@@ -1,0 +1,3 @@
+Create several narrow image-search query families from the supplied local style profile, rotation
+state, and exclusions. Return only the requested schema. Do not claim to crawl the whole internet.
+Do not weaken exclusions or request unsafe, private, or credentialed sources.

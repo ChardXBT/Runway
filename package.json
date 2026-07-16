@@ -1,0 +1,16 @@
+{
+  "name": "leeway",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "npm --prefix apps/web ci --workspaces=false",
+    "web:dev": "npm --prefix apps/web run dev",
+    "web:build": "npm --prefix apps/web run build",
+    "web:lint": "npm --prefix apps/web run lint",
+    "web:test": "npm --prefix apps/web run test",
+    "check": "npm run web:lint && npm run web:test && npm run web:build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

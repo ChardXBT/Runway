@@ -1,0 +1,3 @@
+Summarize the supplied calculated style statistics. Return only the requested schema. Ground every
+claim in supplied values, cite only supplied internal post IDs, and do not call this fine-tuning or
+training. The calculated profile remains authoritative over this prose.

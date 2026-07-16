@@ -1,0 +1,3 @@
+Generate one recommended caption and exactly two alternatives from the bounded retrieval package.
+Return only the requested schema. Match calculated style without copying historical text. Do not
+invent names, quotes, episodes, or plot facts. Report factual uncertainty explicitly.

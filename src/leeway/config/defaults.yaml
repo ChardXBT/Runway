@@ -1,0 +1,13 @@
+product_name: Leeway
+channel_name: Qlob
+channel_handle: Qlob
+timezone: America/Toronto
+default_post_time: "10:00"
+planning_horizon_days: 10
+posts_per_day: 1
+duplicate_window_days: 180
+approval_required: true
+publishing_enabled: false
+capture_scroll_delay_ms: 1800
+capture_idle_cycles_before_stop: 5
+capture_checkpoint_every: 10

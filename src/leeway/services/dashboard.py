@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import func, select
+
+from leeway.db.base import Database
+from leeway.db.models import CaptureRun, GenerationRun, Post, Proposal, StyleProfile
+
+
+class DashboardService:
+    def __init__(self, database: Database):
+        self.database = database
+
+    def summary(self) -> dict[str, object]:
+        with self.database.session() as session:
+            proposal_counts: dict[str, int] = {
+                status: count
+                for status, count in session.execute(
+                    select(Proposal.status, func.count(Proposal.id)).group_by(Proposal.status)
+                )
+            }
+            queue_rows = session.scalars(
+                select(Proposal).order_by(Proposal.planned_publish_at).limit(10)
+            ).all()
+            last_capture = session.scalar(
+                select(CaptureRun).order_by(CaptureRun.started_at.desc()).limit(1)
+            )
+            last_profile = session.scalar(
+                select(StyleProfile).order_by(StyleProfile.version.desc()).limit(1)
+            )
+            last_generation = session.scalar(
+                select(GenerationRun).order_by(GenerationRun.started_at.desc()).limit(1)
+            )
+            catalogue_count = session.scalar(select(func.count(Post.id))) or 0
+            return {
+                "catalogue_count": catalogue_count,
+                "queue_coverage": len(queue_rows),
+                "needs_review": proposal_counts.get("needs_review", 0),
+                "approved": proposal_counts.get("approved", 0),
+                "gaps": max(0, 10 - len(queue_rows)),
+                "last_capture": _run_summary(last_capture),
+                "active_profile_version": last_profile.version if last_profile else None,
+                "last_generation": _run_summary(last_generation),
+            }
+
+
+def _run_summary(run: object | None) -> dict[str, object] | None:
+    if run is None:
+        return None
+    started_at = getattr(run, "started_at", None)
+    return {
+        "id": getattr(run, "id", None),
+        "status": getattr(run, "status", None),
+        "started_at": started_at.isoformat() if isinstance(started_at, datetime) else started_at,
+    }

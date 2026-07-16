@@ -1,0 +1,3 @@
+Analyze only the supplied candidate image/context and return the requested schema. Do not infer
+unverified names or plot facts. Mark uncertainty through confidence and use null for unknown
+franchises. Estimate overlay, watermark, safety, and caption potential conservatively.
