@@ -9,7 +9,7 @@
 - [x] Milestone 4 — approval queue and internal publisher
 - [x] Fixture end-to-end proof
 - [x] Full automated checks
-- [ ] Private GitHub publication
+- [x] Private GitHub publication
 
 ## Current failures
 
@@ -18,4 +18,4 @@
 
 ## Remaining work
 
-- Create the private `ChardXBT/LeeWay` GitHub repository and push the verified build.
+- None. The verified `main` branch is pushed to private repository `ChardXBT/LeeWay`.

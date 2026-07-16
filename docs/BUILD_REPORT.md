@@ -4,6 +4,10 @@ Build completed and verified on 2026-07-16. All milestone claims below are backe
 data, the mock agent runtime, and automated checks. No live Qlob crawl, OpenAI model request,
 internet image search, or external publication was performed.
 
+The completed source repository is privately hosted at
+`https://github.com/ChardXBT/LeeWay`, with `main` as the default branch. GitHub visibility was
+verified as `PRIVATE` after the initial push.
+
 ## Milestone delivery
 
 ### Milestone 0 — foundation
