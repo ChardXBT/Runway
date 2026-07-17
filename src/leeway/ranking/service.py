@@ -9,7 +9,7 @@ from sqlalchemy import select
 from leeway.analysis.schemas import CandidateAnalysis
 from leeway.config import Settings
 from leeway.db.base import Database
-from leeway.db.models import BlockedSource, MediaAsset, PostAnnotation
+from leeway.db.models import BlockedSource, CandidateImage, MediaAsset, Proposal
 from leeway.media.service import ImageFeatures, cosine_similarity
 from leeway.ranking.duplicates import DuplicateResult
 
@@ -169,14 +169,20 @@ class CandidateRanker:
 
     def _rotation(self, analysis: CandidateAnalysis) -> float:
         with self.database.session() as session:
+            active_topics = session.scalars(
+                select(CandidateImage.detected_topic_json)
+                .join(Proposal, Proposal.candidate_image_id == CandidateImage.id)
+                .where(
+                    Proposal.status.not_in(["rejected", "cancelled", "published", "publish_failed"])
+                )
+            ).all()
             counts = Counter(
-                annotation.franchise or "unknown"
-                for annotation in session.scalars(select(PostAnnotation)).all()
+                str(json.loads(topic).get("franchise") or "unknown") for topic in active_topics
             )
         if not counts or not analysis.franchise:
-            return 0.6
-        highest = max(counts.values())
-        return 1.0 - counts.get(analysis.franchise, 0) / max(highest + 1, 1)
+            return 1.0
+        total = sum(counts.values())
+        return 1.0 - counts.get(analysis.franchise, 0) / max(total + 1, 1)
 
 
 def ranking_weights_json() -> str:

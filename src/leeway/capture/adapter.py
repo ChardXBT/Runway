@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -16,6 +16,11 @@ from leeway.capture.schemas import (
 from leeway.domain.enums import DatePrecision, PostType
 
 POST_ID_RE = re.compile(r"/(?:post|channel/[^/]+/community)\/([A-Za-z0-9_-]+)")
+RELATIVE_DATE_RE = re.compile(
+    r"\b(?P<count>\d+|an?|one)\s+"
+    r"(?P<unit>minute|hour|day|week|month|year)s?\s+ago\b",
+    re.IGNORECASE,
+)
 
 
 def parse_visible_count(value: str | None) -> int | None:
@@ -49,13 +54,81 @@ def _best_image_url(image: Tag) -> str | None:
     return None
 
 
+def canonicalize_youtube_image_url(url: str) -> str:
+    """Request the uncropped source asset while retaining the displayed URL separately."""
+    parsed = urlparse(url)
+    if parsed.netloc.lower() not in {
+        "yt3.ggpht.com",
+        "yt3.googleusercontent.com",
+    }:
+        return url
+    return re.sub(r"=s\d+.*$", "=s0", url)
+
+
+def _media_image_tags(container: Tag) -> list[Tag]:
+    if container.name == "ytd-backstage-post-thread-renderer":
+        return [
+            image
+            for image in container.select("ytd-backstage-image-renderer:not([hidden]) img")
+            if isinstance(image, Tag)
+        ]
+    return [image for image in container.select("img") if isinstance(image, Tag)]
+
+
+def _parse_published_date(
+    exact_value: object,
+    displayed_date: str | None,
+    observed_at: datetime,
+) -> tuple[datetime | None, DatePrecision]:
+    if isinstance(exact_value, str) and exact_value:
+        try:
+            return (
+                datetime.fromisoformat(exact_value.replace("Z", "+00:00")),
+                DatePrecision.EXACT,
+            )
+        except ValueError:
+            pass
+    if not displayed_date:
+        return None, DatePrecision.UNKNOWN
+
+    lowered = displayed_date.lower().strip()
+    match = RELATIVE_DATE_RE.search(lowered)
+    if match:
+        raw_count = match.group("count").lower()
+        count = 1 if raw_count in {"a", "an", "one"} else int(raw_count)
+        unit_days = {
+            "minute": 1 / (24 * 60),
+            "hour": 1 / 24,
+            "day": 1,
+            "week": 7,
+            "month": 30,
+            "year": 365,
+        }
+        return observed_at - timedelta(days=count * unit_days[match.group("unit").lower()]), (
+            DatePrecision.RELATIVE
+        )
+    if lowered == "yesterday":
+        return observed_at - timedelta(days=1), DatePrecision.RELATIVE
+    if re.search(r"\b\d{4}\b", displayed_date) and re.search(r"\b\d{1,2}\b", displayed_date):
+        return None, DatePrecision.DAY
+    if re.search(r"\b\d{4}\b", displayed_date):
+        return None, DatePrecision.MONTH
+    return None, DatePrecision.UNKNOWN
+
+
 class YouTubeCommunityPostsAdapterV1:
-    version = "youtube-community-v1"
+    version = "youtube-community-v3"
 
     def extract_file(self, path: Path) -> ExtractionBatch:
         return self.extract_html(path.read_text(encoding="utf-8"))
 
-    def extract_html(self, html: str, base_url: str = "https://www.youtube.com") -> ExtractionBatch:
+    def extract_html(
+        self,
+        html: str,
+        base_url: str = "https://www.youtube.com",
+        observed_at: datetime | None = None,
+    ) -> ExtractionBatch:
+        observed_at = observed_at or datetime.now(UTC)
         soup = BeautifulSoup(html, "html.parser")
         containers = soup.select(
             "article[data-testid='community-post'], "
@@ -66,7 +139,7 @@ class YouTubeCommunityPostsAdapterV1:
         diagnostics: list[ExtractionDiagnostic] = []
         for container in containers:
             try:
-                post = self._extract_container(container, base_url)
+                post = self._extract_container(container, base_url, observed_at)
             except Exception as exc:
                 diagnostics.append(
                     ExtractionDiagnostic(
@@ -85,6 +158,18 @@ class YouTubeCommunityPostsAdapterV1:
                     )
                 )
                 continue
+            if post.raw.get("media_pending"):
+                diagnostics.append(
+                    ExtractionDiagnostic(
+                        code="lazy_media_pending",
+                        message=(
+                            "Post attachment exists but at least one image URL has not "
+                            "loaded yet; the record was deferred."
+                        ),
+                        snippet=str(container)[:500],
+                    )
+                )
+                continue
             posts.append(post)
 
         for unexpected in soup.select("[data-testid='unexpected-community-layout']"):
@@ -97,7 +182,12 @@ class YouTubeCommunityPostsAdapterV1:
             )
         return ExtractionBatch(posts=posts, diagnostics=diagnostics)
 
-    def _extract_container(self, container: Tag, base_url: str) -> ExtractedPost | None:
+    def _extract_container(
+        self,
+        container: Tag,
+        base_url: str,
+        observed_at: datetime,
+    ) -> ExtractedPost | None:
         permalink_tag = container.select_one("a[data-post-permalink], a[href*='/post/']")
         href = permalink_tag.get("href") if permalink_tag else None
         permalink = urljoin(base_url, href) if isinstance(href, str) else None
@@ -126,42 +216,46 @@ class YouTubeCommunityPostsAdapterV1:
         exact_value = None
         if date_tag:
             exact_value = date_tag.get("datetime") or date_tag.get("data-timestamp")
-        published_at: datetime | None = None
-        precision = DatePrecision.UNKNOWN
-        if isinstance(exact_value, str) and exact_value:
-            published_at = datetime.fromisoformat(exact_value.replace("Z", "+00:00"))
-            precision = DatePrecision.EXACT
-        elif displayed_date:
-            lowered = displayed_date.lower()
-            if any(unit in lowered for unit in ("ago", "hour", "minute", "day", "week")):
-                precision = DatePrecision.RELATIVE
-            elif re.search(r"\b\d{4}\b", displayed_date) and re.search(
-                r"\b\d{1,2}\b", displayed_date
-            ):
-                precision = DatePrecision.DAY
-            elif re.search(r"\b\d{4}\b", displayed_date):
-                precision = DatePrecision.MONTH
+        published_at, precision = _parse_published_date(exact_value, displayed_date, observed_at)
 
         like_tag = container.select_one("[data-testid='likes'], #vote-count-middle")
-        comment_tag = container.select_one("[data-testid='comments'], #comments")
+        comment_tag = container.select_one(
+            "[data-testid='comments'], #comments, "
+            "#reply-button-end a[aria-label*='comment' i], #comment-count"
+        )
         raw_like = like_tag.get_text(" ", strip=True) if like_tag else None
-        raw_comment = comment_tag.get_text(" ", strip=True) if comment_tag else None
+        raw_comment: str | None = None
+        if comment_tag:
+            aria_label = comment_tag.get("aria-label")
+            raw_comment = (
+                str(aria_label).strip()
+                if isinstance(aria_label, str) and aria_label.strip()
+                else comment_tag.get_text(" ", strip=True) or None
+            )
+        comment_count = parse_visible_count(raw_comment)
+        if raw_comment and raw_comment.strip().lower() in {"comment", "comments"}:
+            comment_count = 0
 
         images: list[ImageReference] = []
-        for index, image in enumerate(container.select("img")):
-            url = _best_image_url(image)
-            classes = image.get("class")
-            class_text = (
-                " ".join(str(item) for item in classes)
-                if isinstance(classes, list)
-                else str(classes or "")
-            )
-            if not url or "avatar" in class_text.lower():
+        image_tags = _media_image_tags(container)
+        missing_image_sources = 0
+        for index, image in enumerate(image_tags):
+            display_url = _best_image_url(image)
+            if not display_url:
+                missing_image_sources += 1
                 continue
-            absolute_url = url if url.startswith("fixture://") else urljoin(base_url, url)
+            absolute_display_url = (
+                display_url
+                if display_url.startswith("fixture://")
+                else urljoin(base_url, display_url)
+            )
+            absolute_url = canonicalize_youtube_image_url(absolute_display_url)
             images.append(
                 ImageReference(
                     url=absolute_url,
+                    display_url=(
+                        absolute_display_url if absolute_display_url != absolute_url else None
+                    ),
                     alt_text=str(image.get("alt")) if image.get("alt") else None,
                     position=index,
                 )
@@ -171,7 +265,10 @@ class YouTubeCommunityPostsAdapterV1:
             "adapter_version": self.version,
             "attributes": {key: value for key, value in container.attrs.items()},
             "caption_collapsed": bool(container.select_one("[data-testid='read-more']")),
+            "observed_at": observed_at.isoformat(),
             "image_count": len(images),
+            "expected_image_count": len(image_tags),
+            "media_pending": missing_image_sources > 0,
         }
         return ExtractedPost(
             external_post_id=external_post_id,
@@ -182,7 +279,7 @@ class YouTubeCommunityPostsAdapterV1:
             published_at=published_at,
             date_precision=precision,
             like_count=parse_visible_count(raw_like),
-            comment_count=parse_visible_count(raw_comment),
+            comment_count=comment_count,
             raw_like_text=raw_like,
             raw_comment_text=raw_comment,
             images=images,
@@ -201,10 +298,15 @@ class YouTubeCommunityPostsAdapterV1:
         }
         if value in aliases:
             return aliases[value]
-        image_count = len(container.select("img"))
-        if container.select_one("ytd-backstage-poll-renderer, [data-poll]"):
+        image_count = len(_media_image_tags(container))
+        if container.select_one("ytd-backstage-poll-renderer:not([hidden]), [data-poll]"):
             return PostType.POLL
-        if container.select_one("ytd-video-renderer, [data-video-share]"):
+        if container.select_one("ytd-backstage-quiz-renderer:not([hidden]), [data-quiz]"):
+            return PostType.QUIZ
+        if container.select_one(
+            "ytd-post-uploaded-video-renderer:not([hidden]), "
+            "ytd-video-renderer:not([hidden]), [data-video-share]"
+        ):
             return PostType.VIDEO_SHARE
         if image_count > 1:
             return PostType.MULTI_IMAGE

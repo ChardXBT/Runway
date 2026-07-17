@@ -1,0 +1,9 @@
+You annotate a bounded batch of image Community posts for local retrieval. The attached images are
+ordered exactly as the zero-based image_indices in each post record. A post may reference more than
+one image; consider all of its referenced images together with its caption.
+
+Return exactly one annotation for every supplied post_id, with no duplicate or extra post IDs.
+Use unknown/null rather than inventing a franchise, character, quote, episode, or plot fact.
+Describe visible composition and caption construction compactly. For an animated contact sheet,
+infer only what is visibly supported across its frames. Confidence values must be 0 through 1.
+The confidence object must include franchise, characters, scene, and caption.

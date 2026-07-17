@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from leeway.analysis.service import AnalysisService
@@ -5,7 +7,7 @@ from leeway.captions.service import CaptionService
 from leeway.capture.service import CaptureService
 from leeway.config import Settings
 from leeway.db.base import Database
-from leeway.discovery.providers import ManualUrlProvider
+from leeway.discovery.providers import BrowserSearchProvider, ManualUrlProvider
 from leeway.discovery.service import DiscoveryService
 from leeway.intelligence.profile import StyleProfileService
 
@@ -57,3 +59,51 @@ async def test_manual_provider_rejects_non_http_urls() -> None:
         await provider.search(
             SearchPlan(query_families=[], desired_visual_traits=[], excluded_concepts=[])
         )
+
+
+def test_search_plan_uses_supported_named_franchises() -> None:
+    payload = DiscoveryService._plan_payload(
+        {
+            "version": 3,
+            "caption_statistics": {"sample_size": 200},
+            "franchise_distribution": [
+                ["The Simpsons", 196],
+                ["unknown", 2],
+                ["Family Guy", 1],
+                ["Futurama", 1],
+            ],
+            "visual_compositions": [["close-up", 20]],
+            "visual_formats": [["animated still or frame", 190]],
+            "dominant_caption_structures": [["short phrase", 80]],
+        },
+        1,
+    )
+    assert payload["primary_franchise"] == "The Simpsons"
+    assert payload["underused_franchises"] == ["The Simpsons"]
+
+
+def test_bing_metadata_parser_preserves_direct_and_source_urls() -> None:
+    parsed = BrowserSearchProvider._parse_bing_metadata(
+        [
+            json.dumps(
+                {
+                    "murl": "https://images.example.test/frame.jpg",
+                    "purl": "https://source.example.test/article",
+                    "ow": 1280,
+                    "oh": 720,
+                }
+            ),
+            "{not-json",
+            json.dumps({"murl": "data:image/png;base64,abc"}),
+        ]
+    )
+    assert parsed == [
+        {
+            "src": "https://images.example.test/frame.jpg",
+            "page": "https://source.example.test/article",
+            "width": 1280,
+            "height": 720,
+            "index": 0,
+            "adapter": "bing-metadata",
+        }
+    ]

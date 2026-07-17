@@ -38,12 +38,16 @@ class Settings(BaseSettings):
     web_port: int = 3000
     agent_runtime: Literal["mock", "codex", "openai"] = "mock"
     enable_browser_search: bool = False
-    browser_search_url: str = "https://www.google.com/search?tbm=isch&q={query}"
+    browser_search_url: str = "https://www.bing.com/images/search?q={query}"
+    browser_search_max_queries: int = Field(default=3, ge=1, le=10)
+    browser_search_results_per_query: int = Field(default=6, ge=1, le=20)
+    browser_search_max_results: int = Field(default=18, ge=1, le=100)
 
     codex_cli_path: Path | None = None
     codex_model: str = "gpt-5.6-luna"
     codex_reasoning_effort: Literal["none", "low", "medium"] = "low"
     codex_timeout_seconds: int = Field(default=300, ge=30, le=1800)
+    analysis_batch_size: int = Field(default=5, ge=1, le=10)
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_model: str | None = Field(default=None, validation_alias="OPENAI_MODEL")
     search_api_url: str | None = None
@@ -130,10 +134,16 @@ class Settings(BaseSettings):
             "agent_runtime": self.agent_runtime,
             "codex_model": self.codex_model,
             "codex_reasoning_effort": self.codex_reasoning_effort,
+            "analysis_batch_size": self.analysis_batch_size,
             "codex_chatgpt_auth_required": True,
             "paid_api_fallback_enabled": False,
             "openai_configured": bool(self.openai_api_key and self.openai_model),
             "browser_search_enabled": self.enable_browser_search,
+            "browser_search_limits": {
+                "max_queries": self.browser_search_max_queries,
+                "results_per_query": self.browser_search_results_per_query,
+                "max_results": self.browser_search_max_results,
+            },
             "search_api_configured": bool(self.search_api_url and self.search_api_key),
             "data_dir": str(self.resolved_data_dir),
         }

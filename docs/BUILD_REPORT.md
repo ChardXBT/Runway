@@ -1,8 +1,10 @@
 # Build report
 
-Build completed and verified on 2026-07-16. All milestone claims below are backed by local fixture
-data, the mock agent runtime, and automated checks. No live Qlob crawl, OpenAI model request,
-internet image search, or external publication was performed.
+The initial fixture build completed and was verified on 2026-07-16. The milestone detail below
+records that deterministic baseline. A real Qlob capture, ChatGPT-authenticated Codex analysis,
+bounded live image search, real proposal, UI pass, and restart check were subsequently completed on
+2026-07-17 without external publication. See `docs/QLOB_PRODUCTION_VALIDATION.md` for the exact
+production evidence.
 
 The completed source repository is privately hosted at
 `https://github.com/ChardXBT/LeeWay`, with `main` as the default branch. GitHub visibility was
@@ -22,9 +24,13 @@ verified as `PRIVATE` after the initial push.
   real-account and live-publisher acceptance work.
 - Verified saved `Sign in with ChatGPT` authentication and passed one real Luna/low structured
   image request with API fallback disabled.
-- Current checks: Ruff lint/format passed, Mypy strict passed, Pytest `29 passed`, ESLint passed,
+- Current checks: Ruff passed, Mypy strict passed, Pytest `38 passed`, ESLint passed,
   Vitest `2 passed`, the Next.js production build passed, and both npm audits found zero known
   vulnerabilities.
+- Captured and verified all 200 posts exposed by Qlob's Community surface, annotated all 200 in
+  forty resumable batches, and built 19,900 similarity edges.
+- Built real style profile v3, exercised a bounded six-candidate live search, and generated one
+  `needs_review` proposal that survived API and web restarts without any YouTube action.
 
 ## Milestone delivery
 
@@ -194,12 +200,14 @@ To operate the same stages individually:
 - Ruff lint: passed.
 - Ruff format check: 75 files formatted.
 - Mypy strict mode: 57 source files, no issues.
-- Pytest: 19 passed, including the fixture browser parser and full offline workflow.
+- Pytest: 38 passed, including capture hardening, resumable batch analysis, discovery safeguards,
+  proposal grounding persistence, and the full offline workflow.
 - ESLint: passed.
 - Vitest: 2 component test files and 2 tests passed.
 - Next.js production build: passed; all 9 routes compiled and TypeScript passed.
-- Browser smoke: all 7 application pages rendered against the local API with no post-fix console
-  errors. A locale-sensitive hydration mismatch found during the pass was corrected.
+- Browser smoke: all seven application pages rendered against the real Qlob database. The review
+  proposal, safeguards, catalogue, profile, queue, and audit history remained intact after both
+  services restarted.
 - `leeway doctor`: Python, Node, npm, Playwright Chromium, paths, migration `0002`, mock runtime,
   and loopback API checks passed.
 - npm audits: 0 known vulnerabilities in both lockfiles. Next.js' inherited PostCSS version is
@@ -207,12 +215,13 @@ To operate the same stages individually:
 
 ## Honest limitations
 
-- The live Qlob capture adapter was implemented but not run against the user's account.
-- The OpenAI adapter was implemented and schema-validated in code, but no model request was made.
-- Manual/API/browser internet discovery adapters were not run; fixture discovery is the only
-  verified provider. Browser discovery remains experimental and explicitly feature-gated.
+- The real capture, Codex runtime, and a bounded browser-discovery pass are verified. Search
+  providers can still challenge, throttle, or change markup; LeeWay stops instead of bypassing
+  those controls.
 - Rights status for internet candidates defaults to `unknown` and requires human review.
 - YouTube may expose relative dates only; Leeway records that reduced precision instead of
   inventing a timestamp. YouTube DOM changes can still require selector updates.
+- Exact historical image-to-caption recovery measured 0% on the real 40-post holdout; caption
+  ranking measured 75%. Generated captions are reviewable suggestions, not proven matches.
 - Live YouTube scheduling and publishing are intentionally not implemented. The only verified
   publisher is the local internal scheduler.

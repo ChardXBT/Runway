@@ -46,14 +46,17 @@ export function AnnotationEditor({ postId }: { postId: number }) {
     const response = await fetch(`${API_URL}/api/annotations/${postId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fields }),
+      body: JSON.stringify({
+        fields,
+        review_note: "Reviewed in the local catalogue annotation editor.",
+      }),
     });
     if (!response.ok) {
       setStatus("Correction could not be saved.");
       return;
     }
     setAnnotation((await response.json()) as Annotation);
-    setStatus("Correction saved. The original model output remains in history.");
+    setStatus("Review saved. Any correction overlays preserve the original model output.");
   }
 
   if (!annotation) return <section className="panel"><h2>Annotation</h2><p>{status}</p></section>;
@@ -71,7 +74,7 @@ export function AnnotationEditor({ postId }: { postId: number }) {
         <label><span>Composition</span><input className="field" name="composition" defaultValue={current.composition ?? ""} /></label>
         <label><span>Tone</span><input className="field" name="tone" defaultValue={current.tone ?? ""} /></label>
       </div>
-      <div className="form-actions"><button className="button" type="submit">Save correction</button><small role="status">{status}</small></div>
+      <div className="form-actions"><button className="button" type="submit">Save review</button><small role="status">{status}</small></div>
     </form>
   );
 }

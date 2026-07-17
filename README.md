@@ -10,6 +10,10 @@ Live YouTube publishing is intentionally disabled. An approved proposal can only
 internal scheduled state. No setup, test, fixture workflow, or model run logs into Google or posts
 to YouTube.
 
+The real Qlob catalogue, retrieval profile, bounded live discovery, one-proposal review flow, and
+restart persistence were validated on 2026-07-17 without posting. See
+`docs/QLOB_PRODUCTION_VALIDATION.md` for the exact evidence and limitations.
+
 ## Architecture
 
 - FastAPI, Typer, SQLAlchemy, Alembic, SQLite WAL, Pillow, and NumPy in `src/leeway/`.
@@ -144,11 +148,14 @@ status defaults to `unknown` until reviewed.
 - YouTube DOM capture is inherently fragile. Selectors are versioned and failures produce local
   snapshots, but a layout change can require an adapter update.
 - Browser discovery quality and source rights vary by provider; all candidates require review.
-- The live browser adapters are configuration-gated and have not yet been exercised against the
-  user's accounts.
+- The real capture and a bounded six-candidate browser-discovery pass are verified; wider
+  production searches can still encounter provider challenges or layout changes.
 - Adding a caption does not by itself prove that an internet image is reusable. Rights remain
   `unknown` until human review; likely fan art and independently created artwork are rejected.
+- Exact historical image-to-caption recovery measured 0/40 on the Qlob holdout, so generated
+  captions remain suggestions requiring human judgment.
 - Live YouTube scheduling and publishing are not implemented.
 
 See `docs/COMPLETION_GUIDE.md` for the remaining path to production,
-`docs/OPERATIONS.md` for routine commands, and `docs/BUILD_REPORT.md` for the fixture proof.
+`docs/OPERATIONS.md` for routine commands, `docs/BUILD_REPORT.md` for the fixture proof, and
+`docs/QLOB_PRODUCTION_VALIDATION.md` for the real-data pass.

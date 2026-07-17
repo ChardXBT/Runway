@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import asyncio
+import json
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import quote_plus, urlparse
 
 import httpx
@@ -84,7 +84,18 @@ class BrowserSearchProvider:
     """Experimental, headed, user-initiated provider with no stealth or challenge bypass."""
 
     name = "browser"
-    challenge_markers = ("captcha", "unusual traffic", "verify", "consent", "choose an account")
+    challenge_url_markers = (
+        "consent.google.",
+        "/sorry/",
+        "/challenge/",
+    )
+    challenge_text_markers = (
+        "our systems have detected unusual traffic",
+        "prove you're not a robot",
+        "verify you are human",
+        "complete the captcha",
+        "before you continue to google",
+    )
 
     def __init__(self, settings: Settings, *, live: bool):
         if not settings.enable_browser_search:
@@ -95,6 +106,7 @@ class BrowserSearchProvider:
 
     async def search(self, plan: SearchPlan, cursor: str | None = None) -> SearchPage:
         results: list[ImageSearchResult] = []
+        seen_direct_urls: set[str] = set()
         profile = self.settings.browser_profile_dir / "discovery"
         async with async_playwright() as playwright:
             context = await playwright.chromium.launch_persistent_context(
@@ -102,29 +114,55 @@ class BrowserSearchProvider:
             )
             page = context.pages[0] if context.pages else await context.new_page()
             try:
-                for query in _queries(plan):
+                for query in _queries(plan)[: self.settings.browser_search_max_queries]:
                     url = self.settings.browser_search_url.format(query=quote_plus(query))
                     await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
                     sample = (page.url + " " + (await page.title())).lower()
                     body = (await page.locator("body").inner_text())[:2000].lower()
-                    if any(marker in sample + body for marker in self.challenge_markers):
-                        await asyncio.to_thread(
-                            input,
-                            "Search challenge detected. Resolve it manually, then press Enter: ",
+                    if any(
+                        marker in page.url.lower() for marker in self.challenge_url_markers
+                    ) or any(marker in sample + body for marker in self.challenge_text_markers):
+                        await page.screenshot(
+                            path=str(
+                                self.settings.resolved_data_dir
+                                / "captures"
+                                / "browser-search-challenge.png"
+                            ),
+                            full_page=True,
                         )
-                    images = await page.locator("img").evaluate_all(
+                        raise RuntimeError(
+                            "search challenge or consent page detected; resolve it manually "
+                            "in the persistent discovery browser profile, then rerun"
+                        )
+                    bing_metadata = await page.locator("a.iusc[m]").evaluate_all(
+                        """nodes => nodes.map(node => node.getAttribute('m')).filter(Boolean)"""
+                    )
+                    structured_images = self._parse_bing_metadata(bing_metadata)
+                    generic_images = await page.locator("img").evaluate_all(
                         """nodes => nodes.map((img, index) => ({
                           src: img.currentSrc || img.src,
                           width: img.naturalWidth,
                           height: img.naturalHeight,
                           page: img.closest('a')?.href || location.href,
-                          index
+                          index,
+                          adapter: 'generic-img'
                         })).filter(
                           x => /^https?:/.test(x.src) && x.width >= 300 && x.height >= 300
                         )"""
                     )
-                    for item in images[:20]:
+                    images = [*structured_images, *generic_images]
+                    remaining = self.settings.browser_search_max_results - len(results)
+                    if remaining <= 0:
+                        break
+                    per_query = min(
+                        self.settings.browser_search_results_per_query,
+                        remaining,
+                    )
+                    for item in images[:per_query]:
                         direct = str(item["src"])
+                        if direct in seen_direct_urls:
+                            continue
+                        seen_direct_urls.add(direct)
                         source_page = str(item["page"])
                         results.append(
                             ImageSearchResult(
@@ -136,12 +174,43 @@ class BrowserSearchProvider:
                                 original_width=int(item["width"]),
                                 original_height=int(item["height"]),
                                 rights_status="unknown",
-                                provider_metadata={"headed_browser": True},
+                                provider_metadata={
+                                    "headed_browser": True,
+                                    "source_adapter": str(item.get("adapter", "unknown")),
+                                },
                             )
                         )
+                    if len(results) >= self.settings.browser_search_max_results:
+                        break
             finally:
                 await context.close()
         return SearchPage(results=results)
+
+    @staticmethod
+    def _parse_bing_metadata(values: list[str]) -> list[dict[str, Any]]:
+        images: list[dict[str, Any]] = []
+        for index, raw in enumerate(values):
+            try:
+                item = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            direct = str(item.get("murl") or "")
+            if not direct.startswith(("http://", "https://")):
+                continue
+            source_page = str(item.get("purl") or "")
+            if not source_page.startswith(("http://", "https://")):
+                source_page = direct
+            images.append(
+                {
+                    "src": direct,
+                    "page": source_page,
+                    "width": int(item.get("ow") or 0),
+                    "height": int(item.get("oh") or 0),
+                    "index": index,
+                    "adapter": "bing-metadata",
+                }
+            )
+        return images
 
 
 class ApiSearchProvider:

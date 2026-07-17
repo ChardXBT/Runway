@@ -13,6 +13,10 @@ const proposal: Proposal = {
   backup_candidate_ids: [8, 9],
   recommended_caption: "Recommended caption.",
   alternative_captions: ["Alternative one.", "Alternative two."],
+  caption_rationale: "Grounded in short historical reactions.",
+  caption_confidence: 0.91,
+  caption_reference_post_ids: [2, 7],
+  factual_uncertainty_warning: "The exact scene is unknown.",
   final_caption: "Recommended caption.",
   selection_reason: "Strong visual fit.",
   scores: { style: 0.8, novelty: 0.7, quality: 0.9 },
@@ -42,6 +46,8 @@ describe("ReviewWorkspace", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<ReviewWorkspace initialProposal={proposal} />);
+    expect(screen.getByText("Grounded in short historical reactions.")).toBeInTheDocument();
+    expect(screen.getByText("The exact scene is unknown.")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Final caption"), {
       target: { value: "Human final caption." },
     });

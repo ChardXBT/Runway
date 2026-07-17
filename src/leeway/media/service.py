@@ -183,7 +183,12 @@ def content_addressed_copy(
     features: ImageFeatures | None = None,
 ) -> tuple[Path, str]:
     inspected = features or inspect_image(source)
-    extension = ".png" if inspected.mime_type == "image/png" else ".jpg"
+    extension = {
+        "image/gif": ".gif",
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }.get(inspected.mime_type, source.suffix.lower() or ".bin")
     relative = Path("media") / kind / f"{inspected.sha256}{extension}"
     destination = settings.resolved_data_dir / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +208,63 @@ def create_square_preview(source: Path, destination: Path, size: int = 640) -> P
         preview = image.crop((left, top, left + side, top + side))
         preview = preview.resize((size, size), Image.Resampling.LANCZOS)
         preview.save(destination, format="JPEG", quality=90, optimize=True)
+    return destination
+
+
+def prepare_model_image(
+    source: Path,
+    settings: Settings,
+    *,
+    maximum_frames: int = 6,
+    maximum_frame_dimension: int = 512,
+) -> Path:
+    """Return a model-compatible still or deterministic contact sheet for animation."""
+    supported_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
+    with Image.open(source) as opened:
+        frame_count = int(getattr(opened, "n_frames", 1))
+        if source.suffix.lower() in supported_suffixes and frame_count <= 1:
+            return source
+
+        selected_count = min(maximum_frames, frame_count)
+        if selected_count <= 1:
+            frame_indices = [0]
+        else:
+            frame_indices = [
+                round(index * (frame_count - 1) / (selected_count - 1))
+                for index in range(selected_count)
+            ]
+        frames: list[Image.Image] = []
+        for frame_index in frame_indices:
+            opened.seek(frame_index)
+            frame = opened.convert("RGB")
+            frame.thumbnail(
+                (maximum_frame_dimension, maximum_frame_dimension),
+                Image.Resampling.LANCZOS,
+            )
+            frames.append(frame.copy())
+
+    columns = min(3, len(frames))
+    rows = math.ceil(len(frames) / columns)
+    cell_width = max(frame.width for frame in frames)
+    cell_height = max(frame.height for frame in frames)
+    sheet = Image.new("RGB", (columns * cell_width, rows * cell_height), "black")
+    draw = ImageDraw.Draw(sheet)
+    for index, frame in enumerate(frames):
+        column = index % columns
+        row = index // columns
+        left = column * cell_width + (cell_width - frame.width) // 2
+        top = row * cell_height + (cell_height - frame.height) // 2
+        sheet.paste(frame, (left, top))
+        if len(frames) > 1:
+            draw.rectangle((left, top, left + 34, top + 18), fill="black")
+            draw.text((left + 4, top + 2), str(index + 1), fill="white")
+
+    destination = (
+        settings.resolved_data_dir / "media" / "previews" / "model-inputs" / f"{source.stem}.png"
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists():
+        sheet.save(destination, format="PNG", optimize=True)
     return destination
 
 

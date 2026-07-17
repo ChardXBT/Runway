@@ -1,8 +1,8 @@
 # LeeWay completion guide
 
-LeeWay is complete as a local fixture-tested planning application. It is not yet complete as a
-production Qlob posting system because the real Qlob data, live discovery, delegate UI, and
-YouTube scheduler have not been proven.
+LeeWay is complete as a local, real-data-validated intelligence and review application. It is not
+yet complete as a production Qlob posting system because the live YouTube publisher and one
+controlled external scheduling test have not been implemented and proven.
 
 ## 1. Prove delegate access before building the Qlob database — verified
 
@@ -62,7 +62,7 @@ Pass condition: the status says ChatGPT authentication, Luna, low reasoning, ser
 no paid API fallback, and the temporary schema-and-image smoke request passes. If included usage is
 exhausted, LeeWay must stop instead of selecting another provider.
 
-## 3. Build the real Qlob database
+## 3. Build the real Qlob database — verified
 
 What the user provides:
 
@@ -77,10 +77,11 @@ Run:
 .\.venv\Scripts\leeway.exe catalog verify
 ```
 
-Pass condition: expected historical posts and media are present, duplicates are absent, source
-URLs are retained, and the verification report has no unexplained integrity failures.
+Verified on 2026-07-17: capture reached a stable bottom with 200 posts, 200 raw records, and 200
+unique media files. Source URLs were retained and verification found no missing caption/image,
+broken file, duplicate external ID, unmatched raw record, capture error, or diagnostic.
 
-## 4. Build and evaluate Qlob style retrieval
+## 4. Build and evaluate Qlob style retrieval — verified with a documented limitation
 
 What LeeWay uses:
 
@@ -99,10 +100,15 @@ Run:
 Review inaccurate annotations in the UI, add corrections, and rebuild. This is the project's
 "tuning" step: retrieval and profile adaptation, not model-weight training.
 
-Pass condition: representative profile examples look like Qlob, holdout results are acceptable,
-and a human review finds no recurring annotation error that would distort search or captions.
+Verified on 2026-07-17: 200 annotations and 19,900 similarity edges produced profile v3 with 160
+training and 40 holdout records. Ten uncertainty/outlier posts were visually reviewed and seven
+received non-destructive correction overlays. Caption ranking measured 75%, top-three franchise
+retrieval 97.5%, and transformed-duplicate recall 100% with 0% unrelated false positives.
 
-## 5. Prove image discovery and safeguards
+Exact historical image-to-caption recovery measured 0/40. LeeWay therefore does not treat caption
+generation as an exact-match task; every suggested caption still requires human review.
+
+## 5. Prove image discovery and safeguards — bounded pass verified
 
 What the user provides:
 
@@ -123,11 +129,12 @@ Run:
 .\.venv\Scripts\leeway.exe discover images --days 10 --provider browser --live
 ```
 
-Pass condition: candidates have working provenance links, low-quality/duplicate/artwork candidates
-are rejected, and the review set is useful. A caption does not by itself establish permission to
-reuse an image, so rights marked `unknown` still require human judgment.
+Verified on 2026-07-17 with two queries and six total results. Three candidates remained
+reviewable; a duplicate and two prominently watermarked images were rejected. One rejected image
+also triggered personal-artwork and fan-art warnings. A Google challenge caused a safe stop with
+no bypass; the configured Bing pass then completed. All candidate rights remain `unknown`.
 
-## 6. Prove captions and review UI
+## 6. Prove captions and review UI — real read-only pass verified
 
 What LeeWay uses:
 
@@ -147,8 +154,12 @@ Run:
 In the UI, test candidate replacement, all three caption options, editing, rejection, regeneration,
 approval, rescheduling, duplicate warnings, and persistence after restart.
 
-Pass condition: a human can reliably select a suitable image/caption pair for each day, rejected
-patterns affect later retrieval, and no item reaches scheduling without approval.
+Verified on 2026-07-17 with one real proposal. The UI rendered the original and square preview,
+three caption choices, grounding rationale/confidence/reference posts, provenance, rights and date
+warnings, closest history, queue status, settings safeguards, and audit events. The proposal
+survived API and web restarts as `needs_review`. Fixture tests cover edits, rejection, replacement,
+approval, internal scheduling, and persistence. No real approve, schedule, or posting control was
+submitted during this validation.
 
 ## 7. Implement the real YouTube scheduler
 
@@ -170,9 +181,12 @@ posts, matches the approved image/caption exactly, and the failure/recovery proc
 
 ## Project-complete definition
 
-The production project is complete only when all seven stages pass, automated checks are green,
-the private GitHub `main` branch contains the tested code, and the operating procedure can be
-repeated without an API key or unreviewed publication.
+Stages 1 through 6 are now verified within their stated boundaries. The production project is
+complete only when stage 7 passes, automated checks remain green, the private GitHub `main` branch
+contains the tested code, and the operating procedure can be repeated without an API key or
+unreviewed publication.
+
+See `docs/QLOB_PRODUCTION_VALIDATION.md` for the full real-data evidence.
 
 ## Official references
 

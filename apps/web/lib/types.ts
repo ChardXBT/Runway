@@ -15,6 +15,10 @@ export type Proposal = {
   backup_candidate_ids: number[];
   recommended_caption: string;
   alternative_captions: string[];
+  caption_rationale: string;
+  caption_confidence: number | null;
+  caption_reference_post_ids: number[];
+  factual_uncertainty_warning: string | null;
   final_caption: string;
   selection_reason: string;
   scores: { style: number; novelty: number; quality: number };

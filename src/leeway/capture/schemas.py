@@ -9,6 +9,7 @@ from leeway.domain.enums import DatePrecision, PostType
 
 class ImageReference(BaseModel):
     url: str
+    display_url: str | None = None
     alt_text: str | None = None
     position: int = 0
 
@@ -27,6 +28,7 @@ class ExtractedPost(BaseModel):
     raw_comment_text: str | None = None
     images: list[ImageReference] = Field(default_factory=list)
     raw: dict[str, object] = Field(default_factory=dict)
+    raw_dom_snapshot_path: str | None = None
 
     def stable_key(self) -> str:
         return self.external_post_id or self.permalink or ""

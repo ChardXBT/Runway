@@ -122,6 +122,24 @@ export function ReviewWorkspace({ initialProposal }: { initialProposal: Proposal
               </button>
             ))}
           </div>
+          <div className="caption-evidence">
+            <p className="eyebrow">Caption grounding</p>
+            <p>{proposal.caption_rationale || "No rationale recorded."}</p>
+            <small>
+              Confidence{" "}
+              {proposal.caption_confidence === null
+                ? "not reported"
+                : `${Math.round(proposal.caption_confidence * 100)}%`}
+              {" · "}
+              References{" "}
+              {proposal.caption_reference_post_ids.length
+                ? proposal.caption_reference_post_ids.join(", ")
+                : "none"}
+            </small>
+            {proposal.factual_uncertainty_warning && (
+              <p className="caption-warning">{proposal.factual_uncertainty_warning}</p>
+            )}
+          </div>
           <div className="primary-actions">
             {proposal.status === "needs_review" && <button className="button approve" disabled={busy} onClick={() => request("/approve")}>Approve</button>}
             {proposal.status === "needs_review" && <button className="button reject" disabled={busy} onClick={() => request("/reject", { reason: "not a fit" })}>Reject</button>}

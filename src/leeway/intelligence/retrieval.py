@@ -4,10 +4,12 @@ import json
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from sqlalchemy import desc, select
 
 from leeway.analysis.features import qlob_style_score
+from leeway.analysis.service import AnalysisService, effective_annotation_fields
 from leeway.config import Settings
 from leeway.db.base import Database
 from leeway.db.models import (
@@ -40,15 +42,21 @@ class RetrievalService:
             if profile_record is None:
                 raise LookupError("build a style profile before retrieval")
             profile = json.loads(profile_record.profile_json)
+            training_ids = [int(value) for value in profile["training_post_ids"]]
             rows = session.execute(
                 select(Post, MediaAsset)
                 .join(PostMedia, PostMedia.post_id == Post.id)
                 .join(MediaAsset, MediaAsset.id == PostMedia.media_asset_id)
-                .where(Post.is_training_eligible.is_(True), PostMedia.position == 0)
+                .where(
+                    Post.id.in_(training_ids),
+                    Post.is_training_eligible.is_(True),
+                    PostMedia.position == 0,
+                )
             ).all()
             visual = sorted(
                 (
                     cosine_similarity(candidate.embedding_vector, media.embedding_vector or b""),
+                    post.id,
                     post,
                     media,
                 )
@@ -66,7 +74,7 @@ class RetrievalService:
                         f"/media/{Path(media.local_path).relative_to('media').as_posix()}"
                     ),
                 }
-                for score, post, media in reversed(visual[-8:])
+                for score, _post_id, post, media in reversed(visual[-8:])
             ]
             stats = profile["caption_statistics"]
             caption_examples = sorted(
@@ -100,13 +108,23 @@ class RetrievalService:
                             "warning": "date precision cannot prove the 180-day boundary",
                         }
                     )
-            annotations = session.scalars(select(PostAnnotation)).all()
+            annotations = session.scalars(
+                select(PostAnnotation).where(
+                    PostAnnotation.post_id.in_(training_ids),
+                    PostAnnotation.annotation_version == AnalysisService.annotation_version,
+                )
+            ).all()
+            effective_annotations = [
+                effective_annotation_fields(annotation) for annotation in annotations
+            ]
             franchise_rotation = Counter(
-                annotation.franchise or "unknown" for annotation in annotations
+                str(annotation["franchise"] or "unknown") for annotation in effective_annotations
             )
             character_rotation: Counter[str] = Counter()
-            for annotation in annotations:
-                character_rotation.update(json.loads(annotation.characters_json))
+            for annotation in effective_annotations:
+                character_rotation.update(
+                    str(value) for value in cast(list[object], annotation["characters"])
+                )
             negative = session.scalars(
                 select(Proposal)
                 .where(Proposal.status == "rejected")

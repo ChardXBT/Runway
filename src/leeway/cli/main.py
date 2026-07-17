@@ -343,6 +343,30 @@ def capture_youtube_posts(
     typer.echo(result.model_dump_json(indent=2))
 
 
+@capture_app.command("reparse-snapshots")
+def reparse_snapshots(
+    run_id: int | None = typer.Option(None, min=1),
+    dry_run: bool = typer.Option(False),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Rebuild normalized metadata from immutable captured post-card snapshots."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    if (
+        not dry_run
+        and not yes
+        and not typer.confirm(
+            "Reparse saved DOM snapshots and update normalized catalogue metadata?"
+        )
+    ):
+        raise typer.Abort()
+    result = CaptureService(database, settings).reparse_snapshots(
+        run_id=run_id,
+        dry_run=dry_run,
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
 @catalog_app.command("status")
 def catalog_status() -> None:
     settings = get_settings()
@@ -398,10 +422,18 @@ def catalog_export_report() -> None:
 
 
 @analyze_app.command("history")
-def analyze_history(resume: bool = typer.Option(True, "--resume/--no-resume")) -> None:
+def analyze_history(
+    resume: bool = typer.Option(True, "--resume/--no-resume"),
+    max_posts: int | None = typer.Option(None, min=1),
+) -> None:
     settings = get_settings()
     database = initialize_database(settings)
-    result = asyncio.run(AnalysisService(database, settings).analyze_history(resume=resume))
+    result = asyncio.run(
+        AnalysisService(database, settings).analyze_history(
+            resume=resume,
+            max_posts=max_posts,
+        )
+    )
     typer.echo(json.dumps(result, indent=2))
 
 

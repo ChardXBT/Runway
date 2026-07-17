@@ -56,3 +56,17 @@ cannot be reached from the configured Codex path.
 LeeWay adapts through a versioned profile and bounded retrieval from the local Qlob database. This
 keeps evidence inspectable, incorporates user corrections and rejections immediately, and avoids a
 training bill. Model-weight fine-tuning is not required for the current workflow.
+
+## Challenge-aware bounded browser discovery
+
+Headed browser discovery has explicit query/result caps and treats consent, CAPTCHA, and challenge
+pages as terminal run failures requiring human handling. It does not use stealth, proxy rotation,
+CAPTCHA solving, or challenge bypass. Candidate rights default to `unknown`, and duplicate,
+watermark, personal-artwork, and fan-art signals are enforced before proposal generation.
+
+## Production data stays local
+
+The captured database, raw DOM, downloaded historical/candidate media, browser profiles,
+screenshots, and generated reports remain under the ignored `data/` tree. GitHub contains the
+reproducible application, migrations, tests, prompts, and documentation—not account sessions or
+third-party media.

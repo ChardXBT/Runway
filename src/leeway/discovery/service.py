@@ -114,7 +114,24 @@ class DiscoveryService:
                 "candidates": 0,
             }
 
-        page = await provider.search(plan)
+        try:
+            page = await provider.search(plan)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            with self.database.session() as session:
+                loaded_run = session.get(SearchRun, run_id)
+                if loaded_run:
+                    loaded_run.status = RunStatus.FAILED.value
+                    loaded_run.completed_at = datetime.now(UTC)
+                    loaded_run.error_summary = error
+                    audit(
+                        session,
+                        "search_failed",
+                        "search_run",
+                        loaded_run.id,
+                        {"provider": provider.name, "error": error},
+                    )
+            raise
         provider_results = [result.model_dump() for result in page.results]
         with self.database.session() as session:
             loaded_run = session.get(SearchRun, run_id)
@@ -464,12 +481,31 @@ class DiscoveryService:
     def _plan_payload(profile: dict[str, object], days: int) -> dict[str, object]:
         distribution = profile.get("franchise_distribution", [])
         distribution_rows = cast(list[list[Any]], distribution)
-        underused = [str(item[0]) for item in reversed(distribution_rows)]
+        sample_size = int(
+            cast(dict[str, Any], profile.get("caption_statistics", {})).get("sample_size", 0)
+        )
+        minimum_support = max(2, round(sample_size * 0.01))
+        known_franchises = [
+            (str(item[0]), int(item[1]))
+            for item in distribution_rows
+            if len(item) >= 2
+            and str(item[0]).strip().lower() not in {"", "unknown", "none", "null"}
+        ]
+        primary_franchise = known_franchises[0][0] if known_franchises else None
+        supported = [item for item in known_franchises if item[1] >= minimum_support]
+        focus_franchises = [
+            name for name, _count in sorted(supported, key=lambda item: (item[1], item[0]))
+        ]
+        if primary_franchise and primary_franchise not in focus_franchises:
+            focus_franchises.append(primary_franchise)
         return {
             "profile_version": profile.get("version"),
             "days": days,
-            "underused_franchises": underused[:5],
+            "primary_franchise": primary_franchise,
+            "underused_franchises": focus_franchises[:5],
             "preferred_compositions": profile.get("visual_compositions", []),
+            "preferred_visual_formats": profile.get("visual_formats", []),
+            "caption_structures": profile.get("dominant_caption_structures", []),
             "recent_exclusions": [
                 "fan art",
                 "personal artwork",

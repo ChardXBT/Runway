@@ -24,12 +24,44 @@ from leeway.db.models import (
     utcnow,
 )
 from leeway.db.repositories import audit
-from leeway.media.service import cosine_similarity
+from leeway.media.service import cosine_similarity, prepare_model_image
+
+CORRECTION_OUTPUT_ALIASES = {
+    "characters": "visible_characters",
+    "visual_format": "visual_medium",
+    "emotion": "facial_emotional_cues",
+    "text_in_image": "text_overlay",
+}
+
+
+def effective_annotation_fields(annotation: PostAnnotation) -> dict[str, object]:
+    """Return normalized annotation fields with human review overlays applied."""
+    fields: dict[str, object] = {
+        "franchise": annotation.franchise,
+        "show_name": annotation.show_name,
+        "characters": json.loads(annotation.characters_json),
+        "visible_character_count": annotation.visible_character_count,
+        "scene_description": annotation.scene_description,
+        "visual_format": annotation.visual_format,
+        "composition": annotation.composition,
+        "emotion": annotation.emotion,
+        "reaction_potential": annotation.reaction_potential,
+        "caption_intent": annotation.caption_intent,
+        "caption_structure": annotation.caption_structure,
+        "humor_style": annotation.humor_style,
+        "tone": annotation.tone,
+        "text_in_image": annotation.text_in_image,
+    }
+    corrections = json.loads(annotation.reviewed_fields_json or "{}")
+    if not isinstance(corrections, dict):
+        raise ValueError(f"annotation {annotation.id} has invalid reviewed fields")
+    fields.update(corrections)
+    return fields
 
 
 class AnalysisService:
-    annotation_version = "historical-annotation-v1"
-    prompt_version = "annotate-history-v1"
+    annotation_version = "historical-annotation-v2"
+    prompt_version = "annotate-history-batch-v2"
 
     def __init__(
         self,
@@ -41,7 +73,12 @@ class AnalysisService:
         self.settings = settings
         self.runtime = runtime or runtime_for(settings)
 
-    async def analyze_history(self, *, resume: bool = True) -> dict[str, int]:
+    async def analyze_history(
+        self,
+        *,
+        resume: bool = True,
+        max_posts: int | None = None,
+    ) -> dict[str, int]:
         with self.database.session() as session:
             posts = session.scalars(
                 select(Post).where(Post.is_training_eligible.is_(True)).order_by(Post.id)
@@ -57,13 +94,21 @@ class AnalysisService:
             for post in posts:
                 if resume and post.id in existing_ids:
                     continue
-                media = session.scalar(
+                media_assets = session.scalars(
                     select(MediaAsset)
                     .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
                     .where(PostMedia.post_id == post.id)
                     .order_by(PostMedia.position)
-                    .limit(1)
-                )
+                ).all()
+                if not media_assets:
+                    continue
+                prepared_paths = [
+                    prepare_model_image(
+                        self.settings.resolved_data_dir / asset.local_path,
+                        self.settings,
+                    )
+                    for asset in media_assets
+                ]
                 payloads.append(
                     {
                         "post_id": post.id,
@@ -72,29 +117,57 @@ class AnalysisService:
                         "published_at": (
                             post.published_at.isoformat() if post.published_at else None
                         ),
-                        "_image_path": (
-                            str(self.settings.resolved_data_dir / media.local_path)
-                            if media is not None
-                            else None
-                        ),
+                        "_image_paths": [str(path) for path in prepared_paths],
                     }
                 )
 
+        pending_before_limit = len(payloads)
+        if max_posts is not None:
+            payloads = payloads[:max_posts]
         completed = 0
         failed = 0
-        skipped = len(posts) - len(payloads)
-        for payload in payloads:
-            post_id = cast(int, payload["post_id"])
+        skipped = len(posts) - pending_before_limit
+        deferred = pending_before_limit - len(payloads)
+        batches = 0
+        batch_size = self.settings.analysis_batch_size
+        for offset in range(0, len(payloads), batch_size):
+            payload_batch = payloads[offset : offset + batch_size]
+            post_ids = [cast(int, payload["post_id"]) for payload in payload_batch]
+            batch_image_paths: list[str] = []
+            bounded_posts: list[dict[str, object]] = []
+            for payload in payload_batch:
+                indices: list[int] = []
+                for path in cast(list[str], payload["_image_paths"]):
+                    indices.append(len(batch_image_paths))
+                    batch_image_paths.append(path)
+                bounded_posts.append(
+                    {key: value for key, value in payload.items() if not key.startswith("_")}
+                    | {
+                        "image_indices": indices,
+                        "image_count": len(indices),
+                    }
+                )
+            request: dict[str, object] = {
+                "posts": bounded_posts,
+                "_image_paths": batch_image_paths,
+            }
             started = utcnow()
             try:
-                output = await self.runtime.annotate_historical_post(payload)
+                output = await self.runtime.annotate_historical_posts(request)
+                received_ids = [item.post_id for item in output.annotations]
+                if len(received_ids) != len(set(received_ids)) or set(received_ids) != set(
+                    post_ids
+                ):
+                    raise AgentTerminalError(
+                        "Codex batch output did not map one-to-one to the requested post IDs"
+                    )
             except Exception as exc:
-                failed += 1
+                failed += len(payload_batch)
                 self._record_model_run(
-                    task="annotate_historical_post",
+                    task="annotate_historical_posts",
                     prompt_version=self.prompt_version,
-                    input_ids=[post_id],
-                    request=payload,
+                    input_ids=post_ids,
+                    request=request,
                     output=None,
                     started=started,
                     error=f"{type(exc).__name__}: {exc}",
@@ -102,34 +175,44 @@ class AnalysisService:
                 if isinstance(exc, AgentTerminalError):
                     raise
                 continue
+            annotations = {item.post_id: item.annotation for item in output.annotations}
             with self.database.session() as session:
-                existing = session.scalar(
-                    select(PostAnnotation).where(
-                        PostAnnotation.post_id == post_id,
-                        PostAnnotation.annotation_version == self.annotation_version,
+                for post_id in post_ids:
+                    existing = session.scalar(
+                        select(PostAnnotation).where(
+                            PostAnnotation.post_id == post_id,
+                            PostAnnotation.annotation_version == self.annotation_version,
+                        )
                     )
-                )
-                if existing is None:
-                    session.add(self._annotation_record(post_id, output))
-                audit(
-                    session,
-                    "historical_post_annotated",
-                    "post",
-                    post_id,
-                    {"annotation_version": self.annotation_version},
-                )
+                    if existing is None:
+                        session.add(self._annotation_record(post_id, annotations[post_id]))
+                    audit(
+                        session,
+                        "historical_post_annotated",
+                        "post",
+                        post_id,
+                        {"annotation_version": self.annotation_version},
+                    )
             self._record_model_run(
-                task="annotate_historical_post",
+                task="annotate_historical_posts",
                 prompt_version=self.prompt_version,
-                input_ids=[post_id],
-                request=payload,
+                input_ids=post_ids,
+                request=request,
                 output=output.model_dump(),
                 started=started,
                 error=None,
             )
-            completed += 1
+            completed += len(post_ids)
+            batches += 1
         edges = self.rebuild_similarity_edges()
-        return {"completed": completed, "skipped": skipped, "failed": failed, "edges": edges}
+        return {
+            "completed": completed,
+            "skipped": skipped,
+            "failed": failed,
+            "batches": batches,
+            "deferred": deferred,
+            "edges": edges,
+        }
 
     def rebuild_similarity_edges(self) -> int:
         with self.database.session() as session:
@@ -187,7 +270,23 @@ class AnalysisService:
                     count += 1
             return count
 
-    def correct_annotation(self, post_id: int, fields: dict[str, object]) -> dict[str, object]:
+    def correct_annotation(
+        self,
+        post_id: int,
+        fields: dict[str, object],
+        *,
+        review_note: str | None = None,
+    ) -> dict[str, object]:
+        return self.review_annotation(post_id, fields, review_note=review_note)
+
+    def review_annotation(
+        self,
+        post_id: int,
+        expected_fields: dict[str, object],
+        *,
+        review_note: str | None = None,
+    ) -> dict[str, object]:
+        """Record reviewed labels and apply only fields that differ as corrections."""
         allowed = {
             "franchise",
             "show_name",
@@ -204,36 +303,70 @@ class AnalysisService:
             "tone",
             "text_in_image",
         }
-        unexpected = set(fields) - allowed
+        unexpected = set(expected_fields) - allowed
         if unexpected:
             raise ValueError(f"unsupported correction fields: {', '.join(sorted(unexpected))}")
+        if not expected_fields:
+            raise ValueError("at least one reviewed field is required")
+        self._validate_correction_fields(expected_fields)
         with self.database.session() as session:
             annotation = session.scalar(
                 select(PostAnnotation)
-                .where(PostAnnotation.post_id == post_id)
+                .where(
+                    PostAnnotation.post_id == post_id,
+                    PostAnnotation.annotation_version == self.annotation_version,
+                )
                 .order_by(PostAnnotation.created_at.desc())
                 .limit(1)
             )
             if annotation is None:
                 raise LookupError(f"post {post_id} has no annotation")
             current = json.loads(annotation.reviewed_fields_json or "{}")
-            current.update(fields)
-            annotation.reviewed_fields_json = json.dumps(current, sort_keys=True)
-            annotation.review_status = "reviewed"
-            session.add(
-                AnnotationCorrection(
-                    post_annotation_id=annotation.id,
-                    fields_json=json.dumps(fields, sort_keys=True),
+            effective_before = effective_annotation_fields(annotation)
+            changed = {
+                key: value
+                for key, value in expected_fields.items()
+                if effective_before.get(key) != value
+            }
+            if changed:
+                current.update(changed)
+                annotation.reviewed_fields_json = json.dumps(current, sort_keys=True)
+                session.add(
+                    AnnotationCorrection(
+                        post_annotation_id=annotation.id,
+                        fields_json=json.dumps(changed, sort_keys=True),
+                    )
                 )
-            )
-            audit(session, "annotation_corrected", "post", post_id, {"fields": sorted(fields)})
+                correction_details: dict[str, object] = {"fields": sorted(changed)}
+                if review_note:
+                    correction_details["review_note"] = review_note
+                audit(
+                    session,
+                    "annotation_corrected",
+                    "post",
+                    post_id,
+                    correction_details,
+                )
+            annotation.review_status = "reviewed"
+            review_details: dict[str, object] = {
+                "annotation_id": annotation.id,
+                "annotation_version": annotation.annotation_version,
+                "expected_fields": expected_fields,
+                "corrected_fields": sorted(changed),
+            }
+            if review_note:
+                review_details["review_note"] = review_note
+            audit(session, "annotation_reviewed", "post", post_id, review_details)
         return self.effective_annotation(post_id)
 
     def effective_annotation(self, post_id: int) -> dict[str, object]:
         with self.database.session() as session:
             annotation = session.scalar(
                 select(PostAnnotation)
-                .where(PostAnnotation.post_id == post_id)
+                .where(
+                    PostAnnotation.post_id == post_id,
+                    PostAnnotation.annotation_version == self.annotation_version,
+                )
                 .order_by(PostAnnotation.created_at.desc())
                 .limit(1)
             )
@@ -242,14 +375,8 @@ class AnalysisService:
             original = json.loads(annotation.original_output_json)
             corrections = json.loads(annotation.reviewed_fields_json or "{}")
             effective = dict(original)
-            aliases = {
-                "characters": "visible_characters",
-                "visual_format": "visual_medium",
-                "emotion": "facial_emotional_cues",
-                "text_in_image": "text_overlay",
-            }
             for key, value in corrections.items():
-                effective[aliases.get(key, key)] = value
+                effective[CORRECTION_OUTPUT_ALIASES.get(key, key)] = value
             return {
                 "post_id": post_id,
                 "annotation_id": annotation.id,
@@ -327,12 +454,56 @@ class AnalysisService:
     def _concept_similarity(first: PostAnnotation | None, second: PostAnnotation | None) -> float:
         if first is None or second is None:
             return 0.0
-        first_values = {first.franchise, first.composition, *json.loads(first.characters_json)}
-        second_values = {second.franchise, second.composition, *json.loads(second.characters_json)}
+        first_effective = effective_annotation_fields(first)
+        second_effective = effective_annotation_fields(second)
+        first_values = {
+            first_effective["franchise"],
+            first_effective["composition"],
+            *cast(list[object], first_effective["characters"]),
+        }
+        second_values = {
+            second_effective["franchise"],
+            second_effective["composition"],
+            *cast(list[object], second_effective["characters"]),
+        }
         first_values.discard(None)
         second_values.discard(None)
         union = first_values | second_values
         return len(first_values & second_values) / len(union) if union else 0.0
+
+    @staticmethod
+    def _validate_correction_fields(fields: dict[str, object]) -> None:
+        nullable_text = {"franchise", "show_name"}
+        text_fields = {
+            "scene_description",
+            "visual_format",
+            "composition",
+            "emotion",
+            "reaction_potential",
+            "caption_intent",
+            "caption_structure",
+            "humor_style",
+            "tone",
+        }
+        for key in nullable_text:
+            if key in fields and fields[key] is not None and not isinstance(fields[key], str):
+                raise ValueError(f"{key} must be text or null")
+        for key in text_fields:
+            if key in fields and not isinstance(fields[key], str):
+                raise ValueError(f"{key} must be text")
+        if "characters" in fields and (
+            not isinstance(fields["characters"], list)
+            or not all(isinstance(value, str) for value in cast(list[object], fields["characters"]))
+        ):
+            raise ValueError("characters must be a list of strings")
+        if "visible_character_count" in fields and (
+            isinstance(fields["visible_character_count"], bool)
+            or not isinstance(fields["visible_character_count"], int)
+            or fields["visible_character_count"] < 0
+        ):
+            raise ValueError("visible_character_count must be a non-negative integer")
+        if "text_in_image" in fields and not isinstance(fields["text_in_image"], bool):
+            raise ValueError("text_in_image must be true or false")
 
     def _record_model_run(
         self,

@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from leeway.capture.adapter import YouTubeCommunityPostsAdapterV1, fixture_dom_path
@@ -19,7 +19,14 @@ from leeway.config import Settings
 from leeway.db.base import Database
 from leeway.db.models import CaptureRun, MediaAsset, Post, PostMedia, RawPostRecord, utcnow
 from leeway.db.repositories import audit, get_channel
-from leeway.domain.enums import CaptureMode, MediaKind, PostType, RightsStatus, RunStatus
+from leeway.domain.enums import (
+    CaptureMode,
+    DatePrecision,
+    MediaKind,
+    PostType,
+    RightsStatus,
+    RunStatus,
+)
 from leeway.media.service import (
     content_addressed_copy,
     ensure_fixture_images,
@@ -114,29 +121,62 @@ class CaptureService:
         channel_url: str,
         resume: bool = True,
         finalize: bool = False,
+        diagnostics: list[ExtractionDiagnostic] | None = None,
+        cursor_updates: dict[str, object] | None = None,
     ) -> CaptureResult:
         """Append one safe browser checkpoint; used only by explicit live capture."""
         with self.database.session() as session:
             run = self._get_or_create_run(session, mode, channel_url, resume=resume)
             cursor = self._cursor(run)
             seen = set(cursor.get("seen_keys", []))
+            self._record_diagnostics(
+                session,
+                run,
+                diagnostics or [],
+                save_all_snapshots=False,
+            )
             for record in records:
                 key = record.stable_key()
                 if key and key in seen:
                     continue
-                self._process_post(session, run, record, fixture_assets=None)
-                if key:
+                record_complete = self._process_post(session, run, record, fixture_assets=None)
+                if key and record_complete:
                     seen.add(key)
                 run.posts_seen = len(seen)
                 if run.posts_seen % self.settings.capture_checkpoint_every == 0:
                     session.flush()
                     session.commit()
             cursor["seen_keys"] = sorted(seen)
+            if cursor_updates:
+                cursor.update(cursor_updates)
             run.last_cursor_json = json.dumps(cursor, sort_keys=True)
             run.status = RunStatus.COMPLETED if finalize else RunStatus.PAUSED
             run.completed_at = utcnow() if finalize else None
             session.flush()
-            return self._result(run, 0)
+            return self._result(run, len(diagnostics or []))
+
+    def active_seen_keys(self, mode: CaptureMode) -> set[str]:
+        with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
+            run = session.scalar(
+                select(CaptureRun)
+                .where(
+                    CaptureRun.channel_id == channel.id,
+                    CaptureRun.mode == mode.value,
+                    CaptureRun.status.in_(
+                        [RunStatus.RUNNING.value, RunStatus.PAUSED.value, RunStatus.FAILED.value]
+                    ),
+                )
+                .order_by(desc(CaptureRun.started_at))
+                .limit(1)
+            )
+            if run is None:
+                return set()
+            return {
+                str(key)
+                for key in self._cursor(run).get("seen_keys", [])
+                if isinstance(key, str) and key
+            }
 
     def latest_status(self) -> dict[str, object] | None:
         with self.database.session() as session:
@@ -144,6 +184,172 @@ class CaptureService:
             if run is None:
                 return None
             return self._result(run, 0).model_dump()
+
+    def reparse_snapshots(
+        self,
+        *,
+        run_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, object]:
+        """Rebuild normalized metadata from immutable per-post DOM snapshots."""
+        with self.database.session() as session:
+            run = (
+                session.get(CaptureRun, run_id)
+                if run_id is not None
+                else session.scalar(
+                    select(CaptureRun).order_by(desc(CaptureRun.started_at)).limit(1)
+                )
+            )
+            if run is None:
+                raise LookupError("no capture run is available for snapshot reparse")
+            raw_records = session.scalars(
+                select(RawPostRecord)
+                .where(
+                    RawPostRecord.capture_run_id == run.id,
+                    RawPostRecord.raw_dom_snapshot_path.is_not(None),
+                )
+                .order_by(RawPostRecord.id)
+            ).all()
+            scanned = 0
+            reparsed = 0
+            errors: list[dict[str, object]] = []
+            data_root = self.settings.resolved_data_dir.resolve()
+            for raw_record in raw_records:
+                scanned += 1
+                relative = raw_record.raw_dom_snapshot_path
+                if not relative:
+                    continue
+                snapshot = (data_root / relative).resolve()
+                if not snapshot.is_relative_to(data_root) or not snapshot.is_file():
+                    errors.append(
+                        {
+                            "record_key": raw_record.record_key,
+                            "error": "snapshot_missing_or_outside_data_root",
+                        }
+                    )
+                    continue
+                observed_at = raw_record.captured_at
+                if observed_at.tzinfo is None:
+                    observed_at = observed_at.replace(tzinfo=UTC)
+                batch = self.adapter.extract_html(
+                    snapshot.read_text(encoding="utf-8"),
+                    observed_at=observed_at,
+                )
+                if len(batch.posts) != 1 or batch.diagnostics:
+                    errors.append(
+                        {
+                            "record_key": raw_record.record_key,
+                            "error": "snapshot_parse_incomplete",
+                            "post_count": len(batch.posts),
+                            "diagnostics": [
+                                diagnostic.model_dump() for diagnostic in batch.diagnostics
+                            ],
+                        }
+                    )
+                    continue
+                extracted = batch.posts[0]
+                if extracted.stable_key() != raw_record.record_key:
+                    errors.append(
+                        {
+                            "record_key": raw_record.record_key,
+                            "error": "snapshot_key_mismatch",
+                            "extracted_key": extracted.stable_key(),
+                        }
+                    )
+                    continue
+                post = session.scalar(
+                    select(Post)
+                    .where(
+                        Post.channel_id == run.channel_id,
+                        or_(
+                            Post.external_post_id == extracted.external_post_id,
+                            Post.permalink == extracted.permalink,
+                        ),
+                    )
+                    .limit(1)
+                )
+                if post is None:
+                    errors.append(
+                        {
+                            "record_key": raw_record.record_key,
+                            "error": "normalized_post_missing",
+                        }
+                    )
+                    continue
+                linked_count = session.scalar(
+                    select(func.count(PostMedia.media_asset_id)).where(PostMedia.post_id == post.id)
+                )
+                if int(linked_count or 0) != len(extracted.images):
+                    errors.append(
+                        {
+                            "record_key": raw_record.record_key,
+                            "error": "snapshot_media_link_mismatch",
+                            "snapshot_images": len(extracted.images),
+                            "linked_media": int(linked_count or 0),
+                        }
+                    )
+                    continue
+                if dry_run:
+                    reparsed += 1
+                    continue
+                extracted.raw_dom_snapshot_path = relative
+                raw_record.raw_json = extracted.model_dump_json()
+                post.caption = extracted.caption
+                post.displayed_date_text = extracted.displayed_date_text
+                if post.published_at is None or extracted.date_precision == DatePrecision.EXACT:
+                    post.published_at = extracted.published_at
+                post.date_precision = extracted.date_precision.value
+                post.like_count = extracted.like_count
+                post.comment_count = extracted.comment_count
+                post.post_type = extracted.post_type.value
+                post.raw_engagement_json = json.dumps(
+                    {
+                        "likes": extracted.raw_like_text,
+                        "comments": extracted.raw_comment_text,
+                    },
+                    sort_keys=True,
+                )
+                audit(
+                    session,
+                    "post_reparsed_from_snapshot",
+                    "post",
+                    post.id,
+                    {"adapter_version": self.adapter.version, "capture_run_id": run.id},
+                )
+                reparsed += 1
+
+            if not dry_run:
+                cursor = self._cursor(run)
+                cursor["snapshot_reparse"] = {
+                    "adapter_version": self.adapter.version,
+                    "completed_at": datetime.now(UTC).isoformat(),
+                    "errors": len(errors),
+                    "reparsed": reparsed,
+                    "scanned": scanned,
+                }
+                run.last_cursor_json = json.dumps(cursor, sort_keys=True)
+                if not errors:
+                    run.selector_adapter_version = self.adapter.version
+                audit(
+                    session,
+                    "capture_snapshots_reparsed",
+                    "capture_run",
+                    run.id,
+                    {
+                        "adapter_version": self.adapter.version,
+                        "errors": len(errors),
+                        "reparsed": reparsed,
+                        "scanned": scanned,
+                    },
+                )
+            return {
+                "run_id": run.id,
+                "adapter_version": self.adapter.version,
+                "dry_run": dry_run,
+                "scanned": scanned,
+                "reparsed": reparsed,
+                "errors": errors,
+            }
 
     def _get_or_create_run(
         self,
@@ -201,8 +407,9 @@ class CaptureService:
         *,
         save_all_snapshots: bool,
     ) -> None:
-        for index, diagnostic in enumerate(diagnostics):
-            key = f"diagnostic-{index}-{diagnostic.code}"
+        for diagnostic in diagnostics:
+            digest = hashlib.sha256(diagnostic.model_dump_json().encode("utf-8")).hexdigest()[:16]
+            key = f"diagnostic-{diagnostic.code}-{digest}"
             exists = session.scalar(
                 select(RawPostRecord.id).where(
                     RawPostRecord.capture_run_id == run.id,
@@ -238,7 +445,7 @@ class CaptureService:
         run: CaptureRun,
         record: ExtractedPost,
         fixture_assets: dict[str, Path] | None,
-    ) -> None:
+    ) -> bool:
         key = (
             record.stable_key()
             or hashlib.sha256(record.model_dump_json().encode("utf-8")).hexdigest()
@@ -257,6 +464,7 @@ class CaptureService:
                     external_post_id=record.external_post_id,
                     permalink=record.permalink,
                     raw_json=record.model_dump_json(),
+                    raw_dom_snapshot_path=record.raw_dom_snapshot_path,
                 )
             )
 
@@ -309,7 +517,11 @@ class CaptureService:
         for position, reference in enumerate(record.images):
             try:
                 asset, downloaded = self._ingest_reference(
-                    session, reference, MediaKind.HISTORICAL, fixture_assets
+                    session,
+                    reference,
+                    MediaKind.HISTORICAL,
+                    fixture_assets,
+                    source_page_url=record.permalink,
                 )
                 if downloaded:
                     run.media_downloaded += 1
@@ -346,6 +558,7 @@ class CaptureService:
             post.id,
             {"capture_run_id": run.id, "training_eligible": post.is_training_eligible},
         )
+        return linked_count == len(record.images)
 
     def _ingest_reference(
         self,
@@ -353,6 +566,8 @@ class CaptureService:
         reference: ImageReference,
         kind: MediaKind,
         fixture_assets: dict[str, Path] | None,
+        *,
+        source_page_url: str | None = None,
     ) -> tuple[MediaAsset, bool]:
         source = self._resolve_reference(reference, fixture_assets)
         features = inspect_image(source)
@@ -360,6 +575,8 @@ class CaptureService:
             select(MediaAsset).where(MediaAsset.sha256 == features.sha256).limit(1)
         )
         if existing is not None:
+            if source_page_url and not existing.source_page_url:
+                existing.source_page_url = source_page_url
             if existing.embedding_model != features.embedding_model:
                 existing.width = features.width
                 existing.height = features.height
@@ -377,7 +594,7 @@ class CaptureService:
             kind=kind.value,
             local_path=relative,
             original_url=reference.url,
-            source_page_url=None,
+            source_page_url=source_page_url,
             source_domain=parsed.netloc or "fixture.local",
             original_filename=Path(parsed.path).name or f"{features.sha256}.jpg",
             mime_type=features.mime_type,
@@ -420,14 +637,17 @@ class CaptureService:
             response = client.get(reference.url)
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").split(";")[0]
-            if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            if content_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
                 raise ValueError(f"unsupported MIME type {content_type or 'unknown'}")
             if len(response.content) > self.settings.maximum_image_bytes:
                 raise ValueError("image exceeds configured maximum size")
             digest = hashlib.sha256(response.content).hexdigest()
-            extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[
-                content_type
-            ]
+            extension = {
+                "image/jpeg": ".jpg",
+                "image/png": ".png",
+                "image/webp": ".webp",
+                "image/gif": ".gif",
+            }[content_type]
             target = self.settings.resolved_data_dir / "raw" / "downloads" / f"{digest}{extension}"
             target.parent.mkdir(parents=True, exist_ok=True)
             if not target.exists():

@@ -32,6 +32,15 @@ class HistoricalAnnotation(StrictModel):
     confidence: HistoricalConfidence
 
 
+class HistoricalAnnotationResult(StrictModel):
+    post_id: int = Field(ge=1)
+    annotation: HistoricalAnnotation
+
+
+class HistoricalAnnotationBatch(StrictModel):
+    annotations: list[HistoricalAnnotationResult] = Field(min_length=1)
+
+
 class StyleSummary(StrictModel):
     summary: str
     cited_post_ids: list[int]

@@ -29,6 +29,9 @@ async def test_ten_day_workflow_actions_and_restart_persistence(
     assert len(generated["proposal_ids"]) == 10
     rows = proposals.list_proposals()
     assert len(rows) == 10
+    assert all(row["caption_rationale"] for row in rows)
+    assert all(row["caption_confidence"] is not None for row in rows)
+    assert all(row["caption_reference_post_ids"] for row in rows)
     timestamps = [datetime.fromisoformat(str(row["planned_publish_at"])) for row in rows]
     toronto = ZoneInfo("America/Toronto")
     assert [value.astimezone(toronto).hour for value in timestamps] == [10] * 10

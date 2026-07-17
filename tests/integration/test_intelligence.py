@@ -1,4 +1,5 @@
 import copy
+import math
 
 import pytest
 from sqlalchemy import func, select
@@ -29,7 +30,9 @@ async def test_analysis_correction_and_similarity_history(
 
     with database.session() as session:
         assert session.scalar(select(func.count(PostAnnotation.id))) == 9
-        assert session.scalar(select(func.count(ModelRun.id))) == 9
+        assert session.scalar(select(func.count(ModelRun.id))) == math.ceil(
+            9 / settings.analysis_batch_size
+        )
 
 
 @pytest.mark.asyncio
@@ -37,7 +40,11 @@ async def test_profile_is_reproducible_and_evaluation_is_measured(
     database: Database, settings: Settings
 ) -> None:
     CaptureService(database, settings).run_fixture()
-    await AnalysisService(database, settings).analyze_history()
+    analysis = AnalysisService(database, settings)
+    await analysis.analyze_history()
+    raw_post_two = analysis.effective_annotation(2)
+    raw_franchise = raw_post_two["effective"]["franchise"]
+    analysis.correct_annotation(2, {"franchise": "Reviewed profile franchise"})
     profiles = StyleProfileService(database, settings)
     first = await profiles.build()
     second = await profiles.build()
@@ -47,6 +54,13 @@ async def test_profile_is_reproducible_and_evaluation_is_measured(
     second_normalized.pop("version")
     assert first_normalized == second_normalized
     assert second["holdout_post_ids"]
+    distribution = dict(second["franchise_distribution"])
+    assert distribution["Reviewed profile franchise"] == 1
+    assert distribution.get(raw_franchise, 0) == 2
+    assert second["reviewed_training_annotation_post_ids"] == [2]
+    assert second["reviewed_catalogue_annotation_post_ids"] == [2]
+    assert second["corrected_training_annotation_post_ids"] == [2]
+    assert sum(count for _name, count in second["dominant_caption_structures"]) == 7
 
     evaluation = profiles.evaluate()
     assert evaluation["training_samples"] + evaluation["holdout_samples"] == 9
@@ -56,6 +70,9 @@ async def test_profile_is_reproducible_and_evaluation_is_measured(
 
     with database.session() as session:
         media_id = session.scalar(select(MediaAsset.id).order_by(MediaAsset.id).limit(1))
+        first_two = session.scalars(select(MediaAsset).order_by(MediaAsset.id).limit(2)).all()
+        assert len(first_two) == 2
+        first_two[1].embedding_vector = first_two[0].embedding_vector
     assert media_id is not None
     context = RetrievalService(database, settings).context_for_candidate(media_id)
     assert len(context["visual_examples"]) <= 8

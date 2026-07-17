@@ -13,6 +13,7 @@ from leeway.intelligence.profile import StyleProfileService
 
 class AnnotationCorrectionRequest(BaseModel):
     fields: dict[str, object] = Field(min_length=1)
+    review_note: str | None = Field(default=None, max_length=1000)
 
 
 def build_intelligence_router(database: Database, settings: Settings) -> APIRouter:
@@ -32,7 +33,11 @@ def build_intelligence_router(database: Database, settings: Settings) -> APIRout
     @router.patch("/annotations/{post_id}")
     def correct_annotation(post_id: int, payload: AnnotationCorrectionRequest) -> dict[str, object]:
         try:
-            return AnalysisService(database, settings).correct_annotation(post_id, payload.fields)
+            return AnalysisService(database, settings).review_annotation(
+                post_id,
+                payload.fields,
+                review_note=payload.review_note,
+            )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:

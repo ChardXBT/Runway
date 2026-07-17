@@ -19,6 +19,8 @@ from leeway.analysis.schemas import (
     CandidateAnalysis,
     CaptionOptions,
     HistoricalAnnotation,
+    HistoricalAnnotationBatch,
+    HistoricalAnnotationResult,
     SearchPlan,
     SearchQueryFamily,
     StyleSummary,
@@ -54,6 +56,10 @@ class AgentRuntime(Protocol):
     async def annotate_historical_post(
         self, payload: Mapping[str, Any]
     ) -> HistoricalAnnotation: ...
+
+    async def annotate_historical_posts(
+        self, payload: Mapping[str, Any]
+    ) -> HistoricalAnnotationBatch: ...
 
     async def build_style_summary(self, payload: Mapping[str, Any]) -> StyleSummary: ...
 
@@ -97,6 +103,22 @@ class MockAgentRuntime:
                 "caption": 0.95,
             },
         )
+
+    async def annotate_historical_posts(
+        self, payload: Mapping[str, Any]
+    ) -> HistoricalAnnotationBatch:
+        results: list[HistoricalAnnotationResult] = []
+        for raw_post in payload.get("posts", []):
+            if not isinstance(raw_post, Mapping):
+                continue
+            annotation = await self.annotate_historical_post(raw_post)
+            results.append(
+                HistoricalAnnotationResult(
+                    post_id=int(raw_post.get("post_id", 0)),
+                    annotation=annotation,
+                )
+            )
+        return HistoricalAnnotationBatch(annotations=results)
 
     async def build_style_summary(self, payload: Mapping[str, Any]) -> StyleSummary:
         post_ids = [int(value) for value in payload.get("representative_post_ids", [])]
@@ -206,7 +228,7 @@ class OpenAIAgentRuntime:
     ) -> SchemaT:
         instructions = (self.prompts / prompt_name).read_text(encoding="utf-8")
         public_payload = {key: value for key, value in payload.items() if not key.startswith("_")}
-        image_path = _validated_image_path(payload.get("_image_path"))
+        image_paths = _validated_image_paths(payload)
 
         def request() -> SchemaT:
             content: list[dict[str, str]] = [
@@ -215,7 +237,7 @@ class OpenAIAgentRuntime:
                     "text": json.dumps(public_payload, default=str),
                 }
             ]
-            if image_path is not None:
+            for image_path in image_paths:
                 encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
                 mime_type = {
                     ".jpg": "image/jpeg",
@@ -252,6 +274,15 @@ class OpenAIAgentRuntime:
 
     async def annotate_historical_post(self, payload: Mapping[str, Any]) -> HistoricalAnnotation:
         return await self._parse(HistoricalAnnotation, "annotate-history-v1.txt", payload)
+
+    async def annotate_historical_posts(
+        self, payload: Mapping[str, Any]
+    ) -> HistoricalAnnotationBatch:
+        return await self._parse(
+            HistoricalAnnotationBatch,
+            "annotate-history-batch-v2.txt",
+            payload,
+        )
 
     async def build_style_summary(self, payload: Mapping[str, Any]) -> StyleSummary:
         return await self._parse(StyleSummary, "style-summary-v1.txt", payload)
@@ -346,6 +377,8 @@ class CodexAgentRuntime:
                 env=self._safe_environment(),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 timeout=15,
             )
@@ -383,6 +416,8 @@ class CodexAgentRuntime:
                 env=self._safe_environment(),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 timeout=15,
             )
@@ -418,8 +453,8 @@ class CodexAgentRuntime:
     ) -> SchemaT:
         with self._execution_lock:
             self.login_status()
-            image_path = _validated_image_path(payload.get("_image_path"))
-            if require_image and image_path is None:
+            image_paths = _validated_image_paths(payload)
+            if require_image and not image_paths:
                 raise AgentRuntimeError("this Codex task requires a local image file")
             public_payload = {
                 key: value for key, value in payload.items() if not key.startswith("_")
@@ -464,7 +499,7 @@ class CodexAgentRuntime:
                     "--output-last-message",
                     str(output_path),
                 ]
-                if image_path is not None:
+                for image_path in image_paths:
                     command.extend(["--image", str(image_path)])
                 command.append("-")
                 try:
@@ -475,6 +510,8 @@ class CodexAgentRuntime:
                         input=prompt,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         check=False,
                         timeout=self.timeout_seconds,
                     )
@@ -534,6 +571,16 @@ class CodexAgentRuntime:
             require_image=True,
         )
 
+    async def annotate_historical_posts(
+        self, payload: Mapping[str, Any]
+    ) -> HistoricalAnnotationBatch:
+        return await self._parse(
+            HistoricalAnnotationBatch,
+            "annotate-history-batch-v2.txt",
+            payload,
+            require_image=True,
+        )
+
     async def build_style_summary(self, payload: Mapping[str, Any]) -> StyleSummary:
         return await self._parse(StyleSummary, "style-summary-v1.txt", payload)
 
@@ -564,6 +611,23 @@ def _validated_image_path(value: object) -> Path | None:
     if not path.is_file():
         raise AgentRuntimeError(f"model image file does not exist: {path}")
     return path
+
+
+def _validated_image_paths(payload: Mapping[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    single = _validated_image_path(payload.get("_image_path"))
+    if single is not None:
+        paths.append(single)
+    multiple = payload.get("_image_paths", [])
+    if multiple in (None, ""):
+        return paths
+    if not isinstance(multiple, (list, tuple)):
+        raise AgentRuntimeError("_image_paths must be a list of local image files")
+    for value in multiple:
+        path = _validated_image_path(value)
+        if path is not None:
+            paths.append(path)
+    return paths
 
 
 def runtime_for(settings: Settings) -> AgentRuntime:

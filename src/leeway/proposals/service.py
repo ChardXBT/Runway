@@ -138,6 +138,12 @@ class ProposalService:
                         planned_publish_at=planned_at.isoformat(),
                         recommended_caption=captions.recommended,
                         alternative_captions_json=json.dumps(captions.alternatives),
+                        caption_rationale=captions.rationale,
+                        caption_confidence=captions.confidence,
+                        caption_reference_post_ids_json=json.dumps(
+                            captions.referenced_historical_post_ids
+                        ),
+                        factual_uncertainty_warning=captions.factual_uncertainty_warning,
                         final_caption=captions.recommended,
                         status=ProposalStatus.GENERATING.value,
                         selection_reason=current.selection_reason,
@@ -378,12 +384,24 @@ class ProposalService:
             generated_before = {
                 "recommended": proposal.recommended_caption,
                 "alternatives": json.loads(proposal.alternative_captions_json),
+                "rationale": proposal.caption_rationale,
+                "confidence": proposal.caption_confidence,
+                "referenced_historical_post_ids": json.loads(
+                    proposal.caption_reference_post_ids_json
+                ),
+                "factual_uncertainty_warning": proposal.factual_uncertainty_warning,
             }
         captions = await self.caption_service.generate(candidate_id)
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
             proposal.recommended_caption = captions.recommended
             proposal.alternative_captions_json = json.dumps(captions.alternatives)
+            proposal.caption_rationale = captions.rationale
+            proposal.caption_confidence = captions.confidence
+            proposal.caption_reference_post_ids_json = json.dumps(
+                captions.referenced_historical_post_ids
+            )
+            proposal.factual_uncertainty_warning = captions.factual_uncertainty_warning
             # A user-edited final caption is authoritative and survives regeneration.
             proposal.final_caption = final_before
             self._event(
@@ -394,6 +412,10 @@ class ProposalService:
                 {
                     "recommended": captions.recommended,
                     "alternatives": captions.alternatives,
+                    "rationale": captions.rationale,
+                    "confidence": captions.confidence,
+                    "referenced_historical_post_ids": (captions.referenced_historical_post_ids),
+                    "factual_uncertainty_warning": captions.factual_uncertainty_warning,
                     "final_caption_preserved": True,
                 },
             )
@@ -460,6 +482,12 @@ class ProposalService:
             proposal.candidate_image_id = selected_id
             proposal.recommended_caption = captions.recommended
             proposal.alternative_captions_json = json.dumps(captions.alternatives)
+            proposal.caption_rationale = captions.rationale
+            proposal.caption_confidence = captions.confidence
+            proposal.caption_reference_post_ids_json = json.dumps(
+                captions.referenced_historical_post_ids
+            )
+            proposal.factual_uncertainty_warning = captions.factual_uncertainty_warning
             proposal.final_caption = captions.recommended
             proposal.style_score = replacement.style_score
             proposal.novelty_score = replacement.novelty_score
@@ -613,6 +641,10 @@ class ProposalService:
             "backup_candidate_ids": json.loads(proposal.backup_candidate_ids_json),
             "recommended_caption": proposal.recommended_caption,
             "alternative_captions": json.loads(proposal.alternative_captions_json),
+            "caption_rationale": proposal.caption_rationale,
+            "caption_confidence": proposal.caption_confidence,
+            "caption_reference_post_ids": json.loads(proposal.caption_reference_post_ids_json),
+            "factual_uncertainty_warning": proposal.factual_uncertainty_warning,
             "final_caption": proposal.final_caption,
             "selection_reason": proposal.selection_reason,
             "scores": {

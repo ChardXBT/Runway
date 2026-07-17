@@ -9,13 +9,23 @@ from typing import Any, cast
 import numpy as np
 from sqlalchemy import desc, func, select
 
-from leeway.analysis.features import aggregate_caption_features, qlob_style_score, text_embedding
+from leeway.analysis.features import (
+    aggregate_caption_features,
+    caption_features,
+    qlob_style_score,
+    text_embedding,
+)
 from leeway.analysis.runtime import AgentRuntime, runtime_for
-from leeway.analysis.service import image_matrix_for_posts
+from leeway.analysis.service import (
+    CORRECTION_OUTPUT_ALIASES,
+    AnalysisService,
+    effective_annotation_fields,
+    image_matrix_for_posts,
+)
 from leeway.config import Settings
 from leeway.db.base import Database
 from leeway.db.models import (
-    AnnotationCorrection,
+    AuditEvent,
     MediaAsset,
     ModelRun,
     Post,
@@ -30,7 +40,7 @@ from leeway.media.service import cosine_similarity, ensure_fixture_images, inspe
 
 
 class StyleProfileService:
-    schema_version = "style-profile-v1"
+    schema_version = "style-profile-v2"
 
     def __init__(
         self,
@@ -56,25 +66,30 @@ class StyleProfileService:
                 holdout_ids.extend(post.id for post in posts if post.id not in holdout_ids)
                 holdout_ids = holdout_ids[:holdout_count]
             training = [post for post in posts if post.id not in set(holdout_ids)]
-            annotations = {
+            all_annotations = {
                 annotation.post_id: annotation
                 for annotation in session.scalars(
                     select(PostAnnotation).where(
-                        PostAnnotation.post_id.in_([post.id for post in training])
+                        PostAnnotation.annotation_version == AnalysisService.annotation_version,
                     )
                 ).all()
             }
+            annotations = {
+                post.id: all_annotations[post.id] for post in training if post.id in all_annotations
+            }
             if len(annotations) < len(training):
                 raise ValueError("analyze history before building a style profile")
+            effective_annotations = {
+                post_id: effective_annotation_fields(annotation)
+                for post_id, annotation in annotations.items()
+            }
             caption_stats = aggregate_caption_features(post.caption or "" for post in training)
             median_words = float(caption_stats.get("median_words", 0))
-            representatives = sorted(
+            representatives = self._select_representatives(
                 training,
-                key=lambda post: (
-                    abs(len((post.caption or "").split()) - median_words),
-                    post.id,
-                ),
-            )[:5]
+                effective_annotations,
+                median_words,
+            )
             representative_media: dict[int, str | None] = {}
             for representative in representatives:
                 media = session.scalar(
@@ -90,14 +105,54 @@ class StyleProfileService:
                     else None
                 )
             franchise_counts = Counter(
-                annotations[post.id].franchise or "unknown" for post in training
+                str(effective_annotations[post.id]["franchise"] or "unknown") for post in training
             )
             character_counts: Counter[str] = Counter()
             for post in training:
-                character_counts.update(json.loads(annotations[post.id].characters_json))
-            visual_formats = Counter(annotations[post.id].visual_format for post in training)
-            structures = Counter(annotations[post.id].caption_structure for post in training)
-            compositions = Counter(annotations[post.id].composition for post in training)
+                character_counts.update(
+                    str(value)
+                    for value in cast(list[object], effective_annotations[post.id]["characters"])
+                )
+            visual_formats = Counter(
+                self._canonical_visual_format(str(effective_annotations[post.id]["visual_format"]))
+                for post in training
+            )
+            structures = Counter(
+                self._canonical_caption_structure(post.caption or "") for post in training
+            )
+            compositions = Counter(
+                self._canonical_composition(post, effective_annotations[post.id])
+                for post in training
+            )
+            raw_visual_formats = Counter(
+                str(effective_annotations[post.id]["visual_format"]) for post in training
+            )
+            raw_structures = Counter(
+                str(effective_annotations[post.id]["caption_structure"]) for post in training
+            )
+            raw_compositions = Counter(
+                str(effective_annotations[post.id]["composition"]) for post in training
+            )
+            reviewed_training_post_ids = sorted(
+                post_id
+                for post_id, annotation in annotations.items()
+                if annotation.review_status == "reviewed"
+            )
+            reviewed_catalogue_post_ids = sorted(
+                post_id
+                for post_id, annotation in all_annotations.items()
+                if annotation.review_status == "reviewed"
+            )
+            corrected_training_post_ids = sorted(
+                post_id
+                for post_id, annotation in annotations.items()
+                if json.loads(annotation.reviewed_fields_json or "{}")
+            )
+            corrected_catalogue_post_ids = sorted(
+                post_id
+                for post_id, annotation in all_annotations.items()
+                if json.loads(annotation.reviewed_fields_json or "{}")
+            )
             rejected = session.scalars(
                 select(Proposal)
                 .where(Proposal.status == "rejected")
@@ -114,17 +169,84 @@ class StyleProfileService:
             ) + 1
             cutoff = max(post.updated_at for post in posts)
 
+        representative_examples = [
+            {
+                "post_id": post.id,
+                "caption": post.caption,
+                "likes": post.like_count,
+                "comments": post.comment_count,
+                "franchise": effective_annotations[post.id]["franchise"],
+                "visual_format": effective_annotations[post.id]["visual_format"],
+                "composition": effective_annotations[post.id]["composition"],
+                "caption_structure": effective_annotations[post.id]["caption_structure"],
+                "humor_style": effective_annotations[post.id]["humor_style"],
+                "tone": effective_annotations[post.id]["tone"],
+                "profile_tags": {
+                    "caption_structure": self._canonical_caption_structure(post.caption or ""),
+                    "visual_format": self._canonical_visual_format(
+                        str(effective_annotations[post.id]["visual_format"])
+                    ),
+                    "composition": self._canonical_composition(
+                        post, effective_annotations[post.id]
+                    ),
+                },
+            }
+            for post in representatives
+        ]
+        chronological_examples = [
+            {
+                "post_id": post.id,
+                "caption": post.caption,
+                "published_at": post.published_at.isoformat() if post.published_at else None,
+                "franchise": effective_annotations[post.id]["franchise"],
+                "composition": self._canonical_composition(post, effective_annotations[post.id]),
+                "caption_structure": self._canonical_caption_structure(post.caption or ""),
+            }
+            for post in sorted(
+                training,
+                key=lambda item: (
+                    (
+                        item.published_at.replace(tzinfo=UTC)
+                        if item.published_at and item.published_at.tzinfo is None
+                        else item.published_at
+                    )
+                    or datetime.min.replace(tzinfo=UTC),
+                    item.id,
+                ),
+                reverse=True,
+            )[:20]
+        ]
         summary_payload: dict[str, object] = {
+            "schema_version": self.schema_version,
+            "annotation_version": AnalysisService.annotation_version,
+            "training_sample_count": len(training),
             "median_caption_words": caption_stats.get("median_words"),
             "question_frequency": caption_stats.get("question_frequency"),
+            "caption_statistics": caption_stats,
             "dominant_structures": structures.most_common(5),
             "visual_formats": visual_formats.most_common(5),
+            "visual_compositions": compositions.most_common(5),
+            "franchise_distribution": franchise_counts.most_common(5),
+            "character_distribution": character_counts.most_common(10),
             "representative_post_ids": [post.id for post in representatives],
+            "representative_examples": representative_examples,
+            "recent_chronological_examples": chronological_examples,
         }
         started = utcnow()
         summary = await self.runtime.build_style_summary(summary_payload)
+        supplied_summary_ids = {
+            cast(int, example["post_id"])
+            for example in representative_examples + chronological_examples
+        }
+        unknown_citations = set(summary.cited_post_ids) - supplied_summary_ids
+        if unknown_citations:
+            raise ValueError(
+                "style summary cited post IDs absent from its evidence payload: "
+                + ", ".join(str(value) for value in sorted(unknown_citations))
+            )
         profile: dict[str, Any] = {
             "schema_version": self.schema_version,
+            "annotation_version": AnalysisService.annotation_version,
             "version": next_version,
             "channel": self.settings.channel_name,
             "training_post_ids": [post.id for post in training],
@@ -134,13 +256,38 @@ class StyleProfileService:
             "dominant_caption_structures": structures.most_common(10),
             "visual_formats": visual_formats.most_common(10),
             "visual_compositions": compositions.most_common(10),
+            "raw_annotation_vocabulary": {
+                "caption_structures": raw_structures.most_common(20),
+                "visual_formats": raw_visual_formats.most_common(20),
+                "compositions": raw_compositions.most_common(20),
+            },
             "franchise_distribution": franchise_counts.most_common(),
             "character_distribution": character_counts.most_common(),
+            "reviewed_training_annotation_post_ids": reviewed_training_post_ids,
+            "reviewed_training_annotation_count": len(reviewed_training_post_ids),
+            "reviewed_catalogue_annotation_post_ids": reviewed_catalogue_post_ids,
+            "reviewed_catalogue_annotation_count": len(reviewed_catalogue_post_ids),
+            "corrected_training_annotation_post_ids": corrected_training_post_ids,
+            "corrected_training_annotation_count": len(corrected_training_post_ids),
+            "corrected_catalogue_annotation_post_ids": corrected_catalogue_post_ids,
+            "corrected_catalogue_annotation_count": len(corrected_catalogue_post_ids),
             "representative_positive_examples": [
                 {
                     "post_id": post.id,
                     "caption": post.caption,
                     "media_url": representative_media[post.id],
+                    "likes": post.like_count,
+                    "comments": post.comment_count,
+                    "annotation": effective_annotations[post.id],
+                    "profile_tags": {
+                        "caption_structure": self._canonical_caption_structure(post.caption or ""),
+                        "visual_format": self._canonical_visual_format(
+                            str(effective_annotations[post.id]["visual_format"])
+                        ),
+                        "composition": self._canonical_composition(
+                            post, effective_annotations[post.id]
+                        ),
+                    },
                 }
                 for post in representatives
             ],
@@ -266,9 +413,14 @@ class StyleProfileService:
                 annotation.post_id: annotation
                 for annotation in session.scalars(
                     select(PostAnnotation).where(
-                        PostAnnotation.post_id.in_(training_ids + holdout_ids)
+                        PostAnnotation.post_id.in_(training_ids + holdout_ids),
+                        PostAnnotation.annotation_version == AnalysisService.annotation_version,
                     )
                 )
+            }
+            effective_annotations = {
+                post_id: effective_annotation_fields(annotation)
+                for post_id, annotation in annotations.items()
             }
 
         matching = self._image_caption_matching(training_ids, holdout_ids, posts)
@@ -285,24 +437,40 @@ class StyleProfileService:
             ranking_hits += own > distractor
         ranking_accuracy = ranking_hits / len(holdout_ids) if holdout_ids else 0.0
 
+        reviewed_labels: dict[tuple[int, str], object] = {}
+        with self.database.session() as session:
+            review_events = session.scalars(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.event_type == "annotation_reviewed",
+                    AuditEvent.entity_type == "post",
+                )
+                .order_by(AuditEvent.created_at, AuditEvent.id)
+            ).all()
+            for event in review_events:
+                if event.entity_id is None:
+                    continue
+                details = json.loads(event.details_json)
+                if details.get("annotation_version") != AnalysisService.annotation_version:
+                    continue
+                expected_fields = details.get("expected_fields", {})
+                if not isinstance(expected_fields, dict):
+                    continue
+                for field, expected in expected_fields.items():
+                    reviewed_labels[(event.entity_id, field)] = expected
         reviewed_total = 0
         reviewed_correct = 0
-        with self.database.session() as session:
-            corrected = session.scalars(select(AnnotationCorrection)).all()
-            for correction in corrected:
-                annotation = session.get(PostAnnotation, correction.post_annotation_id)
-                if annotation is None:
-                    continue
-                original = json.loads(annotation.original_output_json)
-                aliases = {
-                    "characters": "visible_characters",
-                    "visual_format": "visual_medium",
-                    "emotion": "facial_emotional_cues",
-                    "text_in_image": "text_overlay",
-                }
-                for field, expected in json.loads(correction.fields_json).items():
-                    reviewed_total += 1
-                    reviewed_correct += original.get(aliases.get(field, field)) == expected
+        reviewed_post_ids: set[int] = set()
+        for (post_id, field), expected in reviewed_labels.items():
+            annotation = annotations.get(post_id)
+            if annotation is None:
+                continue
+            original = json.loads(annotation.original_output_json)
+            reviewed_total += 1
+            reviewed_post_ids.add(post_id)
+            reviewed_correct += (
+                original.get(CORRECTION_OUTPUT_ALIASES.get(field, field)) == expected
+            )
 
         retrieval_hits = 0
         train_matrix, train_matched = image_matrix_for_posts(self.database, training_ids)
@@ -310,10 +478,11 @@ class StyleProfileService:
         for vector, post_id in zip(holdout_matrix, holdout_matched, strict=True):
             similarities = train_matrix @ vector
             top_indices = np.argsort(similarities)[::-1][:3]
-            expected = annotations.get(post_id)
+            expected = effective_annotations.get(post_id)
             if expected and any(
-                annotations.get(train_matched[index])
-                and annotations[train_matched[index]].franchise == expected.franchise
+                effective_annotations.get(train_matched[index])
+                and effective_annotations[train_matched[index]]["franchise"]
+                == expected["franchise"]
                 for index in top_indices
             ):
                 retrieval_hits += 1
@@ -331,13 +500,20 @@ class StyleProfileService:
                 round(reviewed_correct / reviewed_total, 6) if reviewed_total else None
             ),
             "reviewed_annotation_fields": reviewed_total,
+            "reviewed_annotation_posts": len(reviewed_post_ids),
+            "review_sample_strategy": "manual uncertainty/outlier audit; not a random sample",
             "duplicate_detection": duplicate_metrics,
             "retrieval_top3_franchise_relevance": round(retrieval_relevance, 6),
             "sample_errors": matching.get("errors", []),
             "limitations": [
-                "Synthetic fixture metrics are directional and do not establish "
-                "real-channel quality.",
-                "Reviewed annotation accuracy is null until a human correction exists.",
+                "Image-caption matching, caption ranking, and retrieval relevance use the "
+                "captured channel holdout; duplicate transformation recall uses controlled "
+                "synthetic fixtures.",
+                "Reviewed annotation accuracy covers only fields with a recorded human "
+                "review and uses an uncertainty/outlier sample, so it is not an unbiased "
+                "full-catalogue accuracy estimate.",
+                "YouTube exposed relative publication dates, so reconstructed timestamps "
+                "are approximate.",
                 "The system builds a retrieval profile; it does not fine-tune model weights.",
             ],
         }
@@ -406,6 +582,7 @@ class StyleProfileService:
         true_positives = sum(transformed_match(candidate) for candidate in positives)
         false_positive = transformed_match(negative)
         return {
+            "evaluation_source": "controlled synthetic transformations",
             "exact_identity_passed": original.sha256 == original.sha256,
             "transformed_true_positive_rate": round(true_positives / len(positives), 6),
             "unrelated_false_positive_rate": float(false_positive),
@@ -426,6 +603,146 @@ class StyleProfileService:
             }
             for post in selected
         ]
+
+    @staticmethod
+    def _select_representatives(
+        posts: list[Post],
+        annotations: dict[int, dict[str, object]],
+        median_words: float,
+        *,
+        limit: int = 8,
+    ) -> list[Post]:
+        """Select typical but structurally varied examples deterministically."""
+        remaining = list(posts)
+        selected: list[Post] = []
+        seen_structures: set[str] = set()
+        seen_compositions: set[str] = set()
+        seen_formats: set[str] = set()
+        seen_question_states: set[bool] = set()
+        max_distance = (
+            max(
+                (abs(len((post.caption or "").split()) - median_words) for post in posts),
+                default=1.0,
+            )
+            or 1.0
+        )
+        while remaining and len(selected) < min(limit, len(posts)):
+
+            def score(post: Post) -> tuple[float, int, int]:
+                annotation = annotations[post.id]
+                structure = StyleProfileService._canonical_caption_structure(post.caption or "")
+                composition = StyleProfileService._canonical_composition(post, annotation)
+                visual_format = StyleProfileService._canonical_visual_format(
+                    str(annotation["visual_format"])
+                )
+                is_question = "?" in (post.caption or "")
+                novelty = (
+                    3.0 * (structure not in seen_structures)
+                    + 2.0 * (composition not in seen_compositions)
+                    + 1.0 * (visual_format not in seen_formats)
+                    + 1.0 * (is_question not in seen_question_states)
+                )
+                typicality = 1.0 - (
+                    abs(len((post.caption or "").split()) - median_words) / max_distance
+                )
+                engagement = (post.like_count or 0) + 3 * (post.comment_count or 0)
+                return novelty + typicality, engagement, -post.id
+
+            chosen = max(remaining, key=score)
+            selected.append(chosen)
+            remaining.remove(chosen)
+            effective = annotations[chosen.id]
+            seen_structures.add(
+                StyleProfileService._canonical_caption_structure(chosen.caption or "")
+            )
+            seen_compositions.add(StyleProfileService._canonical_composition(chosen, effective))
+            seen_formats.add(
+                StyleProfileService._canonical_visual_format(str(effective["visual_format"]))
+            )
+            seen_question_states.add("?" in (chosen.caption or ""))
+        return selected
+
+    @staticmethod
+    def _canonical_caption_structure(caption: str) -> str:
+        features = caption_features(caption)
+        words = cast(list[str], features["tokens"])
+        lowered = caption.strip().lower()
+        if lowered.startswith(("http://", "https://")):
+            return "link share"
+        if any(marker in lowered for marker in ("credit", "drawn by", "art by", "artist:")):
+            return "attribution or credit"
+        if int(features["word_count"]) == 1:
+            return "single word"
+        if bool(features["has_question"]):
+            return "direct question"
+        if '"' in caption or "“" in caption or "”" in caption:
+            return "quoted line or reference"
+        if bool(features["has_exclamation"]):
+            return "exclamatory statement"
+        if words and words[0] in {"i", "i'm", "im", "we", "my", "our"}:
+            return "first-person reaction"
+        if int(features["word_count"]) <= 3:
+            return "short phrase"
+        if int(features["word_count"]) <= 7:
+            return "short statement"
+        return "long statement"
+
+    @staticmethod
+    def _canonical_visual_format(value: str) -> str:
+        lowered = value.lower()
+        if any(marker in lowered for marker in ("collage", "contact sheet", "multi-panel")):
+            return "collage or multi-panel"
+        if "screenshot" in lowered and any(
+            marker in lowered for marker in ("social", "reddit", "post", "web")
+        ):
+            return "social-media screenshot"
+        if any(
+            marker in lowered for marker in ("product", "packaging", "merchandise", "toy", "candy")
+        ):
+            return "product or merchandise image"
+        if any(
+            marker in lowered
+            for marker in ("fan art", "artwork", "drawing", "illustration", "spreadsheet")
+        ):
+            return "artwork or constructed image"
+        if any(marker in lowered for marker in ("animation", "animated", "television still")):
+            return "animated still or frame"
+        if "photograph" in lowered or "photo" in lowered:
+            return "photograph"
+        if "screenshot" in lowered:
+            return "screenshot"
+        return "other visual format"
+
+    @staticmethod
+    def _canonical_composition(post: Post, annotation: dict[str, object]) -> str:
+        value = str(annotation["composition"]).lower()
+        visible_count = int(cast(int, annotation["visible_character_count"]))
+        if post.post_type == "multi_image":
+            return "multi-image comparison"
+        if any(marker in value for marker in ("split", "comparison", "side-by-side")):
+            return "split or comparison"
+        if "close-up" in value or "close up" in value:
+            return "close-up"
+        if any(marker in value for marker in ("crowd", "group", "many characters")):
+            return "group or crowd"
+        if "overhead" in value or "top-down" in value:
+            return "overhead scene"
+        if any(marker in value for marker in ("wide shot", "wide view", "landscape")):
+            return "wide scene"
+        if any(
+            marker in value
+            for marker in ("product", "packaging", "newspaper", "poster", "sign", "object")
+        ):
+            return "object-focused"
+        if visible_count == 0:
+            return "environment or object"
+        if visible_count == 1:
+            return "single-character scene"
+        if visible_count == 2:
+            return "two-character scene"
+        if visible_count >= 4:
+            return "group or crowd"
+        return "multi-character scene"
 
     def _write_profile_reports(self, version: int, profile: dict[str, Any]) -> None:
         reports = self.settings.resolved_data_dir / "reports"
