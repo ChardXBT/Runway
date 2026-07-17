@@ -6,12 +6,12 @@ events. Repository helpers own SQLite transactions. Provider and runtime protoco
 external integration code.
 
 ```text
-headed/manual/fixture inputs -> canonical catalogue + media -> profile/retrieval
-                                                        -> Codex image analysis
-                                                        -> discovery/ranking
-                                                        -> Codex captions/proposals
-                                                        -> human approval
-                                                        -> InternalPublisher only
+headed/browser-agent/manual/fixture inputs -> canonical catalogue + media -> profile/retrieval
+                                                                      -> Codex image analysis
+                                                                      -> discovery/ranking
+                                                                      -> Codex captions/proposals
+                                                                      -> human approval
+                                                                      -> InternalPublisher only
 ```
 
 The offline fixture path uses the mock runtime. The real model path uses the project-local Codex

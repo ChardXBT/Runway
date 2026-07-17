@@ -10,4 +10,23 @@ authentication, consent, account selection, CAPTCHA, unexpected navigation, or l
 confidence. `Ctrl+C` stops after the current transaction; rerun with `--resume`. Errors save an
 HTML snapshot, screenshot, and JSON diagnostic under `data/snapshots/`.
 
+Use the canonical Qlob channel-ID route:
+
+```powershell
+.\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts" --headed --resume
+```
+
+YouTube can pause at continuation boundaries or replace continuation elements while they are being
+observed. LeeWay therefore ignores layout-height jitter, retries detached continuation renderers,
+uses bounded scroll/bounce probes, and declares the surface complete only after both 30 unchanged
+probes and 90 sustained seconds with no new card count or tail post ID. An explicit live
+`--resume` can reopen the latest completed checkpoint without duplicating post IDs.
+
+An already controlled local browser agent can checkpoint immutable card DOM through
+`POST /api/capture/browser-checkpoint`. This bridge is loopback-only, requires the explicit
+`X-Leeway-Capture-Source: browser-agent` header, accepts at most ten cards and 4 MiB per request,
+accepts only HTTPS YouTube channel URLs, and feeds the same idempotent capture run. It cannot
+publish. Finalization additionally requires the stored post count, independently observed surface
+count, and final tail post ID to agree exactly.
+
 Fixture mode is the only capture path used by setup and automated tests.

@@ -24,12 +24,12 @@ verified as `PRIVATE` after the initial push.
   real-account and live-publisher acceptance work.
 - Verified saved `Sign in with ChatGPT` authentication and passed one real Luna/low structured
   image request with API fallback disabled.
-- Current checks: Ruff passed, Mypy strict passed, Pytest `38 passed`, ESLint passed,
+- Current checks: Ruff passed, Mypy strict passed, Pytest `43 passed`, ESLint passed,
   Vitest `2 passed`, the Next.js production build passed, and both npm audits found zero known
   vulnerabilities.
-- Captured and verified all 200 posts exposed by Qlob's Community surface, annotated all 200 in
-  forty resumable batches, and built 19,900 similarity edges.
-- Built real style profile v3, exercised a bounded six-candidate live search, and generated one
+- Captured and verified all 771 posts exposed by Qlob's Community surface, annotated all 698
+  image+caption records, and built 243,253 similarity edges.
+- Built real style profile v4, exercised a bounded six-candidate live search, and generated one
   `needs_review` proposal that survived API and web restarts without any YouTube action.
 
 ## Milestone delivery
@@ -200,7 +200,7 @@ To operate the same stages individually:
 - Ruff lint: passed.
 - Ruff format check: 75 files formatted.
 - Mypy strict mode: 57 source files, no issues.
-- Pytest: 38 passed, including capture hardening, resumable batch analysis, discovery safeguards,
+- Pytest: 43 passed, including capture hardening, resumable batch analysis, discovery safeguards,
   proposal grounding persistence, and the full offline workflow.
 - ESLint: passed.
 - Vitest: 2 component test files and 2 tests passed.

@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
-from playwright.sync_api import BrowserContext, Locator, Page, sync_playwright
+from playwright.sync_api import (
+    BrowserContext,
+    Locator,
+    Page,
+    sync_playwright,
+)
+from playwright.sync_api import (
+    Error as PlaywrightError,
+)
 
 from leeway.capture.adapter import YouTubeCommunityPostsAdapterV1
 from leeway.capture.schemas import ExtractedPost, ExtractionDiagnostic
@@ -47,7 +56,11 @@ class BrowserCaptureService:
         progress: Callable[[str], None] = print,
     ) -> CaptureResult:
         parsed = urlparse(channel_url)
-        if parsed.scheme != "https" or "youtube.com" not in parsed.netloc:
+        if parsed.scheme != "https" or (parsed.hostname or "").lower() not in {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+        }:
             raise ValueError("capture requires an explicit HTTPS youtube.com channel URL")
         mode = CaptureMode.CDP if cdp_url else CaptureMode.MANAGED_BROWSER
         delay = delay_ms or self.settings.capture_scroll_delay_ms
@@ -70,6 +83,7 @@ class BrowserCaptureService:
                 self._verify_surface(page, channel_url)
                 progress(f"Verified read-only Posts surface: {page.url}")
                 idle_cycles = 0
+                idle_started_at: float | None = None
                 seen = self.capture.active_seen_keys(mode) if resume else set()
                 cycle = 0
                 previous_surface: tuple[int, int, str] | None = None
@@ -77,7 +91,7 @@ class BrowserCaptureService:
                 unresolved_media = 0
                 unresolved_storage = 0
                 blocking_diagnostics = 0
-                while idle_cycles < self.settings.capture_idle_cycles_before_stop:
+                while True:
                     if limit_reached:
                         break
                     cycle += 1
@@ -94,7 +108,7 @@ class BrowserCaptureService:
                         diagnostic.code == "lazy_media_pending" for diagnostic in diagnostics
                     )
                     surface = self._surface_state(page, card_count)
-                    surface_grew = previous_surface is None or surface != previous_surface
+                    surface_grew = self._surface_advanced(previous_surface, surface)
                     previous_surface = surface
                     seen_before = len(seen)
                     latest = self.capture.append_records(
@@ -147,19 +161,37 @@ class BrowserCaptureService:
                             },
                             save_all_snapshots,
                         )
-                    idle_cycles = 0 if persisted_new > 0 or surface_grew else idle_cycles + 1
+                    if persisted_new > 0 or surface_grew:
+                        idle_cycles = 0
+                        idle_started_at = None
+                    else:
+                        idle_cycles += 1
+                        idle_started_at = idle_started_at or time.monotonic()
+                    idle_seconds = (
+                        0.0
+                        if idle_started_at is None
+                        else max(0.0, time.monotonic() - idle_started_at)
+                    )
                     if max_posts is not None and len(seen) >= max_posts:
                         limit_reached = True
                         break
-                    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
-                    page.wait_for_timeout(delay)
+                    if self._plateau_reached(idle_cycles, idle_seconds):
+                        break
+                    self._advance_surface(
+                        page,
+                        delay_ms=delay,
+                        idle_cycles=idle_cycles,
+                    )
+                idle_seconds = (
+                    0.0 if idle_started_at is None else max(0.0, time.monotonic() - idle_started_at)
+                )
                 completed = bool(seen) and all(
                     (
                         not limit_reached,
                         unresolved_media == 0,
                         unresolved_storage == 0,
                         blocking_diagnostics == 0,
-                        idle_cycles >= self.settings.capture_idle_cycles_before_stop,
+                        self._plateau_reached(idle_cycles, idle_seconds),
                     )
                 )
                 completion_reason = (
@@ -191,6 +223,7 @@ class BrowserCaptureService:
                     finalize=completed,
                     cursor_updates={
                         "idle_cycles": idle_cycles,
+                        "idle_seconds": round(idle_seconds, 3),
                         "completion_reason": completion_reason,
                         "capture_finished_at": datetime.now(UTC).isoformat(),
                     },
@@ -205,6 +238,58 @@ class BrowserCaptureService:
                 raise
             finally:
                 context.close()
+
+    def _plateau_reached(self, idle_cycles: int, idle_seconds: float) -> bool:
+        return bool(
+            idle_cycles >= self.settings.capture_idle_cycles_before_stop
+            and idle_seconds >= self.settings.capture_idle_seconds_before_stop
+        )
+
+    @staticmethod
+    def _surface_advanced(
+        previous: tuple[int, int, str] | None,
+        current: tuple[int, int, str],
+    ) -> bool:
+        if previous is None:
+            return True
+        previous_count, _previous_height, previous_tail = previous
+        current_count, _current_height, current_tail = current
+        return bool(
+            current_count > previous_count or (current_tail and current_tail != previous_tail)
+        )
+
+    @staticmethod
+    def _advance_surface(page: Page, *, delay_ms: int, idle_cycles: int) -> None:
+        """Probe YouTube's continuation boundary without clicking or mutating the page."""
+        page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+        continuation = page.locator("ytd-continuation-item-renderer:visible").last
+        try:
+            if continuation.count():
+                continuation.scroll_into_view_if_needed(timeout=5_000)
+        except PlaywrightError:
+            # YouTube frequently replaces the continuation renderer while it
+            # loads. The subsequent wheel/bottom probes are equivalent and
+            # must not be aborted by that transient detached-element race.
+            pass
+        page.mouse.wheel(0, 2_400)
+
+        # A small bounce re-enters the continuation observer when scrollTo()
+        # repeatedly lands on the same height during a temporary loading pause.
+        if idle_cycles and idle_cycles % 3 == 0:
+            page.evaluate(
+                """
+                () => window.scrollBy(
+                    0,
+                    -Math.max(700, Math.floor(window.innerHeight * 0.8))
+                )
+                """
+            )
+            page.wait_for_timeout(min(max(delay_ms // 3, 250), 750))
+            page.mouse.wheel(0, 3_600)
+            page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+
+        backoff_ms = min(idle_cycles * 150, 2_500)
+        page.wait_for_timeout(delay_ms + backoff_ms)
 
     @staticmethod
     def _verify_surface(page: Page, requested_url: str) -> None:
@@ -294,7 +379,7 @@ class BrowserCaptureService:
                         "capture_page_url": page.url,
                     }
                 )
-                post.raw_dom_snapshot_path = self._save_post_snapshot(post, outer_html)
+                post.raw_dom_snapshot_path = self.capture.save_post_snapshot(post, outer_html)
                 records.append(post)
                 if len(records) % 25 == 0:
                     progress(f"Prepared {len(records)} new post cards in this checkpoint.")
@@ -334,15 +419,6 @@ class BrowserCaptureService:
                 return True
             page.wait_for_timeout(250)
         return False
-
-    def _save_post_snapshot(self, post: ExtractedPost, html: str) -> str:
-        key = post.stable_key() or f"unkeyed-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
-        safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)[:120]
-        path = self.settings.resolved_data_dir / "captures" / "posts" / f"{safe_key}.html"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            path.write_text(html, encoding="utf-8")
-        return path.relative_to(self.settings.resolved_data_dir).as_posix()
 
     @staticmethod
     def _surface_state(page: Page, card_count: int) -> tuple[int, int, str]:

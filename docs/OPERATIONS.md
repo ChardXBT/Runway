@@ -31,7 +31,7 @@ commands from separate terminals.
 ## Real-data order
 
 ```powershell
-.\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/@Qlob/posts" --headed --resume
+.\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts" --headed --resume
 .\.venv\Scripts\leeway.exe catalog verify
 .\.venv\Scripts\leeway.exe analyze history --resume
 .\.venv\Scripts\leeway.exe profile build

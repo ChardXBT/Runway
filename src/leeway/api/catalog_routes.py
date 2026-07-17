@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from leeway.capture.schemas import BrowserDomSnapshot
 from leeway.capture.service import CaptureService
 from leeway.catalog.service import CatalogService
 from leeway.config import Settings
@@ -19,6 +20,15 @@ class FixtureCaptureRequest(BaseModel):
 
 class EligibilityRequest(BaseModel):
     is_training_eligible: bool
+
+
+class BrowserCheckpointRequest(BaseModel):
+    channel_url: str
+    records: list[BrowserDomSnapshot] = Field(min_length=1, max_length=10)
+    surface_card_count: int = Field(ge=1)
+    surface_tail_key: str = Field(min_length=1, max_length=200)
+    finalize: bool = False
+    expected_total: int | None = Field(default=None, ge=1)
 
 
 def build_catalog_router(database: Database, settings: Settings) -> APIRouter:
@@ -37,6 +47,28 @@ def build_catalog_router(database: Database, settings: Settings) -> APIRouter:
             max_posts=payload.max_posts,
             dry_run=payload.dry_run,
         ).model_dump()
+
+    @router.post("/capture/browser-checkpoint")
+    def ingest_browser_checkpoint(
+        payload: BrowserCheckpointRequest,
+        x_leeway_capture_source: str = Header(),
+    ) -> dict[str, object]:
+        if x_leeway_capture_source != "browser-agent":
+            raise HTTPException(status_code=400, detail="invalid browser capture source")
+        encoded_size = sum(len(record.html.encode("utf-8")) for record in payload.records)
+        if encoded_size > 4 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="browser checkpoint exceeds 4 MiB")
+        try:
+            return capture.append_dom_checkpoint(
+                payload.records,
+                channel_url=payload.channel_url,
+                surface_card_count=payload.surface_card_count,
+                surface_tail_key=payload.surface_tail_key,
+                finalize=payload.finalize,
+                expected_total=payload.expected_total,
+            ).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.get("/catalog/status")
     def catalog_status() -> dict[str, object]:

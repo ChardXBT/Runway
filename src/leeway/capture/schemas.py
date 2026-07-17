@@ -40,6 +40,11 @@ class ExtractionDiagnostic(BaseModel):
     snippet: str | None = None
 
 
+class BrowserDomSnapshot(BaseModel):
+    html: str = Field(min_length=1, max_length=1_000_000)
+    observed_at: datetime
+
+
 class ExtractionBatch(BaseModel):
     posts: list[ExtractedPost]
     diagnostics: list[ExtractionDiagnostic] = Field(default_factory=list)

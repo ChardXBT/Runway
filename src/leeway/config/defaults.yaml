@@ -9,5 +9,6 @@ duplicate_window_days: 180
 approval_required: true
 publishing_enabled: false
 capture_scroll_delay_ms: 1800
-capture_idle_cycles_before_stop: 5
+capture_idle_cycles_before_stop: 30
+capture_idle_seconds_before_stop: 90
 capture_checkpoint_every: 10

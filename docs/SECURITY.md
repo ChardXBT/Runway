@@ -4,6 +4,9 @@
 - `.env`, databases, media, snapshots, and browser profiles are ignored by Git.
 - No Google password or owner credential is requested or stored.
 - Live browser adapters are headed, explicit, challenge-aware, and contain no stealth/evasion.
+- The local browser-agent capture bridge accepts only bounded HTTPS YouTube DOM checkpoints,
+  requires an explicit source header, and validates exact count/tail agreement before completion.
+  It has no publishing capability.
 - External images retain provenance and default to unknown rights status.
 - Search planning excludes fan art, personal artwork, portfolios, commissions, and independent
   illustrations. Model-detected fan art or personal artwork is warned at probability `> 0.25` and

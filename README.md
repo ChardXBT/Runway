@@ -71,14 +71,16 @@ external credentials.
 After reviewing `docs/CAPTURE.md` and installing Chromium:
 
 ```powershell
-.\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/@Qlob/posts" --headed --resume
+.\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts" --headed --resume
 ```
 
 Leeway prints the dedicated profile path, asks for confirmation, opens a visible browser, and
 pauses for manual authentication, consent, account selection, or CAPTCHA handling. Press
 `Ctrl+C` once to stop safely; checkpoints are committed every ten unique posts by default. Run the
 same command with `--resume` to continue. Diagnostics are written to `data/snapshots/` and capture
-state is stored in SQLite.
+state is stored in SQLite. A live run can reopen its latest completed checkpoint because a
+temporary YouTube continuation plateau is not proof of the end. Completion requires at least 30
+unchanged probes and 90 sustained seconds with no new card count or tail post ID.
 
 Inspect the local result with:
 
@@ -152,8 +154,9 @@ status defaults to `unknown` until reviewed.
   production searches can still encounter provider challenges or layout changes.
 - Adding a caption does not by itself prove that an internet image is reusable. Rights remain
   `unknown` until human review; likely fan art and independently created artwork are rejected.
-- Exact historical image-to-caption recovery measured 0/40 on the Qlob holdout, so generated
-  captions remain suggestions requiring human judgment.
+- On the complete profile-v4 holdout, exact historical image-to-caption recovery measured 3/140
+  and Qlob-caption ranking measured 35/140. Generated captions therefore remain suggestions
+  requiring human judgment.
 - Live YouTube scheduling and publishing are not implemented.
 
 See `docs/COMPLETION_GUIDE.md` for the remaining path to production,

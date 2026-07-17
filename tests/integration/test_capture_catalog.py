@@ -1,13 +1,14 @@
 from pathlib import Path
 
+import pytest
 from sqlalchemy import func, select
 
-from leeway.capture.schemas import ExtractedPost, ImageReference
+from leeway.capture.schemas import BrowserDomSnapshot, ExtractedPost, ImageReference
 from leeway.capture.service import CaptureService
 from leeway.catalog.service import CatalogService
 from leeway.config import Settings
 from leeway.db.base import Database
-from leeway.db.models import MediaAsset, Post, RawPostRecord
+from leeway.db.models import CaptureRun, MediaAsset, Post, PostMedia, RawPostRecord
 from leeway.domain.enums import CaptureMode, PostType
 
 
@@ -90,6 +91,179 @@ def test_live_checkpoint_retries_media_before_advancing_cursor(
         raw = session.scalar(select(RawPostRecord).where(RawPostRecord.record_key == "UgkxRetry"))
         assert raw is not None
         assert raw.raw_dom_snapshot_path == snapshot
+
+
+def test_completed_live_capture_reopens_in_place_on_explicit_resume(
+    database: Database, settings: Settings
+) -> None:
+    capture = CaptureService(database, settings)
+    first = ExtractedPost(
+        external_post_id="UgkxFirst",
+        permalink="https://www.youtube.com/post/UgkxFirst",
+        post_type=PostType.IMAGE,
+        caption="First live checkpoint.",
+        images=[ImageReference(url="fixture://history-01")],
+    )
+    completed = capture.append_records(
+        [first],
+        mode=CaptureMode.MANAGED_BROWSER,
+        channel_url="https://www.youtube.com/@Qlob/posts",
+        finalize=True,
+    )
+    assert completed.status == "completed"
+    assert capture.active_seen_keys(CaptureMode.MANAGED_BROWSER) == {"UgkxFirst"}
+
+    second = ExtractedPost(
+        external_post_id="UgkxSecond",
+        permalink="https://www.youtube.com/post/UgkxSecond",
+        post_type=PostType.IMAGE,
+        caption="Second live checkpoint.",
+        images=[ImageReference(url="fixture://history-02")],
+    )
+    resumed = capture.append_records(
+        [second],
+        mode=CaptureMode.MANAGED_BROWSER,
+        channel_url="https://www.youtube.com/@Qlob/posts",
+        resume=True,
+    )
+
+    assert resumed.run_id == completed.run_id
+    assert resumed.status == "paused"
+    assert resumed.posts_seen == 2
+    assert capture.active_seen_keys(CaptureMode.MANAGED_BROWSER) == {
+        "UgkxFirst",
+        "UgkxSecond",
+    }
+    with database.session() as session:
+        run = session.get(CaptureRun, resumed.run_id)
+        assert run is not None
+        assert run.completed_at is None
+
+
+def test_browser_agent_checkpoint_is_bounded_idempotent_and_exactly_finalized(
+    database: Database, settings: Settings
+) -> None:
+    capture = CaptureService(database, settings)
+    html = """
+    <ytd-backstage-post-thread-renderer>
+      <a href="/post/UgkxBrowserAgent">permalink</a>
+      <yt-formatted-string id="content-text">Browser-agent truth.</yt-formatted-string>
+      <yt-formatted-string id="published-time-text">2 days ago</yt-formatted-string>
+      <ytd-backstage-image-renderer>
+        <img src="fixture://history-01">
+      </ytd-backstage-image-renderer>
+    </ytd-backstage-post-thread-renderer>
+    """
+    snapshot = BrowserDomSnapshot(
+        html=html,
+        observed_at="2026-07-17T12:00:00Z",
+    )
+    checkpoint = capture.append_dom_checkpoint(
+        [snapshot],
+        channel_url="https://www.youtube.com/channel/test/posts",
+        surface_card_count=1,
+        surface_tail_key="UgkxBrowserAgent",
+    )
+    assert checkpoint.posts_seen == 1
+    assert checkpoint.status == "paused"
+
+    with pytest.raises(ValueError, match="surface tail"):
+        capture.append_dom_checkpoint(
+            [snapshot],
+            channel_url="https://www.youtube.com/channel/test/posts",
+            surface_card_count=1,
+            surface_tail_key="UgkxWrongTail",
+            finalize=True,
+            expected_total=1,
+        )
+
+    completed = capture.append_dom_checkpoint(
+        [snapshot],
+        channel_url="https://www.youtube.com/channel/test/posts",
+        surface_card_count=1,
+        surface_tail_key="UgkxBrowserAgent",
+        finalize=True,
+        expected_total=1,
+    )
+    assert completed.run_id == checkpoint.run_id
+    assert completed.posts_seen == 1
+    assert completed.status == "completed"
+    assert (settings.resolved_data_dir / "captures" / "posts" / "UgkxBrowserAgent.html").is_file()
+
+
+def test_browser_agent_checkpoint_rejects_non_youtube_sources(
+    database: Database, settings: Settings
+) -> None:
+    capture = CaptureService(database, settings)
+    snapshot = BrowserDomSnapshot(
+        html="<ytd-backstage-post-thread-renderer />",
+        observed_at="2026-07-17T12:00:00Z",
+    )
+    try:
+        capture.append_dom_checkpoint(
+            [snapshot],
+            channel_url="https://example.com/posts",
+            surface_card_count=1,
+            surface_tail_key="not-used",
+        )
+    except ValueError as exc:
+        assert "youtube.com" in str(exc)
+    else:
+        raise AssertionError("non-YouTube browser checkpoint was accepted")
+
+
+def test_capture_deduplicates_identical_media_references_within_one_post(
+    database: Database, settings: Settings
+) -> None:
+    capture = CaptureService(database, settings)
+    duplicate_gallery = ExtractedPost(
+        external_post_id="UgkxDuplicateGallery",
+        permalink="https://www.youtube.com/post/UgkxDuplicateGallery",
+        post_type=PostType.MULTI_IMAGE,
+        caption="The same canonical image appears twice.",
+        images=[
+            ImageReference(url="fixture://history-01"),
+            ImageReference(url="fixture://history-01"),
+        ],
+    )
+    duplicate_gallery.raw_dom_snapshot_path = capture.save_post_snapshot(
+        duplicate_gallery,
+        """
+        <ytd-backstage-post-thread-renderer>
+          <a href="/post/UgkxDuplicateGallery">permalink</a>
+          <yt-formatted-string id="content-text">
+            The same canonical image appears twice.
+          </yt-formatted-string>
+          <ytd-backstage-image-renderer>
+            <img src="fixture://history-01">
+          </ytd-backstage-image-renderer>
+          <ytd-backstage-image-renderer>
+            <img src="fixture://history-01">
+          </ytd-backstage-image-renderer>
+        </ytd-backstage-post-thread-renderer>
+        """,
+    )
+
+    result = capture.append_records(
+        [duplicate_gallery],
+        mode=CaptureMode.MANAGED_BROWSER,
+        channel_url="https://www.youtube.com/@Qlob/posts",
+    )
+
+    assert result.posts_seen == 1
+    with database.session() as session:
+        post = session.scalar(select(Post).where(Post.external_post_id == "UgkxDuplicateGallery"))
+        assert post is not None
+        assert post.is_training_eligible is True
+        assert (
+            session.scalar(
+                select(func.count(PostMedia.media_asset_id)).where(PostMedia.post_id == post.id)
+            )
+            == 1
+        )
+    reparse = capture.reparse_snapshots(run_id=result.run_id, dry_run=True)
+    assert reparse["reparsed"] == 1
+    assert reparse["errors"] == []
 
 
 def test_snapshot_reparse_repairs_normalized_engagement(

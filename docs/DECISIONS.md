@@ -24,6 +24,14 @@ Historical capture is explicit, read-only, headed, resumable, and uses a dedicat
 owner credentials, hidden cookie extraction, stealth, and scheduled re-crawls were rejected for
 safety and maintainability.
 
+## Bounded local browser-agent checkpoints
+
+When a YouTube route stalls in the dedicated profile, an already controlled signed-in browser
+agent may submit immutable post-card DOM to the loopback API. The bridge is fixed to HTTPS YouTube
+URLs and the managed capture run, accepts at most ten cards and 4 MiB per request, requires an
+explicit source header, and cannot publish. Exact surface count and tail-ID agreement are required
+for completion. A general-purpose browser-to-database write endpoint was rejected.
+
 ## Internal publisher only
 
 `InternalPublisher` can move an approved item to `internally_scheduled`; it performs no network

@@ -13,17 +13,17 @@
 - [x] ChatGPT-authenticated Codex image/caption runtime with no paid API fallback
 - [x] Fan-art and personal-artwork discovery safeguards
 - [x] Live Qlob Editor delegate composer and scheduling preflight
-- [x] Real Qlob capture: 200 posts and 200 media files verified
-- [x] Real Qlob analysis: 200 annotations and 19,900 similarity edges
-- [x] Real Qlob style profile v3 with 160/40 train/holdout evaluation
+- [x] Complete Qlob capture: 771 posts, 771 snapshots, and 716 historical media files verified
+- [x] Complete Qlob analysis: 698 annotations and 243,253 similarity edges
+- [x] Real Qlob style profile v4 with 558/140 train/holdout evaluation
 - [x] Bounded live discovery safeguard pass
 - [x] Real one-proposal caption/review/restart dry pass without posting
 
 ## Current failures
 
 - No automated or integrity failures remain in the implemented workflow.
-- Exact historical image-to-caption recovery measured 0/40. Caption suggestions therefore remain
-  human-review inputs; the stronger 75% caption-ranking result does not erase this limitation.
+- Exact historical image-to-caption recovery measured 3/140 and caption-vs-contrast ranking
+  measured 35/140. Caption suggestions therefore remain human-review inputs.
 - Internet-image rights remain `unknown` until a human reviews provenance and intended use.
 
 ## Remaining work

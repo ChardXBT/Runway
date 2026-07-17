@@ -73,13 +73,16 @@ What the user provides:
 Run:
 
 ```powershell
-.\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/@Qlob/posts" --headed --resume
+.\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts" --headed --resume
 .\.venv\Scripts\leeway.exe catalog verify
 ```
 
-Verified on 2026-07-17: capture reached a stable bottom with 200 posts, 200 raw records, and 200
-unique media files. Source URLs were retained and verification found no missing caption/image,
-broken file, duplicate external ID, unmatched raw record, capture error, or diagnostic.
+Verified on 2026-07-17: capture reached a repeatedly stable bottom at 771 unique post IDs and
+produced 771 normalized posts, 771 raw records, 771 immutable DOM snapshots, 732 post-to-media
+links, and 716 unique historical media files. Of those posts, 698 are image+caption records
+eligible for visual annotation. Source URLs were retained and verification found no missing
+caption/image, broken file, duplicate external ID, unmatched raw record, capture error, or
+diagnostic. A full dry reparse scanned and matched all 771 snapshots with zero errors.
 
 ## 4. Build and evaluate Qlob style retrieval — verified with a documented limitation
 
@@ -100,12 +103,14 @@ Run:
 Review inaccurate annotations in the UI, add corrections, and rebuild. This is the project's
 "tuning" step: retrieval and profile adaptation, not model-weight training.
 
-Verified on 2026-07-17: 200 annotations and 19,900 similarity edges produced profile v3 with 160
-training and 40 holdout records. Ten uncertainty/outlier posts were visually reviewed and seven
-received non-destructive correction overlays. Caption ranking measured 75%, top-three franchise
-retrieval 97.5%, and transformed-duplicate recall 100% with 0% unrelated false positives.
+Verified on 2026-07-17: all 698 image+caption records have
+`historical-annotation-v2` annotations and all 243,253 pairwise similarity edges. Profile v4 uses
+558 training and 140 deterministic holdout records. Ten uncertainty/outlier posts remain visually
+reviewed and seven retain non-destructive correction overlays. Top-three franchise retrieval
+measured 135/140 (96.43%), transformed-duplicate recall 100%, and unrelated false positives 0%.
 
-Exact historical image-to-caption recovery measured 0/40. LeeWay therefore does not treat caption
+Exact historical image-to-caption recovery measured 3/140 (2.14%), while Qlob-caption
+vs deterministic-contrast ranking measured 35/140 (25%). LeeWay therefore does not treat caption
 generation as an exact-match task; every suggested caption still requires human review.
 
 ## 5. Prove image discovery and safeguards — bounded pass verified

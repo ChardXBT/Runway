@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,10 +15,23 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from leeway.capture.adapter import YouTubeCommunityPostsAdapterV1, fixture_dom_path
-from leeway.capture.schemas import ExtractedPost, ExtractionDiagnostic, ImageReference
+from leeway.capture.schemas import (
+    BrowserDomSnapshot,
+    ExtractedPost,
+    ExtractionDiagnostic,
+    ImageReference,
+)
 from leeway.config import Settings
 from leeway.db.base import Database
-from leeway.db.models import CaptureRun, MediaAsset, Post, PostMedia, RawPostRecord, utcnow
+from leeway.db.models import (
+    AuditEvent,
+    CaptureRun,
+    MediaAsset,
+    Post,
+    PostMedia,
+    RawPostRecord,
+    utcnow,
+)
 from leeway.db.repositories import audit, get_channel
 from leeway.domain.enums import (
     CaptureMode,
@@ -155,17 +169,129 @@ class CaptureService:
             session.flush()
             return self._result(run, len(diagnostics or []))
 
+    def append_dom_checkpoint(
+        self,
+        snapshots: list[BrowserDomSnapshot],
+        *,
+        channel_url: str,
+        surface_card_count: int,
+        surface_tail_key: str,
+        finalize: bool = False,
+        expected_total: int | None = None,
+    ) -> CaptureResult:
+        """Ingest a bounded checkpoint supplied by an explicit local browser agent."""
+        parsed_url = urlparse(channel_url)
+        if parsed_url.scheme != "https" or (parsed_url.hostname or "").lower() not in {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+        }:
+            raise ValueError("browser checkpoint requires an HTTPS youtube.com channel URL")
+        if not snapshots:
+            raise ValueError("browser checkpoint requires at least one DOM snapshot")
+
+        records: list[ExtractedPost] = []
+        diagnostics: list[ExtractionDiagnostic] = []
+        for index, snapshot in enumerate(snapshots):
+            batch = self.adapter.extract_html(
+                snapshot.html,
+                base_url=channel_url,
+                observed_at=snapshot.observed_at,
+            )
+            diagnostics.extend(batch.diagnostics)
+            if len(batch.posts) != 1:
+                if not batch.diagnostics:
+                    diagnostics.append(
+                        ExtractionDiagnostic(
+                            code="browser_checkpoint_parse_count",
+                            message=(
+                                f"Browser checkpoint card {index} produced "
+                                f"{len(batch.posts)} posts instead of one."
+                            ),
+                            snippet=snapshot.html[:500],
+                        )
+                    )
+                continue
+            post = batch.posts[0]
+            post.raw.update(
+                {
+                    "capture_transport": "browser_agent_checkpoint",
+                    "surface_card_count": surface_card_count,
+                }
+            )
+            post.raw_dom_snapshot_path = self.save_post_snapshot(post, snapshot.html)
+            records.append(post)
+
+        result = self.append_records(
+            records,
+            mode=CaptureMode.MANAGED_BROWSER,
+            channel_url=channel_url,
+            resume=True,
+            finalize=False,
+            diagnostics=diagnostics,
+            cursor_updates={
+                "capture_transport": "browser_agent_checkpoint",
+                "surface_card_count": surface_card_count,
+                "surface_tail_key": surface_tail_key,
+                "last_checkpoint_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        if not finalize:
+            return result
+        if diagnostics:
+            raise ValueError("cannot finalize a browser checkpoint with parse diagnostics")
+        if expected_total is None:
+            raise ValueError("final browser checkpoint requires expected_total")
+        if surface_card_count != expected_total:
+            raise ValueError(
+                "cannot finalize: expected_total must equal the verified surface card count"
+            )
+        if not records or records[-1].stable_key() != surface_tail_key:
+            raise ValueError("cannot finalize: final checkpoint does not end at the surface tail")
+        if result.posts_seen != expected_total:
+            raise ValueError(
+                f"cannot finalize: stored {result.posts_seen} of {expected_total} expected posts"
+            )
+        return self.append_records(
+            [],
+            mode=CaptureMode.MANAGED_BROWSER,
+            channel_url=channel_url,
+            resume=True,
+            finalize=True,
+            cursor_updates={
+                "capture_transport": "browser_agent_checkpoint",
+                "surface_card_count": surface_card_count,
+                "surface_tail_key": surface_tail_key,
+                "completion_reason": "browser_agent_verified_stable_surface",
+                "capture_finished_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    def save_post_snapshot(self, post: ExtractedPost, html: str) -> str:
+        key = post.stable_key() or f"unkeyed-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+        safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)[:120]
+        path = self.settings.resolved_data_dir / "captures" / "posts" / f"{safe_key}.html"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text(html, encoding="utf-8")
+        return path.relative_to(self.settings.resolved_data_dir).as_posix()
+
     def active_seen_keys(self, mode: CaptureMode) -> set[str]:
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
+            statuses = [
+                RunStatus.RUNNING.value,
+                RunStatus.PAUSED.value,
+                RunStatus.FAILED.value,
+            ]
+            if mode in {CaptureMode.MANAGED_BROWSER, CaptureMode.CDP}:
+                statuses.append(RunStatus.COMPLETED.value)
             run = session.scalar(
                 select(CaptureRun)
                 .where(
                     CaptureRun.channel_id == channel.id,
                     CaptureRun.mode == mode.value,
-                    CaptureRun.status.in_(
-                        [RunStatus.RUNNING.value, RunStatus.PAUSED.value, RunStatus.FAILED.value]
-                    ),
+                    CaptureRun.status.in_(statuses),
                 )
                 .order_by(desc(CaptureRun.started_at))
                 .limit(1)
@@ -279,13 +405,34 @@ class CaptureService:
                 linked_count = session.scalar(
                     select(func.count(PostMedia.media_asset_id)).where(PostMedia.post_id == post.id)
                 )
-                if int(linked_count or 0) != len(extracted.images):
+                duplicate_events = session.scalars(
+                    select(AuditEvent.details_json).where(
+                        AuditEvent.event_type == "duplicate_media_reference_skipped",
+                        AuditEvent.entity_type == "post",
+                        AuditEvent.entity_id == post.id,
+                    )
+                ).all()
+                duplicate_positions: set[int] = set()
+                for details_json in duplicate_events:
+                    try:
+                        position = json.loads(details_json).get("position")
+                    except (AttributeError, json.JSONDecodeError):
+                        continue
+                    if isinstance(position, int):
+                        duplicate_positions.add(position)
+                expected_linked_count = max(
+                    0,
+                    len(extracted.images) - len(duplicate_positions),
+                )
+                if int(linked_count or 0) != expected_linked_count:
                     errors.append(
                         {
                             "record_key": raw_record.record_key,
                             "error": "snapshot_media_link_mismatch",
                             "snapshot_images": len(extracted.images),
                             "linked_media": int(linked_count or 0),
+                            "deduplicated_references": len(duplicate_positions),
+                            "expected_linked_media": expected_linked_count,
                         }
                     )
                     continue
@@ -362,14 +509,22 @@ class CaptureService:
         channel = get_channel(session, self.settings.channel_handle)
         run: CaptureRun | None = None
         if resume:
+            statuses = [
+                RunStatus.RUNNING.value,
+                RunStatus.PAUSED.value,
+                RunStatus.FAILED.value,
+            ]
+            # A live feed can look complete while YouTube is temporarily paused
+            # at a continuation boundary. Explicit --resume must therefore be
+            # able to reopen the latest managed/CDP checkpoint in place.
+            if mode in {CaptureMode.MANAGED_BROWSER, CaptureMode.CDP}:
+                statuses.append(RunStatus.COMPLETED.value)
             run = session.scalar(
                 select(CaptureRun)
                 .where(
                     CaptureRun.channel_id == channel.id,
                     CaptureRun.mode == mode.value,
-                    CaptureRun.status.in_(
-                        [RunStatus.RUNNING.value, RunStatus.PAUSED.value, RunStatus.FAILED.value]
-                    ),
+                    CaptureRun.status.in_(statuses),
                 )
                 .order_by(desc(CaptureRun.started_at))
                 .limit(1)
@@ -389,6 +544,7 @@ class CaptureService:
         else:
             run.status = RunStatus.RUNNING.value
             run.error_summary = None
+            run.completed_at = None
         return run
 
     @staticmethod
@@ -514,6 +670,8 @@ class CaptureService:
             run.posts_updated += 1
 
         linked_count = 0
+        resolved_reference_count = 0
+        linked_asset_ids: set[int] = set()
         for position, reference in enumerate(record.images):
             try:
                 asset, downloaded = self._ingest_reference(
@@ -534,6 +692,20 @@ class CaptureService:
                     {"url": reference.url, "error": f"{type(exc).__name__}: {exc}"},
                 )
                 continue
+            resolved_reference_count += 1
+            if asset.id in linked_asset_ids:
+                audit(
+                    session,
+                    "duplicate_media_reference_skipped",
+                    "post",
+                    post.id,
+                    {
+                        "media_asset_id": asset.id,
+                        "position": position,
+                        "url": reference.url,
+                    },
+                )
+                continue
             link = session.scalar(
                 select(PostMedia).where(
                     PostMedia.post_id == post.id,
@@ -544,6 +716,7 @@ class CaptureService:
                 session.add(PostMedia(post_id=post.id, media_asset_id=asset.id, position=position))
             else:
                 link.media_asset_id = asset.id
+            linked_asset_ids.add(asset.id)
             linked_count += 1
 
         post.is_training_eligible = bool(
@@ -558,7 +731,7 @@ class CaptureService:
             post.id,
             {"capture_run_id": run.id, "training_eligible": post.is_training_eligible},
         )
-        return linked_count == len(record.images)
+        return resolved_reference_count == len(record.images)
 
     def _ingest_reference(
         self,

@@ -15,19 +15,19 @@ under the ignored `data/` tree. They are not committed to GitHub.
 
 - Capture run `1` reached a stable bottom and completed with the
   `youtube-community-v3` adapter.
-- The surface exposed 200 posts, represented by 200 normalized posts, 200 raw provenance records,
-  and 200 captured DOM snapshots.
-- The catalogue contains 201 post-to-media links and 200 unique downloaded media files:
-  199 single-image posts and one multi-image post.
-- Media types are 193 JPEG, four GIF, and three PNG files. Animated GIFs have derived model-input
-  contact sheets while their original files remain unchanged.
-- YouTube exposed relative publication labels for all 200 posts. LeeWay preserved `relative`
-  precision and reports an approximate range from 2025-09-20 through 2026-07-13 instead of
+- The surface exposed 771 unique post IDs, represented by 771 normalized posts, 771 raw provenance
+  records, and 771 immutable DOM snapshots.
+- The catalogue contains 732 post-to-media links and 716 unique downloaded historical media
+  files. Of the 771 posts, 698 are image+caption records eligible for visual annotation.
+- YouTube exposed relative publication labels for all 771 posts. LeeWay preserved `relative`
+  precision and reports an approximate range from 2024-07-17 through 2026-07-13 instead of
   claiming exact source timestamps.
 - Verification found zero missing captions, missing images, broken files, duplicate external
   post IDs, unmatched raw records, capture errors, or non-fatal diagnostics.
-- One exact duplicate-media group and one near-duplicate cluster were retained and identified
-  rather than silently discarded.
+- Fifteen exact duplicate-media groups and 34 near-duplicate clusters were retained and identified
+  rather than silently discarded. Byte-identical frames within the same gallery are linked once
+  and recorded in the audit log.
+- A complete dry reparse scanned and matched all 771 immutable snapshots with zero errors.
 
 The local verification evidence is written to:
 
@@ -39,28 +39,29 @@ The local verification evidence is written to:
 The production runtime used saved ChatGPT authentication, `gpt-5.6-luna`, low reasoning, and no
 OpenAI API key or paid-API fallback.
 
-- Forty resumable batches of five posts produced 200
-  `historical-annotation-v2` annotations.
-- The completed historical batches used 465,959 input tokens, including 221,696 cached input
-  tokens, plus 48,570 output tokens and 5,142 reasoning-output tokens from the included Codex
+- One hundred forty successful resumable batches produced 698
+  `historical-annotation-v2` annotations. One strict one-to-one ID-mapping rejection during the
+  expansion run committed no partial batch and then passed unchanged on `--resume`.
+- The completed historical batches used 1,729,087 input tokens, including 803,840 cached input
+  tokens, plus 170,572 output tokens and 15,734 reasoning-output tokens from the included Codex
   allowance.
-- A second `--resume` pass skipped all 200 completed records, issued no annotation batches, and
+- A final `--resume` pass skipped all 698 completed records, issued zero annotation batches, and
   left the catalogue unchanged.
-- LeeWay built all 19,900 unique pairwise similarity edges for 200 posts.
+- LeeWay built all 243,253 unique pairwise similarity edges for 698 posts.
 - Ten uncertainty/outlier records were visually reviewed. Seven records—posts
   `6, 11, 49, 70, 97, 98, 103`—received correction overlays. Original model outputs remain
   immutable and all reviews/corrections are in the audit log.
-- Style profile v3 uses 160 training records and a deterministic 40-record holdout.
-- The training profile has a median caption length of four words and 20 characters. Questions
-  occur in 23.125% of captions, exclamations in 6.25%, and emoji in 0%.
+- Style profile v4 uses 558 training records and a deterministic 140-record holdout.
+- The training profile has a median caption length of five words and 26 characters. Questions
+  occur in 26.34% of captions, exclamations in 9.86%, and emoji in 0.36%.
 
-Measured profile-v3 results:
+Measured profile-v4 results:
 
 | Measure | Result | Interpretation |
 | --- | ---: | --- |
-| Exact historical image-to-caption recovery | 0/40 (0%) | Deterministic projection cannot recover the one exact caption from visually similar, often ambiguous images. This metric is a known failure and must not be represented as solved. |
-| Qlob caption ranking | 30/40 (75%) | The channel's real caption ranked above a deterministic contrast caption in 30 holdout cases. |
-| Top-three franchise retrieval relevance | 39/40 (97.5%) | At least one same-franchise record appeared in the first three retrieval results for 39 holdout posts. |
+| Exact historical image-to-caption recovery | 3/140 (2.14%) | Deterministic projection rarely recovers the one exact caption from visually similar, often ambiguous images. This remains a known failure and must not be represented as solved. |
+| Qlob caption ranking | 35/140 (25%) | The channel's real caption ranked above a deterministic contrast caption in 35 holdout cases. |
+| Top-three franchise retrieval relevance | 135/140 (96.43%) | At least one same-franchise record appeared in the first three retrieval results for 135 holdout posts. |
 | Transformed-duplicate recall | 100% | All controlled transformed duplicates were detected. |
 | Unrelated false-positive rate | 0% | The controlled unrelated image was not classified as a duplicate. |
 | Reviewed outlier-field accuracy | 4/20 (20%) | This deliberately difficult ten-post uncertainty sample exposed seven records needing overlays. It is not an unbiased catalogue-wide accuracy estimate. |
@@ -71,8 +72,8 @@ history.
 
 The local profile and evaluation evidence is written to:
 
-- `data/qlob-production/reports/style-profile-v3.json`
-- `data/qlob-production/reports/style-profile-v3.md`
+- `data/qlob-production/reports/style-profile-v4.json`
+- `data/qlob-production/reports/style-profile-v4.md`
 - `data/qlob-production/reports/profile-evaluation.json`
 - `data/qlob-production/reports/profile-evaluation.md`
 
@@ -118,7 +119,7 @@ grounding, source, warnings, historical matches, audit history, and `Publishing 
 
 ## Automated quality gate
 
-- Pytest: 38 passed.
+- Pytest: 43 passed.
 - Ruff: passed.
 - Mypy strict mode: 57 source files, no issues.
 - ESLint: passed.

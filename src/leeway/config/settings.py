@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     approval_required: bool = True
     publishing_enabled: bool = False
     capture_scroll_delay_ms: int = 1800
-    capture_idle_cycles_before_stop: int = 5
+    capture_idle_cycles_before_stop: int = Field(default=30, ge=3, le=300)
+    capture_idle_seconds_before_stop: int = Field(default=90, ge=15, le=900)
     capture_checkpoint_every: int = 10
 
     data_dir: Path = Path("data")
@@ -130,6 +131,7 @@ class Settings(BaseSettings):
             "publishing_enabled": False,
             "capture_scroll_delay_ms": self.capture_scroll_delay_ms,
             "capture_idle_cycles_before_stop": self.capture_idle_cycles_before_stop,
+            "capture_idle_seconds_before_stop": self.capture_idle_seconds_before_stop,
             "capture_checkpoint_every": self.capture_checkpoint_every,
             "agent_runtime": self.agent_runtime,
             "codex_model": self.codex_model,
