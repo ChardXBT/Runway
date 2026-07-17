@@ -271,6 +271,7 @@ class Proposal(Base, TimestampMixin):
     candidate_image_id: Mapped[int] = mapped_column(ForeignKey("candidate_images.id"), index=True)
     backup_candidate_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     planned_publish_at: Mapped[str] = mapped_column(String(40), index=True)
+    scheduled_publish_at: Mapped[str | None] = mapped_column(String(40), index=True)
     recommended_caption: Mapped[str] = mapped_column(Text)
     alternative_captions_json: Mapped[str] = mapped_column(Text)
     caption_rationale: Mapped[str] = mapped_column(Text, default="")

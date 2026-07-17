@@ -112,14 +112,23 @@ class PlaywrightYouTubeAdapter:
                 )
                 page.wait_for_timeout(1500)
                 self._stop_on_challenge(page)
-                valid = self._session_contract_valid(page)
+                checks = self._session_contract_checks(page)
+                valid = all(checks.values())
+                missing = [label for label, matched in checks.items() if not matched]
+                if not valid:
+                    diagnostic = self.capture_dir / (
+                        datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-session-not-ready.png"
+                    )
+                    page.screenshot(path=str(diagnostic), full_page=True)
                 return PublisherSessionStatus(
                     valid=valid,
                     publisher="youtube-visible-browser",
                     detail=(
                         "Qlob channel, Editor role, and Community composer verified."
                         if valid
-                        else "Qlob Editor session is not ready; run publisher login."
+                        else "Qlob Editor session is not ready; missing "
+                        + ", ".join(missing)
+                        + ". Run publisher login."
                     ),
                 )
             finally:
@@ -369,20 +378,20 @@ class PlaywrightYouTubeAdapter:
         )
 
     def _session_contract_valid(self, page: Any) -> bool:
+        return all(self._session_contract_checks(page).values())
+
+    def _session_contract_checks(self, page: Any) -> dict[str, bool]:
         heading = page.get_by_role("heading", name="Qlob, Verified", exact=True)
         editor = page.get_by_text("You're an editor", exact=True)
         composer = page.locator(
             'ytd-backstage-post-dialog-renderer #contenteditable-root[contenteditable="true"]'
         )
-        return (
-            heading.count() == 1
-            and heading.is_visible()
-            and editor.count() == 1
-            and editor.is_visible()
-            and composer.count() == 1
-            and composer.is_visible()
-            and self.settings.publisher_channel_id in page.url
-        )
+        return {
+            "configured channel URL": self.settings.publisher_channel_id in page.url,
+            "Qlob heading": heading.count() == 1 and heading.is_visible(),
+            "Editor badge": editor.count() == 1 and editor.is_visible(),
+            "Community composer": composer.count() == 1 and composer.is_visible(),
+        }
 
     def _stop_on_challenge(self, page: Any) -> None:
         sample = f"{page.url} {page.title()}".lower()
@@ -412,7 +421,7 @@ class PlaywrightYouTubeAdapter:
 
 
 class YouTubeBrowserPublisher:
-    """Two-step publisher that cannot submit without a one-time human confirmation."""
+    """Visible-browser publisher for explicit editorial scheduling actions."""
 
     publisher_name = "youtube-visible-browser-v1"
 
@@ -520,6 +529,136 @@ class YouTubeBrowserPublisher:
         finally:
             self._confirm_lock.release()
 
+    def queue_attempt(self, proposal_id: int) -> dict[str, object]:
+        """Persist an approve-and-schedule request without waiting for the browser."""
+        self._require_enabled()
+        post, payload_hash = self._prepared_post(proposal_id)
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            existing = session.scalar(
+                select(PublishAttempt)
+                .where(
+                    PublishAttempt.proposal_id == proposal_id,
+                    PublishAttempt.publisher == self.publisher_name,
+                    PublishAttempt.status.in_(["queued", "submitting"]),
+                )
+                .order_by(desc(PublishAttempt.id))
+                .limit(1)
+            )
+            if existing is not None:
+                return self._attempt_dict(existing)
+            for prepared in session.scalars(
+                select(PublishAttempt).where(
+                    PublishAttempt.proposal_id == proposal_id,
+                    PublishAttempt.status == "prepared",
+                )
+            ):
+                prepared.status = "superseded"
+                prepared.completed_at = now
+            attempt = PublishAttempt(
+                proposal_id=proposal_id,
+                publisher=self.publisher_name,
+                status="queued",
+                confirmation_token_hash=self._token_hash(secrets.token_urlsafe(32)),
+                payload_hash=payload_hash,
+                planned_publish_at=post.planned_publish_at,
+                expires_at=now + timedelta(days=1),
+            )
+            session.add(attempt)
+            session.flush()
+            audit(
+                session,
+                "youtube_publish_queued",
+                "proposal",
+                proposal_id,
+                {
+                    "attempt_id": attempt.id,
+                    "planned_publish_at": post.planned_publish_at,
+                    "trigger": "human_approve_and_schedule",
+                },
+            )
+            return self._attempt_dict(attempt)
+
+    def next_queued_attempt_id(self) -> int | None:
+        with self.database.session() as session:
+            return session.scalar(
+                select(PublishAttempt.id)
+                .where(
+                    PublishAttempt.publisher == self.publisher_name,
+                    PublishAttempt.status == "queued",
+                )
+                .order_by(PublishAttempt.id)
+                .limit(1)
+            )
+
+    def requeue_blocked_session_attempts(self) -> int:
+        """Retry only attempts that stopped before the YouTube composer was touched."""
+        self._require_enabled()
+        now = datetime.now(UTC)
+        requeued = 0
+        with self.database.session() as session:
+            attempts = session.scalars(
+                select(PublishAttempt)
+                .where(
+                    PublishAttempt.publisher == self.publisher_name,
+                    PublishAttempt.status == "blocked_session",
+                )
+                .order_by(PublishAttempt.id)
+            ).all()
+            for attempt in attempts:
+                proposal = session.get(Proposal, attempt.proposal_id)
+                latest_attempt_id = session.scalar(
+                    select(PublishAttempt.id)
+                    .where(
+                        PublishAttempt.proposal_id == attempt.proposal_id,
+                        PublishAttempt.publisher == self.publisher_name,
+                    )
+                    .order_by(desc(PublishAttempt.id))
+                    .limit(1)
+                )
+                if (
+                    proposal is None
+                    or proposal.status != ProposalStatus.INTERNALLY_SCHEDULED.value
+                    or latest_attempt_id != attempt.id
+                ):
+                    continue
+                attempt.status = "queued"
+                attempt.error_summary = None
+                attempt.completed_at = None
+                attempt.expires_at = now + timedelta(days=1)
+                requeued += 1
+                audit(
+                    session,
+                    "youtube_queue_resumed",
+                    "proposal",
+                    proposal.id,
+                    {"attempt_id": attempt.id, "trigger": "human_resume_after_sign_in"},
+                )
+        return requeued
+
+    async def process_queued_attempt(self, attempt_id: int) -> PublishResult:
+        """Schedule one persisted editorial approval; callers serialize the queue."""
+        self._require_enabled()
+        await asyncio.to_thread(self._confirm_lock.acquire)
+        try:
+            session_status = await self.adapter.validate_session()
+            if not session_status.valid:
+                self._record_preflight_failure(attempt_id, session_status.detail)
+                raise ValueError(session_status.detail)
+            post = self._consume_queued_attempt(attempt_id)
+            try:
+                receipt = await self.adapter.schedule(post)
+            except Exception as exc:
+                self._record_failure(attempt_id, str(exc))
+                raise
+            if not receipt.submitted:
+                detail = "publisher adapter returned without a confirmed submission attempt"
+                self._record_failure(attempt_id, detail)
+                raise RuntimeError(detail)
+            return self._record_receipt(attempt_id, receipt)
+        finally:
+            self._confirm_lock.release()
+
     async def verify_scheduled_post(self, proposal_id: int) -> VerificationResult:
         self._require_enabled()
         post, _payload_hash = self._prepared_post(
@@ -612,21 +751,21 @@ class YouTubeBrowserPublisher:
                 raise LookupError(f"proposal {proposal_id} not found")
             if proposal.status not in statuses:
                 raise ValueError("external scheduling requires an internally scheduled proposal")
-            if proposal.rights_decision not in {
-                "accepted_for_proposal",
-                "verified_source_status",
-            }:
-                raise ValueError("external scheduling requires a recorded provenance decision")
             candidate = session.get(CandidateImage, proposal.candidate_image_id)
             media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
             if media is None:
                 raise ValueError("proposal has no local image")
+            if candidate and candidate.rights_status == "blocked":
+                raise ValueError("a blocked image cannot be scheduled")
             path = self.settings.resolved_data_dir / media.local_path
             if not path.is_file():
                 raise ValueError("proposal image is missing from local storage")
+            scheduled_at = proposal.scheduled_publish_at
+            if not scheduled_at:
+                raise ValueError("proposal has no assigned daily schedule slot")
             post = PreparedPost(
                 proposal_id=proposal.id,
-                planned_publish_at=proposal.planned_publish_at,
+                planned_publish_at=scheduled_at,
                 caption=proposal.final_caption,
                 local_image_path=str(path),
             )
@@ -674,6 +813,22 @@ class YouTubeBrowserPublisher:
                     proposal.id,
                     {"attempt_id": attempt.id, "error": detail[:500]},
                 )
+
+    def _record_preflight_failure(self, attempt_id: int, detail: str) -> None:
+        with self.database.session() as session:
+            attempt = session.get(PublishAttempt, attempt_id)
+            if attempt is None or attempt.status != "queued":
+                return
+            attempt.status = "blocked_session"
+            attempt.error_summary = detail[:2000]
+            attempt.completed_at = datetime.now(UTC)
+            audit(
+                session,
+                "youtube_queue_blocked",
+                "proposal",
+                attempt.proposal_id,
+                {"attempt_id": attempt.id, "error": detail[:500]},
+            )
 
     def _consume_confirmation(
         self,
@@ -743,6 +898,62 @@ class YouTubeBrowserPublisher:
             raise ValueError(terminal_error)
         if post is None:
             raise RuntimeError("publish confirmation did not produce a prepared post")
+        return post
+
+    def _consume_queued_attempt(self, attempt_id: int) -> PreparedPost:
+        terminal_error: str | None = None
+        post: PreparedPost | None = None
+        with self.database.session() as session:
+            attempt = session.get(PublishAttempt, attempt_id)
+            if attempt is None:
+                raise LookupError(f"publish attempt {attempt_id} not found")
+            proposal = session.get(Proposal, attempt.proposal_id)
+            if proposal is None:
+                raise LookupError(f"proposal {attempt.proposal_id} not found")
+            if attempt.status != "queued":
+                raise ValueError(f"publish attempt is {attempt.status}, not queued")
+            post, current_payload_hash = self._prepared_post(
+                proposal.id,
+                allowed_statuses={
+                    ProposalStatus.INTERNALLY_SCHEDULED.value,
+                    ProposalStatus.PUBLISH_FAILED.value,
+                },
+            )
+            if not hmac.compare_digest(attempt.payload_hash, current_payload_hash):
+                attempt.status = "invalidated"
+                attempt.completed_at = datetime.now(UTC)
+                terminal_error = "proposal changed after it entered the scheduling queue"
+            else:
+                require_transition(proposal.status, ProposalStatus.PUBLISHING)
+                old_status = proposal.status
+                proposal.status = ProposalStatus.PUBLISHING.value
+                attempt.status = "submitting"
+                attempt.submitted_at = datetime.now(UTC)
+                session.add(
+                    ProposalEvent(
+                        proposal_id=proposal.id,
+                        event_type="youtube_submission_started",
+                        old_value_json=json.dumps({"status": old_status}),
+                        new_value_json=json.dumps(
+                            {
+                                "status": ProposalStatus.PUBLISHING.value,
+                                "attempt_id": attempt.id,
+                                "trigger": "approve_and_schedule",
+                            }
+                        ),
+                    )
+                )
+                audit(
+                    session,
+                    "youtube_submission_started",
+                    "proposal",
+                    proposal.id,
+                    {"attempt_id": attempt.id, "trigger": "approve_and_schedule"},
+                )
+        if terminal_error:
+            raise ValueError(terminal_error)
+        if post is None:
+            raise RuntimeError("queued publish attempt did not produce a prepared post")
         return post
 
     def _record_receipt(

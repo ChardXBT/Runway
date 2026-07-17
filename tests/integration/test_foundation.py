@@ -21,12 +21,19 @@ def test_migrations_seed_channel_and_enable_wal(database: Database) -> None:
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='publish_attempts'"
             )
         ).scalar_one()
+        schedule_slot = session.execute(
+            text(
+                "SELECT count(*) FROM pragma_table_info('proposals') "
+                "WHERE name='scheduled_publish_at'"
+            )
+        ).scalar_one()
     assert channel_count == 1
     assert journal_mode.lower() == "wal"
     assert foreign_keys == 1
-    assert migration == "0004_feedback_and_publisher"
+    assert migration == "0005_editorial_conveyor"
     assert feedback_table == 1
     assert publisher_table == 1
+    assert schedule_slot == 1
 
 
 def test_health_app_is_local_and_publishing_is_disabled(settings: Settings) -> None:

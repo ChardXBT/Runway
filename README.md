@@ -4,13 +4,14 @@ Leeway is a local-only intelligence and planning application for image-based You
 posts on the Qlob channel. It captures an historical catalogue through an explicitly initiated,
 read-only browser session; builds a reproducible style profile and local retrieval index; ranks
 provenance-preserving image candidates; generates retrieval-grounded caption options; and manages
-a restart-safe ten-day approval queue. Human edits, selections, approvals, and rejections are
-stored as local retrieval evidence so later caption passes improve without model-weight training.
+a continuous editorial feed backed by a restart-safe scheduling outbox. Human edits, selections,
+approvals, image skips, and rejections are stored as local retrieval evidence so later caption
+passes improve without model-weight training.
 
-A guarded visible-browser YouTube scheduler is implemented but disabled by default. It can accept
-only a provenance-reviewed, approved, internally scheduled proposal and requires a short-lived
-one-time token plus an exact proposal-specific human confirmation. No automated test, model run,
-or preparation step can post to YouTube.
+When the visible-browser publisher is enabled, the explicit `Approve & schedule` action assigns
+the first open 10:00 AM Eastern day and adds the post to a persisted FIFO outbox. Browser
+submissions run one at a time, and LeeWay reserves at most one bot post per local day. The schedule
+has no horizon cap; manually added Qlob posts are independent.
 
 The real Qlob catalogue, retrieval profile, bounded live discovery, one-proposal review flow, and
 restart persistence were validated on 2026-07-17 without posting. See
@@ -20,8 +21,9 @@ restart persistence were validated on 2026-07-17 without posting. See
 
 - FastAPI, Typer, SQLAlchemy, Alembic, SQLite WAL, Pillow, and NumPy in `src/leeway/`.
 - Next.js, TypeScript, and Tailwind in `apps/web/`.
-- A responsive editorial-desk interface with a ten-frame schedule runway, evidence-first review,
-  searchable 60-record archive pages, profile diagnostics, and an immutable activity inspector.
+- A responsive editorial conveyor with one current image/caption decision, an uncapped ordered
+  schedule, searchable 60-record archive pages, profile diagnostics, and an immutable activity
+  inspector.
 - Canonical metadata in `data/leeway.db`; original media, previews, reports, and diagnostics under
   `data/`.
 - The deterministic `MockAgentRuntime` supports offline fixtures. Real analysis uses the official
@@ -32,8 +34,9 @@ restart persistence were validated on 2026-07-17 without posting. See
 - Caption generation requests four open questions, three observations, and two reactions, then
   deterministically selects a grounded open question plus two structural alternatives.
 - Append-only caption feedback is retrieved immediately for future ranking.
-- The external scheduler uses a separate visible persistent profile, a disabled-by-default
-  feature gate, payload hashing, screenshots, and conservative no-retry recovery.
+- The external scheduler uses a separate visible persistent profile, a disabled-by-default feature
+  gate, a persisted serial outbox, payload hashing, screenshots, and conservative no-retry
+  recovery.
 - Fixture, manual URL, experimental headed-browser, and optional API search providers share one
   provider interface.
 
@@ -68,7 +71,7 @@ Start both local services with `./run-leeway.ps1`, then open
 .\.venv\Scripts\leeway.exe profile build
 .\.venv\Scripts\leeway.exe profile evaluate
 .\.venv\Scripts\leeway.exe discover images --days 10 --dry-run
-.\.venv\Scripts\leeway.exe generate batch --days 10
+.\.venv\Scripts\leeway.exe generate batch --days 5
 .\.venv\Scripts\leeway.exe queue status
 ```
 
@@ -150,8 +153,8 @@ The headed browser provider is experimental and disabled until
 ```
 
 It preserves page/image URLs and stops on challenges. It contains no stealth, CAPTCHA-solving,
-proxy rotation, or identity-evasion behavior. Internet images are never auto-published, and rights
-status defaults to `unknown` until reviewed.
+proxy rotation, or identity-evasion behavior. Source metadata remains available in the local
+archive but is not part of the fast approval path.
 
 ## Guarded YouTube scheduling
 
@@ -162,11 +165,11 @@ The dedicated publisher profile is separate from the capture/discovery profiles:
 .\.venv\Scripts\leeway.exe publisher status
 ```
 
-Keep `LEWAY_PUBLISHING_ENABLED=false` for normal operation. For one controlled acceptance, follow
-`docs/COMPLETION_GUIDE.md`: enable the gate, prepare one internally scheduled proposal, inspect the
-exact payload, and separately confirm it. Preparation never submits. Once the final Schedule click
-is attempted, an inconclusive result enters `publish_unverified` and can only be checked—not
-automatically retried.
+With `LEWAY_PUBLISHING_ENABLED=true`, every click on `Approve & schedule` is an explicit scheduling
+instruction for that exact image and caption. LeeWay assigns the next free daily slot, advances the
+review tray immediately, and processes the persisted outbox serially. A session or YouTube error
+pauses the outbox. Once a Schedule click may have happened, an inconclusive result enters
+`publish_unverified` and can only be verified—not automatically resubmitted.
 
 ## Known limitations
 
@@ -174,11 +177,11 @@ automatically retried.
   not invent exact dates.
 - YouTube DOM capture is inherently fragile. Selectors are versioned and failures produce local
   snapshots, but a layout change can require an adapter update.
-- Browser discovery quality and source rights vary by provider; all candidates require review.
+- Browser discovery quality varies by provider; every image/caption pair remains a human editorial
+  decision.
 - The real capture and a bounded six-candidate browser-discovery pass are verified; wider
   production searches can still encounter provider challenges or layout changes.
-- Adding a caption does not by itself prove that an internet image is reusable. Rights remain
-  `unknown` until human review; likely fan art and independently created artwork are rejected.
+- Source and rights metadata remain stored for reference but do not block the approval conveyor.
 - On the complete profile-v4 holdout, exact historical image-to-caption recovery measured 3/140
   and Qlob-caption ranking measured 35/140. Generated captions therefore remain suggestions
   requiring human judgment.

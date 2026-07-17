@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -9,12 +10,13 @@ from leeway.analysis.service import AnalysisService
 from leeway.capture.service import CaptureService
 from leeway.config import Settings
 from leeway.db.base import Database
-from leeway.db.models import Proposal, PublishAttempt
+from leeway.db.models import CandidateImage, Proposal, PublishAttempt
 from leeway.discovery.service import DiscoveryService
 from leeway.intelligence.profile import StyleProfileService
 from leeway.proposals.service import ProposalService
 from leeway.publishing.base import PreparedPost, PublisherSessionStatus
 from leeway.publishing.internal import InternalPublisher
+from leeway.publishing.queue import PublisherQueueCoordinator
 from leeway.publishing.youtube import (
     BrowserScheduleReceipt,
     YouTubeBrowserPublisher,
@@ -24,6 +26,8 @@ from leeway.publishing.youtube import (
 class FakeYouTubeAdapter:
     def __init__(self) -> None:
         self.validate_calls = 0
+        self.session_valid = True
+        self.session_detail = "Qlob Editor fixture session valid."
         self.schedule_calls: list[PreparedPost] = []
         self.verify_calls: list[PreparedPost] = []
         self.schedule_receipt = BrowserScheduleReceipt(
@@ -38,9 +42,9 @@ class FakeYouTubeAdapter:
     async def validate_session(self) -> PublisherSessionStatus:
         self.validate_calls += 1
         return PublisherSessionStatus(
-            valid=True,
+            valid=self.session_valid,
             publisher="fixture",
-            detail="Qlob Editor fixture session valid.",
+            detail=self.session_detail,
         )
 
     async def schedule(self, post: PreparedPost) -> BrowserScheduleReceipt:
@@ -190,3 +194,84 @@ async def test_publisher_persists_expiry_invalidation_and_unverified_recovery(
     assert verification.verified is True
     assert verification.status == "externally_scheduled"
     assert len(adapter.verify_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_editorial_approval_queue_schedules_once_without_rights_gate(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    with database.session() as session:
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        proposal.rights_decision = None
+        candidate = session.get(CandidateImage, proposal.candidate_image_id)
+        assert candidate is not None
+        candidate.rights_status = "unknown"
+
+    adapter = FakeYouTubeAdapter()
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(database, enabled_settings, adapter)
+    queued = publisher.queue_attempt(proposal_id)
+    duplicate = publisher.queue_attempt(proposal_id)
+    assert queued["id"] == duplicate["id"]
+    assert queued["status"] == "queued"
+    assert adapter.schedule_calls == []
+
+    result = await publisher.process_queued_attempt(int(queued["id"]))
+    assert result.status == "externally_scheduled"
+    assert adapter.validate_calls == 1
+    assert len(adapter.schedule_calls) == 1
+    assert publisher.next_queued_attempt_id() is None
+
+
+@pytest.mark.asyncio
+async def test_blocked_session_attempt_can_resume_without_duplicate_submission(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    adapter.session_valid = False
+    adapter.session_detail = "Sign in to the Qlob Editor account."
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(database, enabled_settings, adapter)
+    queued = publisher.queue_attempt(proposal_id)
+
+    with pytest.raises(ValueError, match="Sign in"):
+        await publisher.process_queued_attempt(int(queued["id"]))
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "blocked_session"
+    assert adapter.schedule_calls == []
+
+    adapter.session_valid = True
+    assert publisher.requeue_blocked_session_attempts() == 1
+    assert publisher.requeue_blocked_session_attempts() == 0
+    result = await publisher.process_queued_attempt(int(queued["id"]))
+
+    assert result.status == "externally_scheduled"
+    assert len(adapter.schedule_calls) == 1
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "verified"
+
+
+@pytest.mark.asyncio
+async def test_persisted_queue_starts_after_application_restart(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(database, enabled_settings, adapter)
+    queued = publisher.queue_attempt(proposal_id)
+
+    coordinator = PublisherQueueCoordinator(publisher)
+    coordinator.start()
+    for _ in range(200):
+        if publisher.attempt_status(int(queued["id"]))["status"] == "verified":
+            break
+        await asyncio.sleep(0.01)
+
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "verified"
+    assert len(adapter.schedule_calls) == 1
+    assert coordinator.status()["queued"] == 0

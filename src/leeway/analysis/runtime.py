@@ -609,7 +609,7 @@ class CodexAgentRuntime:
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         return await self._parse(
             CaptionCandidateSet,
-            "captions-v2.txt",
+            "captions-v3.txt",
             payload,
             require_image=True,
         )

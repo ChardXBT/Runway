@@ -10,6 +10,7 @@ export type Proposal = {
   id: number;
   generation_run_id: number;
   planned_publish_at: string;
+  scheduled_publish_at: string | null;
   status: string;
   candidate_image_id: number;
   backup_candidate_ids: number[];
@@ -68,4 +69,31 @@ export type PublishPreparation = {
   caption: string;
   local_image_path: string;
   channel_name: string;
+};
+
+export type WorkflowStatus = {
+  needs_review: number;
+  queued: number;
+  scheduled: number;
+  rejected: number;
+  next_available_at: string;
+  posts_per_day: number;
+  timezone: string;
+};
+
+export type PublisherQueueStatus = {
+  running: boolean;
+  queued: number;
+  paused: boolean;
+  paused_reason: string | null;
+  mode?: "youtube" | "internal_only";
+};
+
+export type EditorialEnvelope = {
+  decision?: "approved" | "rejected" | "image_replaced";
+  detail?: string;
+  proposal?: Proposal;
+  next_proposal: Proposal | null;
+  workflow: WorkflowStatus;
+  publisher_queue?: PublisherQueueStatus;
 };

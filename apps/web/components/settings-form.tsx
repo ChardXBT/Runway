@@ -9,7 +9,6 @@ type Settings = {
   channel_handle: string;
   timezone: string;
   default_post_time: string;
-  planning_horizon_days: number;
   duplicate_window_days: number;
   agent_runtime: string;
   codex_model: string;
@@ -21,9 +20,6 @@ type Settings = {
   publishing_enabled: boolean;
   caption_question_first: boolean;
   publisher_channel_id: string;
-  publisher_confirmation_ttl_minutes: number;
-  publisher_requires_human_confirmation: boolean;
-  publisher_visible_browser_only: boolean;
   blocked_sources: { id: number; type: string; value: string }[];
 };
 
@@ -39,7 +35,6 @@ export function SettingsForm({ initial }: { initial: Settings }) {
       name: String(data.get("name")),
       timezone: String(data.get("timezone")),
       default_post_time: String(data.get("default_post_time")),
-      planning_horizon_days: Number(data.get("planning_horizon_days")),
       duplicate_window_days: Number(data.get("duplicate_window_days")),
     };
     const response = await fetch(`${API_URL}/api/settings/full`, {
@@ -71,7 +66,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
         </strong>
         <span>
           {settings.publishing_enabled
-            ? `Qlob channel ${settings.publisher_channel_id} · visible browser · exact phrase · ${settings.publisher_confirmation_ttl_minutes}-minute token.`
+            ? `Qlob channel ${settings.publisher_channel_id} · visible browser · approved posts enter the queue automatically.`
             : "Only local approval and internal scheduling are available."}
         </span>
       </div>
@@ -99,29 +94,16 @@ export function SettingsForm({ initial }: { initial: Settings }) {
             />
           </label>
         </div>
-        <div className="two-fields">
-          <label>
-            <span>Planning horizon</span>
-            <input
-              className="field"
-              name="planning_horizon_days"
-              type="number"
-              min="1"
-              max="30"
-              defaultValue={settings.planning_horizon_days}
-            />
-          </label>
-          <label>
-            <span>Duplicate window</span>
-            <input
-              className="field"
-              name="duplicate_window_days"
-              type="number"
-              min="1"
-              defaultValue={settings.duplicate_window_days}
-            />
-          </label>
-        </div>
+        <label>
+          <span>Duplicate window</span>
+          <input
+            className="field"
+            name="duplicate_window_days"
+            type="number"
+            min="1"
+            defaultValue={settings.duplicate_window_days}
+          />
+        </label>
         <button className="button" type="submit">
           Save settings
         </button>
@@ -147,12 +129,11 @@ export function SettingsForm({ initial }: { initial: Settings }) {
           </p>
         </article>
         <article className="panel">
-          <p className="eyebrow">External boundary</p>
-          <h2>{settings.publishing_enabled ? "Armed" : "Locked"}</h2>
+          <p className="eyebrow">Scheduling policy</p>
+          <h2>One bot post daily</h2>
           <p>
-            {settings.publisher_requires_human_confirmation
-              ? "No model or background job can cross the one-time confirmation interlock."
-              : "Publisher configuration is incomplete."}
+            Approvals take the next open 10:00 AM Eastern day. The horizon is uncapped and
+            manual channel posts do not consume LeeWay’s daily slot.
           </p>
         </article>
       </section>

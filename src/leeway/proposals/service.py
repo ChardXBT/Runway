@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -35,12 +36,13 @@ class ProposalService:
         self.caption_service = CaptionService(database, settings)
         self.feedback = CaptionFeedbackService(database)
         self.retrieval = RetrievalService(database, settings)
+        self._schedule_lock = threading.Lock()
 
     async def generate_batch(
         self, *, days: int = 10, start_date: date | None = None
     ) -> dict[str, object]:
-        if days < 1 or days > 30:
-            raise ValueError("days must be between 1 and 30")
+        if days < 1 or days > 100:
+            raise ValueError("option count must be between 1 and 100")
         timezone_name, default_time = self._schedule_config()
         timezone = ZoneInfo(timezone_name)
         local_start = start_date or (datetime.now(timezone).date() + timedelta(days=1))
@@ -215,11 +217,35 @@ class ProposalService:
         limit: int = 100,
     ) -> list[dict[str, object]]:
         with self.database.session() as session:
-            statement = select(Proposal).order_by(Proposal.planned_publish_at, Proposal.id)
+            statement = select(Proposal).order_by(Proposal.created_at, Proposal.id)
             if status:
                 statement = statement.where(Proposal.status == status)
             proposals = session.scalars(statement.limit(limit)).all()
             return [self._proposal_dict(session, proposal) for proposal in proposals]
+
+    def next_for_review(self, *, exclude_id: int | None = None) -> dict[str, object] | None:
+        with self.database.session() as session:
+            statement = (
+                select(Proposal)
+                .where(Proposal.status == ProposalStatus.NEEDS_REVIEW.value)
+                .order_by(Proposal.created_at, Proposal.id)
+                .limit(1)
+            )
+            if exclude_id is not None:
+                statement = statement.where(Proposal.id != exclude_id)
+            proposal = session.scalar(statement)
+            return self._proposal_dict(session, proposal) if proposal else None
+
+    def next_generation_date(self) -> date:
+        timezone_name, _default_time = self._schedule_config()
+        timezone = ZoneInfo(timezone_name)
+        with self.database.session() as session:
+            values = session.scalars(select(Proposal.planned_publish_at)).all()
+        dates = [
+            datetime.fromisoformat(value).astimezone(timezone).date() for value in values if value
+        ]
+        tomorrow = datetime.now(timezone).date() + timedelta(days=1)
+        return max(dates, default=tomorrow - timedelta(days=1)) + timedelta(days=1)
 
     def detail(self, proposal_id: int) -> dict[str, object]:
         with self.database.session() as session:
@@ -243,15 +269,48 @@ class ProposalService:
                 "error_summary": run.error_summary,
             }
 
-    def queue_status(self, *, days: int = 10, start_date: date | None = None) -> dict[str, object]:
+    def queue_status(
+        self,
+        *,
+        days: int | None = None,
+        start_date: date | None = None,
+        limit: int = 500,
+    ) -> dict[str, object]:
         timezone_name, default_time = self._schedule_config()
         timezone = ZoneInfo(timezone_name)
+        with self.database.session() as session:
+            proposals = session.scalars(
+                select(Proposal)
+                .where(
+                    Proposal.scheduled_publish_at.is_not(None),
+                    Proposal.status.not_in(
+                        [
+                            ProposalStatus.REJECTED.value,
+                            ProposalStatus.CANCELLED.value,
+                        ]
+                    ),
+                )
+                .order_by(Proposal.scheduled_publish_at, Proposal.id)
+                .limit(limit)
+            ).all()
+            rows = [self._proposal_dict(session, proposal) for proposal in proposals]
+
+        result: dict[str, object] = {
+            "timezone": timezone_name,
+            "default_time": default_time,
+            "posts_per_day": 1,
+            "scheduled": rows,
+            "coverage": len(rows),
+            "next_available_at": self.next_available_slot().isoformat(),
+        }
+        if days is None:
+            return result
+
         local_start = start_date or (datetime.now(timezone).date() + timedelta(days=1))
-        rows = self.list_proposals(limit=500)
         by_date: dict[str, list[dict[str, object]]] = {}
         for row in rows:
             local_date = (
-                datetime.fromisoformat(str(row["planned_publish_at"]))
+                datetime.fromisoformat(str(row["scheduled_publish_at"]))
                 .astimezone(timezone)
                 .date()
                 .isoformat()
@@ -277,14 +336,75 @@ class ProposalService:
                     "conflict": len(active) > 1,
                 }
             )
-        return {
-            "timezone": timezone_name,
-            "default_time": default_time,
-            "days": calendar,
-            "coverage": sum(not day["gap"] for day in calendar),
-            "gaps": [day["date"] for day in calendar if day["gap"]],
-            "conflicts": [day["date"] for day in calendar if day["conflict"]],
+        result.update(
+            {
+                "days": calendar,
+                "coverage": sum(not day["gap"] for day in calendar),
+                "gaps": [day["date"] for day in calendar if day["gap"]],
+                "conflicts": [day["date"] for day in calendar if day["conflict"]],
+            }
+        )
+        return result
+
+    def workflow_summary(self) -> dict[str, object]:
+        with self.database.session() as session:
+            rows = session.scalars(select(Proposal)).all()
+        counts: dict[str, int] = {}
+        for proposal in rows:
+            counts[proposal.status] = counts.get(proposal.status, 0) + 1
+        queued_statuses = {
+            ProposalStatus.INTERNALLY_SCHEDULED.value,
+            ProposalStatus.PUBLISHING.value,
+            ProposalStatus.PUBLISH_UNVERIFIED.value,
+            ProposalStatus.PUBLISH_FAILED.value,
         }
+        scheduled_statuses = {
+            ProposalStatus.EXTERNALLY_SCHEDULED.value,
+            ProposalStatus.PUBLISHED.value,
+        }
+        return {
+            "needs_review": counts.get(ProposalStatus.NEEDS_REVIEW.value, 0),
+            "queued": sum(counts.get(status, 0) for status in queued_statuses),
+            "scheduled": sum(counts.get(status, 0) for status in scheduled_statuses),
+            "rejected": counts.get(ProposalStatus.REJECTED.value, 0),
+            "next_available_at": self.next_available_slot().isoformat(),
+            "posts_per_day": 1,
+            "timezone": self._schedule_config()[0],
+        }
+
+    def next_available_slot(self, *, exclude_proposal_id: int | None = None) -> datetime:
+        timezone_name, default_time = self._schedule_config()
+        timezone = ZoneInfo(timezone_name)
+        now = datetime.now(timezone)
+        first_date = now.date()
+        first_slot = self._planned_datetime(first_date, timezone_name, default_time)
+        if first_slot <= now + timedelta(minutes=5):
+            first_date += timedelta(days=1)
+        reserving_statuses = {
+            ProposalStatus.APPROVED.value,
+            ProposalStatus.INTERNALLY_SCHEDULED.value,
+            ProposalStatus.PUBLISHING.value,
+            ProposalStatus.EXTERNALLY_SCHEDULED.value,
+            ProposalStatus.PUBLISH_UNVERIFIED.value,
+            ProposalStatus.PUBLISHED.value,
+            ProposalStatus.PUBLISH_FAILED.value,
+        }
+        with self.database.session() as session:
+            statement = select(Proposal.scheduled_publish_at).where(
+                Proposal.scheduled_publish_at.is_not(None),
+                Proposal.status.in_(reserving_statuses),
+            )
+            if exclude_proposal_id is not None:
+                statement = statement.where(Proposal.id != exclude_proposal_id)
+            reserved = {
+                datetime.fromisoformat(value).astimezone(timezone).date()
+                for value in session.scalars(statement).all()
+                if value
+            }
+        candidate_date = first_date
+        while candidate_date in reserved:
+            candidate_date += timedelta(days=1)
+        return self._planned_datetime(candidate_date, timezone_name, default_time)
 
     def edit_caption(
         self,
@@ -311,6 +431,9 @@ class ProposalService:
                 unchanged = True
             else:
                 if proposal.status == ProposalStatus.APPROVED.value:
+                    self._release_schedule_slot(
+                        session, proposal, "approval_slot_released_for_edit"
+                    )
                     self._transition(
                         session,
                         proposal,
@@ -352,6 +475,11 @@ class ProposalService:
             if index not in range(len(alternatives)):
                 raise ValueError("alternative caption index is out of range")
             if proposal.status == ProposalStatus.APPROVED.value:
+                self._release_schedule_slot(
+                    session,
+                    proposal,
+                    "approval_slot_released_for_alternative",
+                )
                 self._transition(
                     session,
                     proposal,
@@ -379,31 +507,30 @@ class ProposalService:
         return self.detail(proposal_id)
 
     def approve(self, proposal_id: int) -> dict[str, object]:
-        with self.database.session() as session:
-            proposal = self._get(session, proposal_id)
-            if not proposal.final_caption.strip():
-                raise ValueError("proposal cannot be approved without a final caption")
-            candidate = session.get(CandidateImage, proposal.candidate_image_id)
-            media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
-            if candidate is None or media is None:
-                raise ValueError("proposal cannot be approved without a local candidate image")
-            verified_rights = {"creator_owned", "licensed", "public_domain"}
-            if candidate.rights_status == "blocked":
-                raise ValueError("a blocked image cannot be approved")
-            if (
-                candidate.rights_status not in verified_rights
-                and proposal.rights_decision != "accepted_for_proposal"
-            ):
-                raise ValueError(
-                    "review image provenance and accept its rights status before approval"
+        with self._schedule_lock:
+            scheduled_for = self.next_available_slot(exclude_proposal_id=proposal_id)
+            with self.database.session() as session:
+                proposal = self._get(session, proposal_id)
+                if not proposal.final_caption.strip():
+                    raise ValueError("proposal cannot be approved without a final caption")
+                candidate = session.get(CandidateImage, proposal.candidate_image_id)
+                media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
+                if candidate is None or media is None:
+                    raise ValueError("proposal cannot be approved without a local candidate image")
+                if candidate.rights_status == "blocked":
+                    raise ValueError("a blocked image cannot be approved")
+                old_slot = proposal.scheduled_publish_at
+                proposal.scheduled_publish_at = scheduled_for.isoformat()
+                self._event(
+                    session,
+                    proposal.id,
+                    "schedule_slot_assigned",
+                    {"scheduled_publish_at": old_slot},
+                    {"scheduled_publish_at": proposal.scheduled_publish_at},
                 )
-            if candidate.rights_status in verified_rights:
-                proposal.rights_decision = "verified_source_status"
-                proposal.rights_reviewed_at = datetime.now(UTC)
-            self._transition(session, proposal, ProposalStatus.APPROVED, "approved")
-            proposal.approved_at = datetime.now(UTC)
-            proposal.rejected_at = None
-            if media:
+                self._transition(session, proposal, ProposalStatus.APPROVED, "approved")
+                proposal.approved_at = datetime.now(UTC)
+                proposal.rejected_at = None
                 source = self.settings.resolved_data_dir / media.local_path
                 extension = Path(media.local_path).suffix
                 relative = Path("media") / "approved" / f"{media.sha256}{extension}"
@@ -413,15 +540,19 @@ class ProposalService:
                     shutil.copy2(source, destination)
                 media.kind = "approved"
                 media.local_path = relative.as_posix()
-            audit(
-                session,
-                "proposal_approved",
-                "proposal",
-                proposal.id,
-                {"final_caption": proposal.final_caption},
-            )
-            generated_caption = proposal.recommended_caption
-            final_caption = proposal.final_caption
+                audit(
+                    session,
+                    "proposal_approved",
+                    "proposal",
+                    proposal.id,
+                    {
+                        "final_caption": proposal.final_caption,
+                        "scheduled_publish_at": proposal.scheduled_publish_at,
+                        "bot_posts_for_day": 1,
+                    },
+                )
+                generated_caption = proposal.recommended_caption
+                final_caption = proposal.final_caption
         self.feedback.record(
             proposal_id,
             verdict="accepted",
@@ -442,6 +573,7 @@ class ProposalService:
     ) -> dict[str, object]:
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            self._release_schedule_slot(session, proposal, "schedule_slot_released_for_rejection")
             self._transition(session, proposal, ProposalStatus.REJECTED, "rejected")
             proposal.rejected_at = datetime.now(UTC)
             self._event(
@@ -528,6 +660,7 @@ class ProposalService:
             )
             candidate_id = proposal.candidate_image_id
             final_before = proposal.final_caption
+            final_was_user_edited = proposal.final_caption != proposal.recommended_caption
             generated_before = {
                 "recommended": proposal.recommended_caption,
                 "alternatives": json.loads(proposal.alternative_captions_json),
@@ -550,7 +683,7 @@ class ProposalService:
             )
             proposal.factual_uncertainty_warning = captions.factual_uncertainty_warning
             # A user-edited final caption is authoritative and survives regeneration.
-            proposal.final_caption = final_before
+            proposal.final_caption = final_before if final_was_user_edited else captions.recommended
             self._event(
                 session,
                 proposal.id,
@@ -563,7 +696,7 @@ class ProposalService:
                     "confidence": captions.confidence,
                     "referenced_historical_post_ids": (captions.referenced_historical_post_ids),
                     "factual_uncertainty_warning": captions.factual_uncertainty_warning,
-                    "final_caption_preserved": True,
+                    "final_caption_preserved": final_was_user_edited,
                 },
             )
         return self.detail(proposal_id)
@@ -634,6 +767,11 @@ class ProposalService:
                 )
                 proposal.rejected_at = None
             elif proposal.status == ProposalStatus.APPROVED.value:
+                self._release_schedule_slot(
+                    session,
+                    proposal,
+                    "approval_slot_released_for_replacement",
+                )
                 self._transition(
                     session, proposal, ProposalStatus.NEEDS_REVIEW, "approval_reset_for_replacement"
                 )
@@ -676,7 +814,7 @@ class ProposalService:
             proposal = self._get(session, proposal_id)
             self._require_status(
                 proposal,
-                {ProposalStatus.NEEDS_REVIEW, ProposalStatus.APPROVED},
+                {ProposalStatus.NEEDS_REVIEW},
                 "rescheduling",
             )
             conflict = session.scalar(
@@ -829,6 +967,24 @@ class ProposalService:
             {"status": new_status.value},
         )
 
+    def _release_schedule_slot(
+        self,
+        session: Session,
+        proposal: Proposal,
+        event_type: str,
+    ) -> None:
+        if proposal.scheduled_publish_at is None:
+            return
+        old_slot = proposal.scheduled_publish_at
+        proposal.scheduled_publish_at = None
+        self._event(
+            session,
+            proposal.id,
+            event_type,
+            {"scheduled_publish_at": old_slot},
+            {"scheduled_publish_at": None},
+        )
+
     def _proposal_dict(
         self, session: Session, proposal: Proposal, *, include_events: bool = False
     ) -> dict[str, object]:
@@ -843,6 +999,7 @@ class ProposalService:
             "id": proposal.id,
             "generation_run_id": proposal.generation_run_id,
             "planned_publish_at": proposal.planned_publish_at,
+            "scheduled_publish_at": proposal.scheduled_publish_at,
             "status": proposal.status,
             "candidate_image_id": proposal.candidate_image_id,
             "backup_candidate_ids": json.loads(proposal.backup_candidate_ids_json),

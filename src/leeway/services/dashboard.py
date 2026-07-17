@@ -20,9 +20,14 @@ class DashboardService:
                     select(Proposal.status, func.count(Proposal.id)).group_by(Proposal.status)
                 )
             }
-            queue_rows = session.scalars(
-                select(Proposal).order_by(Proposal.planned_publish_at).limit(10)
-            ).all()
+            scheduled_count = (
+                session.scalar(
+                    select(func.count(Proposal.id)).where(
+                        Proposal.scheduled_publish_at.is_not(None)
+                    )
+                )
+                or 0
+            )
             last_capture = session.scalar(
                 select(CaptureRun).order_by(CaptureRun.started_at.desc()).limit(1)
             )
@@ -35,10 +40,10 @@ class DashboardService:
             catalogue_count = session.scalar(select(func.count(Post.id))) or 0
             return {
                 "catalogue_count": catalogue_count,
-                "queue_coverage": len(queue_rows),
+                "queue_coverage": scheduled_count,
                 "needs_review": proposal_counts.get("needs_review", 0),
                 "approved": proposal_counts.get("approved", 0),
-                "gaps": max(0, 10 - len(queue_rows)),
+                "gaps": 0,
                 "last_capture": _run_summary(last_capture),
                 "active_profile_version": last_profile.version if last_profile else None,
                 "last_generation": _run_summary(last_generation),

@@ -4,13 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const links = [
-  ["Desk", "/"],
   ["Review", "/review"],
-  ["Queue", "/queue"],
+  ["Schedule", "/queue"],
   ["Archive", "/catalogue"],
-  ["Profile", "/profile"],
   ["Settings", "/settings"],
-  ["Activity", "/activity"],
 ] as const;
 
 export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean }) {
@@ -19,7 +16,7 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
   return (
     <header className="topbar">
       <div className="topbar-inner">
-        <Link href="/" className="brand" aria-label="LeeWay editorial desk">
+        <Link href="/review" className="brand" aria-label="LeeWay editorial desk">
           <span className="brand-mark" aria-hidden="true">
             <i>L</i>
             <i>W</i>
@@ -31,7 +28,7 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
         </Link>
         <nav aria-label="Primary navigation">
           {links.map(([label, href]) => {
-            const active = href === "/" ? pathname === href : pathname.startsWith(href);
+            const active = pathname.startsWith(href);
             return (
               <Link
                 key={href}
@@ -48,15 +45,15 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
           className={publishingEnabled ? "publishing-lock armed" : "publishing-lock"}
           title={
             publishingEnabled
-              ? "Visible-browser publisher armed; every proposal still requires exact confirmation"
+              ? "Approved posts enter the visible-browser Qlob scheduling queue"
               : "LeeWay cannot publish to YouTube"
           }
         >
           <span className="lock-signal" aria-hidden="true" />
           <span>
-            <strong>{publishingEnabled ? "Publisher armed" : "Publishing disabled"}</strong>
+            <strong>{publishingEnabled ? "Auto-schedule on" : "Publishing disabled"}</strong>
             <small>
-              {publishingEnabled ? "Confirmation required" : "Local planning only"}
+              {publishingEnabled ? "One bot post daily" : "Local planning only"}
             </small>
           </span>
         </div>

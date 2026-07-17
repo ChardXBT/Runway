@@ -7,13 +7,18 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Proposal, PublishPreparation } from "@/lib/types";
+import type {
+  EditorialEnvelope,
+  Proposal,
+  WorkflowStatus,
+} from "@/lib/types";
 import { ReviewWorkspace } from "./review-workspace";
 
 const proposal: Proposal = {
   id: 42,
   generation_run_id: 1,
   planned_publish_at: "2026-03-08T10:00:00-04:00",
+  scheduled_publish_at: null,
   status: "needs_review",
   candidate_image_id: 7,
   backup_candidate_ids: [8, 9],
@@ -34,7 +39,7 @@ const proposal: Proposal = {
     source_page_url: "https://fixture.local/example",
     direct_image_url: "fixture://candidate-07",
     source_domain: "fixture.local",
-    rights_status: "creator_owned",
+    rights_status: "unknown",
     detected_topic: { franchise: "Fixture", characters: ["One"] },
   },
   rights_decision: null,
@@ -44,123 +49,174 @@ const proposal: Proposal = {
   scheduled_verified_at: null,
 };
 
+const workflow: WorkflowStatus = {
+  needs_review: 2,
+  queued: 0,
+  scheduled: 0,
+  rejected: 0,
+  next_available_at: "2026-03-08T10:00:00-04:00",
+  posts_per_day: 1,
+  timezone: "America/Toronto",
+};
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe("ReviewWorkspace", () => {
-  it("saves the authoritative caption and then approves", async () => {
-    const edited = { ...proposal, final_caption: "Human final caption." };
-    const approved = { ...edited, status: "approved" };
+  it("edits, approves, schedules, and immediately advances", async () => {
+    const next = {
+      ...proposal,
+      id: 43,
+      final_caption: "Next caption.",
+      recommended_caption: "Next caption.",
+    };
+    const response: EditorialEnvelope = {
+      decision: "approved",
+      proposal: {
+        ...proposal,
+        status: "internally_scheduled",
+        final_caption: "Why is One so excited?",
+        scheduled_publish_at: "2026-03-08T10:00:00-04:00",
+      },
+      next_proposal: next,
+      workflow: { ...workflow, needs_review: 1, queued: 1 },
+      publisher_queue: {
+        running: true,
+        queued: 1,
+        paused: false,
+        paused_reason: null,
+        mode: "youtube",
+      },
+    };
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => edited })
-      .mockResolvedValueOnce({ ok: true, json: async () => approved });
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => response,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          detail: "Editorial options are ready.",
+          next_proposal: next,
+          workflow: { ...workflow, needs_review: 5, queued: 1 },
+        }),
+      });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ReviewWorkspace initialProposal={proposal} />);
-    expect(screen.getByText("Grounded in short historical reactions.")).toBeInTheDocument();
-    expect(screen.getByText("The exact scene is unknown.")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Final caption"), {
-      target: { value: "Human final caption." },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save caption" }));
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      final_caption: "Human final caption.",
-      reason_codes: [],
-      note: null,
-      image_verdict: "unsure",
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(fetchMock.mock.calls[1][0]).toContain("/approve");
-    expect(await screen.findByText("approved")).toBeInTheDocument();
-  });
-
-  it("records a reusable preference without approving or publishing", async () => {
-    const learned = {
-      ...proposal,
-      caption_feedback: [
-        {
-          id: 1,
-          verdict: "preferred",
-          generated_caption: proposal.final_caption,
-          preferred_caption: "Why is One so excited?",
-          preferred_structure: "open_question",
-          reason_codes: ["prefer_open_question"],
-          image_verdict: "good",
-          note: null,
-          created_at: "2026-03-01T10:00:00Z",
-        },
-      ],
-    };
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => learned,
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<ReviewWorkspace initialProposal={proposal} />);
-    fireEvent.change(screen.getByLabelText("Final caption"), {
+    expect(screen.queryByText(/rights|provenance|copyright/i)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Caption"), {
       target: { value: "Why is One so excited?" },
     });
-    fireEvent.click(screen.getByText("Prefer an open question"));
-    fireEvent.click(screen.getByRole("button", { name: "Save as preferred" }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve & schedule" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(fetchMock.mock.calls[0][0]).toContain("/feedback");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
-      verdict: "preferred",
-      preferred_caption: "Why is One so excited?",
-      preferred_structure: "open_question",
-      reason_codes: ["prefer_open_question"],
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "/api/editorial/proposals/42/approve",
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      final_caption: "Why is One so excited?",
     });
-    expect(fetchMock.mock.calls[0][0]).not.toContain("/approve");
-    expect(fetchMock.mock.calls[0][0]).not.toContain("/youtube");
+    expect(await screen.findByDisplayValue("Next caption.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Editorial session status")).toHaveTextContent(
+      "1 this session",
+    );
+    expect(fetchMock.mock.calls[1][0]).toContain("/api/editorial/options/ensure");
   });
 
-  it("does not expose the external submit action before exact preparation", async () => {
-    const internallyScheduled = {
-      ...proposal,
-      status: "internally_scheduled",
-      final_caption: "Why is One so excited?",
-    };
-    const preparation: PublishPreparation = {
-      attempt_id: 9,
-      proposal_id: proposal.id,
-      status: "prepared",
-      confirmation_token: "token-long-enough-for-the-api",
-      confirmation_phrase: `SCHEDULE QLOB #${proposal.id}`,
-      expires_at: "2026-03-08T13:55:00Z",
-      planned_publish_at: proposal.planned_publish_at,
-      caption: internallyScheduled.final_caption,
-      local_image_path: "data/media/approved/example.jpg",
-      channel_name: "Qlob",
-    };
+  it("turns rejection into a negative signal and advances", async () => {
+    const next = { ...proposal, id: 44, final_caption: "Another option." };
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => preparation,
+      json: async () => ({
+        decision: "rejected",
+        proposal: { ...proposal, status: "rejected" },
+        next_proposal: next,
+        workflow: { ...workflow, needs_review: 3, rejected: 1 },
+      }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(
-      <ReviewWorkspace initialProposal={internallyScheduled} publishingEnabled />,
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
     );
-    expect(
-      screen.queryByRole("button", { name: "Schedule on YouTube" }),
-    ).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Prepare YouTube schedule" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
 
-    const submit = await screen.findByRole("button", {
-      name: "Schedule on YouTube",
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "/api/editorial/proposals/42/reject",
+    );
+    expect(await screen.findByDisplayValue("Another option.")).toBeInTheDocument();
+  });
+
+  it("rejects an image as negative feedback and advances", async () => {
+    const next = { ...proposal, id: 45, final_caption: "Fresh image option." };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        decision: "image_rejected",
+        proposal: { ...proposal, status: "rejected" },
+        next_proposal: next,
+        workflow: { ...workflow, needs_review: 3, rejected: 1 },
+      }),
     });
-    expect(submit).toBeDisabled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toContain("/youtube/prepare");
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Another image" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "/api/editorial/proposals/42/skip-image",
+    );
+    expect(await screen.findByDisplayValue("Fresh image option.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Editorial session status")).toHaveTextContent(
+      "1 this session",
+    );
+  });
+
+  it("replenishes the conveyor when the tray is empty", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        detail: "Editorial options are ready.",
+        next_proposal: proposal,
+        workflow,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ReviewWorkspace
+        initialProposal={null}
+        initialWorkflow={{ ...workflow, needs_review: 0 }}
+        publishingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Find more options" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/editorial/options/ensure");
+    expect(await screen.findByDisplayValue("Recommended caption.")).toBeInTheDocument();
   });
 });

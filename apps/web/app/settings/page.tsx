@@ -8,7 +8,6 @@ const fallback: Settings = {
   channel_handle: "Qlob",
   timezone: "America/Toronto",
   default_post_time: "10:00",
-  planning_horizon_days: 10,
   duplicate_window_days: 180,
   agent_runtime: "codex",
   codex_model: "gpt-5.6-luna",
@@ -20,9 +19,6 @@ const fallback: Settings = {
   publishing_enabled: false,
   caption_question_first: true,
   publisher_channel_id: "UCQ-nHijGwxNU3Go_wyLQ5Ng",
-  publisher_confirmation_ttl_minutes: 10,
-  publisher_requires_human_confirmation: true,
-  publisher_visible_browser_only: true,
   blocked_sources: [],
 };
 
@@ -33,10 +29,10 @@ export default async function SettingsPage() {
       <header className="header-row">
         <div>
           <p className="eyebrow">Local configuration</p>
-          <h1>Settings with guardrails.</h1>
+          <h1>Quiet rules behind the feed.</h1>
           <p className="lede">
-            Secret values never appear here. Caption learning is local, browser actions stay
-            visible, and external scheduling always stops at a human confirmation boundary.
+            Secret values never appear here. Every approval teaches LeeWay and takes the next
+            open 10:00 AM Eastern slot through the visible Qlob publisher.
           </p>
         </div>
       </header>

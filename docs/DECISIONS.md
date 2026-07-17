@@ -32,14 +32,18 @@ URLs and the managed capture run, accepts at most ten cards and 4 MiB per reques
 explicit source header, and cannot publish. Exact surface count and tail-ID agreement are required
 for completion. A general-purpose browser-to-database write endpoint was rejected.
 
-## Two-stage publishing boundary
+## Human approval, daily allocation, and publisher outbox
 
-`InternalPublisher` first moves an approved item to `internally_scheduled` without a network
-action. `YouTubeBrowserPublisher` is a separate, disabled-by-default boundary using a dedicated
-visible profile. Preparation performs session/channel validation and creates only a short-lived
-confirmation. Submission requires the one-time token and exact proposal phrase, hashes the
-approved payload, records screenshots/audit events, and never auto-retries an ambiguous click.
-Model runtimes and background jobs have no route to this service.
+`Approve & schedule` is the proposal-specific human decision. It atomically reserves the first open
+10:00 AM Toronto slot, records positive learning, and moves the item through `InternalPublisher`
+before adding a persisted outbox attempt. A single worker drains approvals in FIFO order while the
+UI immediately presents the next option. The allocator has no fixed horizon and reserves no more
+than one LeeWay-generated post per local day.
+
+`YouTubeBrowserPublisher` remains a separate visible-browser boundary using a dedicated profile.
+It validates the saved Qlob Editor session, hashes the approved payload, records screenshots/audit
+events, pauses safely before composer interaction when sign-in is needed, and never auto-retries an
+ambiguous final click. Model runtimes have no route to the approval or publisher endpoints.
 
 ## Pluggable discovery
 

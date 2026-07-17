@@ -54,7 +54,7 @@ async def run_fixture_demo(
     await proposals.replace_image(second_id)
     proposals.approve(third_id)
     scheduled = await InternalPublisher(database, settings).schedule_post(third_id)
-    queue = proposals.queue_status(days=10, start_date=start_date)
+    queue = proposals.queue_status()
     database.engine.dispose()
 
     restarted = Database(settings)
@@ -71,8 +71,8 @@ async def run_fixture_demo(
         "profile_built": profile["version"] == 1,
         "evaluation_written": evaluation["holdout_samples"] > 0,
         "discovery_has_ten": discovery_accepted >= 10,
-        "ten_proposals": len(generated_ids) == 10,
-        "queue_covered": queue["coverage"] == 10 and not queue["conflicts"],
+        "option_batch_ready": len(generated_ids) == 10,
+        "one_approved_slot": queue["coverage"] == 1,
         "caption_persisted": (
             persisted_first["final_caption"] == "Human-edited fixture proof caption."
         ),
@@ -104,5 +104,8 @@ async def run_fixture_demo(
             "hard_rejected": discovery["hard_rejected"],
         },
         "generation": generation,
-        "queue": {"coverage": queue["coverage"], "gaps": queue["gaps"]},
+        "queue": {
+            "coverage": queue["coverage"],
+            "next_available_at": queue["next_available_at"],
+        },
     }

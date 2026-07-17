@@ -37,7 +37,7 @@ GENERIC_PATTERNS = (
 
 
 class CaptionService:
-    prompt_version = "captions-v2"
+    prompt_version = "captions-v3"
 
     def __init__(
         self,
@@ -345,6 +345,38 @@ class CaptionService:
         parts = cleaned.split()
         if not parts:
             return ""
+        lowered = cleaned.lower()
+        generic_markers = {
+            "animated",
+            "attendee",
+            "attendees",
+            "boy",
+            "character",
+            "characters",
+            "child",
+            "figure",
+            "girl",
+            "group",
+            "male",
+            "female",
+            "man",
+            "other",
+            "people",
+            "person",
+            "teen",
+            "unidentified",
+            "unknown",
+            "woman",
+            "yellow-skinned",
+        }
+        words = set(lowered.replace("-", " ").split())
+        starts_as_description = parts[0][:1].islower() or parts[0].lower() in {"a", "an", "the"}
+        if starts_as_description or words & generic_markers:
+            if words & {"female", "girl", "woman"}:
+                return "she"
+            if words & {"boy", "male", "man"}:
+                return "he"
+            return "they"
         if parts[0].rstrip(".").lower() in {"mr", "mrs", "ms", "dr", "professor"}:
             return " ".join(parts[:2])[:40]
         return parts[0][:40]

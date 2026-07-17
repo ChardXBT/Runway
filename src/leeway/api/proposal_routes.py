@@ -11,14 +11,16 @@ from leeway.audit.service import AuditService
 from leeway.config import Settings
 from leeway.db.base import Database
 from leeway.discovery.service import DiscoveryService
+from leeway.editorial.service import EditorialService
 from leeway.proposals.service import ProposalService
 from leeway.publishing.internal import InternalPublisher
+from leeway.publishing.queue import PublisherQueueCoordinator
 from leeway.publishing.youtube import YouTubeBrowserPublisher
 from leeway.services.settings import SettingsService
 
 
 class GenerationRequest(BaseModel):
-    days: int = Field(default=10, ge=1, le=30)
+    days: int = Field(default=5, ge=1, le=100)
     start_date: date | None = None
 
 
@@ -73,10 +75,27 @@ class SettingsUpdateRequest(BaseModel):
     fields: dict[str, Any] = Field(min_length=1)
 
 
+class EditorialApproveRequest(BaseModel):
+    final_caption: str = Field(min_length=1, max_length=1000)
+
+
+class EditorialRejectRequest(BaseModel):
+    reason: str = Field(default="not a fit", min_length=1, max_length=500)
+
+
+class EnsureOptionsRequest(BaseModel):
+    target: int = Field(default=5, ge=1, le=50)
+    live_discovery: bool = True
+
+
 def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["proposals"])
     proposals = ProposalService(database, settings)
+    editorial = EditorialService(database, settings)
     youtube_publisher = YouTubeBrowserPublisher(database, settings)
+    publisher_queue = PublisherQueueCoordinator(youtube_publisher)
+    if settings.publishing_enabled:
+        publisher_queue.start()
 
     @router.post("/generation-runs")
     def create_generation(payload: GenerationRequest) -> dict[str, object]:
@@ -107,6 +126,112 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
             return proposals.detail(proposal_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/editorial/next")
+    def editorial_next() -> dict[str, object]:
+        return {
+            "next_proposal": proposals.next_for_review(),
+            "workflow": proposals.workflow_summary(),
+            "publisher_queue": publisher_queue.status(),
+        }
+
+    @router.get("/editorial/status")
+    def editorial_status() -> dict[str, object]:
+        return {
+            "workflow": proposals.workflow_summary(),
+            "publisher_queue": publisher_queue.status(),
+        }
+
+    @router.post("/editorial/options/ensure")
+    def ensure_editorial_options(payload: EnsureOptionsRequest) -> dict[str, object]:
+        try:
+            return asyncio.run(
+                editorial.ensure_options(
+                    target=payload.target,
+                    live_discovery=payload.live_discovery,
+                )
+            )
+        except (LookupError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/editorial/proposals/{proposal_id}/approve")
+    def editorial_approve(
+        proposal_id: int,
+        payload: EditorialApproveRequest,
+    ) -> dict[str, object]:
+        try:
+            current = proposals.detail(proposal_id)
+            if payload.final_caption.strip() != current["final_caption"]:
+                proposals.edit_caption(
+                    proposal_id,
+                    payload.final_caption,
+                    reason_codes=["human_edit"],
+                    image_verdict="good",
+                )
+            proposals.approve(proposal_id)
+            asyncio.run(InternalPublisher(database, settings).schedule_post(proposal_id))
+            queue_result: dict[str, object] = {
+                "running": False,
+                "queued": 0,
+                "paused": False,
+                "paused_reason": None,
+                "mode": "internal_only",
+            }
+            if settings.publishing_enabled:
+                queue_result = {
+                    **publisher_queue.enqueue(proposal_id),
+                    "mode": "youtube",
+                }
+            return {
+                "decision": "approved",
+                "proposal": proposals.detail(proposal_id),
+                "next_proposal": proposals.next_for_review(exclude_id=proposal_id),
+                "workflow": proposals.workflow_summary(),
+                "publisher_queue": queue_result,
+            }
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/editorial/proposals/{proposal_id}/reject")
+    def editorial_reject(
+        proposal_id: int,
+        payload: EditorialRejectRequest,
+    ) -> dict[str, object]:
+        try:
+            rejected = proposals.reject(
+                proposal_id,
+                payload.reason,
+                reason_codes=["not_engaging"],
+                image_verdict="unsure",
+            )
+            return {
+                "decision": "rejected",
+                "proposal": rejected,
+                "next_proposal": proposals.next_for_review(exclude_id=proposal_id),
+                "workflow": proposals.workflow_summary(),
+                "publisher_queue": publisher_queue.status(),
+            }
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/editorial/proposals/{proposal_id}/skip-image")
+    def editorial_skip_image(proposal_id: int) -> dict[str, object]:
+        try:
+            rejected = proposals.reject(
+                proposal_id,
+                "The image was not a fit.",
+                reason_codes=["image_not_a_fit"],
+                image_verdict="bad",
+            )
+            return {
+                "decision": "image_rejected",
+                "proposal": rejected,
+                "next_proposal": proposals.next_for_review(exclude_id=proposal_id),
+                "workflow": proposals.workflow_summary(),
+                "publisher_queue": publisher_queue.status(),
+            }
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.patch("/proposals/{proposal_id}")
     def edit_caption(proposal_id: int, payload: CaptionEditRequest) -> dict[str, object]:
@@ -248,6 +373,17 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @router.get("/publisher/queue")
+    def publisher_queue_status() -> dict[str, object]:
+        return publisher_queue.status()
+
+    @router.post("/publisher/queue/resume")
+    def publisher_queue_resume() -> dict[str, object]:
+        try:
+            return publisher_queue.resume()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @router.post("/proposals/{proposal_id}/youtube/prepare")
     def prepare_youtube_schedule(proposal_id: int) -> dict[str, object]:
         try:
@@ -302,8 +438,11 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @router.get("/queue")
-    def queue(days: int = Query(default=10, ge=1, le=30)) -> dict[str, object]:
-        return proposals.queue_status(days=days)
+    def queue(
+        days: int | None = Query(default=None, ge=1, le=500),
+        limit: int = Query(default=500, ge=1, le=1000),
+    ) -> dict[str, object]:
+        return proposals.queue_status(days=days, limit=limit)
 
     @router.get("/activity")
     def activity(

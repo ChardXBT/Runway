@@ -1,48 +1,39 @@
-# Guarded YouTube browser publisher
+# YouTube publisher and persisted outbox
 
-The former future-publisher milestone is implemented as `YouTubeBrowserPublisher`.
+The filename is retained for existing links; the publisher is implemented.
 
-## Boundary
-
-The publisher uses a dedicated persistent Chromium profile at
-`data/browser-profile/publisher`. Google credentials are entered only in the visible browser;
-LeeWay does not request a password, export cookies, solve challenges, use stealth, or run a hidden
-background publisher.
-
-The caption/model pipeline has no route into the publisher. A proposal must pass every state
-boundary:
+## Normal editorial path
 
 ```text
 needs_review
-  -> approved (human caption/image decision + provenance decision)
+  -> approved (caption/image decision and daily slot reservation)
   -> internally_scheduled
-  -> prepared (no YouTube submission)
-  -> publishing (one-time confirmation consumed)
+  -> queued
+  -> submitting
   -> externally_scheduled OR publish_unverified OR publish_failed
 ```
 
+`Approve & schedule` is the human authorization for that exact proposal. The API immediately
+returns the next review option while a single background worker processes the persisted FIFO
+outbox. A model runtime cannot call this path.
+
+Each approved item is assigned the first unreserved 10:00 AM `America/Toronto` slot. The scheduler
+has no fixed horizon and enforces one LeeWay-generated post per local day.
+
 ## Interlocks
 
-- `LEWAY_PUBLISHING_ENABLED=false` blocks session launch, preparation, and confirmation.
-- The channel URL is pinned to Qlob's configured channel ID.
-- The visible page must expose the Qlob heading, `You're an editor`, and one Community composer.
-- Preparation accepts only an internally scheduled proposal with local media, a future timezone-aware
-  time, and a recorded provenance decision.
-- Preparation creates a short-lived random token. Only its SHA-256 hash is stored.
-- The image bytes, caption, time, proposal ID, and channel ID are hashed. Any change invalidates the
-  attempt.
-- Final submission requires both the one-time token and the exact phrase
-  `SCHEDULE QLOB #<proposal-id>`.
-- The browser captures before/after/failure screenshots and checks Qlob's Scheduled tab.
-- Once the final Schedule click is attempted, any failure is treated as possibly submitted.
-  LeeWay enters `publish_unverified` and offers verification, never an automatic retry.
-- In-process confirmation locking and persisted attempt state prevent token reuse and parallel
-  duplicate submissions.
+- `LEWAY_PUBLISHING_ENABLED=false` blocks all external scheduling.
+- The browser uses a dedicated persistent profile under `data/browser-profile/publisher`.
+- LeeWay validates the configured Qlob channel and Editor access before composer interaction.
+- The exact image bytes, caption, time, proposal ID, and channel ID are hashed.
+- Known-blocked candidates and missing media cannot enter the outbox.
+- Only one submission can run at a time; queue attempts are idempotent and persisted across restarts.
+- An expired Google session stops before the composer, marks the outbox paused, and can be resumed
+  after the operator signs in.
+- Once the final YouTube Schedule click may have occurred, an ambiguous result is verification-only
+  and is never automatically retried.
+- Before/after/failure screenshots and audit events preserve the evidence.
 
-## Acceptance status
-
-All interlocks, state transitions, expiry, token reuse, payload tampering, successful verification,
-and ambiguous-submission recovery are covered by offline fake-adapter tests. The Qlob Editor
-composer/channel contract was inspected read-only in a signed-in browser. A real Schedule click was
-not part of automated or visual QA and still requires a separate, proposal-specific user
-authorization.
+The older CLI `publisher prepare` / `publisher confirm` flow remains available for diagnostics,
+but the product UI does not require a token or typed phrase. The explicit `Approve & schedule`
+button is the normal proposal-specific confirmation.

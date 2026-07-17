@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     timezone: str = "America/Toronto"
     default_post_time: str = "10:00"
     planning_horizon_days: int = 10
-    posts_per_day: int = 1
+    posts_per_day: int = Field(default=1, ge=1, le=1)
     duplicate_window_days: int = 180
     approval_required: bool = True
     publishing_enabled: bool = False
@@ -140,14 +140,15 @@ class Settings(BaseSettings):
             "channel_handle": self.channel_handle,
             "timezone": self.timezone,
             "default_post_time": self.default_post_time,
-            "planning_horizon_days": self.planning_horizon_days,
             "posts_per_day": self.posts_per_day,
+            "scheduling_horizon_days": None,
+            "approval_schedules_automatically": True,
             "duplicate_window_days": self.duplicate_window_days,
             "approval_required": self.approval_required,
             "publishing_enabled": self.publishing_enabled,
             "publisher_channel_id": self.publisher_channel_id,
             "publisher_confirmation_ttl_minutes": self.publisher_confirmation_ttl_minutes,
-            "publisher_requires_human_confirmation": True,
+            "publisher_approval_is_confirmation": True,
             "publisher_visible_browser_only": True,
             "capture_scroll_delay_ms": self.capture_scroll_delay_ms,
             "capture_idle_cycles_before_stop": self.capture_idle_cycles_before_stop,

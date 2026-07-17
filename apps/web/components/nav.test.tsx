@@ -15,9 +15,9 @@ describe("Nav", () => {
     expect(screen.getByText("Publishing disabled")).toBeInTheDocument();
   });
 
-  it("shows the confirmation boundary when the publisher is armed", () => {
+  it("shows the one-post-per-day automation state", () => {
     render(<Nav publishingEnabled />);
-    expect(screen.getByText("Publisher armed")).toBeInTheDocument();
-    expect(screen.getByText("Confirmation required")).toBeInTheDocument();
+    expect(screen.getByText("Auto-schedule on")).toBeInTheDocument();
+    expect(screen.getByText("One bot post daily")).toBeInTheDocument();
   });
 });

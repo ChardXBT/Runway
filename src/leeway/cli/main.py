@@ -66,7 +66,8 @@ def initialize() -> None:
     database = initialize_database(settings)
     typer.echo(f"Initialized {settings.product_name} at {settings.resolved_data_dir}")
     typer.echo(f"Database: {database.settings.database_path}")
-    typer.echo("Publishing: disabled")
+    state = "enabled" if settings.publishing_enabled else "disabled"
+    typer.echo(f"Publishing: {state}")
 
 
 def _command_version(command: str, *args: str) -> str | None:
@@ -581,10 +582,18 @@ def generate_batch(
 
 
 @queue_app.command("status")
-def queue_status(days: int = typer.Option(10, min=1, max=30)) -> None:
+def queue_status(
+    days: int | None = typer.Option(
+        None,
+        min=1,
+        max=500,
+        help="Optional legacy calendar window; omit to list the full schedule.",
+    ),
+    limit: int = typer.Option(500, min=1, max=1000),
+) -> None:
     settings = get_settings()
     database = initialize_database(settings)
-    result = ProposalService(database, settings).queue_status(days=days)
+    result = ProposalService(database, settings).queue_status(days=days, limit=limit)
     typer.echo(json.dumps(result, indent=2, default=str))
 
 

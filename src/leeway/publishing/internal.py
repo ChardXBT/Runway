@@ -43,9 +43,12 @@ class InternalPublisher:
             media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
             if media is None:
                 raise ValueError("approved proposal has no local image")
+            scheduled_at = proposal.scheduled_publish_at
+            if not scheduled_at:
+                raise ValueError("approved proposal has no assigned daily schedule slot")
             return PreparedPost(
                 proposal_id=proposal.id,
-                planned_publish_at=proposal.planned_publish_at,
+                planned_publish_at=scheduled_at,
                 caption=proposal.final_caption,
                 local_image_path=str(self.settings.resolved_data_dir / media.local_path),
             )

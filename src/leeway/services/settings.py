@@ -17,7 +17,6 @@ class SettingsService:
         "handle",
         "timezone",
         "default_post_time",
-        "planning_horizon_days",
         "duplicate_window_days",
     }
 
@@ -38,7 +37,6 @@ class SettingsService:
                     "channel_handle": channel.handle,
                     "timezone": channel.timezone,
                     "default_post_time": channel.default_post_time,
-                    "planning_horizon_days": channel.planning_horizon_days,
                     "duplicate_window_days": channel.duplicate_window_days,
                     "blocked_sources": [
                         {
@@ -66,7 +64,7 @@ class SettingsService:
             hour, minute = (int(part) for part in parts)
             if hour not in range(24) or minute not in range(60):
                 raise ValueError("default_post_time is invalid")
-        for key in ("planning_horizon_days", "duplicate_window_days"):
+        for key in ("duplicate_window_days",):
             if key in fields and int(fields[key]) < 1:
                 raise ValueError(f"{key} must be positive")
         with self.database.session() as session:

@@ -1,9 +1,7 @@
 # Operations
 
-Use `leeway init` once, `leeway doctor` after dependency/configuration changes, and
-`run-leeway.ps1` (Windows) or `run-leeway.sh` (POSIX) to run the local application. Capture is not
-scheduled. Build a new profile explicitly after catalogue changes, then run discovery and batch
-generation.
+Use `leeway init` once, `leeway doctor` after dependency or configuration changes, and
+`run-leeway.ps1` (Windows) or `run-leeway.sh` (POSIX) to run the local application.
 
 ## Codex runtime
 
@@ -16,19 +14,15 @@ allowance:
 .\.venv\Scripts\leeway.exe agent smoke
 ```
 
-Use the browser sign-in opened by `agent login` and choose `Sign in with ChatGPT`. `agent status`
-must report `codex-chatgpt`, `gpt-5.6-luna`, `low`, and
-`paid_api_fallback_enabled: false` before a real run. No OpenAI API key is needed. If the included
-limit is exhausted, LeeWay stops the batch and preserves completed database records; wait for the
-allowance to reset, then rerun a resumable command.
+Choose `Sign in with ChatGPT`. `agent status` must report `codex-chatgpt`, the configured low- or
+medium-reasoning model, and `paid_api_fallback_enabled: false`. LeeWay strips API-key credentials
+from model subprocesses and stops when included usage is exhausted. It never switches to paid API
+billing.
 
-`agent smoke` makes one small structured-image request using a temporary synthetic image and does
-not create or change the Qlob database.
+Only one model request runs at a time. Completed records remain resumable if a limit or transient
+failure stops a run.
 
-Only one model request runs at a time. Do not launch overlapping analysis, discovery, or generation
-commands from separate terminals.
-
-## Real-data order
+## One-time data preparation
 
 ```powershell
 .\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts" --headed --resume
@@ -36,62 +30,58 @@ commands from separate terminals.
 .\.venv\Scripts\leeway.exe analyze history --resume
 .\.venv\Scripts\leeway.exe profile build
 .\.venv\Scripts\leeway.exe profile evaluate
-.\.venv\Scripts\leeway.exe discover images --days 10 --provider browser --live
-.\.venv\Scripts\leeway.exe generate batch --days 10
-.\.venv\Scripts\leeway.exe queue status
 ```
 
-The first command uses a dedicated persistent Chromium profile. Sign into the Google account that
-has Editor or Editor (Limited) access to Qlob. The browser profile retains that session locally,
-subject to normal Google session expiry or security challenges.
+Capture is explicit and read-only. Sign into the Google account that has Editor or Editor (Limited)
+access to Qlob. The dedicated browser profile retains the local session until Google expires it.
 
-Routine reports are written to `data/reports/`. Capture failure bundles are in `data/snapshots/`.
-The SQLite database uses WAL; copy the database plus `-wal`/`-shm` files only after stopping Leeway,
-or use SQLite's backup facility.
+## Daily editorial workflow
 
-## Caption teaching
+1. Open `http://127.0.0.1:3000/review`.
+2. Inspect the image and edit the caption inline if needed.
+3. Select `Approve & schedule`, `Reject`, or `Another image`.
+4. Continue for as many options as desired; the next decision loads immediately.
 
-In Review, save a specific final caption and select useful reasons. Prefer:
+Approvals are assigned the first open 10:00 AM `America/Toronto` slot. There is no fixed horizon,
+and the allocator reserves at most one LeeWay-generated post per local day. Manual posts made
+outside LeeWay do not consume a LeeWay slot.
 
-- `Prefer an open question` when a grounded `why`, `how`, or `what` prompt would invite replies;
-- `Too generic` for flat descriptions or generic engagement bait;
-- `Wrong emotion` or `Wrong character` when image understanding is wrong; and
-- `Invented context` when the caption assumes off-screen events.
+The review tray refills from already accepted candidates first. If none remain, visible bounded
+image discovery runs and then caption generation resumes. Model-usage exhaustion stops refill
+without changing completed approvals.
 
-Use `Save as preferred` for a good caption even when the proposal is not yet approved. Rejections
-and approvals are recorded automatically. Feedback enters future retrieval immediately; no
-separate training job is required.
+Edits and approvals are positive feedback. Rejections and image replacements are negative
+feedback. All signals are append-only and enter later retrieval/ranking automatically; there is no
+separate training form or save step.
 
-## Guarded external scheduling
+## YouTube publisher
 
-Normal operation:
-
-```dotenv
-LEWAY_PUBLISHING_ENABLED=false
-```
-
-One-time account setup:
+Set up the dedicated publisher profile once:
 
 ```powershell
 .\.venv\Scripts\leeway.exe publisher login
+.\.venv\Scripts\leeway.exe publisher status
 ```
 
-Use the Google account YouTube identifies as an Editor for Qlob. The profile is stored at
-`data/browser-profile/publisher`, ignored by Git, and reused until Google expires the session.
+Use the Google account YouTube identifies as an Editor for Qlob. The ignored profile lives at
+`data/browser-profile/publisher`.
 
-For an explicitly authorized controlled schedule:
+With `LEWAY_PUBLISHING_ENABLED=true`, the `Approve & schedule` decision adds the exact approved
+payload to a persisted FIFO outbox. One visible-browser worker schedules items serially while the
+UI advances immediately.
 
-1. Set `LEWAY_PUBLISHING_ENABLED=true` and restart API/web.
-2. Run `publisher status`.
-3. Confirm the proposal is provenance-reviewed, approved, internally scheduled, and at least five
-   minutes in the future.
-4. Run `publisher prepare --proposal-id <ID>`. This does not submit.
-5. Inspect the exact returned channel, caption, image path, and time.
-6. Run `publisher confirm --attempt-id <ID>` only after final authorization; enter the hidden token
-   and exact phrase.
-7. If verification is inconclusive, run `publisher verify --proposal-id <ID>`. Never prepare a
-   duplicate.
-8. Return the feature gate to `false` and restart.
+If Google requires sign-in, LeeWay stops before touching the composer and shows the queue as
+paused. Sign in through `publisher login`, then select `Resume scheduling` in Review. If a final
+Schedule click produced an ambiguous result, verify the proposal instead of retrying it.
 
-Keep a Qlob Manager available for external recovery. LeeWay does not bypass Google challenges and
-does not automatically delete or retry a post.
+The older `publisher prepare` / `publisher confirm` commands remain for diagnostics. They are not
+part of the normal UI workflow.
+
+## Backups and evidence
+
+Routine reports are under `data/reports/`; capture diagnostics are under `data/snapshots/`; browser
+publisher screenshots are under the configured publisher screenshot directory. Runtime data,
+media, browser sessions, and `.env` are ignored by Git.
+
+SQLite uses WAL. Stop LeeWay before copying the database and its `-wal`/`-shm` companions, or use
+SQLite's backup API.

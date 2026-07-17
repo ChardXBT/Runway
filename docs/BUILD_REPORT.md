@@ -24,7 +24,7 @@ verified as `PRIVATE` after the initial push.
   real-account and live-publisher acceptance work.
 - Verified saved `Sign in with ChatGPT` authentication and passed one real Luna/low structured
   image request with API fallback disabled.
-- Current checks: Ruff passed, Mypy strict passed, Pytest `47 passed`, ESLint passed,
+- Checks at that checkpoint: Ruff passed, Mypy strict passed, Pytest `47 passed`, ESLint passed,
   Vitest `5 passed`, the Next.js production build passed, and both npm audits found zero known
   vulnerabilities.
 - Captured and verified all 771 posts exposed by Qlob's Community surface, annotated all 698
@@ -38,14 +38,18 @@ verified as `PRIVATE` after the initial push.
   reranking, and an explicit open-question/observation/reaction review mix.
 - Added append-only feedback memory for edits, alternatives, preferences, approvals, and
   rejections, including reason codes and image verdicts.
-- Added a provenance approval gate and locked editorial mutation after internal scheduling.
-- Implemented the dedicated visible-browser YouTube scheduler with a disabled-by-default feature
-  gate, Qlob/Editor checks, short-lived hashed token, exact typed phrase, payload tamper hash,
-  screenshots, Scheduled-tab verification, and conservative no-retry recovery.
-- Added Alembic migration `0004_feedback_and_publisher`.
-- Current local checks: Ruff lint/format passed, Mypy strict passed for 59 source files, Pytest
-  47 passed, ESLint passed, Vitest 5 passed, the Next.js production build passed, and both npm
-  audits found zero known vulnerabilities.
+- Replaced the original ten-frame queue with a continuous one-decision editorial conveyor. Caption
+  edits are inline; approve, reject, and image replacement record learning and load the next option.
+- Added first-open-day allocation at 10:00 AM Toronto time, with a strict one-LeeWay-post-per-day
+  invariant and no fixed scheduling horizon.
+- Implemented approve-to-schedule publishing through a persisted serial outbox with Qlob/Editor
+  checks, payload hashing, session-expiry pause/resume, screenshots, Scheduled-tab verification,
+  and conservative no-retry recovery after an ambiguous final click.
+- Source metadata remains preserved but is no longer an approval-form gate.
+- Added Alembic migrations `0004_feedback_and_publisher` and `0005_editorial_conveyor`.
+- Current local checks: Ruff lint/format passed, Mypy strict passed, Pytest 51 passed, ESLint passed,
+  Vitest 6 passed, the Next.js production build passed, and both npm audits found zero known
+  vulnerabilities.
 - No real YouTube Schedule/Post button was clicked. External Qlob acceptance remains a separate
   user-authorized action.
 
@@ -87,16 +91,16 @@ verified as `PRIVATE` after the initial push.
 - Added retrieval-grounded caption packages, three structured caption options, persisted model
   metadata, resumable generation runs, and proposal replacement/regeneration.
 
-### Milestone 4 — approval queue and guarded publishers
+### Milestone 4 — editorial conveyor and guarded publishers
 
-- Added a restart-safe ten-day engine using the persisted channel timezone and default local time,
-  including DST-aware scheduling, conflict/gap detection, and resumable batches.
-- Added dashboard, review, queue, catalogue/detail, profile, settings, and activity pages. Review
-  supports caption edits, alternatives, approve/reject, regeneration, replacement, blocking,
-  rescheduling, and metadata correction.
-- Added an internal publisher boundary plus a separate guarded visible-browser external scheduler.
-  No model path can reach it; preparation performs no submission; final confirmation is
-  proposal-specific and single use.
+- Added a restart-safe, DST-aware first-open-day allocator with no fixed horizon and no more than
+  one LeeWay-generated post per Toronto local date.
+- Added the focused Review conveyor, uncapped Schedule list, Archive, Settings, and Activity
+  evidence surfaces. The primary decision supports inline editing, alternatives, approve, reject,
+  and image replacement.
+- Added an internal publisher boundary plus a separate persisted FIFO outbox and guarded
+  visible-browser scheduler. No model path can approve or publish; the operator's exact
+  `Approve & schedule` action is the proposal-specific instruction.
 
 ## Repository tree
 
@@ -118,7 +122,8 @@ LeeWay/
 │   ├── discovery/               # provider interface and implementations
 │   ├── intelligence/            # profile, evaluation, retrieval
 │   ├── media/                   # storage, fingerprints, previews
-│   ├── proposals/               # ten-day workflow
+│   ├── proposals/               # options, feedback, and daily-slot allocation
+│   ├── editorial/               # continuous review-tray orchestration
 │   ├── publishing/              # internal + guarded visible-browser publisher
 │   └── ranking/                 # duplicate detection and scoring
 ├── tests/{unit,integration,e2e}/
@@ -181,7 +186,7 @@ Verification reports are written to `data/reports/catalog-verification.json` and
 Profile and evaluation evidence is written under `data/reports/`. Corrections stay in separate
 overlay records and are applied when a profile is rebuilt.
 
-## Fixture ten-day demo
+## Historical fixture demo
 
 The single proof command creates an isolated timestamped data directory and uses no network:
 
@@ -197,7 +202,7 @@ The verified run is at `data/proofs/20260716T214847Z/`. Its 13 assertions all pa
 - profile v1 used 7 training and 2 holdout samples;
 - transformed duplicate recall was 1.0 and unrelated false-positive rate was 0.0;
 - discovery persisted 30 candidates, accepted 23, and hard-rejected 7;
-- 10 proposals covered all 10 days at 10:00 in `America/Toronto` with no gaps;
+- the original fixture created 10 proposals across 10 days at 10:00 in `America/Toronto`;
 - caption edits and internal scheduling survived a database restart; and
 - the internally scheduled proposal had no external publication ID.
 
@@ -214,7 +219,7 @@ To operate the same stages individually:
 .\.venv\Scripts\leeway.exe queue status
 ```
 
-## Verification results
+## Historical fixture verification results
 
 - Ruff lint: passed.
 - Ruff format check: 75 files formatted.
@@ -237,7 +242,8 @@ To operate the same stages individually:
 - The real capture, Codex runtime, and a bounded browser-discovery pass are verified. Search
   providers can still challenge, throttle, or change markup; LeeWay stops instead of bypassing
   those controls.
-- Rights status for internet candidates defaults to `unknown` and requires human review.
+- Rights status for internet candidates defaults to `unknown`; it is retained as diagnostic
+  metadata and does not add a checkbox to the fast approval path.
 - YouTube may expose relative dates only; Leeway records that reduced precision instead of
   inventing a timestamp. YouTube DOM changes can still require selector updates.
 - Exact historical image-to-caption recovery measured 0% on the real 40-post holdout; caption

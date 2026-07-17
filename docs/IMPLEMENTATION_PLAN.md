@@ -1,8 +1,8 @@
 # Implementation plan
 
-This plan translates the supplied single-pass specification into checkpointed implementation work.
-Each checkpoint keeps the local application runnable and is followed by targeted tests before the
-next milestone begins.
+This plan records the original milestone structure. The approval-queue portion was superseded on
+2026-07-17 by the continuous editorial conveyor described in `docs/PRODUCT.md`: no fixed scheduling
+horizon, at most one LeeWay post per day, automatic feedback, and approve-to-schedule publishing.
 
 ## Milestone 0 — foundation
 
@@ -36,20 +36,22 @@ next milestone begins.
 - Generate and validate three retrieval-grounded captions while rejecting near-copy captions and
   recording complete model/audit history.
 
-## Milestone 4 — approval and queue
+## Milestone 4 — editorial conveyor and publishing
 
-- Generate one restart-safe proposal per local day for ten days at 10:00 America/Toronto with
-  backups and DST-safe timestamps.
-- Implement review, edit, alternative selection, regeneration, replacement, rejection, approval,
-  rescheduling, block, metadata correction, calendar, settings, and activity views/actions.
-- Implement `InternalPublisher` with a strict approval boundary and document the future headed
-  browser publisher without implementing live publishing.
+- Generate review options independently of schedule slots, then reserve the first open 10:00 AM
+  Toronto date only when the operator approves.
+- Present one image/caption decision at a time with inline editing, reject, image replacement,
+  approve-and-schedule, immediate next-option loading, and automatic learning signals.
+- Enforce at most one LeeWay-generated post per local day with no fixed horizon.
+- Move approved payloads through `InternalPublisher` into a persisted serial outbox and guarded
+  visible-browser Qlob publisher.
 
 ## Completion proof
 
 - Run initialization, fixture capture/resume/idempotency, verification, analysis, profile build and
-  evaluation, fixture discovery, ten-day generation, edit/reject/replace/approve/internal schedule,
-  service restart/persistence checks, backend tests/lint/types, and frontend tests/lint/build.
+  evaluation, fixture discovery, option generation, edit/reject/replace/approve/internal schedule,
+  uncapped daily-slot allocation, outbox recovery, service restart/persistence checks, backend
+  tests/lint/types, and frontend tests/lint/build.
 - Record exact outcomes and honest external-adapter limitations in `docs/BUILD_REPORT.md`.
 - Commit only the LeeWay repository scope, create `ChardXBT/LeeWay` as private, and push after every
   feasible check passes, as explicitly requested by the user.
