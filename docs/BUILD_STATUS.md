@@ -1,38 +1,55 @@
 # Build status
 
-## Checkpoints
+## Software build
 
-- [x] Milestone 0 — foundation
-- [x] Milestone 1 — capture and catalogue
-- [x] Milestone 2 — intelligence and retrieval
-- [x] Milestone 3 — discovery, ranking, and captions
-- [x] Milestone 4 — approval queue and internal publisher
-- [x] Fixture end-to-end proof
-- [x] Full automated checks
-- [x] Private GitHub publication
-- [x] ChatGPT-authenticated Codex image/caption runtime with no paid API fallback
-- [x] Fan-art and personal-artwork discovery safeguards
-- [x] Live Qlob Editor delegate composer and scheduling preflight
-- [x] Complete Qlob capture: 771 posts, 771 snapshots, and 716 historical media files verified
-- [x] Complete Qlob analysis: 698 annotations and 243,253 similarity edges
-- [x] Real Qlob style profile v4 with 558/140 train/holdout evaluation
-- [x] Bounded live discovery safeguard pass
-- [x] Real one-proposal caption/review/restart dry pass without posting
-- [x] LeeWay-specific editorial UI redesign with all 771 archive records reachable across 13 pages
-- [x] Desktop and 390px mobile visual QA across every route with no browser warnings or overflow
+- [x] Foundation, local API/CLI, SQLite WAL, and Alembic migrations
+- [x] Complete read-only Qlob capture and verified local catalogue
+- [x] ChatGPT-authenticated Codex runtime with no paid-API fallback
+- [x] Historical image analysis, retrieval profile, correction overlays, and holdout evaluation
+- [x] Bounded image discovery with duplicate, watermark, fan-art, personal-artwork, and source safeguards
+- [x] Question-first caption generation with deterministic grounded prompts and three structural choices
+- [x] Append-only learning records for edits, selections, approvals, preferences, and rejections
+- [x] Review UI with image/caption feedback, provenance gate, alternatives, and learning history
+- [x] Ten-day queue, approval state machine, and internal scheduling
+- [x] Guarded visible-browser YouTube scheduler with a dedicated persistent profile
+- [x] Feature gate, channel/Editor validation, one-time token, exact typed phrase, payload hash, screenshots, and post-verification
+- [x] Conservative ambiguous-submission recovery that cannot automatically retry
+- [x] Desktop and 390px mobile interface QA
+- [x] Private GitHub repository with `main` as the working branch
 
-## Current failures
+## Quality gate
 
-- No automated or integrity failures remain in the implemented workflow.
-- Exact historical image-to-caption recovery measured 3/140 and caption-vs-contrast ranking
-  measured 35/140. Caption suggestions therefore remain human-review inputs.
-- Internet-image rights remain `unknown` until a human reviews provenance and intended use.
+- Ruff lint and format: passed
+- Mypy strict mode: passed for 59 source files
+- Pytest: 47 passed
+- ESLint: passed
+- Vitest: 5 passed across two component files
+- Next.js production build and TypeScript: passed
+- Root and web npm audits: zero known vulnerabilities
 
-## Remaining work
+## Honest limitations
 
-- Implement the guarded YouTube browser publisher.
-- With explicit user authorization, schedule one controlled post, verify it on YouTube, and test
-  the recovery path.
+- Generated captions remain suggestions. The historical holdout did not demonstrate reliable exact
+  caption recovery, so human review stays mandatory.
+- Internet-image rights remain `unknown` until a human reviews provenance. Adding a caption does not
+  establish permission.
+- Google, YouTube, and image-search markup can change. Browser adapters stop on authentication,
+  challenge, or selector uncertainty rather than bypassing it.
+- The guarded publisher is implemented and fake-adapter tested, but no real YouTube Schedule button
+  was clicked during this build. One explicitly authorized controlled schedule is still required to
+  accept the current Qlob account/browser environment.
 
-The exact evidence is in `docs/QLOB_PRODUCTION_VALIDATION.md`. The remaining prerequisites and
-completion criteria are in `docs/COMPLETION_GUIDE.md`.
+## Remaining deployment acceptance
+
+The software implementation is complete. The only external acceptance item is:
+
+1. Sign the Qlob Editor account into LeeWay's dedicated publisher profile.
+2. Temporarily enable `LEWAY_PUBLISHING_ENABLED=true`.
+3. Select one approved, provenance-reviewed, internally scheduled proposal.
+4. Prepare it, inspect the exact channel/image/caption/time, then separately authorize and type the
+   proposal-specific confirmation phrase.
+5. Verify the item in Qlob's Scheduled tab, preserve the audit/screenshots, and return the feature
+   gate to `false`.
+
+That step creates an external side effect and must not be bundled into routine tests. See
+`docs/COMPLETION_GUIDE.md` and `docs/OPERATIONS.md`.

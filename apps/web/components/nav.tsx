@@ -13,7 +13,7 @@ const links = [
   ["Activity", "/activity"],
 ] as const;
 
-export function Nav() {
+export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean }) {
   const pathname = usePathname();
 
   return (
@@ -44,11 +44,20 @@ export function Nav() {
             );
           })}
         </nav>
-        <div className="publishing-lock" title="LeeWay cannot publish to YouTube">
+        <div
+          className={publishingEnabled ? "publishing-lock armed" : "publishing-lock"}
+          title={
+            publishingEnabled
+              ? "Visible-browser publisher armed; every proposal still requires exact confirmation"
+              : "LeeWay cannot publish to YouTube"
+          }
+        >
           <span className="lock-signal" aria-hidden="true" />
           <span>
-            <strong>Publishing disabled</strong>
-            <small>Local planning only</small>
+            <strong>{publishingEnabled ? "Publisher armed" : "Publishing disabled"}</strong>
+            <small>
+              {publishingEnabled ? "Confirmation required" : "Local planning only"}
+            </small>
           </span>
         </div>
       </div>

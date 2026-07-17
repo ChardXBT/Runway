@@ -53,7 +53,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": "ok",
             "product": active_settings.product_name,
             "version": __version__,
-            "publishing_enabled": False,
+            "publishing_enabled": active_settings.publishing_enabled,
+            "publishing_requires_human_confirmation": True,
         }
 
     @application.get("/api/settings", tags=["settings"])

@@ -10,10 +10,15 @@ headed/browser-agent/manual/fixture inputs -> canonical catalogue + media -> pro
                                                                       -> Codex image analysis
                                                                       -> discovery/ranking
                                                                       -> Codex captions/proposals
-                                                                      -> human approval
-                                                                      -> InternalPublisher only
+                                                                      -> feedback-aware reranker
+                                                                      -> human approval/provenance
+                                                                      -> InternalPublisher
+                                                                      -> guarded YouTube publisher
 ```
 
 The offline fixture path uses the mock runtime. The real model path uses the project-local Codex
-CLI with ChatGPT authentication and no API fallback. The API listens only on `127.0.0.1` and serves
-media from the local data directory.
+CLI with ChatGPT authentication and no API fallback. Caption feedback is append-only and enters
+bounded retrieval immediately. The external publisher is a separate service boundary: it cannot
+be invoked by a runtime, requires explicit state transitions and one-time confirmation, and is
+feature-gated off by default. The API listens only on `127.0.0.1` and serves media from the local
+data directory.

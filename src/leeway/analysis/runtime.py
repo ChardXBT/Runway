@@ -17,7 +17,8 @@ from pydantic import BaseModel
 
 from leeway.analysis.schemas import (
     CandidateAnalysis,
-    CaptionOptions,
+    CaptionCandidate,
+    CaptionCandidateSet,
     HistoricalAnnotation,
     HistoricalAnnotationBatch,
     HistoricalAnnotationResult,
@@ -67,7 +68,7 @@ class AgentRuntime(Protocol):
 
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis: ...
 
-    async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionOptions: ...
+    async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet: ...
 
 
 class MockAgentRuntime:
@@ -177,26 +178,36 @@ class MockAgentRuntime:
             confidence=0.9,
         )
 
-    async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionOptions:
+    async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         candidate_id = int(payload.get("candidate_id", 0))
         references = [int(value) for value in payload.get("historical_post_ids", [])][:4]
-        variants = [
+        questions = [
+            "Why does this feel like a bad idea?",
+            "What happened right before this?",
+            "How did the plan get this far?",
+            "What is everyone looking at?",
+        ]
+        observations = [
             "That confidence lasted exactly three seconds.",
-            "Would you trust this plan?",
             "Everyone saw that coming except him.",
             "A completely normal amount of dramatic tension.",
+        ]
+        reactions = [
             "The face of someone who learned nothing.",
+            "This should end well.",
         ]
-        recommended = variants[candidate_id % len(variants)]
-        alternatives = [
-            variants[(candidate_id + 1) % len(variants)],
-            variants[(candidate_id + 2) % len(variants)],
+        ordered_questions = (
+            questions[candidate_id % len(questions) :] + questions[: candidate_id % len(questions)]
+        )
+        candidates = [
+            *[CaptionCandidate(text=text, structure="open_question") for text in ordered_questions],
+            *[CaptionCandidate(text=text, structure="observation") for text in observations],
+            *[CaptionCandidate(text=text, structure="reaction") for text in reactions],
         ]
-        return CaptionOptions(
-            recommended=recommended,
-            alternatives=alternatives,
+        return CaptionCandidateSet(
+            candidates=candidates,
             rationale=(
-                "Matches fixture caption length, playful tone, and reaction-led construction."
+                "Offers question-first, observational, and reaction-led fixture structures."
             ),
             confidence=0.86,
             referenced_historical_post_ids=references,
@@ -293,8 +304,8 @@ class OpenAIAgentRuntime:
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
         return await self._parse(CandidateAnalysis, "candidate-analysis-v1.txt", payload)
 
-    async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionOptions:
-        return await self._parse(CaptionOptions, "captions-v1.txt", payload)
+    async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
+        return await self._parse(CaptionCandidateSet, "captions-v2.txt", payload)
 
 
 class CodexAgentRuntime:
@@ -595,10 +606,10 @@ class CodexAgentRuntime:
             require_image=True,
         )
 
-    async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionOptions:
+    async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         return await self._parse(
-            CaptionOptions,
-            "captions-v1.txt",
+            CaptionCandidateSet,
+            "captions-v2.txt",
             payload,
             require_image=True,
         )

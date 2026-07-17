@@ -13,6 +13,7 @@ from leeway.db.base import Database
 from leeway.discovery.service import DiscoveryService
 from leeway.proposals.service import ProposalService
 from leeway.publishing.internal import InternalPublisher
+from leeway.publishing.youtube import YouTubeBrowserPublisher
 from leeway.services.settings import SettingsService
 
 
@@ -23,6 +24,9 @@ class GenerationRequest(BaseModel):
 
 class CaptionEditRequest(BaseModel):
     final_caption: str = Field(min_length=1, max_length=1000)
+    reason_codes: list[str] = Field(default_factory=list, max_length=10)
+    note: str | None = Field(default=None, max_length=1000)
+    image_verdict: str | None = None
 
 
 class AlternativeRequest(BaseModel):
@@ -31,6 +35,26 @@ class AlternativeRequest(BaseModel):
 
 class RejectionRequest(BaseModel):
     reason: str = Field(default="not a fit", min_length=1, max_length=500)
+    reason_codes: list[str] = Field(default_factory=list, max_length=10)
+    image_verdict: str | None = None
+
+
+class CaptionFeedbackRequest(BaseModel):
+    verdict: str
+    reason_codes: list[str] = Field(default_factory=list, max_length=10)
+    preferred_caption: str | None = Field(default=None, max_length=1000)
+    preferred_structure: str | None = None
+    image_verdict: str | None = None
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class RightsReviewRequest(BaseModel):
+    decision: str
+
+
+class PublishConfirmationRequest(BaseModel):
+    confirmation_token: str = Field(min_length=20, max_length=200)
+    confirmation_phrase: str = Field(min_length=1, max_length=100)
 
 
 class ReplacementRequest(BaseModel):
@@ -52,6 +76,7 @@ class SettingsUpdateRequest(BaseModel):
 def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["proposals"])
     proposals = ProposalService(database, settings)
+    youtube_publisher = YouTubeBrowserPublisher(database, settings)
 
     @router.post("/generation-runs")
     def create_generation(payload: GenerationRequest) -> dict[str, object]:
@@ -86,7 +111,13 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     @router.patch("/proposals/{proposal_id}")
     def edit_caption(proposal_id: int, payload: CaptionEditRequest) -> dict[str, object]:
         try:
-            return proposals.edit_caption(proposal_id, payload.final_caption)
+            return proposals.edit_caption(
+                proposal_id,
+                payload.final_caption,
+                reason_codes=payload.reason_codes,
+                note=payload.note,
+                image_verdict=payload.image_verdict,
+            )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -111,7 +142,12 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     @router.post("/proposals/{proposal_id}/reject")
     def reject(proposal_id: int, payload: RejectionRequest) -> dict[str, object]:
         try:
-            return proposals.reject(proposal_id, payload.reason)
+            return proposals.reject(
+                proposal_id,
+                payload.reason,
+                reason_codes=payload.reason_codes,
+                image_verdict=payload.image_verdict,
+            )
         except (LookupError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -119,6 +155,34 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     def regenerate(proposal_id: int) -> dict[str, object]:
         try:
             return asyncio.run(proposals.regenerate_captions(proposal_id))
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/proposals/{proposal_id}/feedback")
+    def record_feedback(
+        proposal_id: int,
+        payload: CaptionFeedbackRequest,
+    ) -> dict[str, object]:
+        try:
+            return proposals.record_feedback(
+                proposal_id,
+                verdict=payload.verdict,
+                reason_codes=payload.reason_codes,
+                preferred_caption=payload.preferred_caption,
+                preferred_structure=payload.preferred_structure,
+                image_verdict=payload.image_verdict,
+                note=payload.note,
+            )
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/proposals/{proposal_id}/rights-review")
+    def review_rights(
+        proposal_id: int,
+        payload: RightsReviewRequest,
+    ) -> dict[str, object]:
+        try:
+            return proposals.review_rights(proposal_id, payload.decision)
         except (LookupError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -147,6 +211,8 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     def block_image(proposal_id: int) -> dict[str, object]:
         try:
             detail = proposals.detail(proposal_id)
+            if detail["status"] not in {"needs_review", "approved", "rejected"}:
+                raise ValueError("image blocking is unavailable after internal scheduling")
             DiscoveryService(database, settings).reject_candidate(
                 cast(int, detail["candidate_image_id"]), "user_blocked"
             )
@@ -158,6 +224,8 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     def block_domain(proposal_id: int) -> dict[str, object]:
         try:
             detail = proposals.detail(proposal_id)
+            if detail["status"] not in {"needs_review", "approved", "rejected"}:
+                raise ValueError("domain blocking is unavailable after internal scheduling")
             DiscoveryService(database, settings).block_domain(
                 cast(int, detail["candidate_image_id"])
             )
@@ -172,6 +240,66 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
             return proposals.detail(proposal_id)
         except (LookupError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/publisher/session/validate")
+    def validate_publisher_session() -> dict[str, object]:
+        try:
+            return asyncio.run(youtube_publisher.validate_session()).model_dump()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @router.post("/proposals/{proposal_id}/youtube/prepare")
+    def prepare_youtube_schedule(proposal_id: int) -> dict[str, object]:
+        try:
+            return asyncio.run(youtube_publisher.prepare_attempt(proposal_id)).model_dump(
+                mode="json"
+            )
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @router.get("/publisher/attempts/{attempt_id}")
+    def publish_attempt(attempt_id: int) -> dict[str, object]:
+        try:
+            return youtube_publisher.attempt_status(attempt_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/publisher/attempts/{attempt_id}/confirm")
+    def confirm_youtube_schedule(
+        attempt_id: int,
+        payload: PublishConfirmationRequest,
+    ) -> dict[str, object]:
+        try:
+            result = asyncio.run(
+                youtube_publisher.confirm_schedule(
+                    attempt_id,
+                    confirmation_token=payload.confirmation_token,
+                    confirmation_phrase=payload.confirmation_phrase,
+                )
+            )
+            return {
+                "result": result.model_dump(),
+                "proposal": proposals.detail(result.proposal_id),
+            }
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @router.post("/proposals/{proposal_id}/youtube/verify")
+    def verify_youtube_schedule(proposal_id: int) -> dict[str, object]:
+        try:
+            result = asyncio.run(youtube_publisher.verify_scheduled_post(proposal_id))
+            return {
+                "result": result.model_dump(),
+                "proposal": proposals.detail(proposal_id),
+            }
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @router.get("/queue")
     def queue(days: int = Query(default=10, ge=1, le=30)) -> dict[str, object]:

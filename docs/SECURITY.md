@@ -18,4 +18,11 @@
 - Model jobs are serialized to avoid accidental parallel allowance consumption. Authentication,
   usage-limit, timeout, and malformed-output failures stop the batch; no paid API fallback exists.
 - Model output is schema validated, treated as data, and never executed as SQL or a command.
-- Publishing is disabled; the internal publisher requires an already approved proposal.
+- External publishing is feature-gated off by default. The guarded publisher requires provenance
+  review, human approval, internal scheduling, a future timezone-aware time, a valid Qlob Editor
+  session, a short-lived one-time token, an unchanged payload hash, and an exact typed phrase.
+- Publisher tokens are stored only as hashes; Google credentials and cookies remain inside the
+  ignored dedicated browser profile.
+- A final Schedule click is marked possibly submitted before it is attempted. Ambiguous failures
+  enter a verification-only state, preventing automatic duplicate retries.
+- Editorial mutation APIs reject image/caption/date/metadata changes after internal scheduling.

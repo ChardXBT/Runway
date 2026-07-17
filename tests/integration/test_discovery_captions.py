@@ -42,6 +42,8 @@ async def test_offline_discovery_preserves_provenance_scores_and_captions(
     options = [captions.recommended, *captions.alternatives]
     assert len(options) == 3
     assert len(set(options)) == 3
+    assert captions.recommended.lower().startswith(("why ", "how ", "what "))
+    assert captions.recommended.endswith("?")
     historical = {
         "That look when the plan actually works.",
         "Would you trust this plan?",

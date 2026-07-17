@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from pydantic import BaseModel
@@ -23,6 +24,19 @@ class PublishResult(BaseModel):
     status: str
     external_id: str | None = None
     detail: str
+
+
+class PublishPreparation(BaseModel):
+    attempt_id: int
+    proposal_id: int
+    status: str
+    confirmation_token: str
+    confirmation_phrase: str
+    expires_at: datetime
+    planned_publish_at: str
+    caption: str
+    local_image_path: str
+    channel_name: str
 
 
 class VerificationResult(BaseModel):

@@ -130,28 +130,47 @@ console warning/error, and the temporary mobile viewport override was cleared af
 
 ## Automated quality gate
 
-- Pytest: 43 passed.
+- Pytest: 47 passed.
 - Ruff: passed.
-- Mypy strict mode: 57 source files, no issues.
+- Mypy strict mode: 59 source files, no issues.
 - ESLint: passed.
-- Vitest: two component files and two tests passed.
+- Vitest: two component files and five tests passed.
 - Next.js production build: passed; all nine routes compiled and TypeScript passed.
 - `leeway doctor`: Python, Node, npm, Playwright Chromium, production data paths, migration
-  `0003`, ChatGPT-authenticated Codex, no paid fallback, and the loopback API port all passed.
+  `0004`, ChatGPT-authenticated Codex, no paid fallback, and the loopback API port all passed.
 - Real-database restart check: passed.
 - External post/schedule action: intentionally not performed.
 
-## What remains before production completion
+## Post-validation implementation update
 
-The historical database, profile, bounded discovery pass, real proposal, review UI, safeguards,
-and restart persistence are validated. The remaining production milestone is a guarded YouTube
-publisher plus one explicitly authorized controlled scheduling test:
+After the read-only production pass, LeeWay added:
 
-1. Implement a visible publisher that accepts only a human-approved proposal.
-2. Revalidate the selected Qlob delegate session and channel before every submission.
-3. Require an explicit final user action before clicking YouTube's Schedule control.
-4. Verify the exact image, caption, Toronto date/time, and scheduled-post record on YouTube.
-5. Record screenshots and audit evidence and test the Manager-assisted recovery/deletion path.
+- question-first nine-candidate generation and the grounded pattern
+  `Why is <character> so <emotion>?`;
+- append-only caption feedback and immediate positive/negative retrieval;
+- a human provenance gate before approval;
+- editorial immutability after internal scheduling; and
+- a guarded visible-browser YouTube scheduler with Qlob/Editor validation, a short-lived hashed
+  token, exact proposal phrase, payload tamper detection, screenshots, Scheduled-tab verification,
+  and no automatic retry after an ambiguous click.
 
-Until those steps pass, LeeWay is a validated local intelligence and review system, not a complete
-autonomous or live scheduling system.
+These additions are covered by offline fake-adapter and UI tests. The historical note above remains
+accurate: production proposal `1` was not silently regenerated or posted, and no external
+Schedule/Post button was clicked.
+
+## Remaining external acceptance
+
+The software implementation is complete. One explicitly authorized controlled schedule remains to
+validate the current dedicated publisher profile against YouTube's live composer:
+
+1. Sign the Qlob Editor account into the dedicated publisher profile.
+2. Enable the feature gate temporarily and validate Qlob/channel/editor state.
+3. Prepare one approved, provenance-reviewed, internally scheduled proposal.
+4. Inspect its exact image, caption, and Toronto time.
+5. Separately authorize and enter the exact confirmation phrase.
+6. Verify the matching item in Qlob's Scheduled tab and preserve screenshots/audit evidence.
+7. Disable the feature gate again.
+
+Until that external action is performed, LeeWay should be described as software-complete with
+account-specific YouTube scheduling acceptance pending—not as a scheduler already proven against a
+real post.

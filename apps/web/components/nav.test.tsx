@@ -14,4 +14,10 @@ describe("Nav", () => {
     expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Publishing disabled")).toBeInTheDocument();
   });
+
+  it("shows the confirmation boundary when the publisher is armed", () => {
+    render(<Nav publishingEnabled />);
+    expect(screen.getByText("Publisher armed")).toBeInTheDocument();
+    expect(screen.getByText("Confirmation required")).toBeInTheDocument();
+  });
 });

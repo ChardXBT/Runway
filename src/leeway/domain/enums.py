@@ -55,6 +55,8 @@ class ProposalStatus(StrEnum):
     REJECTED = "rejected"
     INTERNALLY_SCHEDULED = "internally_scheduled"
     PUBLISHING = "publishing"
+    EXTERNALLY_SCHEDULED = "externally_scheduled"
+    PUBLISH_UNVERIFIED = "publish_unverified"
     PUBLISHED = "published"
     PUBLISH_FAILED = "publish_failed"
     CANCELLED = "cancelled"

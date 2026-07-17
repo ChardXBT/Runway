@@ -4,11 +4,13 @@ Leeway is a local-only intelligence and planning application for image-based You
 posts on the Qlob channel. It captures an historical catalogue through an explicitly initiated,
 read-only browser session; builds a reproducible style profile and local retrieval index; ranks
 provenance-preserving image candidates; generates retrieval-grounded caption options; and manages
-a restart-safe ten-day approval queue.
+a restart-safe ten-day approval queue. Human edits, selections, approvals, and rejections are
+stored as local retrieval evidence so later caption passes improve without model-weight training.
 
-Live YouTube publishing is intentionally disabled. An approved proposal can only be moved to an
-internal scheduled state. No setup, test, fixture workflow, or model run logs into Google or posts
-to YouTube.
+A guarded visible-browser YouTube scheduler is implemented but disabled by default. It can accept
+only a provenance-reviewed, approved, internally scheduled proposal and requires a short-lived
+one-time token plus an exact proposal-specific human confirmation. No automated test, model run,
+or preparation step can post to YouTube.
 
 The real Qlob catalogue, retrieval profile, bounded live discovery, one-proposal review flow, and
 restart persistence were validated on 2026-07-17 without posting. See
@@ -27,6 +29,11 @@ restart persistence were validated on 2026-07-17 without posting. See
   reasoning by default, and Pydantic-validated structured output.
 - The Codex runtime removes API-key credentials from its subprocess environment and never falls
   back to the separately billed OpenAI API.
+- Caption generation requests four open questions, three observations, and two reactions, then
+  deterministically selects a grounded open question plus two structural alternatives.
+- Append-only caption feedback is retrieved immediately for future ranking.
+- The external scheduler uses a separate visible persistent profile, a disabled-by-default
+  feature gate, payload hashing, screenshots, and conservative no-retry recovery.
 - Fixture, manual URL, experimental headed-browser, and optional API search providers share one
   provider interface.
 
@@ -123,9 +130,10 @@ repository workspace. API-key environment variables are removed. LeeWay requires
 timeouts, or an included-usage limit stop the current batch. There is no provider fallback.
 
 This is retrieval-based adaptation rather than model-weight fine-tuning. Qlob history, images,
-captions, annotations, corrections, rejections, and accepted examples remain in the local SQLite
-database. Each task receives only a bounded package of relevant examples. Historical annotation,
-candidate analysis, and caption generation also receive the actual local image.
+captions, annotations, corrections, caption edits, explicit preferences, rejections, and accepted
+examples remain in the local SQLite database. Each task receives only a bounded package of
+relevant examples. Historical annotation, candidate analysis, and caption generation also receive
+the actual local image. Open-ended `why`/`how`/`what` prompts are the default engagement goal.
 
 Keep `LEWAY_AGENT_RUNTIME=mock` only for the deterministic offline fixture workflow. An explicit
 `openai` adapter remains available for development, but it is never selected or used as a fallback
@@ -145,6 +153,21 @@ It preserves page/image URLs and stops on challenges. It contains no stealth, CA
 proxy rotation, or identity-evasion behavior. Internet images are never auto-published, and rights
 status defaults to `unknown` until reviewed.
 
+## Guarded YouTube scheduling
+
+The dedicated publisher profile is separate from the capture/discovery profiles:
+
+```powershell
+.\.venv\Scripts\leeway.exe publisher login
+.\.venv\Scripts\leeway.exe publisher status
+```
+
+Keep `LEWAY_PUBLISHING_ENABLED=false` for normal operation. For one controlled acceptance, follow
+`docs/COMPLETION_GUIDE.md`: enable the gate, prepare one internally scheduled proposal, inspect the
+exact payload, and separately confirm it. Preparation never submits. Once the final Schedule click
+is attempted, an inconclusive result enters `publish_unverified` and can only be checked—not
+automatically retried.
+
 ## Known limitations
 
 - YouTube may expose only relative publication text; Leeway records `relative` precision and does
@@ -159,7 +182,8 @@ status defaults to `unknown` until reviewed.
 - On the complete profile-v4 holdout, exact historical image-to-caption recovery measured 3/140
   and Qlob-caption ranking measured 35/140. Generated captions therefore remain suggestions
   requiring human judgment.
-- Live YouTube scheduling and publishing are not implemented.
+- The guarded scheduler is implemented and offline-tested, but a real Schedule click has not been
+  included in automated QA. One separately authorized Qlob acceptance pass remains.
 
 See `docs/COMPLETION_GUIDE.md` for the remaining path to production,
 `docs/OPERATIONS.md` for routine commands, `docs/BUILD_REPORT.md` for the fixture proof, and

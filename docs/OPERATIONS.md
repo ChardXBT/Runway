@@ -48,3 +48,50 @@ subject to normal Google session expiry or security challenges.
 Routine reports are written to `data/reports/`. Capture failure bundles are in `data/snapshots/`.
 The SQLite database uses WAL; copy the database plus `-wal`/`-shm` files only after stopping Leeway,
 or use SQLite's backup facility.
+
+## Caption teaching
+
+In Review, save a specific final caption and select useful reasons. Prefer:
+
+- `Prefer an open question` when a grounded `why`, `how`, or `what` prompt would invite replies;
+- `Too generic` for flat descriptions or generic engagement bait;
+- `Wrong emotion` or `Wrong character` when image understanding is wrong; and
+- `Invented context` when the caption assumes off-screen events.
+
+Use `Save as preferred` for a good caption even when the proposal is not yet approved. Rejections
+and approvals are recorded automatically. Feedback enters future retrieval immediately; no
+separate training job is required.
+
+## Guarded external scheduling
+
+Normal operation:
+
+```dotenv
+LEWAY_PUBLISHING_ENABLED=false
+```
+
+One-time account setup:
+
+```powershell
+.\.venv\Scripts\leeway.exe publisher login
+```
+
+Use the Google account YouTube identifies as an Editor for Qlob. The profile is stored at
+`data/browser-profile/publisher`, ignored by Git, and reused until Google expires the session.
+
+For an explicitly authorized controlled schedule:
+
+1. Set `LEWAY_PUBLISHING_ENABLED=true` and restart API/web.
+2. Run `publisher status`.
+3. Confirm the proposal is provenance-reviewed, approved, internally scheduled, and at least five
+   minutes in the future.
+4. Run `publisher prepare --proposal-id <ID>`. This does not submit.
+5. Inspect the exact returned channel, caption, image path, and time.
+6. Run `publisher confirm --attempt-id <ID>` only after final authorization; enter the hidden token
+   and exact phrase.
+7. If verification is inconclusive, run `publisher verify --proposal-id <ID>`. Never prepare a
+   duplicate.
+8. Return the feature gate to `false` and restart.
+
+Keep a Qlob Manager available for external recovery. LeeWay does not bypass Google challenges and
+does not automatically delete or retry a post.

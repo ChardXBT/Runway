@@ -13,3 +13,22 @@ def test_approval_boundary_is_explicit() -> None:
 def test_published_proposal_is_terminal() -> None:
     with pytest.raises(InvalidTransition):
         require_transition(ProposalStatus.PUBLISHED, ProposalStatus.NEEDS_REVIEW)
+
+
+def test_external_submission_has_conservative_recovery_states() -> None:
+    assert transition_allowed(
+        ProposalStatus.INTERNALLY_SCHEDULED,
+        ProposalStatus.PUBLISHING,
+    )
+    assert transition_allowed(
+        ProposalStatus.PUBLISHING,
+        ProposalStatus.PUBLISH_UNVERIFIED,
+    )
+    assert transition_allowed(
+        ProposalStatus.PUBLISH_UNVERIFIED,
+        ProposalStatus.EXTERNALLY_SCHEDULED,
+    )
+    assert not transition_allowed(
+        ProposalStatus.PUBLISH_UNVERIFIED,
+        ProposalStatus.PUBLISHING,
+    )

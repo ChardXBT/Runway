@@ -16,7 +16,7 @@ from leeway.analysis.runtime import (
 )
 from leeway.analysis.schemas import (
     CandidateAnalysis,
-    CaptionOptions,
+    CaptionCandidateSet,
     HistoricalAnnotation,
     SearchPlan,
     StyleSummary,
@@ -58,7 +58,13 @@ def _assert_strict_object_schemas(value: object) -> None:
 
 @pytest.mark.parametrize(
     "schema",
-    [HistoricalAnnotation, StyleSummary, SearchPlan, CandidateAnalysis, CaptionOptions],
+    [
+        HistoricalAnnotation,
+        StyleSummary,
+        SearchPlan,
+        CandidateAnalysis,
+        CaptionCandidateSet,
+    ],
 )
 def test_codex_output_schemas_require_every_property(schema: type[Any]) -> None:
     _assert_strict_object_schemas(schema.model_json_schema())

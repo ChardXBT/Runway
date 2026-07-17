@@ -24,13 +24,30 @@ verified as `PRIVATE` after the initial push.
   real-account and live-publisher acceptance work.
 - Verified saved `Sign in with ChatGPT` authentication and passed one real Luna/low structured
   image request with API fallback disabled.
-- Current checks: Ruff passed, Mypy strict passed, Pytest `43 passed`, ESLint passed,
-  Vitest `2 passed`, the Next.js production build passed, and both npm audits found zero known
+- Current checks: Ruff passed, Mypy strict passed, Pytest `47 passed`, ESLint passed,
+  Vitest `5 passed`, the Next.js production build passed, and both npm audits found zero known
   vulnerabilities.
 - Captured and verified all 771 posts exposed by Qlob's Community surface, annotated all 698
   image+caption records, and built 243,253 similarity edges.
 - Built real style profile v4, exercised a bounded six-candidate live search, and generated one
   `needs_review` proposal that survived API and web restarts without any YouTube action.
+
+## 2026-07-17 completion update
+
+- Added nine-candidate question-first generation, grounded visible-emotion prompts, deterministic
+  reranking, and an explicit open-question/observation/reaction review mix.
+- Added append-only feedback memory for edits, alternatives, preferences, approvals, and
+  rejections, including reason codes and image verdicts.
+- Added a provenance approval gate and locked editorial mutation after internal scheduling.
+- Implemented the dedicated visible-browser YouTube scheduler with a disabled-by-default feature
+  gate, Qlob/Editor checks, short-lived hashed token, exact typed phrase, payload tamper hash,
+  screenshots, Scheduled-tab verification, and conservative no-retry recovery.
+- Added Alembic migration `0004_feedback_and_publisher`.
+- Current local checks: Ruff lint/format passed, Mypy strict passed for 59 source files, Pytest
+  47 passed, ESLint passed, Vitest 5 passed, the Next.js production build passed, and both npm
+  audits found zero known vulnerabilities.
+- No real YouTube Schedule/Post button was clicked. External Qlob acceptance remains a separate
+  user-authorized action.
 
 ## Milestone delivery
 
@@ -38,8 +55,9 @@ verified as `PRIVATE` after the initial push.
 
 - Created the typed Python package, Typer CLI, FastAPI application, Next.js review app, local
   configuration, structured logging, and Windows/POSIX launchers.
-- Added SQLAlchemy models for the complete domain, SQLite WAL, Alembic migrations `0001` and
-  `0002`, restart-safe repositories, local file storage, and audit events.
+- Added SQLAlchemy models for the initial domain, SQLite WAL, initial Alembic migrations `0001` and
+  `0002`, restart-safe repositories, local file storage, and audit events. Later milestones add
+  migrations `0003` and `0004`.
 - Added deterministic mock and configuration-gated OpenAI agent runtimes. The OpenAI adapter uses
   Pydantic-validated structured output and never hard-codes a model.
 
@@ -69,15 +87,16 @@ verified as `PRIVATE` after the initial push.
 - Added retrieval-grounded caption packages, three structured caption options, persisted model
   metadata, resumable generation runs, and proposal replacement/regeneration.
 
-### Milestone 4 — approval queue and internal publisher
+### Milestone 4 — approval queue and guarded publishers
 
 - Added a restart-safe ten-day engine using the persisted channel timezone and default local time,
   including DST-aware scheduling, conflict/gap detection, and resumable batches.
 - Added dashboard, review, queue, catalogue/detail, profile, settings, and activity pages. Review
   supports caption edits, alternatives, approve/reject, regeneration, replacement, blocking,
   rescheduling, and metadata correction.
-- Added an internal-only publisher boundary. Approval can become `internally_scheduled`; no network
-  publication code or external post ID is produced.
+- Added an internal publisher boundary plus a separate guarded visible-browser external scheduler.
+  No model path can reach it; preparation performs no submission; final confirmation is
+  proposal-specific and single use.
 
 ## Repository tree
 
@@ -100,7 +119,7 @@ LeeWay/
 │   ├── intelligence/            # profile, evaluation, retrieval
 │   ├── media/                   # storage, fingerprints, previews
 │   ├── proposals/               # ten-day workflow
-│   ├── publishing/              # internal-only publisher
+│   ├── publishing/              # internal + guarded visible-browser publisher
 │   └── ranking/                 # duplicate detection and scoring
 ├── tests/{unit,integration,e2e}/
 ├── package-lock.json            # root task-runner lockfile
@@ -199,16 +218,16 @@ To operate the same stages individually:
 
 - Ruff lint: passed.
 - Ruff format check: 75 files formatted.
-- Mypy strict mode: 57 source files, no issues.
-- Pytest: 43 passed, including capture hardening, resumable batch analysis, discovery safeguards,
+- Mypy strict mode: 59 source files, no issues.
+- Pytest: 47 passed, including capture hardening, resumable batch analysis, discovery safeguards,
   proposal grounding persistence, and the full offline workflow.
 - ESLint: passed.
-- Vitest: 2 component test files and 2 tests passed.
+- Vitest: 2 component test files and 5 tests passed.
 - Next.js production build: passed; all 9 routes compiled and TypeScript passed.
 - Browser smoke: all seven application pages rendered against the real Qlob database. The review
   proposal, safeguards, catalogue, profile, queue, and audit history remained intact after both
   services restarted.
-- `leeway doctor`: Python, Node, npm, Playwright Chromium, paths, migration `0002`, mock runtime,
+- `leeway doctor`: Python, Node, npm, Playwright Chromium, paths, migration `0004`, mock runtime,
   and loopback API checks passed.
 - npm audits: 0 known vulnerabilities in both lockfiles. Next.js' inherited PostCSS version is
   overridden to the patched `8.5.19` release in the isolated web package.
@@ -223,5 +242,5 @@ To operate the same stages individually:
   inventing a timestamp. YouTube DOM changes can still require selector updates.
 - Exact historical image-to-caption recovery measured 0% on the real 40-post holdout; caption
   ranking measured 75%. Generated captions are reviewable suggestions, not proven matches.
-- Live YouTube scheduling and publishing are intentionally not implemented. The only verified
-  publisher is the local internal scheduler.
+- The guarded YouTube scheduler is implemented and offline-tested. Its current Qlob account/browser
+  environment still needs one separately authorized real scheduling acceptance pass.

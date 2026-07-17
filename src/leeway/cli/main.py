@@ -26,6 +26,7 @@ from leeway.discovery.service import DiscoveryService
 from leeway.intelligence.profile import StyleProfileService
 from leeway.logging import configure_logging
 from leeway.proposals.service import ProposalService
+from leeway.publishing.youtube import PlaywrightYouTubeAdapter, YouTubeBrowserPublisher
 
 app = typer.Typer(
     name="leeway",
@@ -40,6 +41,7 @@ discover_app = typer.Typer(help="Discover and rank candidate images.")
 generate_app = typer.Typer(help="Generate proposal batches.")
 queue_app = typer.Typer(help="Inspect and operate the approval queue.")
 agent_app = typer.Typer(help="Manage the local ChatGPT-authenticated Codex runtime.")
+publisher_app = typer.Typer(help="Operate the guarded visible YouTube publisher.")
 
 app.add_typer(capture_app, name="capture")
 app.add_typer(catalog_app, name="catalog")
@@ -49,6 +51,7 @@ app.add_typer(discover_app, name="discover")
 app.add_typer(generate_app, name="generate")
 app.add_typer(queue_app, name="queue")
 app.add_typer(agent_app, name="agent")
+app.add_typer(publisher_app, name="publisher")
 
 
 @app.callback()
@@ -257,6 +260,66 @@ def agent_smoke() -> None:
             indent=2,
         )
     )
+
+
+@publisher_app.command("login")
+def publisher_login() -> None:
+    """Open the dedicated publisher profile for manual Qlob Editor sign-in."""
+    settings = get_settings()
+    settings.ensure_directories()
+    PlaywrightYouTubeAdapter(settings).login_interactive()
+    typer.echo("Publisher profile saved locally. Run `leeway publisher status` to validate it.")
+
+
+@publisher_app.command("status")
+def publisher_status() -> None:
+    """Validate the feature gate, Qlob channel, Editor role, and composer."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = asyncio.run(YouTubeBrowserPublisher(database, settings).validate_session())
+    typer.echo(result.model_dump_json(indent=2))
+    if not result.valid:
+        raise typer.Exit(code=1)
+
+
+@publisher_app.command("prepare")
+def publisher_prepare(proposal_id: int = typer.Option(..., min=1)) -> None:
+    """Create a short-lived, no-submission confirmation for one proposal."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = asyncio.run(YouTubeBrowserPublisher(database, settings).prepare_attempt(proposal_id))
+    typer.echo(result.model_dump_json(indent=2))
+    typer.echo("Nothing was submitted to YouTube.")
+
+
+@publisher_app.command("confirm")
+def publisher_confirm(
+    attempt_id: int = typer.Option(..., min=1),
+    confirmation_token: str = typer.Option(..., prompt=True, hide_input=True),
+    confirmation_phrase: str = typer.Option(..., prompt=True),
+) -> None:
+    """Submit one prepared attempt after the exact human confirmation."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = asyncio.run(
+        YouTubeBrowserPublisher(database, settings).confirm_schedule(
+            attempt_id,
+            confirmation_token=confirmation_token,
+            confirmation_phrase=confirmation_phrase,
+        )
+    )
+    typer.echo(result.model_dump_json(indent=2))
+
+
+@publisher_app.command("verify")
+def publisher_verify(proposal_id: int = typer.Option(..., min=1)) -> None:
+    """Re-check Qlob's Scheduled tab without resubmitting."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = asyncio.run(
+        YouTubeBrowserPublisher(database, settings).verify_scheduled_post(proposal_id)
+    )
+    typer.echo(result.model_dump_json(indent=2))
 
 
 @app.command()

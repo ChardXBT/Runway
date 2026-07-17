@@ -8,6 +8,9 @@ posts_per_day: 1
 duplicate_window_days: 180
 approval_required: true
 publishing_enabled: false
+caption_question_first: true
+publisher_channel_id: UCQ-nHijGwxNU3Go_wyLQ5Ng
+publisher_confirmation_ttl_minutes: 10
 capture_scroll_delay_ms: 1800
 capture_idle_cycles_before_stop: 30
 capture_idle_seconds_before_stop: 90

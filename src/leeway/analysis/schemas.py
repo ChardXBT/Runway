@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -76,6 +78,19 @@ class CandidateAnalysis(StrictModel):
 class CaptionOptions(StrictModel):
     recommended: str
     alternatives: list[str] = Field(min_length=2, max_length=2)
+    rationale: str
+    confidence: float = Field(ge=0, le=1)
+    referenced_historical_post_ids: list[int]
+    factual_uncertainty_warning: str | None
+
+
+class CaptionCandidate(StrictModel):
+    text: str = Field(min_length=1, max_length=280)
+    structure: Literal["open_question", "observation", "reaction"]
+
+
+class CaptionCandidateSet(StrictModel):
+    candidates: list[CaptionCandidate] = Field(min_length=6, max_length=9)
     rationale: str
     confidence: float = Field(ge=0, le=1)
     referenced_historical_post_ids: list[int]

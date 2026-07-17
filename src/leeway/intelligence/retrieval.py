@@ -10,6 +10,7 @@ from sqlalchemy import desc, select
 
 from leeway.analysis.features import qlob_style_score
 from leeway.analysis.service import AnalysisService, effective_annotation_fields
+from leeway.captions.feedback import CaptionFeedbackService
 from leeway.config import Settings
 from leeway.db.base import Database
 from leeway.db.models import (
@@ -28,7 +29,12 @@ class RetrievalService:
         self.database = database
         self.settings = settings
 
-    def context_for_candidate(self, media_asset_id: int) -> dict[str, object]:
+    def context_for_candidate(
+        self,
+        media_asset_id: int,
+        *,
+        candidate_id: int | None = None,
+    ) -> dict[str, object]:
         with self.database.session() as session:
             candidate = session.get(MediaAsset, media_asset_id)
             if candidate is None or candidate.embedding_vector is None:
@@ -77,7 +83,7 @@ class RetrievalService:
                 for score, _post_id, post, media in reversed(visual[-8:])
             ]
             stats = profile["caption_statistics"]
-            caption_examples = sorted(
+            style_ranked = sorted(
                 (
                     qlob_style_score(post.caption or "", stats),
                     post.id,
@@ -85,6 +91,31 @@ class RetrievalService:
                 )
                 for post, _media in rows
             )
+            caption_examples: list[dict[str, object]] = []
+            seen_caption_ids: set[int] = set()
+            for example in visual_examples[:4]:
+                post_id = int(example["post_id"])
+                caption_examples.append(
+                    {
+                        "post_id": post_id,
+                        "caption": example["caption"],
+                        "evidence": "visual_match",
+                    }
+                )
+                seen_caption_ids.add(post_id)
+            for score, post_id, item in reversed(style_ranked):
+                if post_id in seen_caption_ids:
+                    continue
+                caption_examples.append(
+                    {
+                        **item,
+                        "evidence": "channel_style",
+                        "style_score": round(score, 6),
+                    }
+                )
+                seen_caption_ids.add(post_id)
+                if len(caption_examples) >= 8:
+                    break
             cutoff = datetime.now(UTC) - timedelta(days=self.settings.duplicate_window_days)
             exclusions = []
             for post, media in rows:
@@ -131,11 +162,22 @@ class RetrievalService:
                 .order_by(desc(Proposal.rejected_at), desc(Proposal.id))
                 .limit(5)
             ).all()
+            feedback_context = (
+                CaptionFeedbackService(self.database).context_for_candidate(candidate_id)
+                if candidate_id is not None
+                else {
+                    "editorial_policy": {
+                        "primary_goal": ("open-ended questions that invite community discussion"),
+                        "recommended_structure": "open_question",
+                    },
+                    "positive_examples": [],
+                    "negative_examples": [],
+                    "learned_preferences": {},
+                }
+            )
             return {
                 "visual_examples": visual_examples[:8],
-                "caption_style_examples": [
-                    item for _score, _post_id, item in reversed(caption_examples[-8:])
-                ],
+                "caption_style_examples": caption_examples[:8],
                 "recent_180_day_exclusions": exclusions,
                 "rotation_state": {
                     "franchises": franchise_rotation.most_common(),
@@ -149,5 +191,12 @@ class RetrievalService:
                     }
                     for proposal in negative
                 ],
+                "style_profile": {
+                    "summary": profile.get("summary", ""),
+                    "caption_statistics": profile.get("caption_statistics", {}),
+                    "dominant_caption_structures": profile.get("dominant_caption_structures", []),
+                    "recent_overuse_rules": profile.get("recent_overuse_rules", {}),
+                },
+                "feedback_context": feedback_context,
                 "style_profile_version": profile_record.version,
             }

@@ -18,6 +18,11 @@ const fallback: Settings = {
   openai_configured: false,
   browser_search_enabled: false,
   publishing_enabled: false,
+  caption_question_first: true,
+  publisher_channel_id: "UCQ-nHijGwxNU3Go_wyLQ5Ng",
+  publisher_confirmation_ttl_minutes: 10,
+  publisher_requires_human_confirmation: true,
+  publisher_visible_browser_only: true,
   blocked_sources: [],
 };
 
@@ -30,8 +35,8 @@ export default async function SettingsPage() {
           <p className="eyebrow">Local configuration</p>
           <h1>Settings with guardrails.</h1>
           <p className="lede">
-            Secret values never appear here. Browser discovery stays headed and explicit; live
-            publishing stays disabled.
+            Secret values never appear here. Caption learning is local, browser actions stay
+            visible, and external scheduling always stops at a human confirmation boundary.
           </p>
         </div>
       </header>

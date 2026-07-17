@@ -285,8 +285,13 @@ class Proposal(Base, TimestampMixin):
     quality_score: Mapped[float] = mapped_column(Float)
     closest_historical_matches_json: Mapped[str] = mapped_column(Text, default="[]")
     warnings_json: Mapped[str] = mapped_column(Text, default="[]")
+    rights_decision: Mapped[str | None] = mapped_column(String(40), index=True)
+    rights_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    external_post_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    external_post_url: Mapped[str | None] = mapped_column(Text)
+    scheduled_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ProposalEvent(Base):
@@ -298,6 +303,42 @@ class ProposalEvent(Base):
     old_value_json: Mapped[str] = mapped_column(Text, default="{}")
     new_value_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CaptionFeedback(Base):
+    __tablename__ = "caption_feedback"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id"), index=True)
+    candidate_image_id: Mapped[int] = mapped_column(ForeignKey("candidate_images.id"), index=True)
+    verdict: Mapped[str] = mapped_column(String(40), index=True)
+    generated_caption: Mapped[str] = mapped_column(Text)
+    preferred_caption: Mapped[str | None] = mapped_column(Text)
+    preferred_structure: Mapped[str | None] = mapped_column(String(40), index=True)
+    reason_codes_json: Mapped[str] = mapped_column(Text, default="[]")
+    image_verdict: Mapped[str | None] = mapped_column(String(40), index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PublishAttempt(Base):
+    __tablename__ = "publish_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id"), index=True)
+    publisher: Mapped[str] = mapped_column(String(80), index=True)
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    confirmation_token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    planned_publish_at: Mapped[str] = mapped_column(String(40))
+    screenshot_paths_json: Mapped[str] = mapped_column(Text, default="[]")
+    external_id: Mapped[str | None] = mapped_column(String(200))
+    external_url: Mapped[str | None] = mapped_column(Text)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    prepared_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ModelRun(Base):

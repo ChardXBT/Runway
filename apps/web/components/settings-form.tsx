@@ -19,6 +19,11 @@ type Settings = {
   openai_configured: boolean;
   browser_search_enabled: boolean;
   publishing_enabled: boolean;
+  caption_question_first: boolean;
+  publisher_channel_id: string;
+  publisher_confirmation_ttl_minutes: number;
+  publisher_requires_human_confirmation: boolean;
+  publisher_visible_browser_only: boolean;
   blocked_sources: { id: number; type: string; value: string }[];
 };
 
@@ -58,9 +63,17 @@ export function SettingsForm({ initial }: { initial: Settings }) {
 
   return (
     <>
-      <div className="publishing-banner">
-        <strong>Live YouTube publishing is disabled.</strong>
-        <span>Only the local internal schedule state is available.</span>
+      <div className={settings.publishing_enabled ? "publishing-banner armed" : "publishing-banner"}>
+        <strong>
+          {settings.publishing_enabled
+            ? "The guarded YouTube publisher is armed."
+            : "Live YouTube publishing is disabled."}
+        </strong>
+        <span>
+          {settings.publishing_enabled
+            ? `Qlob channel ${settings.publisher_channel_id} · visible browser · exact phrase · ${settings.publisher_confirmation_ttl_minutes}-minute token.`
+            : "Only local approval and internal scheduling are available."}
+        </span>
       </div>
       <form className="panel settings-form" onSubmit={save}>
         <label>
@@ -124,6 +137,23 @@ export function SettingsForm({ initial }: { initial: Settings }) {
           <p className="eyebrow">Browser discovery</p>
           <h2>{settings.browser_search_enabled ? "Enabled" : "Disabled"}</h2>
           <p>Always headed, explicit, and challenge-aware.</p>
+        </article>
+        <article className="panel">
+          <p className="eyebrow">Caption learning</p>
+          <h2>{settings.caption_question_first ? "Question first" : "Balanced"}</h2>
+          <p>
+            Edits, approvals, selections, and rejections become retrieval evidence for the next
+            caption pass.
+          </p>
+        </article>
+        <article className="panel">
+          <p className="eyebrow">External boundary</p>
+          <h2>{settings.publishing_enabled ? "Armed" : "Locked"}</h2>
+          <p>
+            {settings.publisher_requires_human_confirmation
+              ? "No model or background job can cross the one-time confirmation interlock."
+              : "Publisher configuration is incomplete."}
+          </p>
         </article>
       </section>
       <section className="panel">

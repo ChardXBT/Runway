@@ -32,11 +32,14 @@ URLs and the managed capture run, accepts at most ten cards and 4 MiB per reques
 explicit source header, and cannot publish. Exact surface count and tail-ID agreement are required
 for completion. A general-purpose browser-to-database write endpoint was rejected.
 
-## Internal publisher only
+## Two-stage publishing boundary
 
-`InternalPublisher` can move an approved item to `internally_scheduled`; it performs no network
-publishing. Live YouTube automation was rejected for this build to preserve the approval boundary.
-A future adapter must use a separate Editor (Limited) account/profile and explicit user action.
+`InternalPublisher` first moves an approved item to `internally_scheduled` without a network
+action. `YouTubeBrowserPublisher` is a separate, disabled-by-default boundary using a dedicated
+visible profile. Preparation performs session/channel validation and creates only a short-lived
+confirmation. Submission requires the one-time token and exact proposal phrase, hashes the
+approved payload, records screenshots/audit events, and never auto-retries an ambiguous click.
+Model runtimes and background jobs have no route to this service.
 
 ## Pluggable discovery
 
@@ -64,6 +67,14 @@ cannot be reached from the configured Codex path.
 LeeWay adapts through a versioned profile and bounded retrieval from the local Qlob database. This
 keeps evidence inspectable, incorporates user corrections and rejections immediately, and avoids a
 training bill. Model-weight fine-tuning is not required for the current workflow.
+
+## Append-only editorial learning
+
+Caption edits, selections, approvals, explicit preferences, and rejections are preserved as
+structured feedback instead of overwriting prior evidence. Future caption runs retrieve relevant
+positive and negative examples and apply a deterministic question-first reranker. This makes
+operator teaching immediate, inspectable, reversible by adding new evidence, and independent of a
+paid training service.
 
 ## Challenge-aware bounded browser discovery
 

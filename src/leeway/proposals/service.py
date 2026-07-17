@@ -9,11 +9,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from leeway.captions.feedback import CaptionFeedbackService
 from leeway.captions.service import CaptionService
 from leeway.config import Settings
 from leeway.db.base import Database
 from leeway.db.models import (
     CandidateImage,
+    CaptionFeedback,
     GenerationRun,
     MediaAsset,
     Proposal,
@@ -31,6 +33,7 @@ class ProposalService:
         self.database = database
         self.settings = settings
         self.caption_service = CaptionService(database, settings)
+        self.feedback = CaptionFeedbackService(database)
         self.retrieval = RetrievalService(database, settings)
 
     async def generate_batch(
@@ -120,7 +123,10 @@ class ProposalService:
                 candidate = primary_candidates[candidate_index]
                 candidate_index += 1
                 captions = await self.caption_service.generate(candidate.id)
-                context = self.retrieval.context_for_candidate(candidate.media_asset_id)
+                context = self.retrieval.context_for_candidate(
+                    candidate.media_asset_id,
+                    candidate_id=candidate.id,
+                )
                 backup_ids: list[int] = []
                 if reserve_candidates:
                     for backup_offset in range(min(2, len(reserve_candidates))):
@@ -280,32 +286,68 @@ class ProposalService:
             "conflicts": [day["date"] for day in calendar if day["conflict"]],
         }
 
-    def edit_caption(self, proposal_id: int, caption: str) -> dict[str, object]:
+    def edit_caption(
+        self,
+        proposal_id: int,
+        caption: str,
+        *,
+        reason_codes: list[str] | None = None,
+        note: str | None = None,
+        image_verdict: str | None = None,
+    ) -> dict[str, object]:
         cleaned = caption.strip()
         if not cleaned:
             raise ValueError("final caption cannot be empty")
+        unchanged = False
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
-            if proposal.status == ProposalStatus.APPROVED.value:
-                self._transition(
-                    session, proposal, ProposalStatus.NEEDS_REVIEW, "approval_reset_for_edit"
-                )
-                proposal.approved_at = None
-            old = proposal.final_caption
-            proposal.final_caption = cleaned
-            self._event(
-                session,
-                proposal.id,
-                "caption_edited",
-                {"final_caption": old},
-                {"final_caption": cleaned},
+            self._require_status(
+                proposal,
+                {ProposalStatus.NEEDS_REVIEW, ProposalStatus.APPROVED},
+                "caption editing",
             )
-            audit(session, "caption_edited", "proposal", proposal.id, {})
+            old = proposal.final_caption
+            if old == cleaned:
+                unchanged = True
+            else:
+                if proposal.status == ProposalStatus.APPROVED.value:
+                    self._transition(
+                        session,
+                        proposal,
+                        ProposalStatus.NEEDS_REVIEW,
+                        "approval_reset_for_edit",
+                    )
+                    proposal.approved_at = None
+                proposal.final_caption = cleaned
+                self._event(
+                    session,
+                    proposal.id,
+                    "caption_edited",
+                    {"final_caption": old},
+                    {"final_caption": cleaned},
+                )
+                audit(session, "caption_edited", "proposal", proposal.id, {})
+        if unchanged:
+            return self.detail(proposal_id)
+        self.feedback.record(
+            proposal_id,
+            verdict="edited",
+            generated_caption=old,
+            preferred_caption=cleaned,
+            reason_codes=reason_codes or ["human_edit"],
+            image_verdict=image_verdict,
+            note=note,
+        )
         return self.detail(proposal_id)
 
     def select_alternative(self, proposal_id: int, index: int) -> dict[str, object]:
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            self._require_status(
+                proposal,
+                {ProposalStatus.NEEDS_REVIEW, ProposalStatus.APPROVED},
+                "alternative selection",
+            )
             alternatives = json.loads(proposal.alternative_captions_json)
             if index not in range(len(alternatives)):
                 raise ValueError("alternative caption index is out of range")
@@ -326,6 +368,14 @@ class ProposalService:
                 {"final_caption": old},
                 {"index": index, "final_caption": proposal.final_caption},
             )
+            selected = proposal.final_caption
+        self.feedback.record(
+            proposal_id,
+            verdict="selected",
+            generated_caption=old,
+            preferred_caption=selected,
+            reason_codes=["selected_alternative"],
+        )
         return self.detail(proposal_id)
 
     def approve(self, proposal_id: int) -> dict[str, object]:
@@ -333,11 +383,26 @@ class ProposalService:
             proposal = self._get(session, proposal_id)
             if not proposal.final_caption.strip():
                 raise ValueError("proposal cannot be approved without a final caption")
+            candidate = session.get(CandidateImage, proposal.candidate_image_id)
+            media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
+            if candidate is None or media is None:
+                raise ValueError("proposal cannot be approved without a local candidate image")
+            verified_rights = {"creator_owned", "licensed", "public_domain"}
+            if candidate.rights_status == "blocked":
+                raise ValueError("a blocked image cannot be approved")
+            if (
+                candidate.rights_status not in verified_rights
+                and proposal.rights_decision != "accepted_for_proposal"
+            ):
+                raise ValueError(
+                    "review image provenance and accept its rights status before approval"
+                )
+            if candidate.rights_status in verified_rights:
+                proposal.rights_decision = "verified_source_status"
+                proposal.rights_reviewed_at = datetime.now(UTC)
             self._transition(session, proposal, ProposalStatus.APPROVED, "approved")
             proposal.approved_at = datetime.now(UTC)
             proposal.rejected_at = None
-            candidate = session.get(CandidateImage, proposal.candidate_image_id)
-            media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
             if media:
                 source = self.settings.resolved_data_dir / media.local_path
                 extension = Path(media.local_path).suffix
@@ -355,9 +420,26 @@ class ProposalService:
                 proposal.id,
                 {"final_caption": proposal.final_caption},
             )
+            generated_caption = proposal.recommended_caption
+            final_caption = proposal.final_caption
+        self.feedback.record(
+            proposal_id,
+            verdict="accepted",
+            generated_caption=generated_caption,
+            preferred_caption=final_caption,
+            reason_codes=["approved"],
+            image_verdict="good",
+        )
         return self.detail(proposal_id)
 
-    def reject(self, proposal_id: int, reason: str) -> dict[str, object]:
+    def reject(
+        self,
+        proposal_id: int,
+        reason: str,
+        *,
+        reason_codes: list[str] | None = None,
+        image_verdict: str | None = None,
+    ) -> dict[str, object]:
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
             self._transition(session, proposal, ProposalStatus.REJECTED, "rejected")
@@ -374,11 +456,76 @@ class ProposalService:
                 },
             )
             audit(session, "proposal_rejected", "proposal", proposal.id, {"reason": reason})
+            rejected_caption = proposal.final_caption
+        inferred_reasons = reason_codes or self._reason_codes(reason)
+        self.feedback.record(
+            proposal_id,
+            verdict="rejected",
+            generated_caption=rejected_caption,
+            reason_codes=inferred_reasons,
+            image_verdict=image_verdict,
+            note=reason,
+        )
+        return self.detail(proposal_id)
+
+    def record_feedback(
+        self,
+        proposal_id: int,
+        *,
+        verdict: str,
+        reason_codes: list[str] | None = None,
+        preferred_caption: str | None = None,
+        preferred_structure: str | None = None,
+        image_verdict: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        self.feedback.record(
+            proposal_id,
+            verdict=verdict,
+            preferred_caption=preferred_caption,
+            preferred_structure=preferred_structure,
+            reason_codes=reason_codes,
+            image_verdict=image_verdict,
+            note=note,
+        )
+        return self.detail(proposal_id)
+
+    def review_rights(self, proposal_id: int, decision: str) -> dict[str, object]:
+        if decision not in {"accepted_for_proposal", "blocked"}:
+            raise ValueError("rights decision must be accepted_for_proposal or blocked")
+        with self.database.session() as session:
+            proposal = self._get(session, proposal_id)
+            self._require_status(
+                proposal,
+                {ProposalStatus.NEEDS_REVIEW},
+                "rights review",
+            )
+            proposal.rights_decision = decision
+            proposal.rights_reviewed_at = datetime.now(UTC)
+            self._event(
+                session,
+                proposal.id,
+                "rights_reviewed",
+                {},
+                {"decision": decision},
+            )
+            audit(
+                session,
+                "proposal_rights_reviewed",
+                "proposal",
+                proposal.id,
+                {"decision": decision},
+            )
         return self.detail(proposal_id)
 
     async def regenerate_captions(self, proposal_id: int) -> dict[str, object]:
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            self._require_status(
+                proposal,
+                {ProposalStatus.NEEDS_REVIEW},
+                "caption regeneration",
+            )
             candidate_id = proposal.candidate_image_id
             final_before = proposal.final_caption
             generated_before = {
@@ -426,6 +573,15 @@ class ProposalService:
     ) -> dict[str, object]:
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            self._require_status(
+                proposal,
+                {
+                    ProposalStatus.NEEDS_REVIEW,
+                    ProposalStatus.REJECTED,
+                    ProposalStatus.APPROVED,
+                },
+                "image replacement",
+            )
             backups = [int(value) for value in json.loads(proposal.backup_candidate_ids_json)]
             replacement_id = candidate_id or (backups[0] if backups else None)
             if replacement_id is None:
@@ -466,7 +622,10 @@ class ProposalService:
             selected_id = replacement.id
             old_candidate = proposal.candidate_image_id
         captions = await self.caption_service.generate(selected_id)
-        context = self.retrieval.context_for_candidate(replacement.media_asset_id)
+        context = self.retrieval.context_for_candidate(
+            replacement.media_asset_id,
+            candidate_id=selected_id,
+        )
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
             if proposal.status == ProposalStatus.REJECTED.value:
@@ -480,6 +639,8 @@ class ProposalService:
                 )
                 proposal.approved_at = None
             proposal.candidate_image_id = selected_id
+            proposal.rights_decision = None
+            proposal.rights_reviewed_at = None
             proposal.recommended_caption = captions.recommended
             proposal.alternative_captions_json = json.dumps(captions.alternatives)
             proposal.caption_rationale = captions.rationale
@@ -513,6 +674,11 @@ class ProposalService:
         planned = self._planned_datetime(new_date, timezone_name, default_time).isoformat()
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            self._require_status(
+                proposal,
+                {ProposalStatus.NEEDS_REVIEW, ProposalStatus.APPROVED},
+                "rescheduling",
+            )
             conflict = session.scalar(
                 select(Proposal.id).where(
                     Proposal.channel_id == proposal.channel_id,
@@ -544,6 +710,11 @@ class ProposalService:
             raise ValueError("metadata correction contains unsupported fields")
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            self._require_status(
+                proposal,
+                {ProposalStatus.NEEDS_REVIEW},
+                "metadata correction",
+            )
             candidate = session.get(CandidateImage, proposal.candidate_image_id)
             if candidate is None:
                 raise LookupError("proposal candidate is missing")
@@ -581,11 +752,47 @@ class ProposalService:
             return channel.timezone, channel.default_post_time
 
     @staticmethod
+    def _reason_codes(reason: str) -> list[str]:
+        lowered = reason.lower()
+        codes: list[str] = []
+        mappings = {
+            "generic": "too_generic",
+            "question": "prefer_open_question",
+            "emotion": "wrong_emotion",
+            "character": "wrong_character",
+            "context": "invented_context",
+            "engag": "not_engaging",
+            "funny": "not_funny",
+            "long": "too_long",
+            "repet": "too_similar",
+            "similar": "too_similar",
+            "source": "source_concern",
+            "rights": "source_concern",
+        }
+        for marker, code in mappings.items():
+            if marker in lowered and code not in codes:
+                codes.append(code)
+        return codes or ["not_engaging"]
+
+    @staticmethod
     def _get(session: Session, proposal_id: int) -> Proposal:
         proposal = session.get(Proposal, proposal_id)
         if proposal is None:
             raise LookupError(f"proposal {proposal_id} not found")
         return proposal
+
+    @staticmethod
+    def _require_status(
+        proposal: Proposal,
+        allowed: set[ProposalStatus],
+        action: str,
+    ) -> None:
+        current = ProposalStatus(proposal.status)
+        if current not in allowed:
+            expected = ", ".join(sorted(status.value for status in allowed))
+            raise ValueError(
+                f"{action} requires proposal status {expected}; current status is {current.value}"
+            )
 
     @staticmethod
     def _event(
@@ -654,8 +861,19 @@ class ProposalService:
             },
             "closest_historical_matches": json.loads(proposal.closest_historical_matches_json),
             "warnings": json.loads(proposal.warnings_json),
+            "rights_decision": proposal.rights_decision,
+            "rights_reviewed_at": (
+                proposal.rights_reviewed_at.isoformat() if proposal.rights_reviewed_at else None
+            ),
             "approved_at": proposal.approved_at.isoformat() if proposal.approved_at else None,
             "rejected_at": proposal.rejected_at.isoformat() if proposal.rejected_at else None,
+            "external_post_id": proposal.external_post_id,
+            "external_post_url": proposal.external_post_url,
+            "scheduled_verified_at": (
+                proposal.scheduled_verified_at.isoformat()
+                if proposal.scheduled_verified_at
+                else None
+            ),
             "candidate": (
                 {
                     "original_url": (
@@ -695,5 +913,24 @@ class ProposalService:
                     "created_at": event.created_at.isoformat(),
                 }
                 for event in events
+            ]
+            feedback = session.scalars(
+                select(CaptionFeedback)
+                .where(CaptionFeedback.proposal_id == proposal.id)
+                .order_by(CaptionFeedback.created_at, CaptionFeedback.id)
+            ).all()
+            result["caption_feedback"] = [
+                {
+                    "id": row.id,
+                    "verdict": row.verdict,
+                    "generated_caption": row.generated_caption,
+                    "preferred_caption": row.preferred_caption,
+                    "preferred_structure": row.preferred_structure,
+                    "reason_codes": json.loads(row.reason_codes_json),
+                    "image_verdict": row.image_verdict,
+                    "note": row.note,
+                    "created_at": row.created_at.isoformat(),
+                }
+                for row in feedback
             ]
         return result

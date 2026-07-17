@@ -22,11 +22,20 @@ ALLOWED_TRANSITIONS: dict[ProposalStatus, set[ProposalStatus]] = {
         ProposalStatus.CANCELLED,
     },
     ProposalStatus.PUBLISHING: {
-        ProposalStatus.PUBLISHED,
+        ProposalStatus.EXTERNALLY_SCHEDULED,
+        ProposalStatus.PUBLISH_UNVERIFIED,
         ProposalStatus.PUBLISH_FAILED,
+    },
+    ProposalStatus.EXTERNALLY_SCHEDULED: {
+        ProposalStatus.PUBLISHED,
+        ProposalStatus.CANCELLED,
     },
     ProposalStatus.PUBLISH_FAILED: {
         ProposalStatus.PUBLISHING,
+        ProposalStatus.CANCELLED,
+    },
+    ProposalStatus.PUBLISH_UNVERIFIED: {
+        ProposalStatus.EXTERNALLY_SCHEDULED,
         ProposalStatus.CANCELLED,
     },
     ProposalStatus.PUBLISHED: set(),

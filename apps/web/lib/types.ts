@@ -30,6 +30,22 @@ export type Proposal = {
     media_url?: string;
   }[];
   warnings: string[];
+  rights_decision: string | null;
+  rights_reviewed_at: string | null;
+  external_post_id: string | null;
+  external_post_url: string | null;
+  scheduled_verified_at: string | null;
+  caption_feedback?: {
+    id: number;
+    verdict: string;
+    generated_caption: string;
+    preferred_caption: string | null;
+    preferred_structure: string | null;
+    reason_codes: string[];
+    image_verdict: string | null;
+    note: string | null;
+    created_at: string;
+  }[];
   candidate: {
     original_url: string | null;
     preview_url: string | null;
@@ -39,4 +55,17 @@ export type Proposal = {
     rights_status: string;
     detected_topic: CandidateTopic;
   } | null;
+};
+
+export type PublishPreparation = {
+  attempt_id: number;
+  proposal_id: number;
+  status: string;
+  confirmation_token: string;
+  confirmation_phrase: string;
+  expires_at: string;
+  planned_publish_at: string;
+  caption: string;
+  local_image_path: string;
+  channel_name: string;
 };

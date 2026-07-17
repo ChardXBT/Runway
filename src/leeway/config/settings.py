@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     duplicate_perceptual_threshold: float = 0.94
     duplicate_semantic_threshold: float = 0.99
     caption_duplicate_threshold: float = 0.92
+    caption_question_first: bool = True
+    publisher_channel_id: str = "UCQ-nHijGwxNU3Go_wyLQ5Ng"
+    publisher_confirmation_ttl_minutes: int = Field(default=10, ge=2, le=30)
 
     @field_validator("host")
     @classmethod
@@ -100,6 +103,17 @@ class Settings(BaseSettings):
     def browser_profile_dir(self) -> Path:
         return self.resolved_data_dir / "browser-profile"
 
+    @property
+    def publisher_profile_dir(self) -> Path:
+        return self.browser_profile_dir / "publisher"
+
+    @property
+    def publisher_channel_url(self) -> str:
+        return (
+            f"https://www.youtube.com/channel/{self.publisher_channel_id}/posts"
+            "?show_create_dialog=1"
+        )
+
     def ensure_directories(self) -> list[Path]:
         directories = [
             self.resolved_data_dir,
@@ -110,6 +124,8 @@ class Settings(BaseSettings):
             self.resolved_data_dir / "media" / "approved",
             self.resolved_data_dir / "media" / "previews",
             self.browser_profile_dir,
+            self.publisher_profile_dir,
+            self.resolved_data_dir / "captures" / "publisher",
             self.resolved_data_dir / "reports",
             self.resolved_data_dir / "snapshots",
         ]
@@ -128,7 +144,11 @@ class Settings(BaseSettings):
             "posts_per_day": self.posts_per_day,
             "duplicate_window_days": self.duplicate_window_days,
             "approval_required": self.approval_required,
-            "publishing_enabled": False,
+            "publishing_enabled": self.publishing_enabled,
+            "publisher_channel_id": self.publisher_channel_id,
+            "publisher_confirmation_ttl_minutes": self.publisher_confirmation_ttl_minutes,
+            "publisher_requires_human_confirmation": True,
+            "publisher_visible_browser_only": True,
             "capture_scroll_delay_ms": self.capture_scroll_delay_ms,
             "capture_idle_cycles_before_stop": self.capture_idle_cycles_before_stop,
             "capture_idle_seconds_before_stop": self.capture_idle_seconds_before_stop,
@@ -137,6 +157,7 @@ class Settings(BaseSettings):
             "codex_model": self.codex_model,
             "codex_reasoning_effort": self.codex_reasoning_effort,
             "analysis_batch_size": self.analysis_batch_size,
+            "caption_question_first": self.caption_question_first,
             "codex_chatgpt_auth_required": True,
             "paid_api_fallback_enabled": False,
             "openai_configured": bool(self.openai_api_key and self.openai_model),
