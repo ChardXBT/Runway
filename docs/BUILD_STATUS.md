@@ -12,11 +12,12 @@
 - [x] Private GitHub publication
 - [x] ChatGPT-authenticated Codex image/caption runtime with no paid API fallback
 - [x] Fan-art and personal-artwork discovery safeguards
+- [x] Live Qlob Editor delegate composer and scheduling preflight
 
 ## Current failures
 
-- None in the implemented offline workflow. The real-account acceptance tests below have not yet
-  been run.
+- None in the implemented workflow. The delegate preflight passed without publishing or creating
+  database records; the real capture and live publisher tests remain pending.
 
 ## Remaining work
 
@@ -25,7 +26,6 @@
 - Exercise live image discovery and review provenance/rights behavior.
 - Test the review UI with real candidates and captions.
 - Implement the guarded YouTube browser publisher.
-- Manually prove the Editor (Limited) delegate can open the post composer and schedule a post.
 - Schedule a private/unlisted test where possible, verify it on YouTube, and test the recovery path.
 
 The exact order, prerequisites, and completion criteria are in `docs/COMPLETION_GUIDE.md`.

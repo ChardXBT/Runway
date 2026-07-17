@@ -4,7 +4,17 @@ LeeWay is complete as a local fixture-tested planning application. It is not yet
 production Qlob posting system because the real Qlob data, live discovery, delegate UI, and
 YouTube scheduler have not been proven.
 
-## 1. Prove delegate access before building the Qlob database
+## 1. Prove delegate access before building the Qlob database — verified
+
+Verified on 2026-07-17 without submitting a post:
+
+- YouTube identified the selected Qlob channel session as `You're an editor`.
+- Qlob's Create menu exposed `Create post`.
+- The composer accepted caption text and exposed the image attachment control.
+- Entering harmless preflight text enabled the Post and scheduling controls.
+- `Schedule post` opened date, time, and local-timezone controls.
+- The final Post and Schedule actions were not clicked, the preflight text was discarded, and no
+  LeeWay database or historical-capture operation ran.
 
 What the user provides:
 
