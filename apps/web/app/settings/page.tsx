@@ -30,8 +30,8 @@ export default async function SettingsPage() {
           <p className="eyebrow">Local configuration</p>
           <h1>Settings with guardrails.</h1>
           <p className="lede">
-            Secret values never appear here. Browser and network integrations remain disabled
-            until explicitly configured.
+            Secret values never appear here. Browser discovery stays headed and explicit; live
+            publishing stays disabled.
           </p>
         </div>
       </header>

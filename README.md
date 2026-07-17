@@ -1,4 +1,4 @@
-# Leeway
+# LeeWay
 
 Leeway is a local-only intelligence and planning application for image-based YouTube Community
 posts on the Qlob channel. It captures an historical catalogue through an explicitly initiated,
@@ -18,6 +18,8 @@ restart persistence were validated on 2026-07-17 without posting. See
 
 - FastAPI, Typer, SQLAlchemy, Alembic, SQLite WAL, Pillow, and NumPy in `src/leeway/`.
 - Next.js, TypeScript, and Tailwind in `apps/web/`.
+- A responsive editorial-desk interface with a ten-frame schedule runway, evidence-first review,
+  searchable 60-record archive pages, profile diagnostics, and an immutable activity inspector.
 - Canonical metadata in `data/leeway.db`; original media, previews, reports, and diagnostics under
   `data/`.
 - The deterministic `MockAgentRuntime` supports offline fixtures. Real analysis uses the official

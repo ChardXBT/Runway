@@ -117,6 +117,17 @@ The dashboard, review, queue, catalogue, profile, settings, and activity pages a
 against this real database. The UI showed the original and square preview, caption alternatives,
 grounding, source, warnings, historical matches, audit history, and `Publishing disabled`.
 
+The final interface pass replaced the oversized sidebar and generic metric cards with a compact
+sticky control rail and a Qlob-specific editorial light-table system. The dashboard uses a
+ten-frame contact-sheet runway; the review view prioritizes the image/caption decision; raw URLs
+are separated from archive-detail headlines; and audit payloads remain collapsed until requested.
+The archive exposes 60 records per page across 13 pages, with 51 records on the final page and all
+771 records reachable.
+
+Browser visual QA covered every route at the normal desktop viewport plus the dashboard, review,
+and archive at 390px mobile width. There was no document-level horizontal overflow, no browser
+console warning/error, and the temporary mobile viewport override was cleared after testing.
+
 ## Automated quality gate
 
 - Pytest: 43 passed.

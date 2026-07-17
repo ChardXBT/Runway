@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 import { Nav } from "@/components/nav";
-import "./globals.css";
+import "./studio.css";
 
 export const metadata: Metadata = {
-  title: "Leeway — Qlob studio",
-  description: "Local-only Community-post intelligence and planning",
+  title: "LeeWay — Qlob editorial desk",
+  description: "Local Qlob Community-post intelligence, review, and planning",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
@@ -15,7 +15,9 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
       <body>
         <div className="app-shell">
           <Nav />
-          <main className="main">{children}</main>
+          <main className="main">
+            <div className="page-frame">{children}</div>
+          </main>
         </div>
       </body>
     </html>

@@ -18,6 +18,8 @@
 - [x] Real Qlob style profile v4 with 558/140 train/holdout evaluation
 - [x] Bounded live discovery safeguard pass
 - [x] Real one-proposal caption/review/restart dry pass without posting
+- [x] LeeWay-specific editorial UI redesign with all 771 archive records reachable across 13 pages
+- [x] Desktop and 390px mobile visual QA across every route with no browser warnings or overflow
 
 ## Current failures
 

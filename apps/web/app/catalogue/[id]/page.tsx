@@ -19,6 +19,15 @@ type Detail = {
   media: { id: number; url: string; width: number; height: number; sha256: string }[];
 };
 
+function splitCaption(caption: string | null) {
+  if (!caption) return { text: "Caption unavailable", url: null };
+  const match = caption.match(/https?:\/\/\S+/);
+  if (!match) return { text: caption, url: null };
+  const url = match[0];
+  const text = caption.replace(url, "").trim().replace(/[:\-–—]\s*$/, "");
+  return { text: text || "Linked post", url };
+}
+
 export default async function CatalogueDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const post = await apiGet<Detail | null>(`/api/catalog/${id}`, null);
@@ -26,12 +35,18 @@ export default async function CatalogueDetail({ params }: { params: Promise<{ id
   if (!post) {
     return <section className="panel empty"><div><strong>Post not found.</strong><Link href="/catalogue">Back to catalogue</Link></div></section>;
   }
+  const caption = splitCaption(post.caption);
   return (
     <>
       <Link className="back-link" href="/catalogue">← Catalogue</Link>
       <header className="detail-heading">
         <p className="eyebrow">Historical post #{post.id}</p>
-        <h1>{post.caption || "Caption unavailable"}</h1>
+        <h1>{caption.text}</h1>
+        {caption.url && (
+          <a className="caption-url" href={caption.url} target="_blank" rel="noreferrer">
+            {caption.url}
+          </a>
+        )}
       </header>
       <section className="detail-grid">
         <div className="detail-media">

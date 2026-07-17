@@ -13,27 +13,72 @@ type Post = {
   media: Media[];
 };
 
+type CatalogStatus = {
+  total_posts: number;
+  training_eligible: number;
+  media_assets: number;
+};
+
 export default async function CataloguePage({
   searchParams,
 }: {
-  searchParams: Promise<{ search?: string; type?: string; eligible?: string; franchise?: string; character?: string }>;
+  searchParams: Promise<{
+    search?: string;
+    type?: string;
+    eligible?: string;
+    franchise?: string;
+    character?: string;
+    page?: string;
+  }>;
 }) {
   const params = await searchParams;
-  const query = new URLSearchParams({ limit: "100" });
+  const pageSize = 60;
+  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
+  const query = new URLSearchParams({
+    limit: String(pageSize + 1),
+    offset: String((page - 1) * pageSize),
+  });
   if (params.search) query.set("search", params.search);
   if (params.type) query.set("post_type", params.type);
   if (params.eligible) query.set("training_eligible", params.eligible);
   if (params.franchise) query.set("franchise", params.franchise);
   if (params.character) query.set("character", params.character);
-  const posts = await apiGet<Post[]>(`/api/catalog?${query}`, []);
+  const [catalogRows, status] = await Promise.all([
+    apiGet<Post[]>(`/api/catalog?${query}`, []),
+    apiGet<CatalogStatus>("/api/catalog/status", {
+      total_posts: 0,
+      training_eligible: 0,
+      media_assets: 0,
+    }),
+  ]);
+  const posts = catalogRows.slice(0, pageSize);
+  const hasNextPage = catalogRows.length > pageSize;
+  const makePageHref = (target: number) => {
+    const next = new URLSearchParams();
+    if (params.search) next.set("search", params.search);
+    if (params.type) next.set("type", params.type);
+    if (params.eligible) next.set("eligible", params.eligible);
+    if (params.franchise) next.set("franchise", params.franchise);
+    if (params.character) next.set("character", params.character);
+    if (target > 1) next.set("page", String(target));
+    const encoded = next.toString();
+    return encoded ? `/catalogue?${encoded}` : "/catalogue";
+  };
 
   return (
     <>
-      <header className="header-row">
+      <header className="page-header">
         <div>
-          <p className="eyebrow">Historical catalogue</p>
-          <h1>What Qlob has already said.</h1>
-          <p className="lede">Raw provenance stays intact; eligibility and date precision stay visible.</p>
+          <p className="eyebrow">Archive / page {page}</p>
+          <h1>Qlob’s visual memory.</h1>
+          <p className="lede">
+            Search every captured caption and inspect the image, source record, model annotation,
+            and closest historical matches.
+          </p>
+        </div>
+        <div className="header-counter">
+          <strong>{status.total_posts}</strong>
+          <span>{posts.length} shown on page {page}</span>
         </div>
       </header>
       <form className="filter-bar" method="get">
@@ -62,7 +107,10 @@ export default async function CataloguePage({
             <option value="false">Excluded</option>
           </select>
         </label>
-        <button className="button" type="submit">Filter</button>
+        <div className="filter-actions">
+          <button className="button" type="submit">Apply filters</button>
+          <Link className="text-link" href="/catalogue">Reset</Link>
+        </div>
       </form>
       {posts.length ? (
         <section className="catalog-grid" aria-label="Historical posts">
@@ -79,6 +127,7 @@ export default async function CataloguePage({
               </div>
               <div className="catalog-copy">
                 <div className="meta-row">
+                  <span className="record-id">#{post.id}</span>
                   <span>{post.post_type.replace("_", " ")}</span>
                   <span>{post.date_precision}</span>
                   {post.is_training_eligible && <span className="pill">Profile</span>}
@@ -91,9 +140,17 @@ export default async function CataloguePage({
         </section>
       ) : (
         <section className="panel empty">
-          <div><strong>No catalogue records yet.</strong>Run the offline fixture capture or an explicit headed capture.</div>
+          <div>
+            <strong>No records match these filters.</strong>
+            Reset the filters or return to an earlier page.
+          </div>
         </section>
       )}
+      <nav className="pagination" aria-label="Archive pages">
+        {page > 1 ? <Link className="button secondary" href={makePageHref(page - 1)}>Previous</Link> : <span />}
+        <span>Page {page}</span>
+        {hasNextPage ? <Link className="button secondary" href={makePageHref(page + 1)}>Next</Link> : <span />}
+      </nav>
     </>
   );
 }

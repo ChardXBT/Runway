@@ -40,8 +40,9 @@ export default async function ProfilePage() {
   }
   return (
     <>
-      <header className="header-row">
-        <div><p className="eyebrow">Qlob style profile · v{profile.version}</p><h1>Patterns, with receipts.</h1><p className="lede">A reproducible retrieval profile built from local statistics and cited examples—not model-weight fine-tuning.</p></div>
+      <header className="page-header">
+        <div><p className="eyebrow">Profile / Qlob v{profile.version}</p><h1>Patterns, with receipts.</h1><p className="lede">A reproducible retrieval profile built from local statistics and cited examples—not model-weight fine-tuning.</p></div>
+        <div className="header-counter"><strong>{profile.training_post_ids.length}</strong><span>training records</span></div>
       </header>
       <section className="profile-hero panel"><p>{profile.summary}</p></section>
       <section className="stat-grid profile-stats" aria-label="Profile statistics">
@@ -56,7 +57,7 @@ export default async function ProfilePage() {
       </section>
       <section className="panel"><p className="eyebrow">Representative images + captions</p><div className="quote-list">{profile.representative_positive_examples.map((example) => <Link href={`/catalogue/${example.post_id}`} key={example.post_id}>{example.media_url && <img src={`${process.env.NEXT_PUBLIC_LEEWAY_API_URL ?? "http://127.0.0.1:8000"}${example.media_url}`} alt="" />}<span>#{example.post_id}</span><q>{example.caption}</q></Link>)}</div></section>
       <section className="panel"><p className="eyebrow">Rotation observations</p><ul className="clean-list">{profile.rotation_patterns.map((item) => <li key={item}>{item}</li>)}</ul></section>
-      {evaluation && <section className="panel"><p className="eyebrow">Measured holdout evaluation · v{evaluation.profile_version}</p><div className="evaluation-grid"><div><span>Image-caption matching</span><strong><Percent value={evaluation.image_caption_matching.accuracy} /></strong></div><div><span>Caption ranking</span><strong><Percent value={evaluation.qlob_caption_ranking_accuracy} /></strong></div><div><span>Retrieval relevance</span><strong><Percent value={evaluation.retrieval_top3_franchise_relevance} /></strong></div><div><span>Duplicate recall</span><strong><Percent value={evaluation.duplicate_detection.transformed_true_positive_rate} /></strong></div></div><small>Synthetic fixture metrics are directional; they do not establish real-channel quality.</small></section>}
+      {evaluation && <section className="panel"><p className="eyebrow">Measured holdout evaluation · v{evaluation.profile_version}</p><div className="evaluation-grid"><div><span>Image-caption matching</span><strong><Percent value={evaluation.image_caption_matching.accuracy} /></strong></div><div><span>Caption ranking</span><strong><Percent value={evaluation.qlob_caption_ranking_accuracy} /></strong></div><div><span>Retrieval relevance</span><strong><Percent value={evaluation.retrieval_top3_franchise_relevance} /></strong></div><div><span>Duplicate recall</span><strong><Percent value={evaluation.duplicate_detection.transformed_true_positive_rate} /></strong></div></div><small>Holdout metrics diagnose retrieval behavior; every generated caption still requires human judgment.</small></section>}
     </>
   );
 }
