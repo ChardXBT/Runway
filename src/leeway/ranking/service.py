@@ -82,6 +82,10 @@ class CandidateRanker:
             warnings.append("rights status is unknown and requires human review")
         if analysis.watermark_probability > 0.25:
             warnings.append("possible watermark")
+        if analysis.personal_artwork_probability > 0.25:
+            warnings.append("possible independently created artwork")
+        if analysis.fan_art_probability > 0.25:
+            warnings.append("possible fan art")
         reason = (
             f"Selected from {source_domain}: style {style:.2f}, novelty {novelty:.2f}, "
             f"quality {quality:.2f}, caption potential {caption_potential:.2f}."
@@ -134,6 +138,10 @@ class CandidateRanker:
             return "unsafe_content"
         if analysis.watermark_probability >= 0.65:
             return "prominent_watermark"
+        if analysis.personal_artwork_probability >= 0.5:
+            return "personal_artwork"
+        if analysis.fan_art_probability >= 0.5:
+            return "fan_art"
         return None
 
     @staticmethod

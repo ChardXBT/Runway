@@ -36,10 +36,14 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     api_port: int = 8000
     web_port: int = 3000
-    agent_runtime: Literal["mock", "openai"] = "mock"
+    agent_runtime: Literal["mock", "codex", "openai"] = "mock"
     enable_browser_search: bool = False
     browser_search_url: str = "https://www.google.com/search?tbm=isch&q={query}"
 
+    codex_cli_path: Path | None = None
+    codex_model: str = "gpt-5.6-luna"
+    codex_reasoning_effort: Literal["none", "low", "medium"] = "low"
+    codex_timeout_seconds: int = Field(default=300, ge=30, le=1800)
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_model: str | None = Field(default=None, validation_alias="OPENAI_MODEL")
     search_api_url: str | None = None
@@ -124,6 +128,10 @@ class Settings(BaseSettings):
             "capture_idle_cycles_before_stop": self.capture_idle_cycles_before_stop,
             "capture_checkpoint_every": self.capture_checkpoint_every,
             "agent_runtime": self.agent_runtime,
+            "codex_model": self.codex_model,
+            "codex_reasoning_effort": self.codex_reasoning_effort,
+            "codex_chatgpt_auth_required": True,
+            "paid_api_fallback_enabled": False,
             "openai_configured": bool(self.openai_api_key and self.openai_model),
             "browser_search_enabled": self.enable_browser_search,
             "search_api_configured": bool(self.search_api_url and self.search_api_key),

@@ -11,7 +11,7 @@ import httpx
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from leeway.analysis.runtime import AgentRuntime, runtime_for
+from leeway.analysis.runtime import AgentRuntime, AgentTerminalError, runtime_for
 from leeway.config import Settings
 from leeway.db.base import Database
 from leeway.db.models import (
@@ -140,6 +140,14 @@ class DiscoveryService:
                         run_id,
                         {"result": result.model_dump(), "error": errors[-1]},
                     )
+                if isinstance(exc, AgentTerminalError):
+                    with self.database.session() as session:
+                        loaded_run = session.get(SearchRun, run_id)
+                        if loaded_run:
+                            loaded_run.status = RunStatus.FAILED.value
+                            loaded_run.completed_at = datetime.now(UTC)
+                            loaded_run.error_summary = errors[-1]
+                    raise
                 continue
             created += 1
             rejected += hard_rejected
@@ -278,6 +286,7 @@ class DiscoveryService:
                 "width": features.width,
                 "height": features.height,
                 "quality_metrics": features.quality_metrics,
+                "_image_path": str(source),
             }
         )
         self._record_model_run(
@@ -461,7 +470,13 @@ class DiscoveryService:
             "days": days,
             "underused_franchises": underused[:5],
             "preferred_compositions": profile.get("visual_compositions", []),
-            "recent_exclusions": [],
+            "recent_exclusions": [
+                "fan art",
+                "personal artwork",
+                "artist portfolios",
+                "commissions",
+                "independent illustrations",
+            ],
             "current_queue_distribution": [],
         }
 

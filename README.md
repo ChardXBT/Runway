@@ -16,8 +16,11 @@ to YouTube.
 - Next.js, TypeScript, and Tailwind in `apps/web/`.
 - Canonical metadata in `data/leeway.db`; original media, previews, reports, and diagnostics under
   `data/`.
-- `MockAgentRuntime` is the default. `OpenAIAgentRuntime` is enabled only through environment
-  values and validates every response against a Pydantic schema.
+- The deterministic `MockAgentRuntime` supports offline fixtures. Real analysis uses the official
+  project-local Codex CLI with ChatGPT-plan authentication, real image inputs, Luna with low
+  reasoning by default, and Pydantic-validated structured output.
+- The Codex runtime removes API-key credentials from its subprocess environment and never falls
+  back to the separately billed OpenAI API.
 - Fixture, manual URL, experimental headed-browser, and optional API search providers share one
   provider interface.
 
@@ -87,10 +90,38 @@ Verification writes JSON and Markdown reports under `data/reports/`.
 
 ## Model runtime
 
-Keep the default `LEWAY_AGENT_RUNTIME=mock` for offline use. To opt into OpenAI model calls, copy
-`.env.example` to `.env`, set `LEWAY_AGENT_RUNTIME=openai`, `OPENAI_API_KEY`, and an explicit
-`OPENAI_MODEL`. Leeway does not hard-code a model name. It sends only bounded retrieval packages,
-validates structured outputs, and records model metadata in `model_runs`.
+Copy `.env.example` to `.env`. The recommended real configuration is:
+
+```dotenv
+LEWAY_AGENT_RUNTIME=codex
+LEWAY_CODEX_MODEL=gpt-5.6-luna
+LEWAY_CODEX_REASONING_EFFORT=low
+OPENAI_API_KEY=
+OPENAI_MODEL=
+```
+
+`npm install` installs the official Codex CLI inside this repository. Authenticate it with the
+ChatGPT account that has the paid Codex allowance, then verify the configuration:
+
+```powershell
+.\.venv\Scripts\leeway.exe agent login
+.\.venv\Scripts\leeway.exe agent status
+.\.venv\Scripts\leeway.exe agent smoke
+```
+
+Every Codex call is ephemeral, serialized, read-only, web-search-disabled, and run outside the
+repository workspace. API-key environment variables are removed. LeeWay requires the CLI to report
+`Logged in using ChatGPT`; API-key authentication, expired authentication, invalid output,
+timeouts, or an included-usage limit stop the current batch. There is no provider fallback.
+
+This is retrieval-based adaptation rather than model-weight fine-tuning. Qlob history, images,
+captions, annotations, corrections, rejections, and accepted examples remain in the local SQLite
+database. Each task receives only a bounded package of relevant examples. Historical annotation,
+candidate analysis, and caption generation also receive the actual local image.
+
+Keep `LEWAY_AGENT_RUNTIME=mock` only for the deterministic offline fixture workflow. An explicit
+`openai` adapter remains available for development, but it is never selected or used as a fallback
+from the configured Codex runtime.
 
 ## Discovery
 
@@ -113,8 +144,11 @@ status defaults to `unknown` until reviewed.
 - YouTube DOM capture is inherently fragile. Selectors are versioned and failures produce local
   snapshots, but a layout change can require an adapter update.
 - Browser discovery quality and source rights vary by provider; all candidates require review.
-- The OpenAI and live browser adapters are configuration-gated and are not exercised by automated
-  tests.
+- The live browser adapters are configuration-gated and have not yet been exercised against the
+  user's accounts.
+- Adding a caption does not by itself prove that an internet image is reusable. Rights remain
+  `unknown` until human review; likely fan art and independently created artwork are rejected.
 - Live YouTube scheduling and publishing are not implemented.
 
-See `docs/OPERATIONS.md` for routine commands and `docs/BUILD_REPORT.md` for the fixture proof.
+See `docs/COMPLETION_GUIDE.md` for the remaining path to production,
+`docs/OPERATIONS.md` for routine commands, and `docs/BUILD_REPORT.md` for the fixture proof.

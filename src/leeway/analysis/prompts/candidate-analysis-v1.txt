@@ -1,3 +1,5 @@
 Analyze only the supplied candidate image/context and return the requested schema. Do not infer
 unverified names or plot facts. Mark uncertainty through confidence and use null for unknown
-franchises. Estimate overlay, watermark, safety, and caption potential conservatively.
+franchises. Estimate overlay, watermark, safety, caption potential, independently created personal
+artwork, and fan art conservatively. Treat portfolio illustrations and artist-uploaded fan work as
+personal artwork even when the source does not display a watermark.

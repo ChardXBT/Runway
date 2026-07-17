@@ -12,7 +12,7 @@ from leeway.analysis.runtime import AgentRuntime, runtime_for
 from leeway.analysis.schemas import CaptionOptions
 from leeway.config import Settings
 from leeway.db.base import Database
-from leeway.db.models import CandidateImage, ModelRun, Post, Proposal, utcnow
+from leeway.db.models import CandidateImage, MediaAsset, ModelRun, Post, Proposal, utcnow
 from leeway.db.repositories import audit
 from leeway.intelligence.retrieval import RetrievalService
 
@@ -39,6 +39,10 @@ class CaptionService:
             if candidate.hard_rejection_reason:
                 raise ValueError("captions cannot be generated for a hard-rejected candidate")
             media_asset_id = candidate.media_asset_id
+            media = session.get(MediaAsset, media_asset_id)
+            if media is None:
+                raise LookupError(f"candidate {candidate_id} has no media asset")
+            image_path = self.settings.resolved_data_dir / media.local_path
             analysis = json.loads(candidate.detected_topic_json)
         context = self.retrieval.context_for_candidate(media_asset_id)
         caption_examples = cast(list[dict[str, Any]], context["caption_style_examples"])
@@ -48,6 +52,7 @@ class CaptionService:
             "candidate_analysis": analysis,
             "historical_post_ids": historical_ids,
             "retrieval_context": context,
+            "_image_path": str(image_path),
         }
         started = utcnow()
         generated = await self.runtime.generate_caption_options(payload)

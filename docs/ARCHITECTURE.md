@@ -7,11 +7,13 @@ external integration code.
 
 ```text
 headed/manual/fixture inputs -> canonical catalogue + media -> profile/retrieval
+                                                        -> Codex image analysis
                                                         -> discovery/ranking
-                                                        -> captions/proposals
+                                                        -> Codex captions/proposals
                                                         -> human approval
                                                         -> InternalPublisher only
 ```
 
-All default paths are offline. The API listens only on `127.0.0.1` and serves media from the local
-data directory.
+The offline fixture path uses the mock runtime. The real model path uses the project-local Codex
+CLI with ChatGPT authentication and no API fallback. The API listens only on `127.0.0.1` and serves
+media from the local data directory.

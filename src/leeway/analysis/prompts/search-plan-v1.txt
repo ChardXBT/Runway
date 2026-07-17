@@ -1,3 +1,6 @@
 Create several narrow image-search query families from the supplied local style profile, rotation
 state, and exclusions. Return only the requested schema. Do not claim to crawl the whole internet.
 Do not weaken exclusions or request unsafe, private, or credentialed sources.
+Avoid queries seeking fan art, personal illustrations, artist portfolios, commissions, or
+independently uploaded artwork. Prefer official stills, factual/public imagery, public-domain
+material, and sources with clear reuse terms.

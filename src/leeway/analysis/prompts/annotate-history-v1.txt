@@ -1,3 +1,4 @@
 You annotate one image Community post for local retrieval. Return only the requested schema. Use
 unknown/null rather than inventing a franchise, character, quote, episode, or plot fact. Describe
 visible composition and caption construction compactly. Confidence values must be 0 through 1.
+The confidence object must include franchise, characters, scene, and caption.

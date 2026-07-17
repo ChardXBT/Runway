@@ -7,10 +7,17 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class HistoricalConfidence(StrictModel):
+    franchise: float = Field(ge=0, le=1)
+    characters: float = Field(ge=0, le=1)
+    scene: float = Field(ge=0, le=1)
+    caption: float = Field(ge=0, le=1)
+
+
 class HistoricalAnnotation(StrictModel):
-    franchise: str | None = None
-    show_name: str | None = None
-    visible_characters: list[str] = Field(default_factory=list)
+    franchise: str | None
+    show_name: str | None
+    visible_characters: list[str]
     visible_character_count: int = Field(ge=0)
     scene_description: str
     visual_medium: str
@@ -22,7 +29,7 @@ class HistoricalAnnotation(StrictModel):
     caption_structure: str
     humor_style: str
     tone: str
-    confidence: dict[str, float]
+    confidence: HistoricalConfidence
 
 
 class StyleSummary(StrictModel):
@@ -43,14 +50,16 @@ class SearchPlan(StrictModel):
 
 
 class CandidateAnalysis(StrictModel):
-    franchise: str | None = None
-    characters: list[str] = Field(default_factory=list)
+    franchise: str | None
+    characters: list[str]
     scene_archetype: str
     composition: str
     emotion: str
     text_overlay: bool
     watermark_probability: float = Field(ge=0, le=1)
     unsafe_probability: float = Field(ge=0, le=1)
+    personal_artwork_probability: float = Field(ge=0, le=1)
+    fan_art_probability: float = Field(ge=0, le=1)
     caption_potential: float = Field(ge=0, le=1)
     confidence: float = Field(ge=0, le=1)
 
@@ -60,5 +69,5 @@ class CaptionOptions(StrictModel):
     alternatives: list[str] = Field(min_length=2, max_length=2)
     rationale: str
     confidence: float = Field(ge=0, le=1)
-    referenced_historical_post_ids: list[int] = Field(default_factory=list)
-    factual_uncertainty_warning: str | None = None
+    referenced_historical_post_ids: list[int]
+    factual_uncertainty_warning: str | None

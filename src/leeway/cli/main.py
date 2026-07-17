@@ -8,11 +8,14 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 
 import typer
+from PIL import Image, ImageDraw
 
+from leeway.analysis.runtime import AgentRuntimeError, CodexAgentRuntime
 from leeway.analysis.service import AnalysisService
 from leeway.capture.browser import BrowserCaptureService, CapturePaused
 from leeway.capture.service import CaptureService
@@ -36,6 +39,7 @@ profile_app = typer.Typer(help="Build, inspect, and evaluate versioned style pro
 discover_app = typer.Typer(help="Discover and rank candidate images.")
 generate_app = typer.Typer(help="Generate proposal batches.")
 queue_app = typer.Typer(help="Inspect and operate the approval queue.")
+agent_app = typer.Typer(help="Manage the local ChatGPT-authenticated Codex runtime.")
 
 app.add_typer(capture_app, name="capture")
 app.add_typer(catalog_app, name="catalog")
@@ -44,6 +48,7 @@ app.add_typer(profile_app, name="profile")
 app.add_typer(discover_app, name="discover")
 app.add_typer(generate_app, name="generate")
 app.add_typer(queue_app, name="queue")
+app.add_typer(agent_app, name="agent")
 
 
 @app.callback()
@@ -123,14 +128,31 @@ def doctor() -> None:
     checks.append(
         ("Database migration", migration is not None, migration[0] if migration else "none")
     )
-    checks.append(
-        (
-            "OpenAI runtime",
-            settings.agent_runtime == "mock"
-            or bool(settings.openai_api_key and settings.openai_model),
-            "mock" if settings.agent_runtime == "mock" else "configured (secret hidden)",
+    if settings.agent_runtime == "codex":
+        try:
+            codex = CodexAgentRuntime(settings)
+            codex_detail = (
+                f"{codex.version()}; {codex.login_status()}; "
+                f"{codex.model_name}/{codex.reasoning_effort}; API fallback disabled"
+            )
+            codex_ok = True
+        except AgentRuntimeError as exc:
+            codex_detail = str(exc)
+            codex_ok = False
+        checks.append(("Codex runtime", codex_ok, codex_detail))
+    else:
+        checks.append(
+            (
+                "Model runtime",
+                settings.agent_runtime == "mock"
+                or bool(settings.openai_api_key and settings.openai_model),
+                (
+                    "mock"
+                    if settings.agent_runtime == "mock"
+                    else "OpenAI configured (secret hidden)"
+                ),
+            )
         )
-    )
     checks.append(
         (
             "API port",
@@ -148,6 +170,93 @@ def doctor() -> None:
             required_failures += 1
     if required_failures:
         raise typer.Exit(code=1)
+
+
+@agent_app.command("status")
+def agent_status() -> None:
+    """Verify Codex CLI, ChatGPT authentication, model tier, and fallback policy."""
+    settings = get_settings()
+    try:
+        codex = CodexAgentRuntime(settings)
+        result = {
+            "provider": codex.provider,
+            "cli": codex.version(),
+            "authentication": codex.login_status(),
+            "model": codex.model_name,
+            "reasoning_effort": codex.reasoning_effort,
+            "serialized_jobs": True,
+            "paid_api_fallback_enabled": False,
+        }
+    except AgentRuntimeError as exc:
+        typer.echo(json.dumps({"status": "blocked", "error": str(exc)}, indent=2))
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, indent=2))
+
+
+@agent_app.command("login")
+def agent_login() -> None:
+    """Open the official Codex browser sign-in and require ChatGPT authentication."""
+    settings = get_settings()
+    try:
+        codex = CodexAgentRuntime(settings)
+    except AgentRuntimeError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    code = codex.login_interactive()
+    if code:
+        raise typer.Exit(code=code)
+    try:
+        typer.echo(codex.login_status())
+    except AgentRuntimeError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@agent_app.command("smoke")
+def agent_smoke() -> None:
+    """Run one small Luna/low structured-image request without touching the Qlob database."""
+    settings = get_settings()
+    smoke_settings = settings.model_copy(update={"agent_runtime": "codex"})
+    try:
+        codex = CodexAgentRuntime(smoke_settings)
+        with tempfile.TemporaryDirectory(prefix="leeway-agent-smoke-") as temporary:
+            root = Path(temporary)
+            image_path = root / "synthetic-reaction.png"
+            image = Image.new("RGB", (640, 640), (44, 62, 92))
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((170, 120, 470, 480), fill=(238, 190, 91))
+            draw.ellipse((250, 220, 285, 265), fill=(30, 35, 45))
+            draw.ellipse((355, 220, 390, 265), fill=(30, 35, 45))
+            draw.arc((250, 260, 390, 390), start=15, end=165, fill=(30, 35, 45), width=12)
+            image.save(image_path)
+            result = asyncio.run(
+                codex.analyze_candidate_image(
+                    {
+                        "candidate_id": 0,
+                        "search_query": "synthetic runtime health check",
+                        "source_domain": "local.test",
+                        "width": 640,
+                        "height": 640,
+                        "quality_metrics": {"synthetic": 1.0},
+                        "_image_path": str(image_path),
+                    }
+                )
+            )
+    except AgentRuntimeError as exc:
+        typer.echo(json.dumps({"status": "blocked", "error": str(exc)}, indent=2))
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "status": "passed",
+                "provider": codex.provider,
+                "model": codex.model_name,
+                "reasoning_effort": codex.reasoning_effort,
+                "paid_api_fallback_enabled": False,
+                "token_usage": codex.last_token_usage,
+                "structured_output": result.model_dump(),
+            },
+            indent=2,
+        )
+    )
 
 
 @app.command()

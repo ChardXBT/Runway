@@ -41,8 +41,18 @@ The first version uses SHA-256, perceptual hashes, crop-resistant descriptors, a
 embeddings. A hosted vector service and opaque model-only ranking were rejected so duplicate and
 selection decisions remain reproducible and explainable.
 
-## OpenAI adapter boundary
+## ChatGPT-plan Codex boundary
 
-The real runtime uses the Responses API structured-output parser with Pydantic schemas and an
-environment-supplied model. It is never the default, and no model ID is hard-coded. This follows
-the current official structured-output guidance while preserving a deterministic mock path.
+The real runtime uses the official project-local Codex CLI with saved ChatGPT authentication.
+Luna with low reasoning is the default to conserve included usage. Every request is ephemeral,
+serialized, read-only, web-search-disabled, image-aware where required, and constrained by a
+Pydantic JSON schema. API-key authentication is rejected and there is no paid API fallback.
+
+The separately billed OpenAI API adapter remains explicit-only for development compatibility. It
+cannot be reached from the configured Codex path.
+
+## Retrieval instead of weight fine-tuning
+
+LeeWay adapts through a versioned profile and bounded retrieval from the local Qlob database. This
+keeps evidence inspectable, incorporates user corrections and rejections immediately, and avoids a
+training bill. Model-weight fine-tuning is not required for the current workflow.

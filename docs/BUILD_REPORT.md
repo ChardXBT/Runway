@@ -8,6 +8,24 @@ The completed source repository is privately hosted at
 `https://github.com/ChardXBT/LeeWay`, with `main` as the default branch. GitHub visibility was
 verified as `PRIVATE` after the initial push.
 
+## 2026-07-17 runtime update
+
+- Added an official project-local Codex CLI runtime using ChatGPT authentication, Luna with low
+  reasoning, actual image inputs, Pydantic output schemas, serialized requests, and stop-on-limit
+  behavior.
+- Added an enforced no-paid-API boundary: API-key environment values are stripped, API-key login
+  is rejected, and Codex failures never fall back to the OpenAI adapter.
+- Added fan-art and personal-artwork exclusions, warnings, and hard filters.
+- Added CLI status/login checks and settings UI visibility for the selected model and fallback
+  policy.
+- Added `docs/COMPLETION_GUIDE.md` so implemented fixture milestones are separated from pending
+  real-account and live-publisher acceptance work.
+- Verified saved `Sign in with ChatGPT` authentication and passed one real Luna/low structured
+  image request with API fallback disabled.
+- Current checks: Ruff lint/format passed, Mypy strict passed, Pytest `29 passed`, ESLint passed,
+  Vitest `2 passed`, the Next.js production build passed, and both npm audits found zero known
+  vulnerabilities.
+
 ## Milestone delivery
 
 ### Milestone 0 — foundation

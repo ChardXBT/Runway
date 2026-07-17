@@ -9,7 +9,7 @@ import numpy as np
 from sqlalchemy import delete, select
 
 from leeway.analysis.features import text_embedding, text_similarity
-from leeway.analysis.runtime import AgentRuntime, runtime_for
+from leeway.analysis.runtime import AgentRuntime, AgentTerminalError, runtime_for
 from leeway.analysis.schemas import HistoricalAnnotation
 from leeway.config import Settings
 from leeway.db.base import Database
@@ -53,16 +53,32 @@ class AnalysisService:
                     )
                 ).all()
             )
-            payloads: list[dict[str, object]] = [
-                {
-                    "post_id": post.id,
-                    "caption": post.caption or "",
-                    "post_type": post.post_type,
-                    "published_at": post.published_at.isoformat() if post.published_at else None,
-                }
-                for post in posts
-                if not resume or post.id not in existing_ids
-            ]
+            payloads: list[dict[str, object]] = []
+            for post in posts:
+                if resume and post.id in existing_ids:
+                    continue
+                media = session.scalar(
+                    select(MediaAsset)
+                    .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
+                    .where(PostMedia.post_id == post.id)
+                    .order_by(PostMedia.position)
+                    .limit(1)
+                )
+                payloads.append(
+                    {
+                        "post_id": post.id,
+                        "caption": post.caption or "",
+                        "post_type": post.post_type,
+                        "published_at": (
+                            post.published_at.isoformat() if post.published_at else None
+                        ),
+                        "_image_path": (
+                            str(self.settings.resolved_data_dir / media.local_path)
+                            if media is not None
+                            else None
+                        ),
+                    }
+                )
 
         completed = 0
         failed = 0
@@ -83,6 +99,8 @@ class AnalysisService:
                     started=started,
                     error=f"{type(exc).__name__}: {exc}",
                 )
+                if isinstance(exc, AgentTerminalError):
+                    raise
                 continue
             with self.database.session() as session:
                 existing = session.scalar(
@@ -299,7 +317,7 @@ class AnalysisService:
             humor_style=output.humor_style,
             tone=output.tone,
             text_in_image=output.text_overlay,
-            model_confidence_json=json.dumps(output.confidence, sort_keys=True),
+            model_confidence_json=json.dumps(output.confidence.model_dump(), sort_keys=True),
             original_output_json=output.model_dump_json(),
             review_status="unreviewed",
             reviewed_fields_json="{}",
