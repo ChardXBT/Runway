@@ -1,0 +1,47 @@
+{
+  "annotation_version": "historical-annotation-v2",
+  "artifact_version": "runway-frozen-intelligence-baseline-v1",
+  "baseline_commit": "876fe5f814b1a58f0d11b9eaf29f4c508f20595d",
+  "baseline_id": "baseline-876fe5f",
+  "configuration": {
+    "agent_runtime": "mock",
+    "caption_duplicate_threshold": 0.92,
+    "caption_question_first": true,
+    "duplicate_perceptual_threshold": 0.94,
+    "duplicate_semantic_threshold": 0.99,
+    "ranking_weights": {
+      "caption_potential": 0.2,
+      "novelty": 0.2,
+      "quality": 0.15,
+      "rotation": 0.05,
+      "source_safety": 0.05,
+      "style": 0.25,
+      "topic": 0.1
+    },
+    "retrieval_limits": {
+      "caption_style_examples": 8,
+      "negative_examples": 5,
+      "visual_examples": 8
+    }
+  },
+  "configuration_hash": "7302e247771c206804e73199a1e288fb651d9140f891b3c59bdf353e222c825e",
+  "dataset": "dataset.json",
+  "metrics": "metrics.json",
+  "offline": true,
+  "outputs": "outputs.json",
+  "paid_provider_calls": 0,
+  "profile_schema_version": "style-profile-v2",
+  "profile_version": 1,
+  "prompt_sha256": {
+    "annotate-history-batch-v2.txt": "9e1aec53698db55bb59128c607d20381cde7e782aae39040413640a09c3bf00f",
+    "annotate-history-v1.txt": "ecace410454e4eeffa816312e646512e8fb439767dd091df3fde0bc177503452",
+    "candidate-analysis-v1.txt": "a11ac9845fd490482f79b97cf769bc19b8f974e31e3de45758388847c1f56a66",
+    "captions-v1.txt": "d58d83babe732804356b5e0033078a486c139e9ece8477070a43f8c90b6272fe",
+    "captions-v2.txt": "ce11f643a03b93b1d8200274b4d137b50186110f874353c6e036420303b36d97",
+    "captions-v3.txt": "933bccc22d6108d6b7eb84e88427f04924f2941ce5cbf25312dd03a819540044",
+    "search-plan-v1.txt": "be7305547fb771cbe9438353bbcc18c34ffd6e4563e06d79da9cf9f0ab3acaa0",
+    "style-summary-v1.txt": "b8536df853c26fdf7e94fbfef80ce47d0574bbd6e736017b79274f3b19e29a2b"
+  },
+  "publishing_enabled": false,
+  "schema_revision": "0006_uncapped_lineup"
+}

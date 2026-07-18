@@ -1,0 +1,190 @@
+{
+  "cases": [
+    {
+      "candidate_analysis": {
+        "caption_potential": 0.87,
+        "characters": [
+          "Fixture candidate 5"
+        ],
+        "composition": "balanced two-subject",
+        "confidence": 0.9,
+        "emotion": "determination",
+        "fan_art_probability": 0.0,
+        "franchise": "Synthetic Ensemble",
+        "personal_artwork_probability": 0.0,
+        "scene_archetype": "group decision",
+        "text_overlay": false,
+        "unsafe_probability": 0.0,
+        "watermark_probability": 0.02
+      },
+      "case_id": "qlob-fixture-candidate-18",
+      "channel": "Qlob",
+      "fixture_uri": "fixture://candidate-18",
+      "rights_status": "creator_owned",
+      "split": "development"
+    },
+    {
+      "candidate_analysis": {
+        "caption_potential": 0.9,
+        "characters": [
+          "Fixture candidate 5"
+        ],
+        "composition": "balanced two-subject",
+        "confidence": 0.9,
+        "emotion": "surprise",
+        "fan_art_probability": 0.0,
+        "franchise": "Synthetic Adventure",
+        "personal_artwork_probability": 0.0,
+        "scene_archetype": "group decision",
+        "text_overlay": false,
+        "unsafe_probability": 0.0,
+        "watermark_probability": 0.02
+      },
+      "case_id": "qlob-fixture-candidate-04",
+      "channel": "Qlob",
+      "fixture_uri": "fixture://candidate-04",
+      "rights_status": "creator_owned",
+      "split": "development"
+    },
+    {
+      "candidate_analysis": {
+        "caption_potential": 0.81,
+        "characters": [
+          "Fixture candidate 2"
+        ],
+        "composition": "centered",
+        "confidence": 0.9,
+        "emotion": "surprise",
+        "fan_art_probability": 0.0,
+        "franchise": "Synthetic Adventure",
+        "personal_artwork_probability": 0.0,
+        "scene_archetype": "reaction",
+        "text_overlay": false,
+        "unsafe_probability": 0.0,
+        "watermark_probability": 0.02
+      },
+      "case_id": "qlob-fixture-candidate-01",
+      "channel": "Qlob",
+      "fixture_uri": "fixture://candidate-01",
+      "rights_status": "creator_owned",
+      "split": "development"
+    },
+    {
+      "candidate_analysis": {
+        "caption_potential": 0.9,
+        "characters": [
+          "Fixture candidate 3"
+        ],
+        "composition": "centered",
+        "confidence": 0.9,
+        "emotion": "determination",
+        "fan_art_probability": 0.0,
+        "franchise": "Synthetic Ensemble",
+        "personal_artwork_probability": 0.0,
+        "scene_archetype": "reaction",
+        "text_overlay": false,
+        "unsafe_probability": 0.0,
+        "watermark_probability": 0.02
+      },
+      "case_id": "qlob-fixture-candidate-09",
+      "channel": "Qlob",
+      "fixture_uri": "fixture://candidate-09",
+      "rights_status": "creator_owned",
+      "split": "tuning"
+    },
+    {
+      "candidate_analysis": {
+        "caption_potential": 0.9,
+        "characters": [
+          "Fixture candidate 6"
+        ],
+        "composition": "centered",
+        "confidence": 0.9,
+        "emotion": "surprise",
+        "fan_art_probability": 0.0,
+        "franchise": "Synthetic Adventure",
+        "personal_artwork_probability": 0.0,
+        "scene_archetype": "reaction",
+        "text_overlay": false,
+        "unsafe_probability": 0.0,
+        "watermark_probability": 0.02
+      },
+      "case_id": "qlob-fixture-candidate-19",
+      "channel": "Qlob",
+      "fixture_uri": "fixture://candidate-19",
+      "rights_status": "creator_owned",
+      "split": "tuning"
+    },
+    {
+      "candidate_analysis": {
+        "caption_potential": 0.8400000000000001,
+        "characters": [
+          "Fixture candidate 4"
+        ],
+        "composition": "centered",
+        "confidence": 0.9,
+        "emotion": "surprise",
+        "fan_art_probability": 0.0,
+        "franchise": "Synthetic Comedy",
+        "personal_artwork_probability": 0.0,
+        "scene_archetype": "reaction",
+        "text_overlay": false,
+        "unsafe_probability": 0.0,
+        "watermark_probability": 0.02
+      },
+      "case_id": "qlob-fixture-candidate-17",
+      "channel": "Qlob",
+      "fixture_uri": "fixture://candidate-17",
+      "rights_status": "creator_owned",
+      "split": "tuning"
+    },
+    {
+      "candidate_analysis": {
+        "caption_potential": 0.87,
+        "characters": [
+          "Fixture candidate 4"
+        ],
+        "composition": "centered",
+        "confidence": 0.9,
+        "emotion": "determination",
+        "fan_art_probability": 0.0,
+        "franchise": "Synthetic Ensemble",
+        "personal_artwork_probability": 0.0,
+        "scene_archetype": "reaction",
+        "text_overlay": false,
+        "unsafe_probability": 0.0,
+        "watermark_probability": 0.02
+      },
+      "case_id": "qlob-fixture-candidate-03",
+      "channel": "Qlob",
+      "fixture_uri": "fixture://candidate-03",
+      "rights_status": "creator_owned",
+      "split": "locked_holdout"
+    },
+    {
+      "candidate_analysis": {
+        "caption_potential": 0.8400000000000001,
+        "characters": [
+          "Fixture candidate 7"
+        ],
+        "composition": "centered",
+        "confidence": 0.9,
+        "emotion": "determination",
+        "fan_art_probability": 0.0,
+        "franchise": "Synthetic Ensemble",
+        "personal_artwork_probability": 0.0,
+        "scene_archetype": "reaction",
+        "text_overlay": false,
+        "unsafe_probability": 0.0,
+        "watermark_probability": 0.02
+      },
+      "case_id": "qlob-fixture-candidate-27",
+      "channel": "Qlob",
+      "fixture_uri": "fixture://candidate-27",
+      "rights_status": "creator_owned",
+      "split": "locked_holdout"
+    }
+  ],
+  "cluster_policy": "Each synthetic fixture URI is one deterministic source cluster; clusters do not cross splits.",
+  "dataset_version": "runway-baseline-fixture-v1"
+}

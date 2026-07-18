@@ -1,0 +1,5414 @@
+{
+  "artifact_version": "runway-frozen-intelligence-outputs-v1",
+  "baseline_commit": "876fe5f814b1a58f0d11b9eaf29f4c508f20595d",
+  "cases": [
+    {
+      "case_id": "qlob-fixture-candidate-18",
+      "displayed_captions": [
+        "Why is Fixture so confident?",
+        "That suspicious silence says everything.",
+        "That escalated with impressive speed."
+      ],
+      "duplicate": {
+        "closest_historical_matches": [
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.959666
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.943022
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.937475
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.936149
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.924718
+          }
+        ],
+        "hard_rejection_reason": null,
+        "novelty_score": 0.297042
+      },
+      "generated_pool": [
+        {
+          "structure": "open_question",
+          "text": "How did the plan get this far?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What is everyone looking at?"
+        },
+        {
+          "structure": "open_question",
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What happened right before this?"
+        },
+        {
+          "structure": "observation",
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "structure": "observation",
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "structure": "observation",
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "structure": "reaction",
+          "text": "The face of someone who learned nothing."
+        },
+        {
+          "structure": "reaction",
+          "text": "This should end well."
+        }
+      ],
+      "grounding": {
+        "factual_uncertainty_warning": null,
+        "selected": [
+          {
+            "grounded": true,
+            "text": "Why is Fixture so confident?"
+          },
+          {
+            "grounded": false,
+            "text": "That suspicious silence says everything."
+          },
+          {
+            "grounded": false,
+            "text": "That escalated with impressive speed."
+          }
+        ]
+      },
+      "input": {
+        "candidate_analysis": {
+          "caption_potential": 0.87,
+          "characters": [
+            "Fixture candidate 5"
+          ],
+          "composition": "balanced two-subject",
+          "confidence": 0.9,
+          "emotion": "determination",
+          "fan_art_probability": 0.0,
+          "franchise": "Synthetic Ensemble",
+          "personal_artwork_probability": 0.0,
+          "scene_archetype": "group decision",
+          "text_overlay": false,
+          "unsafe_probability": 0.0,
+          "watermark_probability": 0.02
+        },
+        "channel": "Qlob",
+        "image": {
+          "fixture_uri": "fixture://candidate-18",
+          "height": 620,
+          "rights_status": "creator_owned",
+          "source_domain": "fixture.local",
+          "width": 720
+        },
+        "profile_version": 1
+      },
+      "ranking": [
+        {
+          "grounded": true,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.913934,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.963379,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "Why is Fixture so confident?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.90755,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.842485,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What is everyone looking at?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.798992,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.827287,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What happened right before this?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.748024,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.820152,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What has everyone so interested?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.899496,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.81308,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "Why does this feel like trouble?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.770868,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "How would you explain this scene?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.765221,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did things get to this point?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.72265,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.751847,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did the plan get this far?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.740818,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.891535,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.733572,
+          "structure": "open_question",
+          "style_score": 0.557858,
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.502159,
+          "structure": "observation",
+          "style_score": 0.914286,
+          "text": "That suspicious silence says everything."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.701858,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.475974,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "That escalated with impressive speed."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.473881,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.463982,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.461432,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "Moments before the plan changed."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.818731,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.886039,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.448104,
+          "structure": "reaction",
+          "style_score": 0.805524,
+          "text": "This should end well."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.8443,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.431164,
+          "structure": "observation",
+          "style_score": 0.716478,
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.427108,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.372757,
+          "structure": "reaction",
+          "style_score": 0.716478,
+          "text": "The face of someone who learned nothing."
+        }
+      ],
+      "recommendation": "Why is Fixture so confident?",
+      "retrieval": {
+        "caption_style_examples": [
+          {
+            "caption": "We all know who caused this.",
+            "evidence": "visual_match",
+            "post_id": 7
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "evidence": "visual_match",
+            "post_id": 11
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "evidence": "visual_match",
+            "post_id": 5
+          },
+          {
+            "caption": "Which entrance wins?",
+            "evidence": "visual_match",
+            "post_id": 2
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "evidence": "channel_style",
+            "post_id": 10,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "evidence": "channel_style",
+            "post_id": 6,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "evidence": "channel_style",
+            "post_id": 12,
+            "style_score": 0.573621
+          }
+        ],
+        "feedback_context": {
+          "editorial_policy": {
+            "avoid_generic_engagement_bait": true,
+            "avoid_yes_no_questions": true,
+            "primary_goal": "open-ended questions that invite community discussion",
+            "recommended_structure": "open_question",
+            "required_option_mix": {
+              "observation": 1,
+              "open_question": 1,
+              "reaction": 1
+            }
+          },
+          "learned_preferences": {
+            "common_feedback_reasons": [],
+            "positive_feedback_count": 0,
+            "preferred_structures": []
+          },
+          "negative_examples": [],
+          "positive_examples": []
+        },
+        "negative_examples": [],
+        "recent_180_day_exclusions": [
+          {
+            "media_asset_id": 2,
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717+00:00"
+          }
+        ],
+        "rotation_state": {
+          "characters": [
+            [
+              "Fixture character 3",
+              3
+            ],
+            [
+              "Fixture character 1",
+              2
+            ],
+            [
+              "Fixture character 2",
+              2
+            ]
+          ],
+          "franchises": [
+            [
+              "Synthetic Comedy",
+              3
+            ],
+            [
+              "Synthetic Ensemble",
+              2
+            ],
+            [
+              "Synthetic Adventure",
+              2
+            ]
+          ]
+        },
+        "style_profile": {
+          "caption_statistics": {
+            "call_to_action_frequency": 0.0,
+            "common_openings": [
+              [
+                "which entrance wins",
+                1
+              ],
+              [
+                "he really thought",
+                1
+              ],
+              [
+                "no context just",
+                1
+              ],
+              [
+                "we all know",
+                1
+              ],
+              [
+                "a perfectly normal",
+                1
+              ],
+              [
+                "would you trust",
+                1
+              ],
+              [
+                "the face of",
+                1
+              ]
+            ],
+            "emoji_frequency": 0.0,
+            "exclamation_frequency": 0.142857,
+            "first_person_frequency": 0.142857,
+            "mean_uppercase_ratio": 0.044491,
+            "median_characters": 32.0,
+            "median_words": 5.0,
+            "question_frequency": 0.285714,
+            "repeated_bigrams": [],
+            "sample_size": 7,
+            "second_person_frequency": 0.142857,
+            "word_percentiles": {
+              "p10": 4.2,
+              "p25": 5.0,
+              "p75": 6.5,
+              "p90": 7.4
+            }
+          },
+          "dominant_caption_structures": [
+            [
+              "direct question",
+              2
+            ],
+            [
+              "short statement",
+              2
+            ],
+            [
+              "long statement",
+              1
+            ],
+            [
+              "first-person reaction",
+              1
+            ],
+            [
+              "exclamatory statement",
+              1
+            ]
+          ],
+          "recent_overuse_rules": {
+            "avoid_consecutive_composition": true,
+            "avoid_consecutive_franchise": true,
+            "duplicate_window_days": 180
+          },
+          "summary": "Fixture Qlob style favors compact, playful reaction captions near 5.0 words, with questions used selectively and images framed around one clear emotional beat."
+        },
+        "style_profile_version": 1,
+        "visual_examples": [
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.959666
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.943022
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.937475
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.936149
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.924718
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.919459
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "media_asset_id": 8,
+            "media_url": "/media/historical/71165b9683e874ee801b2466f86dddbbbb3fe268190e1af11fb360e195d6f385.jpg",
+            "post_id": 10,
+            "published_at": null,
+            "visual_similarity": 0.913052
+          }
+        ]
+      },
+      "runtime": {
+        "abstained": false,
+        "error": null,
+        "latency_ms": 70.457,
+        "model": "deterministic-fixture-v1",
+        "prompt_version": "captions-v3",
+        "provider": "mock",
+        "token_usage": {}
+      },
+      "split": "development"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-04",
+      "displayed_captions": [
+        "Why is Fixture so surprised?",
+        "That suspicious silence says everything.",
+        "That escalated with impressive speed."
+      ],
+      "duplicate": {
+        "closest_historical_matches": [
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.954512
+          },
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.940124
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.924466
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.915125
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.913778
+          }
+        ],
+        "hard_rejection_reason": null,
+        "novelty_score": 0.319275
+      },
+      "generated_pool": [
+        {
+          "structure": "open_question",
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What happened right before this?"
+        },
+        {
+          "structure": "open_question",
+          "text": "How did the plan get this far?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What is everyone looking at?"
+        },
+        {
+          "structure": "observation",
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "structure": "observation",
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "structure": "observation",
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "structure": "reaction",
+          "text": "The face of someone who learned nothing."
+        },
+        {
+          "structure": "reaction",
+          "text": "This should end well."
+        }
+      ],
+      "grounding": {
+        "factual_uncertainty_warning": null,
+        "selected": [
+          {
+            "grounded": true,
+            "text": "Why is Fixture so surprised?"
+          },
+          {
+            "grounded": false,
+            "text": "That suspicious silence says everything."
+          },
+          {
+            "grounded": false,
+            "text": "That escalated with impressive speed."
+          }
+        ]
+      },
+      "input": {
+        "candidate_analysis": {
+          "caption_potential": 0.9,
+          "characters": [
+            "Fixture candidate 5"
+          ],
+          "composition": "balanced two-subject",
+          "confidence": 0.9,
+          "emotion": "surprise",
+          "fan_art_probability": 0.0,
+          "franchise": "Synthetic Adventure",
+          "personal_artwork_probability": 0.0,
+          "scene_archetype": "group decision",
+          "text_overlay": false,
+          "unsafe_probability": 0.0,
+          "watermark_probability": 0.02
+        },
+        "channel": "Qlob",
+        "image": {
+          "fixture_uri": "fixture://candidate-04",
+          "height": 540,
+          "rights_status": "creator_owned",
+          "source_domain": "fixture.local",
+          "width": 800
+        },
+        "profile_version": 1
+      },
+      "ranking": [
+        {
+          "grounded": true,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.850929,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.954558,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "Why is Fixture so surprised?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.90755,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.842485,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What is everyone looking at?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.798992,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.827287,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What happened right before this?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.748024,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.820152,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What has everyone so interested?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.899496,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.81308,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "Why does this feel like trouble?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.770868,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "How would you explain this scene?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.765221,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did things get to this point?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.72265,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.751847,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did the plan get this far?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.740818,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.891535,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.733572,
+          "structure": "open_question",
+          "style_score": 0.557858,
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.502159,
+          "structure": "observation",
+          "style_score": 0.914286,
+          "text": "That suspicious silence says everything."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.701858,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.475974,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "That escalated with impressive speed."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.473881,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.463982,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.461432,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "Moments before the plan changed."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.818731,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.886039,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.448104,
+          "structure": "reaction",
+          "style_score": 0.805524,
+          "text": "This should end well."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.8443,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.431164,
+          "structure": "observation",
+          "style_score": 0.716478,
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.427108,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.372757,
+          "structure": "reaction",
+          "style_score": 0.716478,
+          "text": "The face of someone who learned nothing."
+        }
+      ],
+      "recommendation": "Why is Fixture so surprised?",
+      "retrieval": {
+        "caption_style_examples": [
+          {
+            "caption": "Would you trust this plan?",
+            "evidence": "visual_match",
+            "post_id": 11
+          },
+          {
+            "caption": "We all know who caused this.",
+            "evidence": "visual_match",
+            "post_id": 7
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "evidence": "visual_match",
+            "post_id": 12
+          },
+          {
+            "caption": "Which entrance wins?",
+            "evidence": "visual_match",
+            "post_id": 2
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "evidence": "channel_style",
+            "post_id": 10,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "evidence": "channel_style",
+            "post_id": 6,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "evidence": "channel_style",
+            "post_id": 5,
+            "style_score": 0.643573
+          }
+        ],
+        "feedback_context": {
+          "editorial_policy": {
+            "avoid_generic_engagement_bait": true,
+            "avoid_yes_no_questions": true,
+            "primary_goal": "open-ended questions that invite community discussion",
+            "recommended_structure": "open_question",
+            "required_option_mix": {
+              "observation": 1,
+              "open_question": 1,
+              "reaction": 1
+            }
+          },
+          "learned_preferences": {
+            "common_feedback_reasons": [],
+            "positive_feedback_count": 0,
+            "preferred_structures": []
+          },
+          "negative_examples": [],
+          "positive_examples": []
+        },
+        "negative_examples": [],
+        "recent_180_day_exclusions": [
+          {
+            "media_asset_id": 2,
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717+00:00"
+          }
+        ],
+        "rotation_state": {
+          "characters": [
+            [
+              "Fixture character 3",
+              3
+            ],
+            [
+              "Fixture character 1",
+              2
+            ],
+            [
+              "Fixture character 2",
+              2
+            ]
+          ],
+          "franchises": [
+            [
+              "Synthetic Comedy",
+              3
+            ],
+            [
+              "Synthetic Ensemble",
+              2
+            ],
+            [
+              "Synthetic Adventure",
+              2
+            ]
+          ]
+        },
+        "style_profile": {
+          "caption_statistics": {
+            "call_to_action_frequency": 0.0,
+            "common_openings": [
+              [
+                "which entrance wins",
+                1
+              ],
+              [
+                "he really thought",
+                1
+              ],
+              [
+                "no context just",
+                1
+              ],
+              [
+                "we all know",
+                1
+              ],
+              [
+                "a perfectly normal",
+                1
+              ],
+              [
+                "would you trust",
+                1
+              ],
+              [
+                "the face of",
+                1
+              ]
+            ],
+            "emoji_frequency": 0.0,
+            "exclamation_frequency": 0.142857,
+            "first_person_frequency": 0.142857,
+            "mean_uppercase_ratio": 0.044491,
+            "median_characters": 32.0,
+            "median_words": 5.0,
+            "question_frequency": 0.285714,
+            "repeated_bigrams": [],
+            "sample_size": 7,
+            "second_person_frequency": 0.142857,
+            "word_percentiles": {
+              "p10": 4.2,
+              "p25": 5.0,
+              "p75": 6.5,
+              "p90": 7.4
+            }
+          },
+          "dominant_caption_structures": [
+            [
+              "direct question",
+              2
+            ],
+            [
+              "short statement",
+              2
+            ],
+            [
+              "long statement",
+              1
+            ],
+            [
+              "first-person reaction",
+              1
+            ],
+            [
+              "exclamatory statement",
+              1
+            ]
+          ],
+          "recent_overuse_rules": {
+            "avoid_consecutive_composition": true,
+            "avoid_consecutive_franchise": true,
+            "duplicate_window_days": 180
+          },
+          "summary": "Fixture Qlob style favors compact, playful reaction captions near 5.0 words, with questions used selectively and images framed around one clear emotional beat."
+        },
+        "style_profile_version": 1,
+        "visual_examples": [
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.954512
+          },
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.940124
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.924466
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.915125
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.913778
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.906773
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "media_asset_id": 8,
+            "media_url": "/media/historical/71165b9683e874ee801b2466f86dddbbbb3fe268190e1af11fb360e195d6f385.jpg",
+            "post_id": 10,
+            "published_at": null,
+            "visual_similarity": 0.899963
+          }
+        ]
+      },
+      "runtime": {
+        "abstained": false,
+        "error": null,
+        "latency_ms": 70.1,
+        "model": "deterministic-fixture-v1",
+        "prompt_version": "captions-v3",
+        "provider": "mock",
+        "token_usage": {}
+      },
+      "split": "development"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-01",
+      "displayed_captions": [
+        "Why is Fixture so surprised?",
+        "That suspicious silence says everything.",
+        "That escalated with impressive speed."
+      ],
+      "duplicate": {
+        "closest_historical_matches": [
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.956603
+          },
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.952347
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.935269
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.933121
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.932227
+          }
+        ],
+        "hard_rejection_reason": null,
+        "novelty_score": 0.361642
+      },
+      "generated_pool": [
+        {
+          "structure": "open_question",
+          "text": "What happened right before this?"
+        },
+        {
+          "structure": "open_question",
+          "text": "How did the plan get this far?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What is everyone looking at?"
+        },
+        {
+          "structure": "open_question",
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "structure": "observation",
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "structure": "observation",
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "structure": "observation",
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "structure": "reaction",
+          "text": "The face of someone who learned nothing."
+        },
+        {
+          "structure": "reaction",
+          "text": "This should end well."
+        }
+      ],
+      "grounding": {
+        "factual_uncertainty_warning": null,
+        "selected": [
+          {
+            "grounded": true,
+            "text": "Why is Fixture so surprised?"
+          },
+          {
+            "grounded": false,
+            "text": "That suspicious silence says everything."
+          },
+          {
+            "grounded": false,
+            "text": "That escalated with impressive speed."
+          }
+        ]
+      },
+      "input": {
+        "candidate_analysis": {
+          "caption_potential": 0.81,
+          "characters": [
+            "Fixture candidate 2"
+          ],
+          "composition": "centered",
+          "confidence": 0.9,
+          "emotion": "surprise",
+          "fan_art_probability": 0.0,
+          "franchise": "Synthetic Adventure",
+          "personal_artwork_probability": 0.0,
+          "scene_archetype": "reaction",
+          "text_overlay": false,
+          "unsafe_probability": 0.0,
+          "watermark_probability": 0.02
+        },
+        "channel": "Qlob",
+        "image": {
+          "fixture_uri": "fixture://candidate-01",
+          "height": 580,
+          "rights_status": "creator_owned",
+          "source_domain": "fixture.local",
+          "width": 800
+        },
+        "profile_version": 1
+      },
+      "ranking": [
+        {
+          "grounded": true,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.850929,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.954558,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "Why is Fixture so surprised?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.90755,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.842485,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What is everyone looking at?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.798992,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.827287,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What happened right before this?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.748024,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.820152,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What has everyone so interested?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.899496,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.81308,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "Why does this feel like trouble?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.770868,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "How would you explain this scene?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.765221,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did things get to this point?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.72265,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.751847,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did the plan get this far?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.740818,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.891535,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.733572,
+          "structure": "open_question",
+          "style_score": 0.557858,
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.502159,
+          "structure": "observation",
+          "style_score": 0.914286,
+          "text": "That suspicious silence says everything."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.701858,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.475974,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "That escalated with impressive speed."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.473881,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.463982,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.461432,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "Moments before the plan changed."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.818731,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.886039,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.448104,
+          "structure": "reaction",
+          "style_score": 0.805524,
+          "text": "This should end well."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.8443,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.431164,
+          "structure": "observation",
+          "style_score": 0.716478,
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.427108,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.372757,
+          "structure": "reaction",
+          "style_score": 0.716478,
+          "text": "The face of someone who learned nothing."
+        }
+      ],
+      "recommendation": "Why is Fixture so surprised?",
+      "retrieval": {
+        "caption_style_examples": [
+          {
+            "caption": "Would you trust this plan?",
+            "evidence": "visual_match",
+            "post_id": 11
+          },
+          {
+            "caption": "We all know who caused this.",
+            "evidence": "visual_match",
+            "post_id": 7
+          },
+          {
+            "caption": "Which entrance wins?",
+            "evidence": "visual_match",
+            "post_id": 2
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "evidence": "visual_match",
+            "post_id": 12
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "evidence": "channel_style",
+            "post_id": 10,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "evidence": "channel_style",
+            "post_id": 6,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "evidence": "channel_style",
+            "post_id": 5,
+            "style_score": 0.643573
+          }
+        ],
+        "feedback_context": {
+          "editorial_policy": {
+            "avoid_generic_engagement_bait": true,
+            "avoid_yes_no_questions": true,
+            "primary_goal": "open-ended questions that invite community discussion",
+            "recommended_structure": "open_question",
+            "required_option_mix": {
+              "observation": 1,
+              "open_question": 1,
+              "reaction": 1
+            }
+          },
+          "learned_preferences": {
+            "common_feedback_reasons": [],
+            "positive_feedback_count": 0,
+            "preferred_structures": []
+          },
+          "negative_examples": [],
+          "positive_examples": []
+        },
+        "negative_examples": [],
+        "recent_180_day_exclusions": [
+          {
+            "media_asset_id": 2,
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717+00:00"
+          }
+        ],
+        "rotation_state": {
+          "characters": [
+            [
+              "Fixture character 3",
+              3
+            ],
+            [
+              "Fixture character 1",
+              2
+            ],
+            [
+              "Fixture character 2",
+              2
+            ]
+          ],
+          "franchises": [
+            [
+              "Synthetic Comedy",
+              3
+            ],
+            [
+              "Synthetic Ensemble",
+              2
+            ],
+            [
+              "Synthetic Adventure",
+              2
+            ]
+          ]
+        },
+        "style_profile": {
+          "caption_statistics": {
+            "call_to_action_frequency": 0.0,
+            "common_openings": [
+              [
+                "which entrance wins",
+                1
+              ],
+              [
+                "he really thought",
+                1
+              ],
+              [
+                "no context just",
+                1
+              ],
+              [
+                "we all know",
+                1
+              ],
+              [
+                "a perfectly normal",
+                1
+              ],
+              [
+                "would you trust",
+                1
+              ],
+              [
+                "the face of",
+                1
+              ]
+            ],
+            "emoji_frequency": 0.0,
+            "exclamation_frequency": 0.142857,
+            "first_person_frequency": 0.142857,
+            "mean_uppercase_ratio": 0.044491,
+            "median_characters": 32.0,
+            "median_words": 5.0,
+            "question_frequency": 0.285714,
+            "repeated_bigrams": [],
+            "sample_size": 7,
+            "second_person_frequency": 0.142857,
+            "word_percentiles": {
+              "p10": 4.2,
+              "p25": 5.0,
+              "p75": 6.5,
+              "p90": 7.4
+            }
+          },
+          "dominant_caption_structures": [
+            [
+              "direct question",
+              2
+            ],
+            [
+              "short statement",
+              2
+            ],
+            [
+              "long statement",
+              1
+            ],
+            [
+              "first-person reaction",
+              1
+            ],
+            [
+              "exclamatory statement",
+              1
+            ]
+          ],
+          "recent_overuse_rules": {
+            "avoid_consecutive_composition": true,
+            "avoid_consecutive_franchise": true,
+            "duplicate_window_days": 180
+          },
+          "summary": "Fixture Qlob style favors compact, playful reaction captions near 5.0 words, with questions used selectively and images framed around one clear emotional beat."
+        },
+        "style_profile_version": 1,
+        "visual_examples": [
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.956603
+          },
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.952347
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.935269
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.933121
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.932227
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.927679
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "media_asset_id": 8,
+            "media_url": "/media/historical/71165b9683e874ee801b2466f86dddbbbb3fe268190e1af11fb360e195d6f385.jpg",
+            "post_id": 10,
+            "published_at": null,
+            "visual_similarity": 0.923217
+          }
+        ]
+      },
+      "runtime": {
+        "abstained": false,
+        "error": null,
+        "latency_ms": 68.697,
+        "model": "deterministic-fixture-v1",
+        "prompt_version": "captions-v3",
+        "provider": "mock",
+        "token_usage": {}
+      },
+      "split": "development"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-09",
+      "displayed_captions": [
+        "Why is Fixture so confident?",
+        "That suspicious silence says everything.",
+        "That escalated with impressive speed."
+      ],
+      "duplicate": {
+        "closest_historical_matches": [
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.965315
+          },
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.962085
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.943971
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.937099
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.928495
+          }
+        ],
+        "hard_rejection_reason": null,
+        "novelty_score": 0.201025
+      },
+      "generated_pool": [
+        {
+          "structure": "open_question",
+          "text": "What happened right before this?"
+        },
+        {
+          "structure": "open_question",
+          "text": "How did the plan get this far?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What is everyone looking at?"
+        },
+        {
+          "structure": "open_question",
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "structure": "observation",
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "structure": "observation",
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "structure": "observation",
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "structure": "reaction",
+          "text": "The face of someone who learned nothing."
+        },
+        {
+          "structure": "reaction",
+          "text": "This should end well."
+        }
+      ],
+      "grounding": {
+        "factual_uncertainty_warning": null,
+        "selected": [
+          {
+            "grounded": true,
+            "text": "Why is Fixture so confident?"
+          },
+          {
+            "grounded": false,
+            "text": "That suspicious silence says everything."
+          },
+          {
+            "grounded": false,
+            "text": "That escalated with impressive speed."
+          }
+        ]
+      },
+      "input": {
+        "candidate_analysis": {
+          "caption_potential": 0.9,
+          "characters": [
+            "Fixture candidate 3"
+          ],
+          "composition": "centered",
+          "confidence": 0.9,
+          "emotion": "determination",
+          "fan_art_probability": 0.0,
+          "franchise": "Synthetic Ensemble",
+          "personal_artwork_probability": 0.0,
+          "scene_archetype": "reaction",
+          "text_overlay": false,
+          "unsafe_probability": 0.0,
+          "watermark_probability": 0.02
+        },
+        "channel": "Qlob",
+        "image": {
+          "fixture_uri": "fixture://candidate-09",
+          "height": 580,
+          "rights_status": "creator_owned",
+          "source_domain": "fixture.local",
+          "width": 720
+        },
+        "profile_version": 1
+      },
+      "ranking": [
+        {
+          "grounded": true,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.913934,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.963379,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "Why is Fixture so confident?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.90755,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.842485,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What is everyone looking at?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.798992,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.827287,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What happened right before this?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.748024,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.820152,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What has everyone so interested?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.899496,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.81308,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "Why does this feel like trouble?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.770868,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "How would you explain this scene?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.765221,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did things get to this point?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.72265,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.751847,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did the plan get this far?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.740818,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.891535,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.733572,
+          "structure": "open_question",
+          "style_score": 0.557858,
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.502159,
+          "structure": "observation",
+          "style_score": 0.914286,
+          "text": "That suspicious silence says everything."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.701858,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.475974,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "That escalated with impressive speed."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.473881,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.463982,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.461432,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "Moments before the plan changed."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.818731,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.886039,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.448104,
+          "structure": "reaction",
+          "style_score": 0.805524,
+          "text": "This should end well."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.8443,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.431164,
+          "structure": "observation",
+          "style_score": 0.716478,
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.427108,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.372757,
+          "structure": "reaction",
+          "style_score": 0.716478,
+          "text": "The face of someone who learned nothing."
+        }
+      ],
+      "recommendation": "Why is Fixture so confident?",
+      "retrieval": {
+        "caption_style_examples": [
+          {
+            "caption": "Would you trust this plan?",
+            "evidence": "visual_match",
+            "post_id": 11
+          },
+          {
+            "caption": "We all know who caused this.",
+            "evidence": "visual_match",
+            "post_id": 7
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "evidence": "visual_match",
+            "post_id": 12
+          },
+          {
+            "caption": "Which entrance wins?",
+            "evidence": "visual_match",
+            "post_id": 2
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "evidence": "channel_style",
+            "post_id": 10,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "evidence": "channel_style",
+            "post_id": 6,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "evidence": "channel_style",
+            "post_id": 5,
+            "style_score": 0.643573
+          }
+        ],
+        "feedback_context": {
+          "editorial_policy": {
+            "avoid_generic_engagement_bait": true,
+            "avoid_yes_no_questions": true,
+            "primary_goal": "open-ended questions that invite community discussion",
+            "recommended_structure": "open_question",
+            "required_option_mix": {
+              "observation": 1,
+              "open_question": 1,
+              "reaction": 1
+            }
+          },
+          "learned_preferences": {
+            "common_feedback_reasons": [],
+            "positive_feedback_count": 0,
+            "preferred_structures": []
+          },
+          "negative_examples": [],
+          "positive_examples": []
+        },
+        "negative_examples": [],
+        "recent_180_day_exclusions": [
+          {
+            "media_asset_id": 2,
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717+00:00"
+          }
+        ],
+        "rotation_state": {
+          "characters": [
+            [
+              "Fixture character 3",
+              3
+            ],
+            [
+              "Fixture character 1",
+              2
+            ],
+            [
+              "Fixture character 2",
+              2
+            ]
+          ],
+          "franchises": [
+            [
+              "Synthetic Comedy",
+              3
+            ],
+            [
+              "Synthetic Ensemble",
+              2
+            ],
+            [
+              "Synthetic Adventure",
+              2
+            ]
+          ]
+        },
+        "style_profile": {
+          "caption_statistics": {
+            "call_to_action_frequency": 0.0,
+            "common_openings": [
+              [
+                "which entrance wins",
+                1
+              ],
+              [
+                "he really thought",
+                1
+              ],
+              [
+                "no context just",
+                1
+              ],
+              [
+                "we all know",
+                1
+              ],
+              [
+                "a perfectly normal",
+                1
+              ],
+              [
+                "would you trust",
+                1
+              ],
+              [
+                "the face of",
+                1
+              ]
+            ],
+            "emoji_frequency": 0.0,
+            "exclamation_frequency": 0.142857,
+            "first_person_frequency": 0.142857,
+            "mean_uppercase_ratio": 0.044491,
+            "median_characters": 32.0,
+            "median_words": 5.0,
+            "question_frequency": 0.285714,
+            "repeated_bigrams": [],
+            "sample_size": 7,
+            "second_person_frequency": 0.142857,
+            "word_percentiles": {
+              "p10": 4.2,
+              "p25": 5.0,
+              "p75": 6.5,
+              "p90": 7.4
+            }
+          },
+          "dominant_caption_structures": [
+            [
+              "direct question",
+              2
+            ],
+            [
+              "short statement",
+              2
+            ],
+            [
+              "long statement",
+              1
+            ],
+            [
+              "first-person reaction",
+              1
+            ],
+            [
+              "exclamatory statement",
+              1
+            ]
+          ],
+          "recent_overuse_rules": {
+            "avoid_consecutive_composition": true,
+            "avoid_consecutive_franchise": true,
+            "duplicate_window_days": 180
+          },
+          "summary": "Fixture Qlob style favors compact, playful reaction captions near 5.0 words, with questions used selectively and images framed around one clear emotional beat."
+        },
+        "style_profile_version": 1,
+        "visual_examples": [
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.965315
+          },
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.962085
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.943971
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.937099
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.928495
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.918632
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "media_asset_id": 8,
+            "media_url": "/media/historical/71165b9683e874ee801b2466f86dddbbbb3fe268190e1af11fb360e195d6f385.jpg",
+            "post_id": 10,
+            "published_at": null,
+            "visual_similarity": 0.913472
+          }
+        ]
+      },
+      "runtime": {
+        "abstained": false,
+        "error": null,
+        "latency_ms": 69.917,
+        "model": "deterministic-fixture-v1",
+        "prompt_version": "captions-v3",
+        "provider": "mock",
+        "token_usage": {}
+      },
+      "split": "tuning"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-19",
+      "displayed_captions": [
+        "Why is Fixture so surprised?",
+        "That suspicious silence says everything.",
+        "That escalated with impressive speed."
+      ],
+      "duplicate": {
+        "closest_historical_matches": [
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.959406
+          },
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.958282
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.944373
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.943819
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.941928
+          }
+        ],
+        "hard_rejection_reason": null,
+        "novelty_score": 0.099967
+      },
+      "generated_pool": [
+        {
+          "structure": "open_question",
+          "text": "What is everyone looking at?"
+        },
+        {
+          "structure": "open_question",
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What happened right before this?"
+        },
+        {
+          "structure": "open_question",
+          "text": "How did the plan get this far?"
+        },
+        {
+          "structure": "observation",
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "structure": "observation",
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "structure": "observation",
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "structure": "reaction",
+          "text": "The face of someone who learned nothing."
+        },
+        {
+          "structure": "reaction",
+          "text": "This should end well."
+        }
+      ],
+      "grounding": {
+        "factual_uncertainty_warning": null,
+        "selected": [
+          {
+            "grounded": true,
+            "text": "Why is Fixture so surprised?"
+          },
+          {
+            "grounded": false,
+            "text": "That suspicious silence says everything."
+          },
+          {
+            "grounded": false,
+            "text": "That escalated with impressive speed."
+          }
+        ]
+      },
+      "input": {
+        "candidate_analysis": {
+          "caption_potential": 0.9,
+          "characters": [
+            "Fixture candidate 6"
+          ],
+          "composition": "centered",
+          "confidence": 0.9,
+          "emotion": "surprise",
+          "fan_art_probability": 0.0,
+          "franchise": "Synthetic Adventure",
+          "personal_artwork_probability": 0.0,
+          "scene_archetype": "reaction",
+          "text_overlay": false,
+          "unsafe_probability": 0.0,
+          "watermark_probability": 0.02
+        },
+        "channel": "Qlob",
+        "image": {
+          "fixture_uri": "fixture://candidate-19",
+          "height": 660,
+          "rights_status": "creator_owned",
+          "source_domain": "fixture.local",
+          "width": 800
+        },
+        "profile_version": 1
+      },
+      "ranking": [
+        {
+          "grounded": true,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.850929,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.954558,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "Why is Fixture so surprised?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.90755,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.842485,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What is everyone looking at?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.798992,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.827287,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What happened right before this?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.748024,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.820152,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What has everyone so interested?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.899496,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.81308,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "Why does this feel like trouble?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.770868,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "How would you explain this scene?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.765221,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did things get to this point?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.72265,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.751847,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did the plan get this far?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.740818,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.891535,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.733572,
+          "structure": "open_question",
+          "style_score": 0.557858,
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.502159,
+          "structure": "observation",
+          "style_score": 0.914286,
+          "text": "That suspicious silence says everything."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.701858,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.475974,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "That escalated with impressive speed."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.473881,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.463982,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.461432,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "Moments before the plan changed."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.818731,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.886039,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.448104,
+          "structure": "reaction",
+          "style_score": 0.805524,
+          "text": "This should end well."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.8443,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.431164,
+          "structure": "observation",
+          "style_score": 0.716478,
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.427108,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.372757,
+          "structure": "reaction",
+          "style_score": 0.716478,
+          "text": "The face of someone who learned nothing."
+        }
+      ],
+      "recommendation": "Why is Fixture so surprised?",
+      "retrieval": {
+        "caption_style_examples": [
+          {
+            "caption": "Would you trust this plan?",
+            "evidence": "visual_match",
+            "post_id": 11
+          },
+          {
+            "caption": "We all know who caused this.",
+            "evidence": "visual_match",
+            "post_id": 7
+          },
+          {
+            "caption": "Which entrance wins?",
+            "evidence": "visual_match",
+            "post_id": 2
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "evidence": "visual_match",
+            "post_id": 5
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "evidence": "channel_style",
+            "post_id": 10,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "evidence": "channel_style",
+            "post_id": 6,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "evidence": "channel_style",
+            "post_id": 12,
+            "style_score": 0.573621
+          }
+        ],
+        "feedback_context": {
+          "editorial_policy": {
+            "avoid_generic_engagement_bait": true,
+            "avoid_yes_no_questions": true,
+            "primary_goal": "open-ended questions that invite community discussion",
+            "recommended_structure": "open_question",
+            "required_option_mix": {
+              "observation": 1,
+              "open_question": 1,
+              "reaction": 1
+            }
+          },
+          "learned_preferences": {
+            "common_feedback_reasons": [],
+            "positive_feedback_count": 0,
+            "preferred_structures": []
+          },
+          "negative_examples": [],
+          "positive_examples": []
+        },
+        "negative_examples": [],
+        "recent_180_day_exclusions": [
+          {
+            "media_asset_id": 2,
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717+00:00"
+          }
+        ],
+        "rotation_state": {
+          "characters": [
+            [
+              "Fixture character 3",
+              3
+            ],
+            [
+              "Fixture character 1",
+              2
+            ],
+            [
+              "Fixture character 2",
+              2
+            ]
+          ],
+          "franchises": [
+            [
+              "Synthetic Comedy",
+              3
+            ],
+            [
+              "Synthetic Ensemble",
+              2
+            ],
+            [
+              "Synthetic Adventure",
+              2
+            ]
+          ]
+        },
+        "style_profile": {
+          "caption_statistics": {
+            "call_to_action_frequency": 0.0,
+            "common_openings": [
+              [
+                "which entrance wins",
+                1
+              ],
+              [
+                "he really thought",
+                1
+              ],
+              [
+                "no context just",
+                1
+              ],
+              [
+                "we all know",
+                1
+              ],
+              [
+                "a perfectly normal",
+                1
+              ],
+              [
+                "would you trust",
+                1
+              ],
+              [
+                "the face of",
+                1
+              ]
+            ],
+            "emoji_frequency": 0.0,
+            "exclamation_frequency": 0.142857,
+            "first_person_frequency": 0.142857,
+            "mean_uppercase_ratio": 0.044491,
+            "median_characters": 32.0,
+            "median_words": 5.0,
+            "question_frequency": 0.285714,
+            "repeated_bigrams": [],
+            "sample_size": 7,
+            "second_person_frequency": 0.142857,
+            "word_percentiles": {
+              "p10": 4.2,
+              "p25": 5.0,
+              "p75": 6.5,
+              "p90": 7.4
+            }
+          },
+          "dominant_caption_structures": [
+            [
+              "direct question",
+              2
+            ],
+            [
+              "short statement",
+              2
+            ],
+            [
+              "long statement",
+              1
+            ],
+            [
+              "first-person reaction",
+              1
+            ],
+            [
+              "exclamatory statement",
+              1
+            ]
+          ],
+          "recent_overuse_rules": {
+            "avoid_consecutive_composition": true,
+            "avoid_consecutive_franchise": true,
+            "duplicate_window_days": 180
+          },
+          "summary": "Fixture Qlob style favors compact, playful reaction captions near 5.0 words, with questions used selectively and images framed around one clear emotional beat."
+        },
+        "style_profile_version": 1,
+        "visual_examples": [
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.959406
+          },
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.958282
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.944373
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.943819
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.941928
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "media_asset_id": 8,
+            "media_url": "/media/historical/71165b9683e874ee801b2466f86dddbbbb3fe268190e1af11fb360e195d6f385.jpg",
+            "post_id": 10,
+            "published_at": null,
+            "visual_similarity": 0.935717
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.935081
+          }
+        ]
+      },
+      "runtime": {
+        "abstained": false,
+        "error": null,
+        "latency_ms": 71.449,
+        "model": "deterministic-fixture-v1",
+        "prompt_version": "captions-v3",
+        "provider": "mock",
+        "token_usage": {}
+      },
+      "split": "tuning"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-17",
+      "displayed_captions": [
+        "Why is Fixture so surprised?",
+        "That suspicious silence says everything.",
+        "That escalated with impressive speed."
+      ],
+      "duplicate": {
+        "closest_historical_matches": [
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.962202
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.961787
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.950257
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.942382
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.937388
+          }
+        ],
+        "hard_rejection_reason": null,
+        "novelty_score": 0.171067
+      },
+      "generated_pool": [
+        {
+          "structure": "open_question",
+          "text": "What happened right before this?"
+        },
+        {
+          "structure": "open_question",
+          "text": "How did the plan get this far?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What is everyone looking at?"
+        },
+        {
+          "structure": "open_question",
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "structure": "observation",
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "structure": "observation",
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "structure": "observation",
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "structure": "reaction",
+          "text": "The face of someone who learned nothing."
+        },
+        {
+          "structure": "reaction",
+          "text": "This should end well."
+        }
+      ],
+      "grounding": {
+        "factual_uncertainty_warning": null,
+        "selected": [
+          {
+            "grounded": true,
+            "text": "Why is Fixture so surprised?"
+          },
+          {
+            "grounded": false,
+            "text": "That suspicious silence says everything."
+          },
+          {
+            "grounded": false,
+            "text": "That escalated with impressive speed."
+          }
+        ]
+      },
+      "input": {
+        "candidate_analysis": {
+          "caption_potential": 0.8400000000000001,
+          "characters": [
+            "Fixture candidate 4"
+          ],
+          "composition": "centered",
+          "confidence": 0.9,
+          "emotion": "surprise",
+          "fan_art_probability": 0.0,
+          "franchise": "Synthetic Comedy",
+          "personal_artwork_probability": 0.0,
+          "scene_archetype": "reaction",
+          "text_overlay": false,
+          "unsafe_probability": 0.0,
+          "watermark_probability": 0.02
+        },
+        "channel": "Qlob",
+        "image": {
+          "fixture_uri": "fixture://candidate-17",
+          "height": 580,
+          "rights_status": "creator_owned",
+          "source_domain": "fixture.local",
+          "width": 880
+        },
+        "profile_version": 1
+      },
+      "ranking": [
+        {
+          "grounded": true,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.850929,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.954558,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "Why is Fixture so surprised?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.90755,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.842485,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What is everyone looking at?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.798992,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.827287,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What happened right before this?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.748024,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.820152,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What has everyone so interested?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.899496,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.81308,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "Why does this feel like trouble?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.770868,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "How would you explain this scene?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.765221,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did things get to this point?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.72265,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.751847,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did the plan get this far?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.740818,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.891535,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.733572,
+          "structure": "open_question",
+          "style_score": 0.557858,
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.502159,
+          "structure": "observation",
+          "style_score": 0.914286,
+          "text": "That suspicious silence says everything."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.701858,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.475974,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "That escalated with impressive speed."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.473881,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.463982,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.461432,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "Moments before the plan changed."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.818731,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.886039,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.448104,
+          "structure": "reaction",
+          "style_score": 0.805524,
+          "text": "This should end well."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.8443,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.431164,
+          "structure": "observation",
+          "style_score": 0.716478,
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.427108,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.372757,
+          "structure": "reaction",
+          "style_score": 0.716478,
+          "text": "The face of someone who learned nothing."
+        }
+      ],
+      "recommendation": "Why is Fixture so surprised?",
+      "retrieval": {
+        "caption_style_examples": [
+          {
+            "caption": "We all know who caused this.",
+            "evidence": "visual_match",
+            "post_id": 7
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "evidence": "visual_match",
+            "post_id": 11
+          },
+          {
+            "caption": "Which entrance wins?",
+            "evidence": "visual_match",
+            "post_id": 2
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "evidence": "visual_match",
+            "post_id": 5
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "evidence": "channel_style",
+            "post_id": 10,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "evidence": "channel_style",
+            "post_id": 6,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "evidence": "channel_style",
+            "post_id": 12,
+            "style_score": 0.573621
+          }
+        ],
+        "feedback_context": {
+          "editorial_policy": {
+            "avoid_generic_engagement_bait": true,
+            "avoid_yes_no_questions": true,
+            "primary_goal": "open-ended questions that invite community discussion",
+            "recommended_structure": "open_question",
+            "required_option_mix": {
+              "observation": 1,
+              "open_question": 1,
+              "reaction": 1
+            }
+          },
+          "learned_preferences": {
+            "common_feedback_reasons": [],
+            "positive_feedback_count": 0,
+            "preferred_structures": []
+          },
+          "negative_examples": [],
+          "positive_examples": []
+        },
+        "negative_examples": [],
+        "recent_180_day_exclusions": [
+          {
+            "media_asset_id": 2,
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717+00:00"
+          }
+        ],
+        "rotation_state": {
+          "characters": [
+            [
+              "Fixture character 3",
+              3
+            ],
+            [
+              "Fixture character 1",
+              2
+            ],
+            [
+              "Fixture character 2",
+              2
+            ]
+          ],
+          "franchises": [
+            [
+              "Synthetic Comedy",
+              3
+            ],
+            [
+              "Synthetic Ensemble",
+              2
+            ],
+            [
+              "Synthetic Adventure",
+              2
+            ]
+          ]
+        },
+        "style_profile": {
+          "caption_statistics": {
+            "call_to_action_frequency": 0.0,
+            "common_openings": [
+              [
+                "which entrance wins",
+                1
+              ],
+              [
+                "he really thought",
+                1
+              ],
+              [
+                "no context just",
+                1
+              ],
+              [
+                "we all know",
+                1
+              ],
+              [
+                "a perfectly normal",
+                1
+              ],
+              [
+                "would you trust",
+                1
+              ],
+              [
+                "the face of",
+                1
+              ]
+            ],
+            "emoji_frequency": 0.0,
+            "exclamation_frequency": 0.142857,
+            "first_person_frequency": 0.142857,
+            "mean_uppercase_ratio": 0.044491,
+            "median_characters": 32.0,
+            "median_words": 5.0,
+            "question_frequency": 0.285714,
+            "repeated_bigrams": [],
+            "sample_size": 7,
+            "second_person_frequency": 0.142857,
+            "word_percentiles": {
+              "p10": 4.2,
+              "p25": 5.0,
+              "p75": 6.5,
+              "p90": 7.4
+            }
+          },
+          "dominant_caption_structures": [
+            [
+              "direct question",
+              2
+            ],
+            [
+              "short statement",
+              2
+            ],
+            [
+              "long statement",
+              1
+            ],
+            [
+              "first-person reaction",
+              1
+            ],
+            [
+              "exclamatory statement",
+              1
+            ]
+          ],
+          "recent_overuse_rules": {
+            "avoid_consecutive_composition": true,
+            "avoid_consecutive_franchise": true,
+            "duplicate_window_days": 180
+          },
+          "summary": "Fixture Qlob style favors compact, playful reaction captions near 5.0 words, with questions used selectively and images framed around one clear emotional beat."
+        },
+        "style_profile_version": 1,
+        "visual_examples": [
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.962202
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.961787
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.950257
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.942382
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.937388
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.936321
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "media_asset_id": 8,
+            "media_url": "/media/historical/71165b9683e874ee801b2466f86dddbbbb3fe268190e1af11fb360e195d6f385.jpg",
+            "post_id": 10,
+            "published_at": null,
+            "visual_similarity": 0.922365
+          }
+        ]
+      },
+      "runtime": {
+        "abstained": false,
+        "error": null,
+        "latency_ms": 69.173,
+        "model": "deterministic-fixture-v1",
+        "prompt_version": "captions-v3",
+        "provider": "mock",
+        "token_usage": {}
+      },
+      "split": "tuning"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-03",
+      "displayed_captions": [
+        "Why is Fixture so confident?",
+        "That suspicious silence says everything.",
+        "That escalated with impressive speed."
+      ],
+      "duplicate": {
+        "closest_historical_matches": [
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.968946
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.960165
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.945421
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.944456
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.937313
+          }
+        ],
+        "hard_rejection_reason": null,
+        "novelty_score": 0.111092
+      },
+      "generated_pool": [
+        {
+          "structure": "open_question",
+          "text": "What is everyone looking at?"
+        },
+        {
+          "structure": "open_question",
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What happened right before this?"
+        },
+        {
+          "structure": "open_question",
+          "text": "How did the plan get this far?"
+        },
+        {
+          "structure": "observation",
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "structure": "observation",
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "structure": "observation",
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "structure": "reaction",
+          "text": "The face of someone who learned nothing."
+        },
+        {
+          "structure": "reaction",
+          "text": "This should end well."
+        }
+      ],
+      "grounding": {
+        "factual_uncertainty_warning": null,
+        "selected": [
+          {
+            "grounded": true,
+            "text": "Why is Fixture so confident?"
+          },
+          {
+            "grounded": false,
+            "text": "That suspicious silence says everything."
+          },
+          {
+            "grounded": false,
+            "text": "That escalated with impressive speed."
+          }
+        ]
+      },
+      "input": {
+        "candidate_analysis": {
+          "caption_potential": 0.87,
+          "characters": [
+            "Fixture candidate 4"
+          ],
+          "composition": "centered",
+          "confidence": 0.9,
+          "emotion": "determination",
+          "fan_art_probability": 0.0,
+          "franchise": "Synthetic Ensemble",
+          "personal_artwork_probability": 0.0,
+          "scene_archetype": "reaction",
+          "text_overlay": false,
+          "unsafe_probability": 0.0,
+          "watermark_probability": 0.02
+        },
+        "channel": "Qlob",
+        "image": {
+          "fixture_uri": "fixture://candidate-03",
+          "height": 660,
+          "rights_status": "creator_owned",
+          "source_domain": "fixture.local",
+          "width": 720
+        },
+        "profile_version": 1
+      },
+      "ranking": [
+        {
+          "grounded": true,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.913934,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.963379,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "Why is Fixture so confident?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.90755,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.842485,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What is everyone looking at?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.798992,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.827287,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What happened right before this?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.748024,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.820152,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What has everyone so interested?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.899496,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.81308,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "Why does this feel like trouble?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.770868,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "How would you explain this scene?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.765221,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did things get to this point?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.72265,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.751847,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did the plan get this far?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.740818,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.891535,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.733572,
+          "structure": "open_question",
+          "style_score": 0.557858,
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.502159,
+          "structure": "observation",
+          "style_score": 0.914286,
+          "text": "That suspicious silence says everything."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.701858,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.475974,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "That escalated with impressive speed."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.473881,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.463982,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.461432,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "Moments before the plan changed."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.818731,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.886039,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.448104,
+          "structure": "reaction",
+          "style_score": 0.805524,
+          "text": "This should end well."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.8443,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.431164,
+          "structure": "observation",
+          "style_score": 0.716478,
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.427108,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.372757,
+          "structure": "reaction",
+          "style_score": 0.716478,
+          "text": "The face of someone who learned nothing."
+        }
+      ],
+      "recommendation": "Why is Fixture so confident?",
+      "retrieval": {
+        "caption_style_examples": [
+          {
+            "caption": "We all know who caused this.",
+            "evidence": "visual_match",
+            "post_id": 7
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "evidence": "visual_match",
+            "post_id": 11
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "evidence": "visual_match",
+            "post_id": 12
+          },
+          {
+            "caption": "Which entrance wins?",
+            "evidence": "visual_match",
+            "post_id": 2
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "evidence": "channel_style",
+            "post_id": 10,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "evidence": "channel_style",
+            "post_id": 6,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "evidence": "channel_style",
+            "post_id": 5,
+            "style_score": 0.643573
+          }
+        ],
+        "feedback_context": {
+          "editorial_policy": {
+            "avoid_generic_engagement_bait": true,
+            "avoid_yes_no_questions": true,
+            "primary_goal": "open-ended questions that invite community discussion",
+            "recommended_structure": "open_question",
+            "required_option_mix": {
+              "observation": 1,
+              "open_question": 1,
+              "reaction": 1
+            }
+          },
+          "learned_preferences": {
+            "common_feedback_reasons": [],
+            "positive_feedback_count": 0,
+            "preferred_structures": []
+          },
+          "negative_examples": [],
+          "positive_examples": []
+        },
+        "negative_examples": [],
+        "recent_180_day_exclusions": [
+          {
+            "media_asset_id": 2,
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717+00:00"
+          }
+        ],
+        "rotation_state": {
+          "characters": [
+            [
+              "Fixture character 3",
+              3
+            ],
+            [
+              "Fixture character 1",
+              2
+            ],
+            [
+              "Fixture character 2",
+              2
+            ]
+          ],
+          "franchises": [
+            [
+              "Synthetic Comedy",
+              3
+            ],
+            [
+              "Synthetic Ensemble",
+              2
+            ],
+            [
+              "Synthetic Adventure",
+              2
+            ]
+          ]
+        },
+        "style_profile": {
+          "caption_statistics": {
+            "call_to_action_frequency": 0.0,
+            "common_openings": [
+              [
+                "which entrance wins",
+                1
+              ],
+              [
+                "he really thought",
+                1
+              ],
+              [
+                "no context just",
+                1
+              ],
+              [
+                "we all know",
+                1
+              ],
+              [
+                "a perfectly normal",
+                1
+              ],
+              [
+                "would you trust",
+                1
+              ],
+              [
+                "the face of",
+                1
+              ]
+            ],
+            "emoji_frequency": 0.0,
+            "exclamation_frequency": 0.142857,
+            "first_person_frequency": 0.142857,
+            "mean_uppercase_ratio": 0.044491,
+            "median_characters": 32.0,
+            "median_words": 5.0,
+            "question_frequency": 0.285714,
+            "repeated_bigrams": [],
+            "sample_size": 7,
+            "second_person_frequency": 0.142857,
+            "word_percentiles": {
+              "p10": 4.2,
+              "p25": 5.0,
+              "p75": 6.5,
+              "p90": 7.4
+            }
+          },
+          "dominant_caption_structures": [
+            [
+              "direct question",
+              2
+            ],
+            [
+              "short statement",
+              2
+            ],
+            [
+              "long statement",
+              1
+            ],
+            [
+              "first-person reaction",
+              1
+            ],
+            [
+              "exclamatory statement",
+              1
+            ]
+          ],
+          "recent_overuse_rules": {
+            "avoid_consecutive_composition": true,
+            "avoid_consecutive_franchise": true,
+            "duplicate_window_days": 180
+          },
+          "summary": "Fixture Qlob style favors compact, playful reaction captions near 5.0 words, with questions used selectively and images framed around one clear emotional beat."
+        },
+        "style_profile_version": 1,
+        "visual_examples": [
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.968946
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.960165
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.945421
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.944456
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.937313
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "media_asset_id": 8,
+            "media_url": "/media/historical/71165b9683e874ee801b2466f86dddbbbb3fe268190e1af11fb360e195d6f385.jpg",
+            "post_id": 10,
+            "published_at": null,
+            "visual_similarity": 0.933726
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.925462
+          }
+        ]
+      },
+      "runtime": {
+        "abstained": false,
+        "error": null,
+        "latency_ms": 68.835,
+        "model": "deterministic-fixture-v1",
+        "prompt_version": "captions-v3",
+        "provider": "mock",
+        "token_usage": {}
+      },
+      "split": "locked_holdout"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-27",
+      "displayed_captions": [
+        "Why is Fixture so confident?",
+        "That suspicious silence says everything.",
+        "That escalated with impressive speed."
+      ],
+      "duplicate": {
+        "closest_historical_matches": [
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.980115
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.967921
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.96215
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.957274
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.949217
+          }
+        ],
+        "hard_rejection_reason": null,
+        "novelty_score": 0.116858
+      },
+      "generated_pool": [
+        {
+          "structure": "open_question",
+          "text": "What is everyone looking at?"
+        },
+        {
+          "structure": "open_question",
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "structure": "open_question",
+          "text": "What happened right before this?"
+        },
+        {
+          "structure": "open_question",
+          "text": "How did the plan get this far?"
+        },
+        {
+          "structure": "observation",
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "structure": "observation",
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "structure": "observation",
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "structure": "reaction",
+          "text": "The face of someone who learned nothing."
+        },
+        {
+          "structure": "reaction",
+          "text": "This should end well."
+        }
+      ],
+      "grounding": {
+        "factual_uncertainty_warning": null,
+        "selected": [
+          {
+            "grounded": true,
+            "text": "Why is Fixture so confident?"
+          },
+          {
+            "grounded": false,
+            "text": "That suspicious silence says everything."
+          },
+          {
+            "grounded": false,
+            "text": "That escalated with impressive speed."
+          }
+        ]
+      },
+      "input": {
+        "candidate_analysis": {
+          "caption_potential": 0.8400000000000001,
+          "characters": [
+            "Fixture candidate 7"
+          ],
+          "composition": "centered",
+          "confidence": 0.9,
+          "emotion": "determination",
+          "fan_art_probability": 0.0,
+          "franchise": "Synthetic Ensemble",
+          "personal_artwork_probability": 0.0,
+          "scene_archetype": "reaction",
+          "text_overlay": false,
+          "unsafe_probability": 0.0,
+          "watermark_probability": 0.02
+        },
+        "channel": "Qlob",
+        "image": {
+          "fixture_uri": "fixture://candidate-27",
+          "height": 660,
+          "rights_status": "creator_owned",
+          "source_domain": "fixture.local",
+          "width": 720
+        },
+        "profile_version": 1
+      },
+      "ranking": [
+        {
+          "grounded": true,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.913934,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.963379,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "Why is Fixture so confident?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.90755,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.842485,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What is everyone looking at?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.798992,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.827287,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What happened right before this?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.748024,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.820152,
+          "structure": "open_question",
+          "style_score": 0.828571,
+          "text": "What has everyone so interested?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.899496,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.81308,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "Why does this feel like trouble?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.770868,
+          "structure": "open_question",
+          "style_score": 0.71981,
+          "text": "How would you explain this scene?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.765221,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did things get to this point?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.72265,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.751847,
+          "structure": "open_question",
+          "style_score": 0.630763,
+          "text": "How did the plan get this far?"
+        },
+        {
+          "grounded": false,
+          "length_score": 0.740818,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.891535,
+          "open_question": true,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.733572,
+          "structure": "open_question",
+          "style_score": 0.557858,
+          "text": "Why does this feel like a bad idea?"
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.502159,
+          "structure": "observation",
+          "style_score": 0.914286,
+          "text": "That suspicious silence says everything."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.701858,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.475974,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "That escalated with impressive speed."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.888889,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.473881,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "Everyone saw that coming except him."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.818182,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.463982,
+          "structure": "observation",
+          "style_score": 0.805524,
+          "text": "That confidence lasted exactly three seconds."
+        },
+        {
+          "grounded": false,
+          "length_score": 1.0,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.597985,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.461432,
+          "structure": "reaction",
+          "style_score": 0.914286,
+          "text": "Moments before the plan changed."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.818731,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.886039,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.448104,
+          "structure": "reaction",
+          "style_score": 0.805524,
+          "text": "This should end well."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.8443,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.431164,
+          "structure": "observation",
+          "style_score": 0.716478,
+          "text": "A completely normal amount of dramatic tension."
+        },
+        {
+          "grounded": false,
+          "length_score": 0.904837,
+          "negative_feedback_similarity": 0.0,
+          "novelty_score": 0.427108,
+          "open_question": false,
+          "penalties": {
+            "generic": 0.0,
+            "negative_feedback": 0.0,
+            "yes_no_question": 0.0
+          },
+          "positive_feedback_similarity": 0.0,
+          "score": 0.372757,
+          "structure": "reaction",
+          "style_score": 0.716478,
+          "text": "The face of someone who learned nothing."
+        }
+      ],
+      "recommendation": "Why is Fixture so confident?",
+      "retrieval": {
+        "caption_style_examples": [
+          {
+            "caption": "We all know who caused this.",
+            "evidence": "visual_match",
+            "post_id": 7
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "evidence": "visual_match",
+            "post_id": 11
+          },
+          {
+            "caption": "Which entrance wins?",
+            "evidence": "visual_match",
+            "post_id": 2
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "evidence": "visual_match",
+            "post_id": 5
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "evidence": "channel_style",
+            "post_id": 10,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "evidence": "channel_style",
+            "post_id": 6,
+            "style_score": 0.914286
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "evidence": "channel_style",
+            "post_id": 12,
+            "style_score": 0.573621
+          }
+        ],
+        "feedback_context": {
+          "editorial_policy": {
+            "avoid_generic_engagement_bait": true,
+            "avoid_yes_no_questions": true,
+            "primary_goal": "open-ended questions that invite community discussion",
+            "recommended_structure": "open_question",
+            "required_option_mix": {
+              "observation": 1,
+              "open_question": 1,
+              "reaction": 1
+            }
+          },
+          "learned_preferences": {
+            "common_feedback_reasons": [],
+            "positive_feedback_count": 0,
+            "preferred_structures": []
+          },
+          "negative_examples": [],
+          "positive_examples": []
+        },
+        "negative_examples": [],
+        "recent_180_day_exclusions": [
+          {
+            "media_asset_id": 2,
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717+00:00"
+          }
+        ],
+        "rotation_state": {
+          "characters": [
+            [
+              "Fixture character 3",
+              3
+            ],
+            [
+              "Fixture character 1",
+              2
+            ],
+            [
+              "Fixture character 2",
+              2
+            ]
+          ],
+          "franchises": [
+            [
+              "Synthetic Comedy",
+              3
+            ],
+            [
+              "Synthetic Ensemble",
+              2
+            ],
+            [
+              "Synthetic Adventure",
+              2
+            ]
+          ]
+        },
+        "style_profile": {
+          "caption_statistics": {
+            "call_to_action_frequency": 0.0,
+            "common_openings": [
+              [
+                "which entrance wins",
+                1
+              ],
+              [
+                "he really thought",
+                1
+              ],
+              [
+                "no context just",
+                1
+              ],
+              [
+                "we all know",
+                1
+              ],
+              [
+                "a perfectly normal",
+                1
+              ],
+              [
+                "would you trust",
+                1
+              ],
+              [
+                "the face of",
+                1
+              ]
+            ],
+            "emoji_frequency": 0.0,
+            "exclamation_frequency": 0.142857,
+            "first_person_frequency": 0.142857,
+            "mean_uppercase_ratio": 0.044491,
+            "median_characters": 32.0,
+            "median_words": 5.0,
+            "question_frequency": 0.285714,
+            "repeated_bigrams": [],
+            "sample_size": 7,
+            "second_person_frequency": 0.142857,
+            "word_percentiles": {
+              "p10": 4.2,
+              "p25": 5.0,
+              "p75": 6.5,
+              "p90": 7.4
+            }
+          },
+          "dominant_caption_structures": [
+            [
+              "direct question",
+              2
+            ],
+            [
+              "short statement",
+              2
+            ],
+            [
+              "long statement",
+              1
+            ],
+            [
+              "first-person reaction",
+              1
+            ],
+            [
+              "exclamatory statement",
+              1
+            ]
+          ],
+          "recent_overuse_rules": {
+            "avoid_consecutive_composition": true,
+            "avoid_consecutive_franchise": true,
+            "duplicate_window_days": 180
+          },
+          "summary": "Fixture Qlob style favors compact, playful reaction captions near 5.0 words, with questions used selectively and images framed around one clear emotional beat."
+        },
+        "style_profile_version": 1,
+        "visual_examples": [
+          {
+            "caption": "We all know who caused this.",
+            "media_asset_id": 6,
+            "media_url": "/media/historical/fa845ff7a449aa88796d8a36a64bd94ac0ab3357db7be2954ce91cfa31f96760.jpg",
+            "post_id": 7,
+            "published_at": "2024-07-02T14:00:00",
+            "visual_similarity": 0.980115
+          },
+          {
+            "caption": "Would you trust this plan?",
+            "media_asset_id": 9,
+            "media_url": "/media/historical/0117f5a3070c52f2134158c3961d810458265cd20a44b9255a85ac52a4597580.jpg",
+            "post_id": 11,
+            "published_at": null,
+            "visual_similarity": 0.967921
+          },
+          {
+            "caption": "Which entrance wins?",
+            "media_asset_id": 2,
+            "media_url": "/media/historical/c2b61170d3e810c8907ca17fe8c7f67eca8a01057655df6d1a146c97154b8a00.jpg",
+            "post_id": 2,
+            "published_at": "2026-06-27T22:08:40.343717",
+            "visual_similarity": 0.96215
+          },
+          {
+            "caption": "He really thought nobody noticed the dramatic entrance.",
+            "media_asset_id": 4,
+            "media_url": "/media/historical/22fe3f6ca40ca7b6adf277d8b209dd97846ea7bd625d9a5563f6ddc93608abd4.jpg",
+            "post_id": 5,
+            "published_at": "2024-11-11T15:00:00",
+            "visual_similarity": 0.957274
+          },
+          {
+            "caption": "The face of someone with zero regrets!",
+            "media_asset_id": 10,
+            "media_url": "/media/historical/159af829d7f9d71d2d41a1bb85bacd5573d064944f28335acea932a6f6f991e2.jpg",
+            "post_id": 12,
+            "published_at": "2023-06-01T14:00:00",
+            "visual_similarity": 0.949217
+          },
+          {
+            "caption": "No context. Just impeccable timing.",
+            "media_asset_id": 5,
+            "media_url": "/media/historical/9f6097d64519c63879820361b6d7fd2ceeec9033da41af7b54ab68fe32550b41.jpg",
+            "post_id": 6,
+            "published_at": null,
+            "visual_similarity": 0.947881
+          },
+          {
+            "caption": "A perfectly normal team meeting.",
+            "media_asset_id": 8,
+            "media_url": "/media/historical/71165b9683e874ee801b2466f86dddbbbb3fe268190e1af11fb360e195d6f385.jpg",
+            "post_id": 10,
+            "published_at": null,
+            "visual_similarity": 0.9322
+          }
+        ]
+      },
+      "runtime": {
+        "abstained": false,
+        "error": null,
+        "latency_ms": 69.934,
+        "model": "deterministic-fixture-v1",
+        "prompt_version": "captions-v3",
+        "provider": "mock",
+        "token_usage": {}
+      },
+      "split": "locked_holdout"
+    }
+  ]
+}
