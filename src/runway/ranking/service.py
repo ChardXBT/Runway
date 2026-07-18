@@ -179,11 +179,7 @@ class CandidateRanker:
                 return set()
             payload = json.loads(profile.profile_json)
         statistics = payload.get("caption_statistics", {})
-        sample_size = (
-            int(statistics.get("sample_size", 0))
-            if isinstance(statistics, dict)
-            else 0
-        )
+        sample_size = int(statistics.get("sample_size", 0)) if isinstance(statistics, dict) else 0
         minimum_support = max(2, round(sample_size * 0.01))
         distribution = payload.get("franchise_distribution", [])
         if not isinstance(distribution, list):
