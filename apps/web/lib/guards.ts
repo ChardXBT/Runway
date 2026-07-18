@@ -1,5 +1,6 @@
 import type {
   EditorialEnvelope,
+  GenerationActivity,
   LineupSchedule,
   Proposal,
   PublisherQueueStatus,
@@ -84,6 +85,18 @@ export function isPublisherQueueStatus(
   );
 }
 
+export function isGenerationActivity(
+  value: unknown,
+): value is GenerationActivity {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.running === "boolean" &&
+    (value.started_at === null || isDateString(value.started_at)) &&
+    (value.completed_at === null || isDateString(value.completed_at)) &&
+    (value.detail === null || typeof value.detail === "string")
+  );
+}
+
 export function isEditorialEnvelope(value: unknown): value is EditorialEnvelope {
   if (!isRecord(value)) return false;
   return (
@@ -91,7 +104,9 @@ export function isEditorialEnvelope(value: unknown): value is EditorialEnvelope 
     isWorkflowStatus(value.workflow) &&
     (value.proposal === undefined || isProposal(value.proposal)) &&
     (value.publisher_queue === undefined ||
-      isPublisherQueueStatus(value.publisher_queue))
+      isPublisherQueueStatus(value.publisher_queue)) &&
+    (value.generation === undefined ||
+      isGenerationActivity(value.generation))
   );
 }
 

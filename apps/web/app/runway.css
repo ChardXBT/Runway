@@ -3284,6 +3284,28 @@ textarea:focus,
   font-variant-numeric: tabular-nums;
 }
 
+.generation-active {
+  border-color: rgba(144, 98, 12, 0.24);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(214, 154, 50, 0.1), transparent 34%),
+    var(--surface);
+}
+
+.generation-pulse {
+  width: 26px;
+  height: 26px;
+  border: 2px solid rgba(251, 250, 246, 0.22);
+  border-top-color: var(--runway-light);
+  border-radius: 50%;
+  animation: generation-spin 0.9s linear infinite;
+}
+
+@keyframes generation-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Uncapped schedule ------------------------------------------------------- */
 
 .schedule-header {

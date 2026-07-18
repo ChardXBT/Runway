@@ -229,11 +229,94 @@ describe("ReviewWorkspace", () => {
         publishingEnabled
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Load more options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Generate more" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0][0]).toContain("/api/editorial/options/ensure");
     expect(await screen.findByDisplayValue("Recommended caption.")).toBeInTheDocument();
+  });
+
+  it("recovers an in-progress generation after returning to Generator", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        next_proposal: proposal,
+        workflow,
+        generation: {
+          running: false,
+          started_at: "2026-03-07T15:00:00Z",
+          completed_at: "2026-03-07T15:02:00Z",
+          detail: "Editorial options are ready.",
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ReviewWorkspace
+        initialProposal={null}
+        initialWorkflow={{ ...workflow, needs_review: 0 }}
+        initialGeneration={{
+          running: true,
+          started_at: "2026-03-07T15:00:00Z",
+          completed_at: null,
+          detail: "Discovering images and generating captions.",
+        }}
+        publishingEnabled
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Generating…" })).toBeDisabled();
+    expect(screen.getByText("Building the next look.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/editorial/next"),
+        { cache: "no-store" },
+      ),
+    );
+    expect(await screen.findByDisplayValue("Recommended caption.")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "The generated option is ready.",
+    );
+  });
+
+  it("shows a completed no-result explanation and allows another search", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          next_proposal: null,
+          workflow: { ...workflow, needs_review: 0 },
+          generation: {
+            running: false,
+            started_at: "2026-03-07T15:00:00Z",
+            completed_at: "2026-03-07T15:02:00Z",
+            detail: "No usable image candidates were found.",
+          },
+        }),
+      }),
+    );
+
+    render(
+      <ReviewWorkspace
+        initialProposal={null}
+        initialWorkflow={{ ...workflow, needs_review: 0 }}
+        initialGeneration={{
+          running: true,
+          started_at: "2026-03-07T15:00:00Z",
+          completed_at: null,
+          detail: "Discovering images and generating captions.",
+        }}
+        publishingEnabled
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No usable image candidates were found.",
+    );
+    expect(screen.getByRole("button", { name: "Generate more" })).toBeEnabled();
+    expect(screen.queryByText("Building the next look.")).not.toBeInTheDocument();
   });
 
   it("locks an accept immediately so double clicks submit only once", async () => {

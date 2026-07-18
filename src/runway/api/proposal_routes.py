@@ -143,6 +143,7 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
             "next_proposal": proposals.next_for_review(),
             "workflow": proposals.workflow_summary(),
             "publisher_queue": publisher_queue.status(),
+            "generation": editorial.generation_status(),
         }
 
     @router.get("/editorial/status")
@@ -150,6 +151,7 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
         return {
             "workflow": proposals.workflow_summary(),
             "publisher_queue": publisher_queue.status(),
+            "generation": editorial.generation_status(),
         }
 
     @router.post("/editorial/options/ensure")

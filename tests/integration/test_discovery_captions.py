@@ -2,12 +2,17 @@ import json
 
 import pytest
 
+from runway.analysis.schemas import SearchPlan, SearchQueryFamily
 from runway.analysis.service import AnalysisService
 from runway.captions.service import CaptionService
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
-from runway.discovery.providers import BrowserSearchProvider, ManualUrlProvider
+from runway.discovery.providers import (
+    BrowserSearchProvider,
+    ManualUrlProvider,
+    _diverse_queries,
+)
 from runway.discovery.service import DiscoveryService
 from runway.intelligence.profile import StyleProfileService
 
@@ -108,4 +113,24 @@ def test_bing_metadata_parser_preserves_direct_and_source_urls() -> None:
             "index": 0,
             "adapter": "bing-metadata",
         }
+    ]
+
+
+def test_live_browser_queries_rotate_across_families_before_repeating() -> None:
+    plan = SearchPlan(
+        query_families=[
+            SearchQueryFamily(purpose="reactions", queries=["reaction one", "reaction two"]),
+            SearchQueryFamily(purpose="groups", queries=["group one", "group two"]),
+            SearchQueryFamily(purpose="objects", queries=["object one"]),
+        ],
+        desired_visual_traits=[],
+        excluded_concepts=[],
+    )
+
+    assert _diverse_queries(plan) == [
+        "reaction one",
+        "group one",
+        "object one",
+        "reaction two",
+        "group two",
     ]

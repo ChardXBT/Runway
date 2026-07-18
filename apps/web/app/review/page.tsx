@@ -7,6 +7,7 @@ import {
 } from "@/lib/guards";
 import type {
   EditorialEnvelope,
+  GenerationActivity,
   Proposal,
   PublisherQueueStatus,
   WorkflowStatus,
@@ -27,6 +28,13 @@ const fallbackQueue: PublisherQueueStatus = {
   queued: 0,
   paused: false,
   paused_reason: null,
+};
+
+const fallbackGeneration: GenerationActivity = {
+  running: false,
+  started_at: null,
+  completed_at: null,
+  detail: null,
 };
 
 export default async function ReviewPage({
@@ -63,6 +71,7 @@ export default async function ReviewPage({
       initialProposal={proposal}
       initialWorkflow={editorial.workflow}
       initialPublisherQueue={editorial.publisher_queue}
+      initialGeneration={editorial.generation ?? fallbackGeneration}
       publishingEnabled={settings.publishing_enabled}
     />
   );

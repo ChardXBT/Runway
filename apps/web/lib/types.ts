@@ -83,6 +83,13 @@ export type WorkflowStatus = {
   timezone: string;
 };
 
+export type GenerationActivity = {
+  running: boolean;
+  started_at: string | null;
+  completed_at: string | null;
+  detail: string | null;
+};
+
 export type PublisherQueueStatus = {
   running: boolean;
   queued: number;
@@ -107,4 +114,5 @@ export type EditorialEnvelope = {
   next_proposal: Proposal | null;
   workflow: WorkflowStatus;
   publisher_queue?: PublisherQueueStatus;
+  generation?: GenerationActivity;
 };

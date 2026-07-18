@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
 import {
@@ -16,6 +16,7 @@ import {
 } from "@/lib/guards";
 import type {
   EditorialEnvelope,
+  GenerationActivity,
   Proposal,
   PublisherQueueStatus,
   WorkflowStatus,
@@ -38,15 +39,26 @@ function emptyQueue(): PublisherQueueStatus {
   };
 }
 
+function emptyGeneration(): GenerationActivity {
+  return {
+    running: false,
+    started_at: null,
+    completed_at: null,
+    detail: null,
+  };
+}
+
 export function ReviewWorkspace({
   initialProposal,
   initialWorkflow,
   initialPublisherQueue,
+  initialGeneration,
   publishingEnabled,
 }: {
   initialProposal: Proposal | null;
   initialWorkflow: WorkflowStatus;
   initialPublisherQueue?: PublisherQueueStatus;
+  initialGeneration?: GenerationActivity;
   publishingEnabled: boolean;
 }) {
   const [proposal, setProposal] = useState(initialProposal);
@@ -54,6 +66,9 @@ export function ReviewWorkspace({
   const [workflow, setWorkflow] = useState(initialWorkflow);
   const [publisherQueue, setPublisherQueue] = useState(
     initialPublisherQueue ?? emptyQueue(),
+  );
+  const [generation, setGeneration] = useState(
+    initialGeneration ?? emptyGeneration(),
   );
   const [busy, setBusy] = useState<Action | null>(null);
   const [editing, setEditing] = useState(false);
@@ -92,6 +107,12 @@ export function ReviewWorkspace({
     setDecisionUncertain(false);
   }
 
+  function applyEditorialStatus(payload: EditorialEnvelope) {
+    setWorkflow(payload.workflow);
+    if (payload.publisher_queue) setPublisherQueue(payload.publisher_queue);
+    setGeneration(payload.generation ?? emptyGeneration());
+  }
+
   async function parseResponse(response: Response) {
     return readApiJson(response, {
       validate: isEditorialEnvelope,
@@ -107,18 +128,30 @@ export function ReviewWorkspace({
   }
 
   async function requestOptions() {
+    setGeneration((current) => ({
+      ...current,
+      running: true,
+      started_at: current.started_at ?? new Date().toISOString(),
+      completed_at: null,
+      detail: "Discovering images and generating captions.",
+    }));
     const response = await fetch(`${API_URL}/api/editorial/options/ensure`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ target: 5, live_discovery: true }),
     });
     const payload = await parseResponse(response);
-    setWorkflow(payload.workflow);
+    applyEditorialStatus(payload);
     showProposal(payload.next_proposal);
     setNotice(
       payload.next_proposal
         ? "The next option is ready."
-        : payload.detail || "No accepted options were found.",
+        : payload.generation?.running
+          ? payload.generation.detail ||
+            "Generation is running. RunWay will show the option when it is ready."
+          : payload.generation?.detail ||
+            payload.detail ||
+            "No usable options were found.",
     );
   }
 
@@ -158,8 +191,7 @@ export function ReviewWorkspace({
   }
 
   async function finishDecision(payload: EditorialEnvelope, notice: string) {
-    setWorkflow(payload.workflow);
-    if (payload.publisher_queue) setPublisherQueue(payload.publisher_queue);
+    applyEditorialStatus(payload);
     setSessionDecisions((value) => value + 1);
     setNotice(notice);
     if (payload.next_proposal) {
@@ -361,6 +393,62 @@ export function ReviewWorkspace({
       setBusy(null);
     }
   }
+
+  useEffect(() => {
+    if (proposal || !generation.running || busy === "options") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    async function pollGeneration() {
+      let keepPolling = true;
+      try {
+        const response = await fetch(`${API_URL}/api/editorial/next`, {
+          cache: "no-store",
+        });
+        const payload = await readApiJson(response, {
+          validate: isEditorialEnvelope,
+          failureMessage: "RunWay could not check generation progress.",
+        });
+        if (cancelled) return;
+        applyEditorialStatus(payload);
+        if (payload.next_proposal) {
+          showProposal(payload.next_proposal);
+          setNotice("The generated option is ready.");
+          keepPolling = false;
+        } else if (payload.generation?.running) {
+          setNotice(
+            payload.generation.detail ||
+              "Discovering images and generating captions. This can take a few minutes.",
+          );
+        } else {
+          setNotice(
+            payload.generation?.detail ||
+              "Generation finished without a usable image. Try Generate more.",
+            true,
+          );
+          keepPolling = false;
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setNotice(
+          actionError(
+            error,
+            "Generation may still be running, but RunWay could not check its progress.",
+          ),
+          true,
+        );
+      }
+      if (!cancelled && keepPolling) {
+        timer = setTimeout(pollGeneration, 3000);
+      }
+    }
+
+    void pollGeneration();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [busy, generation.running, proposal]);
 
   const nextSlot =
     slotFormatter?.format(new Date(workflow.next_available_at)) ??
@@ -567,27 +655,46 @@ export function ReviewWorkspace({
           </details>
         </>
       ) : (
-        <section className="editorial-empty">
-          <span className="empty-counter">{sessionDecisions}</span>
-          <h2>{sessionDecisions ? "That’s the edit." : "Bring in the first look."}</h2>
+        <section
+          className={generation.running ? "editorial-empty generation-active" : "editorial-empty"}
+        >
+          <span className="empty-counter" aria-hidden="true">
+            {generation.running ? <span className="generation-pulse" /> : sessionDecisions}
+          </span>
+          <h2>
+            {generation.running
+              ? "Building the next look."
+              : sessionDecisions
+                ? "That’s the edit."
+                : "Bring in the first look."}
+          </h2>
           <p>
-            RunWay uses unused ranked images first, then opens a visible discovery pass for
-            fresh material.
+            {generation.running
+              ? "RunWay is searching for a usable image, checking it, and asking Codex for captions. You can visit another section and come back."
+              : "RunWay uses unused ranked images first, then opens a visible discovery pass for fresh material."}
           </p>
           <button
             type="button"
             className="button"
-            disabled={busy !== null}
+            disabled={busy !== null || generation.running}
             onClick={ensureOptions}
             aria-busy={busy === "options"}
           >
-            {busy === "options" ? "Preparing looks…" : "Load more options"}
+            {generation.running
+              ? "Generating…"
+              : busy === "options"
+                ? "Starting generation…"
+                : "Generate more"}
           </button>
           <small
+            id="generation-status"
             role={messageIsError ? "alert" : "status"}
             aria-live={messageIsError ? "assertive" : "polite"}
           >
-            {message}
+            {message ||
+              (generation.running
+                ? "Generation usually takes a few minutes."
+                : generation.detail)}
           </small>
         </section>
       )}

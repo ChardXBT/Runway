@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from contextlib import suppress
 from typing import Any, Protocol
 from urllib.parse import quote_plus, urlparse
 
 import httpx
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from runway.analysis.schemas import SearchPlan
@@ -25,6 +27,19 @@ class PageImageExtractor(Protocol):
 
 def _queries(plan: SearchPlan) -> list[str]:
     return [query for family in plan.query_families for query in family.queries]
+
+
+def _diverse_queries(plan: SearchPlan) -> list[str]:
+    """Round-robin query families so a small live search still varies composition."""
+    families = [list(family.queries) for family in plan.query_families if family.queries]
+    queries: list[str] = []
+    depth = 0
+    while any(depth < len(family) for family in families):
+        for family in families:
+            if depth < len(family):
+                queries.append(family[depth])
+        depth += 1
+    return queries
 
 
 class FixtureSearchProvider:
@@ -114,7 +129,9 @@ class BrowserSearchProvider:
             )
             page = context.pages[0] if context.pages else await context.new_page()
             try:
-                for query in _queries(plan)[: self.settings.browser_search_max_queries]:
+                for query in _diverse_queries(plan)[
+                    : self.settings.browser_search_max_queries
+                ]:
                     url = self.settings.browser_search_url.format(query=quote_plus(query))
                     await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
                     sample = (page.url + " " + (await page.title())).lower()
@@ -133,24 +150,29 @@ class BrowserSearchProvider:
                         raise RuntimeError(
                             "search challenge or consent page detected; resolve it manually "
                             "in the persistent discovery browser profile, then rerun"
-                        )
-                    bing_metadata = await page.locator("a.iusc[m]").evaluate_all(
+                    )
+                    result_links = page.locator("a.iusc[m]")
+                    with suppress(PlaywrightTimeoutError):
+                        await result_links.first.wait_for(state="attached", timeout=15_000)
+                    bing_metadata = await result_links.evaluate_all(
                         """nodes => nodes.map(node => node.getAttribute('m')).filter(Boolean)"""
                     )
                     structured_images = self._parse_bing_metadata(bing_metadata)
-                    generic_images = await page.locator("img").evaluate_all(
-                        """nodes => nodes.map((img, index) => ({
-                          src: img.currentSrc || img.src,
-                          width: img.naturalWidth,
-                          height: img.naturalHeight,
-                          page: img.closest('a')?.href || location.href,
-                          index,
-                          adapter: 'generic-img'
-                        })).filter(
-                          x => /^https?:/.test(x.src) && x.width >= 300 && x.height >= 300
-                        )"""
-                    )
-                    images = [*structured_images, *generic_images]
+                    generic_images: list[dict[str, Any]] = []
+                    if not structured_images:
+                        generic_images = await page.locator("img").evaluate_all(
+                            """nodes => nodes.map((img, index) => ({
+                              src: img.currentSrc || img.src,
+                              width: img.naturalWidth,
+                              height: img.naturalHeight,
+                              page: img.closest('a')?.href || location.href,
+                              index,
+                              adapter: 'generic-img'
+                            })).filter(
+                              x => /^https?:/.test(x.src) && x.width >= 300 && x.height >= 300
+                            )"""
+                        )
+                    images = structured_images or generic_images
                     remaining = self.settings.browser_search_max_results - len(results)
                     if remaining <= 0:
                         break
@@ -158,7 +180,8 @@ class BrowserSearchProvider:
                         self.settings.browser_search_results_per_query,
                         remaining,
                     )
-                    for item in images[:per_query]:
+                    added = 0
+                    for item in images:
                         direct = str(item["src"])
                         if direct in seen_direct_urls:
                             continue
@@ -180,6 +203,9 @@ class BrowserSearchProvider:
                                 },
                             )
                         )
+                        added += 1
+                        if added >= per_query:
+                            break
                     if len(results) >= self.settings.browser_search_max_results:
                         break
             finally:
