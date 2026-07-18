@@ -4,9 +4,13 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import secrets
+import shutil
+import subprocess
 import threading
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Protocol, cast
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
@@ -108,31 +112,74 @@ class PlaywrightYouTubeAdapter:
         return await asyncio.to_thread(self._remove_sync, post)
 
     def login_interactive(self) -> None:
-        from playwright.sync_api import sync_playwright
+        """Open ordinary Google Chrome for manual sign-in without browser automation."""
+        chrome = self.chrome_executable()
+        self.settings.publisher_profile_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            str(chrome),
+            f"--user-data-dir={self.settings.publisher_profile_dir}",
+            "--profile-directory=Default",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--new-window",
+            self.settings.publisher_channel_url,
+        ]
+        subprocess.Popen(command)
+        input(
+            "A normal Google Chrome window opened with RunWay's isolated profile. "
+            "Sign into the Qlob Editor account, confirm the Qlob Posts page is visible, "
+            "then CLOSE that Chrome window and press Enter here..."
+        )
 
-        with self._browser_lock, sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.settings.publisher_profile_dir),
-                headless=False,
-                viewport={"width": 1440, "height": 1000},
+    def chrome_executable(self) -> Path:
+        configured = self.settings.publisher_chrome_path
+        if configured is not None:
+            resolved = configured.expanduser().resolve()
+            if not resolved.is_file():
+                raise RuntimeError(f"configured Google Chrome was not found: {resolved}")
+            return resolved
+
+        candidates: list[Path] = []
+        if os.name == "nt":
+            for root_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+                root = os.environ.get(root_name)
+                if root:
+                    candidates.append(
+                        Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+                    )
+        else:
+            for name in ("google-chrome", "google-chrome-stable", "chrome"):
+                found = shutil.which(name)
+                if found:
+                    candidates.append(Path(found))
+            candidates.extend(
+                [
+                    Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                    Path("/usr/bin/google-chrome"),
+                    Path("/usr/bin/google-chrome-stable"),
+                ]
             )
-            page = context.pages[0] if context.pages else context.new_page()
-            page.goto(self.settings.publisher_channel_url, wait_until="domcontentloaded")
-            input(
-                "Sign into the Qlob Editor account in the visible browser. "
-                "When the Qlob Posts composer is visible, return here and press Enter..."
-            )
-            context.close()
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+        raise RuntimeError(
+            "Google Chrome is required for publisher sign-in. Install Chrome or set "
+            "RUNWAY_PUBLISHER_CHROME_PATH."
+        )
+
+    def _launch_publisher_context(self, playwright: Any) -> Any:
+        return playwright.chromium.launch_persistent_context(
+            user_data_dir=str(self.settings.publisher_profile_dir),
+            channel=self.settings.publisher_browser_channel,
+            headless=False,
+            viewport={"width": 1440, "height": 1000},
+        )
 
     def _validate_session_sync(self) -> PublisherSessionStatus:
         from playwright.sync_api import sync_playwright
 
         with self._browser_lock, sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.settings.publisher_profile_dir),
-                headless=False,
-                viewport={"width": 1440, "height": 1000},
-            )
+            context = self._launch_publisher_context(playwright)
             page = context.pages[0] if context.pages else context.new_page()
             try:
                 page.goto(
@@ -171,11 +218,7 @@ class PlaywrightYouTubeAdapter:
         screenshots: list[str] = []
         submitted = False
         with self._browser_lock, sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.settings.publisher_profile_dir),
-                headless=False,
-                viewport={"width": 1440, "height": 1000},
-            )
+            context = self._launch_publisher_context(playwright)
             page = context.pages[0] if context.pages else context.new_page()
             try:
                 page.goto(
@@ -304,11 +347,7 @@ class PlaywrightYouTubeAdapter:
         from playwright.sync_api import sync_playwright
 
         with self._browser_lock, sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.settings.publisher_profile_dir),
-                headless=False,
-                viewport={"width": 1440, "height": 1000},
-            )
+            context = self._launch_publisher_context(playwright)
             page = context.pages[0] if context.pages else context.new_page()
             try:
                 page.goto(
@@ -340,11 +379,7 @@ class PlaywrightYouTubeAdapter:
         screenshots: list[str] = []
         applied = False
         with self._browser_lock, sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.settings.publisher_profile_dir),
-                headless=False,
-                viewport={"width": 1440, "height": 1000},
-            )
+            context = self._launch_publisher_context(playwright)
             page = context.pages[0] if context.pages else context.new_page()
             try:
                 page.goto(
@@ -459,11 +494,7 @@ class PlaywrightYouTubeAdapter:
         screenshots: list[str] = []
         applied = False
         with self._browser_lock, sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(self.settings.publisher_profile_dir),
-                headless=False,
-                viewport={"width": 1440, "height": 1000},
-            )
+            context = self._launch_publisher_context(playwright)
             page = context.pages[0] if context.pages else context.new_page()
             try:
                 page.goto(

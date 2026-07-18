@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from datetime import date
 from pathlib import Path
 
@@ -94,6 +95,22 @@ def _port_available(host: str, port: int) -> bool:
     return True
 
 
+def _runway_api_healthy(host: str, port: int) -> bool:
+    url_host = f"[{host}]" if ":" in host else host
+    try:
+        with urllib.request.urlopen(
+            f"http://{url_host}:{port}/health",
+            timeout=2,
+        ) as response:
+            payload: object = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    product = payload.get("product")
+    return response.status == 200 and isinstance(product, str) and product == "RunWay"
+
+
 @app.command()
 def doctor() -> None:
     """Check local dependencies and configuration without exposing secrets."""
@@ -124,6 +141,14 @@ def doctor() -> None:
     except Exception as exc:  # pragma: no cover - environment dependent
         browser_detail = f"unavailable: {type(exc).__name__}"
     checks.append(("Playwright Chromium", browser_ok, browser_detail))
+    try:
+        chrome = PlaywrightYouTubeAdapter(settings).chrome_executable()
+        chrome_ok = True
+        chrome_detail = str(chrome)
+    except RuntimeError as exc:
+        chrome_ok = False
+        chrome_detail = str(exc)
+    checks.append(("Google Chrome publisher", chrome_ok, chrome_detail))
 
     writable = all(path.exists() and path.is_dir() for path in settings.ensure_directories())
     checks.append(("Data directories", writable, str(settings.resolved_data_dir)))
@@ -157,17 +182,25 @@ def doctor() -> None:
                 ),
             )
         )
+    port_available = _port_available(settings.host, settings.api_port)
+    api_running = not port_available and _runway_api_healthy(settings.host, settings.api_port)
     checks.append(
         (
             "API port",
-            _port_available(settings.host, settings.api_port),
-            f"{settings.host}:{settings.api_port}",
+            port_available or api_running,
+            (
+                f"{settings.host}:{settings.api_port} already serving RunWay"
+                if api_running
+                else f"{settings.host}:{settings.api_port}"
+            ),
         )
     )
 
     required_failures = 0
     for name, ok, detail in checks:
-        optional = name == "Playwright Chromium"
+        optional = name == "Playwright Chromium" or (
+            name == "Google Chrome publisher" and not settings.publishing_enabled
+        )
         marker = "OK" if ok else ("WARN" if optional else "FAIL")
         typer.echo(f"[{marker}] {name}: {detail}")
         if not ok and not optional:

@@ -22,6 +22,10 @@
   `Accept` action, internal scheduling, a future timezone-aware daily slot, a valid
   Qlob Editor session, and an unchanged payload hash. The normal UI has no rights declaration or
   typed-phrase step; an explicitly blocked candidate still cannot be scheduled.
+- Google sign-in occurs manually in ordinary installed Chrome with an isolated
+  RunWay profile. Playwright is not active during credential entry. RunWay does
+  not bypass Google warnings, reduce account protections, export cookies, or
+  automate passwords or multifactor challenges.
 - Outbox attempts are persisted and serialized. A stale login pauses before composer interaction;
   resume is explicit after sign-in. Google credentials and cookies remain inside the ignored
   dedicated browser profile.

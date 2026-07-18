@@ -164,6 +164,13 @@ The dedicated publisher profile is separate from the capture/discovery profiles:
 .\.venv\Scripts\runway.exe publisher status
 ```
 
+`publisher login` opens ordinary installed Google Chrome—not Playwright's
+automation browser—with an isolated RunWay profile. Sign in manually with the
+Google account that has Qlob Editor access, confirm the Posts page is visible,
+close that Chrome window, and then press Enter in the terminal. Guarded
+publishing later reopens the saved profile through installed Chrome. Never
+disable Google account protections or copy cookies into RunWay.
+
 With `RUNWAY_PUBLISHING_ENABLED=true`, every click on `Accept` is an explicit scheduling
 instruction for that exact image and caption. RunWay assigns the next free daily slot, advances the
 Runway immediately, and processes the persisted outbox serially. Confirmed Lineup edits, moves,
@@ -188,6 +195,10 @@ pauses the outbox. Once a Schedule click may have happened, an inconclusive resu
   requiring human judgment.
 - The guarded scheduler is implemented and offline-tested, but a real Schedule click has not been
   included in automated QA. One separately authorized Qlob acceptance pass remains.
+- The official YouTube Data API does not expose a Community-post resource, so
+  Community scheduling cannot be replaced with an OAuth API call. If Google
+  refuses even the ordinary-Chrome isolated profile, keep publishing disabled
+  and schedule the prepared image/caption manually in normal YouTube.
 
 See `docs/COMPLETION_GUIDE.md` for the remaining path to production,
 `docs/OPERATIONS.md` for routine commands, `docs/BUILD_REPORT.md` for the fixture proof, and

@@ -61,12 +61,21 @@ class Settings(BaseSettings):
     caption_question_first: bool = True
     publisher_channel_id: str = "UCQ-nHijGwxNU3Go_wyLQ5Ng"
     publisher_confirmation_ttl_minutes: int = Field(default=10, ge=2, le=30)
+    publisher_browser_channel: Literal["chrome", "chromium"] = "chrome"
+    publisher_chrome_path: Path | None = None
 
     @field_validator("host")
     @classmethod
     def loopback_only(cls, value: str) -> str:
         if value not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("RunWay may only bind to a loopback host")
+        return value
+
+    @field_validator("codex_cli_path", "publisher_chrome_path", mode="before")
+    @classmethod
+    def blank_optional_path(cls, value: object) -> object | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
         return value
 
     @field_validator("default_post_time")
@@ -147,6 +156,7 @@ class Settings(BaseSettings):
             "publishing_enabled": self.publishing_enabled,
             "publisher_channel_id": self.publisher_channel_id,
             "publisher_confirmation_ttl_minutes": self.publisher_confirmation_ttl_minutes,
+            "publisher_browser_channel": self.publisher_browser_channel,
             "publisher_approval_is_confirmation": True,
             "publisher_visible_browser_only": True,
             "capture_scroll_delay_ms": self.capture_scroll_delay_ms,

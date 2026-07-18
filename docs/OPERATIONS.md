@@ -63,8 +63,11 @@ Set up the dedicated publisher profile once:
 .\.venv\Scripts\runway.exe publisher status
 ```
 
-Use the Google account YouTube identifies as an Editor for Qlob. The ignored profile lives at
-`data/browser-profile/publisher`.
+The command opens ordinary installed Google Chrome. Use the Google account
+YouTube identifies as an Editor for Qlob, confirm the Qlob Posts page, close
+that Chrome window, and then press Enter. The ignored isolated profile lives at
+`data/browser-profile/publisher`. RunWay does not automate Google credentials
+or bypass account warnings.
 
 With `RUNWAY_PUBLISHING_ENABLED=true`, the `Accept` decision adds the exact accepted
 payload to a persisted FIFO outbox. One visible-browser worker schedules items serially while the
