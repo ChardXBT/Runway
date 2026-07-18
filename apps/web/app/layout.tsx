@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { Nav } from "@/components/nav";
 import { apiGet } from "@/lib/api";
+import { isRecord } from "@/lib/guards";
 import "./runway.css";
 
 export const metadata: Metadata = {
@@ -16,6 +17,8 @@ export default async function RootLayout({
   const settings = await apiGet<{ publishing_enabled: boolean }>(
     "/api/settings",
     { publishing_enabled: false },
+    (value): value is { publishing_enabled: boolean } =>
+      isRecord(value) && typeof value.publishing_enabled === "boolean",
   );
   return (
     <html lang="en">

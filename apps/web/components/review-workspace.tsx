@@ -1,25 +1,25 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
+import {
+  actionError,
+  hasUncertainOutcome,
+  readApiJson,
+} from "@/lib/client-api";
+import {
+  isEditorialEnvelope,
+  isProposal,
+  isPublisherQueueStatus,
+} from "@/lib/guards";
 import type {
   EditorialEnvelope,
   Proposal,
   PublisherQueueStatus,
   WorkflowStatus,
 } from "@/lib/types";
-
-const slotFormatter = new Intl.DateTimeFormat("en-US", {
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  hour12: true,
-  timeZone: "America/Toronto",
-});
 
 type Action =
   | "accept"
@@ -58,52 +58,84 @@ export function ReviewWorkspace({
   const [busy, setBusy] = useState<Action | null>(null);
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageIsError, setMessageIsError] = useState(false);
+  const [decisionUncertain, setDecisionUncertain] = useState(false);
   const [sessionDecisions, setSessionDecisions] = useState(0);
   const warmingTray = useRef(false);
+  const actionLock = useRef(false);
   const captionRef = useRef<HTMLTextAreaElement>(null);
+  const slotFormatter = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: workflow.timezone,
+      });
+    } catch {
+      return null;
+    }
+  }, [workflow.timezone]);
+
+  function setNotice(text: string, error = false) {
+    setMessage(text);
+    setMessageIsError(error);
+  }
 
   function showProposal(next: Proposal | null) {
     setProposal(next);
     setCaption(next?.final_caption ?? "");
     setEditing(false);
+    setDecisionUncertain(false);
   }
 
   async function parseResponse(response: Response) {
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.detail || "RunWay could not complete that decision.");
-    }
-    return payload as EditorialEnvelope;
+    return readApiJson(response, {
+      validate: isEditorialEnvelope,
+      failureMessage: "RunWay could not complete that decision.",
+    });
   }
 
   async function parseProposalResponse(response: Response) {
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.detail || "RunWay could not refresh this option.");
-    }
-    return payload as Proposal;
+    return readApiJson(response, {
+      validate: isProposal,
+      failureMessage: "RunWay could not refresh this option.",
+    });
+  }
+
+  async function requestOptions() {
+    const response = await fetch(`${API_URL}/api/editorial/options/ensure`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: 5, live_discovery: true }),
+    });
+    const payload = await parseResponse(response);
+    setWorkflow(payload.workflow);
+    showProposal(payload.next_proposal);
+    setNotice(
+      payload.next_proposal
+        ? "The next option is ready."
+        : payload.detail || "No accepted options were found.",
+    );
   }
 
   async function ensureOptions() {
+    if (actionLock.current) return;
+    actionLock.current = true;
     setBusy("options");
-    setMessage("Preparing the next looks…");
+    setNotice("Preparing the next looks…");
     try {
-      const response = await fetch(`${API_URL}/api/editorial/options/ensure`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: 5, live_discovery: true }),
-      });
-      const payload = await parseResponse(response);
-      setWorkflow(payload.workflow);
-      showProposal(payload.next_proposal);
-      setMessage(
-        payload.next_proposal
-          ? "The next option is ready."
-          : payload.detail || "No accepted options were found.",
-      );
+      await requestOptions();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not find more options.");
+      setNotice(
+        actionError(error, "Could not find more options. Try again when the local service is ready."),
+        true,
+      );
     } finally {
+      actionLock.current = false;
       setBusy(null);
     }
   }
@@ -117,8 +149,7 @@ export function ReviewWorkspace({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target: 5, live_discovery: true }),
       });
-      const payload = await parseResponse(response);
-      setWorkflow(payload.workflow);
+      await parseResponse(response);
     } catch {
       // Empty-runway refill remains the visible recovery path.
     } finally {
@@ -130,20 +161,39 @@ export function ReviewWorkspace({
     setWorkflow(payload.workflow);
     if (payload.publisher_queue) setPublisherQueue(payload.publisher_queue);
     setSessionDecisions((value) => value + 1);
-    setMessage(notice);
+    setNotice(notice);
     if (payload.next_proposal) {
       showProposal(payload.next_proposal);
       if (payload.workflow.needs_review <= 2) void warmTray();
       return;
     }
     showProposal(null);
-    await ensureOptions();
+    setNotice(`${notice} Preparing the next option…`);
+    try {
+      await requestOptions();
+    } catch (error) {
+      setNotice(
+        `${notice} ${actionError(
+          error,
+          "The next option could not be loaded. Use Load more options to continue.",
+        )}`,
+        true,
+      );
+    }
   }
 
   async function accept() {
-    if (!proposal || busy || !caption.trim()) return;
+    if (
+      !proposal ||
+      actionLock.current ||
+      decisionUncertain ||
+      !caption.trim()
+    ) {
+      return;
+    }
+    actionLock.current = true;
     setBusy("accept");
-    setMessage("");
+    setNotice("");
     try {
       const response = await fetch(
         `${API_URL}/api/editorial/proposals/${proposal.id}/approve`,
@@ -158,20 +208,34 @@ export function ReviewWorkspace({
       await finishDecision(
         payload,
         scheduledAt
-          ? `Accepted for ${slotFormatter.format(new Date(scheduledAt))}.`
+          ? `Accepted for ${
+              slotFormatter?.format(new Date(scheduledAt)) ??
+              "the configured Lineup slot"
+            }.`
           : "Accepted and added to Lineup.",
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Accept failed.");
+      const uncertain = hasUncertainOutcome(error);
+      setDecisionUncertain(uncertain);
+      setNotice(
+        actionError(
+          error,
+          "Accept failed. Your caption is still here.",
+          "The accept response could not be verified. Your caption is preserved; reload Generator and check Lineup before taking another decision.",
+        ),
+        true,
+      );
     } finally {
+      actionLock.current = false;
       setBusy(null);
     }
   }
 
   async function reject() {
-    if (!proposal || busy) return;
+    if (!proposal || actionLock.current || decisionUncertain) return;
+    actionLock.current = true;
     setBusy("reject");
-    setMessage("");
+    setNotice("");
     try {
       const response = await fetch(
         `${API_URL}/api/editorial/proposals/${proposal.id}/reject`,
@@ -186,16 +250,27 @@ export function ReviewWorkspace({
         "Rejected. The negative signal is saved.",
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Rejection failed.");
+      const uncertain = hasUncertainOutcome(error);
+      setDecisionUncertain(uncertain);
+      setNotice(
+        actionError(
+          error,
+          "Rejection failed. This option is still on screen.",
+          "The rejection response could not be verified. Reload Generator before making another decision.",
+        ),
+        true,
+      );
     } finally {
+      actionLock.current = false;
       setBusy(null);
     }
   }
 
   async function regenerateCaptions() {
-    if (!proposal || busy) return;
+    if (!proposal || actionLock.current || decisionUncertain) return;
+    actionLock.current = true;
     setBusy("regenerate");
-    setMessage("Generating fresh captions from the same image…");
+    setNotice("Generating fresh captions from the same image…");
     try {
       const response = await fetch(
         `${API_URL}/api/proposals/${proposal.id}/regenerate`,
@@ -203,20 +278,23 @@ export function ReviewWorkspace({
       );
       const refreshed = await parseProposalResponse(response);
       showProposal(refreshed);
-      setMessage("Fresh captions are ready.");
+      setNotice("Fresh captions are ready.");
     } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Caption regeneration failed.",
+      setNotice(
+        actionError(error, "Caption regeneration failed. The current caption is preserved."),
+        true,
       );
     } finally {
+      actionLock.current = false;
       setBusy(null);
     }
   }
 
   async function replaceImage() {
-    if (!proposal || busy) return;
+    if (!proposal || actionLock.current || decisionUncertain) return;
+    actionLock.current = true;
     setBusy("replace");
-    setMessage("Finding another image and generating its captions…");
+    setNotice("Finding another image and generating its captions…");
     try {
       const response = await fetch(
         `${API_URL}/api/proposals/${proposal.id}/replace`,
@@ -228,10 +306,14 @@ export function ReviewWorkspace({
       );
       const refreshed = await parseProposalResponse(response);
       showProposal(refreshed);
-      setMessage("A replacement image and its captions are ready.");
+      setNotice("A replacement image and its captions are ready.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Image replacement failed.");
+      setNotice(
+        actionError(error, "Image replacement failed. The current option is preserved."),
+        true,
+      );
     } finally {
+      actionLock.current = false;
       setBusy(null);
     }
   }
@@ -248,23 +330,41 @@ export function ReviewWorkspace({
   }
 
   async function resumePublisher() {
+    if (actionLock.current) return;
+    actionLock.current = true;
     setBusy("resume");
+    setNotice("Requesting a safe queue recovery…");
     try {
       const response = await fetch(`${API_URL}/api/publisher/queue/resume`, {
         method: "POST",
       });
-      const payload = (await response.json()) as PublisherQueueStatus;
-      if (!response.ok) throw new Error("The publisher queue could not resume.");
+      const payload = await readApiJson(response, {
+        validate: isPublisherQueueStatus,
+        failureMessage: "The publisher queue could not resume.",
+      });
       setPublisherQueue(payload);
-      setMessage("YouTube scheduling resumed.");
+      setNotice(
+        payload.paused
+          ? "The publisher queue is still paused. Check the saved YouTube session."
+          : payload.running
+            ? "YouTube scheduling resumed."
+            : "The publisher queue is ready.",
+        payload.paused,
+      );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not resume scheduling.");
+      setNotice(
+        actionError(error, "Could not resume scheduling. The queue remains unchanged here."),
+        true,
+      );
     } finally {
+      actionLock.current = false;
       setBusy(null);
     }
   }
 
-  const nextSlot = slotFormatter.format(new Date(workflow.next_available_at));
+  const nextSlot =
+    slotFormatter?.format(new Date(workflow.next_available_at)) ??
+    "Next configured opening";
   const topic = proposal?.candidate?.detected_topic;
 
   return (
@@ -294,11 +394,13 @@ export function ReviewWorkspace({
             <span>{publisherQueue.paused_reason}</span>
           </div>
           <button
+            type="button"
             className="button secondary"
             disabled={busy !== null}
             onClick={resumePublisher}
+            aria-busy={busy === "resume"}
           >
-            Resume after sign-in
+            {busy === "resume" ? "Resuming…" : "Resume after sign-in"}
           </button>
         </section>
       )}
@@ -344,6 +446,7 @@ export function ReviewWorkspace({
                 onFocus={() => setEditing(true)}
                 rows={4}
                 maxLength={1000}
+                disabled={busy !== null || decisionUncertain}
                 spellCheck
                 autoCapitalize="sentences"
               />
@@ -354,48 +457,66 @@ export function ReviewWorkspace({
 
               <div className="decision-actions" aria-label="Decision controls">
                 <button
+                  type="button"
                   className="decision-reject"
-                  disabled={busy !== null}
+                  disabled={busy !== null || decisionUncertain}
                   onClick={reject}
+                  aria-busy={busy === "reject"}
                 >
                   {busy === "reject" ? "Rejecting…" : "Reject"}
                 </button>
                 <button
+                  type="button"
                   className={editing ? "decision-edit active" : "decision-edit"}
-                  disabled={busy !== null}
+                  disabled={busy !== null || decisionUncertain}
                   onClick={toggleEdit}
                   aria-pressed={editing}
                 >
                   Edit
                 </button>
                 <button
+                  type="button"
                   className="decision-approve"
-                  disabled={busy !== null || !caption.trim()}
+                  disabled={
+                    busy !== null || decisionUncertain || !caption.trim()
+                  }
                   onClick={accept}
+                  aria-busy={busy === "accept"}
                 >
                   {busy === "accept" ? "Accepting…" : "Accept"}
                 </button>
               </div>
 
-              <p className="decision-message" role="status">
+              <p
+                className={messageIsError ? "decision-message error" : "decision-message"}
+                role={messageIsError ? "alert" : "status"}
+                aria-live={messageIsError ? "assertive" : "polite"}
+              >
                 {message ||
                   (publishingEnabled
                     ? "Accept schedules this exact image and caption on Qlob, then advances."
                     : "Accept reserves the next daily slot; YouTube scheduling is off.")}
               </p>
+              {decisionUncertain && (
+                <a className="decision-recovery" href="/review">
+                  Reload Generator to verify
+                </a>
+              )}
 
               <div className="generator-tools" aria-label="Regenerate this option">
                 <button
                   type="button"
-                  disabled={busy !== null}
+                  disabled={busy !== null || decisionUncertain}
                   onClick={replaceImage}
+                  aria-busy={busy === "replace"}
                 >
                   {busy === "replace" ? "Replacing image…" : "Replace image"}
                 </button>
                 <button
                   type="button"
-                  disabled={busy !== null}
+                  disabled={busy !== null || decisionUncertain}
                   onClick={regenerateCaptions}
+                  aria-busy={busy === "regenerate"}
                 >
                   {busy === "regenerate"
                     ? "Generating captions…"
@@ -410,11 +531,11 @@ export function ReviewWorkspace({
                     <span>Choose one to edit or accept</span>
                   </div>
                   <div className="caption-options" aria-label="Caption options">
-                    {proposal.alternative_captions.map((alternative) => (
+                    {proposal.alternative_captions.map((alternative, index) => (
                       <button
-                        key={alternative}
+                        key={`${index}-${alternative}`}
                         type="button"
-                        disabled={busy !== null}
+                        disabled={busy !== null || decisionUncertain}
                         className={caption === alternative ? "selected" : ""}
                         onClick={() => {
                           setCaption(alternative);
@@ -453,10 +574,21 @@ export function ReviewWorkspace({
             RunWay uses unused ranked images first, then opens a visible discovery pass for
             fresh material.
           </p>
-          <button className="button" disabled={busy !== null} onClick={ensureOptions}>
+          <button
+            type="button"
+            className="button"
+            disabled={busy !== null}
+            onClick={ensureOptions}
+            aria-busy={busy === "options"}
+          >
             {busy === "options" ? "Preparing looks…" : "Load more options"}
           </button>
-          <small role="status">{message}</small>
+          <small
+            role={messageIsError ? "alert" : "status"}
+            aria-live={messageIsError ? "assertive" : "polite"}
+          >
+            {message}
+          </small>
         </section>
       )}
     </main>

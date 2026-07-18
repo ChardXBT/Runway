@@ -1,4 +1,5 @@
 import { apiGet } from "@/lib/api";
+import { isRecord } from "@/lib/guards";
 
 type Event = {
   id: number;
@@ -9,8 +10,29 @@ type Event = {
   created_at: string;
 };
 
+function isEventList(value: unknown): value is Event[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (event) =>
+        isRecord(event) &&
+        typeof event.id === "number" &&
+        typeof event.event_type === "string" &&
+        typeof event.entity_type === "string" &&
+        (event.entity_id === null || typeof event.entity_id === "number") &&
+        isRecord(event.details) &&
+        typeof event.created_at === "string" &&
+        !Number.isNaN(new Date(event.created_at).getTime()),
+    )
+  );
+}
+
 export default async function ActivityPage() {
-  const events = await apiGet<Event[]>("/api/activity?limit=200", []);
+  const events = await apiGet<Event[]>(
+    "/api/activity?limit=200",
+    [],
+    isEventList,
+  );
 
   return (
     <>

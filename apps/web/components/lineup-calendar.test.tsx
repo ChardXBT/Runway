@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -65,6 +66,7 @@ const lineup: LineupSchedule = {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -78,7 +80,9 @@ describe("LineupCalendar", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
-    fireEvent.click(screen.getByRole("button", { name: "Edit or move" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    );
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Caption"), {
       target: { value: "Wait... what?!" },
@@ -87,7 +91,7 @@ describe("LineupCalendar", () => {
       target: { value: "2026-08-09" },
     });
 
-    expect(screen.getByText(/swaps the two release dates/i)).toBeInTheDocument();
+    expect(screen.getByText("Swap on confirmation.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Confirm changes" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
@@ -126,7 +130,9 @@ describe("LineupCalendar", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
-    fireEvent.click(screen.getByRole("button", { name: "Edit or move" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    );
     fireEvent.change(screen.getByLabelText("Caption"), {
       target: { value: "Why now?!" },
     });
@@ -145,18 +151,21 @@ describe("LineupCalendar", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
-    fireEvent.click(screen.getByRole("button", { name: "Edit or move" }));
+    const opener = screen.getByRole("button", { name: "Edit or choose date" });
+    fireEvent.click(opener);
     const dialog = await screen.findByRole("dialog");
     fireEvent.keyDown(dialog, { key: "Escape" });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(opener).toHaveFocus());
   });
 
   it("shows the calendar and upcoming-post list together", () => {
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
 
     expect(screen.getByLabelText("RunWay release calendar")).toBeInTheDocument();
+    expect(screen.getByLabelText("RunWay release agenda")).toBeInTheDocument();
     expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("First line");
     expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("Second line");
   });
@@ -173,5 +182,291 @@ describe("LineupCalendar", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0][0]).toContain("/api/lineup/12/retry");
+  });
+
+  it("opens a clear swap confirmation from the one-day shortcut", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+
+    fireEvent.click(screen.getByRole("button", { name: "One day →" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Swap on confirmation.")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("there will still be only one RunWay post per day");
+    expect(screen.getByLabelText("Release date")).toHaveValue("2026-08-09");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("prevents a Toronto slot in the past and explains why", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-18T14:30:00Z"));
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    );
+    fireEvent.change(screen.getByLabelText("Release date"), {
+      target: { value: "2026-07-18" },
+    });
+
+    expect(screen.getByLabelText("Release date")).toHaveAttribute(
+      "min",
+      "2026-07-18",
+    );
+    expect(screen.getByLabelText("Release date")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Confirm changes" })).toBeDisabled();
+    expect(within(screen.getByRole("dialog")).getByRole("alert")).toHaveTextContent(
+      "Choose a future 10:00 AM Eastern slot",
+    );
+  });
+
+  it("uses the configured timezone for same-day validation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-18T16:30:00Z"));
+    const pacific = {
+      ...lineup,
+      timezone: "America/Vancouver",
+    };
+    render(<LineupCalendar initialLineup={pacific} publishingEnabled />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    );
+    fireEvent.change(screen.getByLabelText("Release date"), {
+      target: { value: "2026-07-18" },
+    });
+
+    expect(screen.getByRole("button", { name: "Confirm changes" })).toBeEnabled();
+    expect(screen.getByLabelText("Release date")).not.toHaveAttribute(
+      "aria-invalid",
+    );
+  });
+
+  it("locks duplicate confirmations while a Lineup mutation is running", async () => {
+    let resolveResponse!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      resolveResponse = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    );
+    const confirm = screen.getByRole("button", { name: "Confirm changes" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", { name: "Verifying change…" }),
+    ).toBeDisabled();
+
+    resolveResponse({
+      ok: true,
+      json: async () => ({ lineup }),
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("preserves dialog input and blocks retry after a malformed success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ lineup: "unknown" }),
+      }),
+    );
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    );
+    fireEvent.change(screen.getByLabelText("Caption"), {
+      target: { value: "Wait... keep this?!" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm changes" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "unexpected response",
+    );
+    expect(screen.getByLabelText("Caption")).toHaveValue("Wait... keep this?!");
+    expect(
+      screen.getByRole("button", { name: "Confirm changes" }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("link", { name: "Refresh Lineup to verify" }),
+    ).toHaveAttribute("href", "/lineup");
+    expect(screen.queryByText(/Confirmed\./)).not.toBeInTheDocument();
+  });
+
+  it("uses labeled green, red, and amber states and locks unsafe posts", () => {
+    const failed = {
+      ...first,
+      id: 21,
+      status: "publish_failed",
+      planned_publish_at: "2026-08-10T10:00:00-04:00",
+      scheduled_publish_at: "2026-08-10T10:00:00-04:00",
+      final_caption: "Failed post",
+    };
+    const unverified = {
+      ...first,
+      id: 22,
+      status: "publish_unverified",
+      planned_publish_at: "2026-08-11T10:00:00-04:00",
+      scheduled_publish_at: "2026-08-11T10:00:00-04:00",
+      final_caption: "Unverified post",
+    };
+    const publishing = {
+      ...first,
+      id: 23,
+      status: "publishing",
+      planned_publish_at: "2026-08-12T10:00:00-04:00",
+      scheduled_publish_at: "2026-08-12T10:00:00-04:00",
+      final_caption: "Publishing post",
+    };
+    const published = {
+      ...first,
+      id: 24,
+      status: "published",
+      planned_publish_at: "2026-07-10T10:00:00-04:00",
+      scheduled_publish_at: "2026-07-10T10:00:00-04:00",
+      final_caption: "Published post",
+    };
+    const states = {
+      ...lineup,
+      coverage: 3,
+      scheduled: [failed, unverified, publishing],
+    };
+    render(
+      <LineupCalendar
+        initialLineup={states}
+        initialPublished={[published]}
+        publishingEnabled
+      />,
+    );
+
+    const inspector = screen.getByLabelText("Selected post");
+    expect(within(inspector).getByText("Failed · retry required")).toHaveClass(
+      "status-tone-danger",
+    );
+
+    fireEvent.click(
+      within(screen.getByLabelText("Upcoming posts")).getByRole("button", {
+        name: /Unverified post/,
+      }),
+    );
+    expect(
+      within(inspector).getByText("Unverified · check required"),
+    ).toHaveClass("status-tone-warning");
+    expect(
+      within(inspector).getByRole("button", { name: "Edit or choose date" }),
+    ).toBeDisabled();
+    expect(within(inspector).getByRole("button", { name: "Remove" })).toBeDisabled();
+
+    fireEvent.click(
+      within(screen.getByLabelText("Upcoming posts")).getByRole("button", {
+        name: /Publishing post/,
+      }),
+    );
+    expect(within(inspector).getByText("Publishing now")).toHaveClass(
+      "status-tone-warning",
+    );
+    expect(
+      within(inspector).getByRole("button", { name: "Edit or choose date" }),
+    ).toBeDisabled();
+    expect(within(inspector).getByRole("button", { name: "Remove" })).toBeDisabled();
+
+    fireEvent.click(
+      within(screen.getByLabelText("Past published posts")).getByRole("button", {
+        name: /Published post/,
+      }),
+    );
+    expect(within(inspector).getByText("Published")).toHaveClass(
+      "status-tone-success",
+    );
+    expect(
+      within(inspector).getByRole("button", { name: "Edit or choose date" }),
+    ).toBeDisabled();
+    expect(within(inspector).getByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(inspector).toHaveTextContent("locked history");
+  });
+
+  it("locks mutations when malformed state contains two active posts on one date", () => {
+    const collision = {
+      ...second,
+      scheduled_publish_at: first.scheduled_publish_at,
+      planned_publish_at: first.planned_publish_at,
+    };
+    render(
+      <LineupCalendar
+        initialLineup={{ ...lineup, scheduled: [first, collision] }}
+        publishingEnabled
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Daily-slot conflict detected",
+    );
+    expect(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+  });
+
+  it("rejects a successful response that would create a daily collision", async () => {
+    const collision = {
+      ...second,
+      scheduled_publish_at: first.scheduled_publish_at,
+      planned_publish_at: first.planned_publish_at,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          lineup: { ...lineup, scheduled: [first, collision] },
+        }),
+      }),
+    );
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    );
+    fireEvent.change(screen.getByLabelText("Caption"), {
+      target: { value: "Keep this unique?!" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm changes" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "conflicting daily slots",
+    );
+    expect(
+      within(dialog).getByRole("link", { name: "Refresh Lineup to verify" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Confirmed\./)).not.toBeInTheDocument();
+  });
+
+  it("traps Tab inside the dialog", () => {
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit or choose date" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    const confirm = within(dialog).getByRole("button", {
+      name: "Confirm changes",
+    });
+    confirm.focus();
+    fireEvent.keyDown(confirm, { key: "Tab" });
+
+    expect(screen.getByLabelText("Caption")).toHaveFocus();
   });
 });

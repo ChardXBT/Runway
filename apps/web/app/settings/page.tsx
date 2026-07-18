@@ -1,6 +1,7 @@
 import { PlatformConnection } from "@/components/platform-connection";
-import { SettingsForm } from "@/components/settings-form";
+import { isSettings, SettingsForm } from "@/components/settings-form";
 import { apiGet } from "@/lib/api";
+import { isPublisherQueueStatus } from "@/lib/guards";
 import type { PublisherQueueStatus } from "@/lib/types";
 
 type Settings = Parameters<typeof SettingsForm>[0]["initial"];
@@ -27,13 +28,13 @@ const fallback: Settings = {
 
 export default async function SettingsPage() {
   const [settings, publisherQueue] = await Promise.all([
-    apiGet<Settings>("/api/settings/full", fallback),
+    apiGet<Settings>("/api/settings/full", fallback, isSettings),
     apiGet<PublisherQueueStatus>("/api/publisher/queue", {
       running: false,
       queued: 0,
       paused: false,
       paused_reason: null,
-    }),
+    }, isPublisherQueueStatus),
   ]);
   return (
     <>

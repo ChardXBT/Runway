@@ -1,11 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
+import { actionError, readApiJson } from "@/lib/client-api";
+import { isPublisherQueueStatus, isRecord } from "@/lib/guards";
 import type { PublisherQueueStatus } from "@/lib/types";
 
 type ConnectionState = "unchecked" | "valid" | "invalid";
+
+type ConnectionResponse = {
+  valid: boolean;
+  detail?: string;
+};
+
+function isConnectionResponse(value: unknown): value is ConnectionResponse {
+  return (
+    isRecord(value) &&
+    typeof value.valid === "boolean" &&
+    (value.detail === undefined || typeof value.detail === "string")
+  );
+}
 
 export function PlatformConnection({
   publishingEnabled,
@@ -21,6 +36,8 @@ export function PlatformConnection({
   const [connection, setConnection] = useState<ConnectionState>("unchecked");
   const [queue, setQueue] = useState(initialQueue);
   const [busy, setBusy] = useState<"check" | "resume" | null>(null);
+  const actionLock = useRef(false);
+  const [detailIsError, setDetailIsError] = useState(false);
   const [detail, setDetail] = useState(
     publishingEnabled
       ? "Run a connection check before the first live scheduling session."
@@ -28,52 +45,77 @@ export function PlatformConnection({
   );
 
   async function checkConnection() {
-    if (!publishingEnabled || busy) return;
+    if (!publishingEnabled || actionLock.current) return;
+    actionLock.current = true;
     setBusy("check");
+    setDetailIsError(false);
     setDetail("Opening the private publisher profile and checking Qlob access…");
     try {
       const response = await fetch(`${API_URL}/api/publisher/session/validate`, {
         method: "POST",
       });
-      const payload = (await response.json()) as {
-        valid?: boolean;
-        detail?: string;
-      };
-      if (!response.ok) {
-        throw new Error(payload.detail || "The YouTube connection check failed.");
-      }
+      const payload = await readApiJson(response, {
+        validate: isConnectionResponse,
+        failureMessage: "The YouTube connection check failed.",
+      });
       setConnection(payload.valid ? "valid" : "invalid");
-      setDetail(payload.detail || "YouTube connection checked.");
+      setDetailIsError(!payload.valid);
+      setDetail(
+        payload.detail ||
+          (payload.valid
+            ? "The saved Qlob Editor session is ready."
+            : "The saved session does not currently have usable Qlob access."),
+      );
     } catch (error) {
       setConnection("invalid");
+      setDetailIsError(true);
       setDetail(
-        error instanceof Error ? error.message : "The YouTube connection check failed.",
+        actionError(
+          error,
+          "The YouTube connection check failed. The saved session was not marked connected.",
+        ),
       );
     } finally {
+      actionLock.current = false;
       setBusy(null);
     }
   }
 
   async function resumeQueue() {
-    if (!publishingEnabled || busy) return;
+    if (!publishingEnabled || actionLock.current) return;
+    actionLock.current = true;
     setBusy("resume");
+    setDetailIsError(false);
+    setDetail("Requesting a safe queue recovery…");
     try {
       const response = await fetch(`${API_URL}/api/publisher/queue/resume`, {
         method: "POST",
       });
-      const payload = (await response.json()) as PublisherQueueStatus & {
-        detail?: string;
-      };
-      if (!response.ok) {
-        throw new Error(payload.detail || "YouTube scheduling could not resume.");
-      }
+      const payload = await readApiJson(response, {
+        validate: isPublisherQueueStatus,
+        failureMessage: "YouTube scheduling could not resume.",
+      });
       setQueue(payload);
-      setDetail("The publisher queue is running again.");
-    } catch (error) {
+      setDetailIsError(payload.paused);
       setDetail(
-        error instanceof Error ? error.message : "YouTube scheduling could not resume.",
+        payload.paused
+          ? `The queue is still paused${payload.paused_reason ? `: ${payload.paused_reason}` : "."}`
+          : payload.running
+            ? "The publisher queue is running again."
+            : payload.queued
+              ? `${payload.queued} YouTube ${payload.queued === 1 ? "action is" : "actions are"} ready to process.`
+              : "The publisher queue is ready; no actions are waiting.",
+      );
+    } catch (error) {
+      setDetailIsError(true);
+      setDetail(
+        actionError(
+          error,
+          "YouTube scheduling could not resume. The queue state was not changed here.",
+        ),
       );
     } finally {
+      actionLock.current = false;
       setBusy(null);
     }
   }
@@ -102,6 +144,49 @@ export function PlatformConnection({
           {stateLabel}
         </span>
       </div>
+      <ol className="connection-steps" aria-label="YouTube connection setup">
+        <li>
+          <span>1</span>
+          <div>
+            <strong>Confirm Editor access</strong>
+            <p>
+              Use the Google account YouTube identifies as an Editor for the Qlob
+              channel.
+            </p>
+          </div>
+        </li>
+        <li>
+          <span>2</span>
+          <div>
+            <strong>Save the publisher login</strong>
+            <p>
+              Run <code>.\.venv\Scripts\runway.exe publisher login</code> in the
+              RunWay terminal, sign in inside the dedicated Chrome window, confirm
+              Qlob’s Posts page, then close the window and press Enter.
+            </p>
+          </div>
+        </li>
+        <li>
+          <span>3</span>
+          <div>
+            <strong>Check the saved session</strong>
+            <p>
+              The button below performs a real read-only session and channel access
+              check. It does not create or schedule a post.
+            </p>
+          </div>
+        </li>
+        <li>
+          <span>4</span>
+          <div>
+            <strong>Recover safely</strong>
+            <p>
+              If Google asks for sign-in or verification, RunWay pauses. Repeat the
+              publisher login step, check the session, then resume failed actions.
+            </p>
+          </div>
+        </li>
+      </ol>
       <dl className="connection-facts">
         <div>
           <dt>Channel</dt>
@@ -126,7 +211,11 @@ export function PlatformConnection({
           </dd>
         </div>
       </dl>
-      <p className="connection-detail" role="status">
+      <p
+        className="connection-detail"
+        role={detailIsError ? "alert" : "status"}
+        aria-live={detailIsError ? "assertive" : "polite"}
+      >
         {detail}
       </p>
       <div className="connection-actions">
@@ -135,8 +224,9 @@ export function PlatformConnection({
           className="button"
           onClick={checkConnection}
           disabled={!publishingEnabled || busy !== null}
+          aria-busy={busy === "check"}
         >
-          {busy === "check" ? "Checking connection…" : "Check connection"}
+          {busy === "check" ? "Checking saved session…" : "Check saved session"}
         </button>
         {(queue.paused || connection === "invalid") && (
           <button
@@ -144,6 +234,7 @@ export function PlatformConnection({
             className="button secondary"
             onClick={resumeQueue}
             disabled={!publishingEnabled || busy !== null}
+            aria-busy={busy === "resume"}
           >
             {busy === "resume" ? "Resuming…" : "Resume failed actions"}
           </button>

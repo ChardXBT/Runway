@@ -3,6 +3,7 @@ import Link from "next/link";
 import { API_URL, apiGet } from "@/lib/api";
 import { AnnotationEditor } from "@/components/annotation-editor";
 import { EligibilityToggle } from "@/components/eligibility-toggle";
+import { isRecord } from "@/lib/guards";
 
 type Detail = {
   id: number;
@@ -19,6 +20,50 @@ type Detail = {
   media: { id: number; url: string; width: number; height: number; sha256: string }[];
 };
 
+type Similar = { post_id: number; caption: string; score: number };
+
+function isDetail(value: unknown): value is Detail {
+  return (
+    isRecord(value) &&
+    typeof value.id === "number" &&
+    (value.external_post_id === null ||
+      typeof value.external_post_id === "string") &&
+    (value.permalink === null || typeof value.permalink === "string") &&
+    typeof value.post_type === "string" &&
+    (value.caption === null || typeof value.caption === "string") &&
+    (value.displayed_date_text === null ||
+      typeof value.displayed_date_text === "string") &&
+    (value.published_at === null || typeof value.published_at === "string") &&
+    typeof value.date_precision === "string" &&
+    (value.like_count === null || typeof value.like_count === "number") &&
+    (value.comment_count === null || typeof value.comment_count === "number") &&
+    typeof value.is_training_eligible === "boolean" &&
+    Array.isArray(value.media) &&
+    value.media.every(
+      (media) =>
+        isRecord(media) &&
+        typeof media.id === "number" &&
+        typeof media.url === "string" &&
+        typeof media.width === "number" &&
+        typeof media.height === "number" &&
+        typeof media.sha256 === "string",
+    )
+  );
+}
+
+function isSimilarList(value: unknown): value is Similar[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.post_id === "number" &&
+        typeof item.caption === "string" &&
+        typeof item.score === "number",
+    )
+  );
+}
+
 function splitCaption(caption: string | null) {
   if (!caption) return { text: "Caption unavailable", url: null };
   const match = caption.match(/https?:\/\/\S+/);
@@ -30,8 +75,16 @@ function splitCaption(caption: string | null) {
 
 export default async function CatalogueDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const post = await apiGet<Detail | null>(`/api/catalog/${id}`, null);
-  const similar = await apiGet<{ post_id: number; caption: string; score: number }[]>(`/api/catalog/${id}/similar`, []);
+  const post = await apiGet<Detail | null>(
+    `/api/catalog/${id}`,
+    null,
+    (value): value is Detail | null => value === null || isDetail(value),
+  );
+  const similar = await apiGet<Similar[]>(
+    `/api/catalog/${id}/similar`,
+    [],
+    isSimilarList,
+  );
   if (!post) {
     return <section className="panel empty"><div><strong>Post not found.</strong><Link href="/catalogue">Back to catalogue</Link></div></section>;
   }

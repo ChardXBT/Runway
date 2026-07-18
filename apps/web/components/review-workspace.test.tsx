@@ -235,4 +235,139 @@ describe("ReviewWorkspace", () => {
     expect(fetchMock.mock.calls[0][0]).toContain("/api/editorial/options/ensure");
     expect(await screen.findByDisplayValue("Recommended caption.")).toBeInTheDocument();
   });
+
+  it("locks an accept immediately so double clicks submit only once", async () => {
+    let resolveResponse!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      resolveResponse = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal("fetch", fetchMock);
+    const next = {
+      ...proposal,
+      id: 45,
+      final_caption: "Next safe option.",
+      recommended_caption: "Next safe option.",
+    };
+
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={{ ...workflow, needs_review: 5 }}
+        publishingEnabled
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Primary caption"), {
+      target: { value: "Why is One celebrating?!" },
+    });
+    const accept = screen.getByRole("button", { name: "Accept" });
+    fireEvent.click(accept);
+    fireEvent.click(accept);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Accepting…" })).toBeDisabled();
+
+    resolveResponse({
+      ok: true,
+      json: async () => ({
+        decision: "approved",
+        proposal: {
+          ...proposal,
+          status: "internally_scheduled",
+          final_caption: "Why is One celebrating?!",
+          scheduled_publish_at: "2026-03-08T10:00:00-04:00",
+        },
+        next_proposal: next,
+        workflow: { ...workflow, needs_review: 4, queued: 1 },
+      }),
+    });
+
+    expect(await screen.findByDisplayValue("Next safe option.")).toBeInTheDocument();
+  });
+
+  it("preserves the caption and blocks another decision after an ambiguous network failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+    );
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Primary caption"), {
+      target: { value: "Wait... what?!" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "response could not be verified",
+    );
+    expect(screen.getByDisplayValue("Wait... what?!")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeDisabled();
+    expect(
+      screen.getByRole("link", { name: "Reload Generator to verify" }),
+    ).toHaveAttribute("href", "/review");
+  });
+
+  it("does not advance or claim success for a malformed approval response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ decision: "approved" }),
+      }),
+    );
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Primary caption"), {
+      target: { value: "Is this really happening?!" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "response could not be verified",
+    );
+    expect(
+      screen.getByDisplayValue("Is this really happening?!"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Accepted for/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the decision retryable after a confirmed server rejection", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ detail: "Caption is not valid yet." }),
+      }),
+    );
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Primary caption"), {
+      target: { value: "Keep this?!" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Caption is not valid yet.",
+    );
+    expect(screen.getByDisplayValue("Keep this?!")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+    expect(
+      screen.queryByRole("link", { name: "Reload Generator to verify" }),
+    ).not.toBeInTheDocument();
+  });
 });

@@ -2,6 +2,7 @@
 import Link from "next/link";
 
 import { apiGet } from "@/lib/api";
+import { isRecord } from "@/lib/guards";
 
 type Profile = {
   version: number;
@@ -28,13 +29,76 @@ type Evaluation = {
   duplicate_detection: { transformed_true_positive_rate: number; unrelated_false_positive_rate: number };
 };
 
+function isProfile(value: unknown): value is Profile {
+  const isDistribution = (distribution: unknown) =>
+    Array.isArray(distribution) &&
+    distribution.every(
+      (item) =>
+        Array.isArray(item) &&
+        item.length === 2 &&
+        typeof item[0] === "string" &&
+        typeof item[1] === "number",
+    );
+  return (
+    isRecord(value) &&
+    typeof value.version === "number" &&
+    typeof value.summary === "string" &&
+    Array.isArray(value.training_post_ids) &&
+    Array.isArray(value.holdout_post_ids) &&
+    isRecord(value.caption_statistics) &&
+    typeof value.caption_statistics.median_words === "number" &&
+    typeof value.caption_statistics.question_frequency === "number" &&
+    typeof value.caption_statistics.exclamation_frequency === "number" &&
+    isDistribution(value.franchise_distribution) &&
+    isDistribution(value.character_distribution) &&
+    isDistribution(value.visual_compositions) &&
+    Array.isArray(value.representative_positive_examples) &&
+    value.representative_positive_examples.every(
+      (example) =>
+        isRecord(example) &&
+        typeof example.post_id === "number" &&
+        typeof example.caption === "string" &&
+        (example.media_url === undefined ||
+          example.media_url === null ||
+          typeof example.media_url === "string"),
+    ) &&
+    Array.isArray(value.rotation_patterns) &&
+    value.rotation_patterns.every((item) => typeof item === "string")
+  );
+}
+
+function isEvaluation(value: unknown): value is Evaluation {
+  return (
+    isRecord(value) &&
+    typeof value.profile_version === "number" &&
+    isRecord(value.image_caption_matching) &&
+    typeof value.image_caption_matching.accuracy === "number" &&
+    typeof value.image_caption_matching.evaluated === "number" &&
+    typeof value.qlob_caption_ranking_accuracy === "number" &&
+    typeof value.retrieval_top3_franchise_relevance === "number" &&
+    isRecord(value.duplicate_detection) &&
+    typeof value.duplicate_detection.transformed_true_positive_rate ===
+      "number" &&
+    typeof value.duplicate_detection.unrelated_false_positive_rate === "number"
+  );
+}
+
 function Percent({ value }: { value: number }) {
   return <>{new Intl.NumberFormat("en", { style: "percent", maximumFractionDigits: 1 }).format(value)}</>;
 }
 
 export default async function ProfilePage() {
-  const profile = await apiGet<Profile | null>("/api/profiles/active", null);
-  const evaluation = await apiGet<Evaluation | null>("/api/profiles/evaluation", null);
+  const profile = await apiGet<Profile | null>(
+    "/api/profiles/active",
+    null,
+    (value): value is Profile | null => value === null || isProfile(value),
+  );
+  const evaluation = await apiGet<Evaluation | null>(
+    "/api/profiles/evaluation",
+    null,
+    (value): value is Evaluation | null =>
+      value === null || isEvaluation(value),
+  );
   if (!profile) {
     return <><p className="eyebrow">Style intelligence</p><h1>No profile yet.</h1><section className="panel empty"><div><strong>Analyze the fixture catalogue first.</strong>Run <code>runway analyze history --resume</code>, then <code>runway profile build</code>.</div></section></>;
   }

@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Nav } from "./nav";
@@ -24,5 +24,19 @@ describe("Nav", () => {
     render(<Nav publishingEnabled />);
     expect(screen.getByText("YouTube actions enabled")).toBeInTheDocument();
     expect(screen.getByText("Account sign-in is checked on use")).toBeInTheDocument();
+  });
+
+  it("closes the backstage menu with Escape and restores focus", async () => {
+    render(<Nav />);
+    const openMenu = screen.getByLabelText("Open RunWay menu");
+    fireEvent.click(openMenu);
+    const closeMenu = await screen.findByLabelText("Close RunWay menu");
+    expect(closeMenu.closest("details")).toHaveAttribute("open");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    const reopenedLabel = await screen.findByLabelText("Open RunWay menu");
+    expect(reopenedLabel.closest("details")).not.toHaveAttribute("open");
+    expect(reopenedLabel).toHaveFocus();
   });
 });

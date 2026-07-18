@@ -1,5 +1,10 @@
 import { ReviewWorkspace } from "@/components/review-workspace";
 import { apiGet } from "@/lib/api";
+import {
+  isEditorialEnvelope,
+  isProposal,
+  isRecord,
+} from "@/lib/guards";
 import type {
   EditorialEnvelope,
   Proposal,
@@ -33,17 +38,23 @@ export default async function ReviewPage({
   const [settings, editorial] = await Promise.all([
     apiGet<{ publishing_enabled: boolean }>("/api/settings", {
       publishing_enabled: false,
-    }),
+    }, (value): value is { publishing_enabled: boolean } =>
+      isRecord(value) && typeof value.publishing_enabled === "boolean",
+    ),
     apiGet<EditorialEnvelope>("/api/editorial/next", {
       next_proposal: null,
       workflow: fallbackWorkflow,
       publisher_queue: fallbackQueue,
-    }),
+    }, isEditorialEnvelope),
   ]);
 
   let proposal = editorial.next_proposal;
   if (id) {
-    const requested = await apiGet<Proposal | null>(`/api/proposals/${id}`, null);
+    const requested = await apiGet<Proposal | null>(
+      `/api/proposals/${id}`,
+      null,
+      (value): value is Proposal | null => value === null || isProposal(value),
+    );
     if (requested?.status === "needs_review") proposal = requested;
   }
 

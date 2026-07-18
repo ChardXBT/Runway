@@ -1,8 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
+import { actionError, readApiJson } from "@/lib/client-api";
+import { isRecord } from "@/lib/guards";
 
 type Annotation = {
   effective: {
@@ -15,22 +17,68 @@ type Annotation = {
   review_status: string;
 };
 
+function isAnnotation(value: unknown): value is Annotation {
+  if (!isRecord(value) || !isRecord(value.effective)) return false;
+  const effective = value.effective;
+  return (
+    (effective.franchise === undefined ||
+      effective.franchise === null ||
+      typeof effective.franchise === "string") &&
+    (effective.visible_characters === undefined ||
+      (Array.isArray(effective.visible_characters) &&
+        effective.visible_characters.every(
+          (character) => typeof character === "string",
+        ))) &&
+    (effective.scene_description === undefined ||
+      typeof effective.scene_description === "string") &&
+    (effective.composition === undefined ||
+      typeof effective.composition === "string") &&
+    (effective.tone === undefined || typeof effective.tone === "string") &&
+    typeof value.review_status === "string"
+  );
+}
+
 export function AnnotationEditor({ postId }: { postId: number }) {
   const [annotation, setAnnotation] = useState<Annotation | null>(null);
   const [status, setStatus] = useState("Loading annotation…");
+  const [statusIsError, setStatusIsError] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const actionLock = useRef(false);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/annotations/${postId}`)
-      .then((response) => (response.ok ? response.json() : Promise.reject()))
-      .then((value: Annotation) => {
+    const controller = new AbortController();
+    async function load() {
+      try {
+        const response = await fetch(`${API_URL}/api/annotations/${postId}`, {
+          signal: controller.signal,
+        });
+        const value = await readApiJson(response, {
+          validate: isAnnotation,
+          failureMessage: "Run historical analysis to create this annotation.",
+          malformedMessage:
+            "The annotation response was unreadable. Reload before editing this record.",
+        });
         setAnnotation(value);
         setStatus("");
-      })
-      .catch(() => setStatus("Run historical analysis to create this annotation."));
+        setStatusIsError(false);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setStatus(
+          actionError(
+            error,
+            "Run historical analysis to create this annotation.",
+          ),
+        );
+        setStatusIsError(true);
+      }
+    }
+    void load();
+    return () => controller.abort();
   }, [postId]);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (actionLock.current) return;
     const data = new FormData(event.currentTarget);
     const fields = {
       franchise: String(data.get("franchise") || "") || null,
@@ -42,27 +90,58 @@ export function AnnotationEditor({ postId }: { postId: number }) {
       composition: String(data.get("composition") || ""),
       tone: String(data.get("tone") || ""),
     };
+    actionLock.current = true;
+    setSaving(true);
     setStatus("Saving…");
-    const response = await fetch(`${API_URL}/api/annotations/${postId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fields,
-        review_note: "Reviewed in the local catalogue annotation editor.",
-      }),
-    });
-    if (!response.ok) {
-      setStatus("Correction could not be saved.");
-      return;
+    setStatusIsError(false);
+    try {
+      const response = await fetch(`${API_URL}/api/annotations/${postId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fields,
+          review_note: "Reviewed in the local catalogue annotation editor.",
+        }),
+      });
+      setAnnotation(
+        await readApiJson(response, {
+          validate: isAnnotation,
+          failureMessage: "Correction could not be saved.",
+        }),
+      );
+      setStatus(
+        "Review saved. Any correction overlays preserve the original model output.",
+      );
+    } catch (error) {
+      setStatus(
+        actionError(
+          error,
+          "Correction could not be saved. Your entries are preserved.",
+          "The save response could not be verified. Your entries are preserved; reload before trying again.",
+        ),
+      );
+      setStatusIsError(true);
+    } finally {
+      actionLock.current = false;
+      setSaving(false);
     }
-    setAnnotation((await response.json()) as Annotation);
-    setStatus("Review saved. Any correction overlays preserve the original model output.");
   }
 
-  if (!annotation) return <section className="panel"><h2>Annotation</h2><p>{status}</p></section>;
+  if (!annotation) {
+    return (
+      <section className="panel" aria-busy={!statusIsError}>
+        <h2>Annotation</h2>
+        <p role={statusIsError ? "alert" : "status"}>{status}</p>
+      </section>
+    );
+  }
   const current = annotation.effective;
   return (
-    <form className="panel annotation-form" onSubmit={save}>
+    <form
+      className="panel annotation-form"
+      onSubmit={save}
+      aria-busy={saving}
+    >
       <div className="section-heading">
         <div><p className="eyebrow">Reviewed overlay</p><h2>Annotation</h2></div>
         <span className="pill">{annotation.review_status}</span>
@@ -74,7 +153,12 @@ export function AnnotationEditor({ postId }: { postId: number }) {
         <label><span>Composition</span><input className="field" name="composition" defaultValue={current.composition ?? ""} /></label>
         <label><span>Tone</span><input className="field" name="tone" defaultValue={current.tone ?? ""} /></label>
       </div>
-      <div className="form-actions"><button className="button" type="submit">Save review</button><small role="status">{status}</small></div>
+      <div className="form-actions">
+        <button className="button" type="submit" disabled={saving}>
+          {saving ? "Saving review…" : "Save review"}
+        </button>
+        <small role={statusIsError ? "alert" : "status"}>{status}</small>
+      </div>
     </form>
   );
 }

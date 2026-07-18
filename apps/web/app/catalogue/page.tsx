@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { API_URL, apiGet } from "@/lib/api";
+import { isRecord, proposalList } from "@/lib/guards";
 import type { Proposal } from "@/lib/types";
 
 type Media = { id: number; url: string; width: number; height: number };
@@ -19,6 +20,40 @@ type CatalogStatus = {
   training_eligible: number;
   media_assets: number;
 };
+
+function isPostList(value: unknown): value is Post[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (post) =>
+        isRecord(post) &&
+        typeof post.id === "number" &&
+        typeof post.post_type === "string" &&
+        (post.caption === null || typeof post.caption === "string") &&
+        (post.published_at === null || typeof post.published_at === "string") &&
+        typeof post.date_precision === "string" &&
+        typeof post.is_training_eligible === "boolean" &&
+        Array.isArray(post.media) &&
+        post.media.every(
+          (media) =>
+            isRecord(media) &&
+            typeof media.id === "number" &&
+            typeof media.url === "string" &&
+            typeof media.width === "number" &&
+            typeof media.height === "number",
+        ),
+    )
+  );
+}
+
+function isCatalogStatus(value: unknown): value is CatalogStatus {
+  return (
+    isRecord(value) &&
+    typeof value.total_posts === "number" &&
+    typeof value.training_eligible === "number" &&
+    typeof value.media_assets === "number"
+  );
+}
 
 export default async function CataloguePage({
   searchParams,
@@ -45,13 +80,17 @@ export default async function CataloguePage({
   if (params.franchise) query.set("franchise", params.franchise);
   if (params.character) query.set("character", params.character);
   const [catalogRows, status, rejected] = await Promise.all([
-    apiGet<Post[]>(`/api/catalog?${query}`, []),
+    apiGet<Post[]>(`/api/catalog?${query}`, [], isPostList),
     apiGet<CatalogStatus>("/api/catalog/status", {
       total_posts: 0,
       training_eligible: 0,
       media_assets: 0,
-    }),
-    apiGet<Proposal[]>("/api/proposals?status=rejected&limit=100", []),
+    }, isCatalogStatus),
+    apiGet<Proposal[]>(
+      "/api/proposals?status=rejected&limit=100",
+      [],
+      proposalList,
+    ),
   ]);
   const posts = catalogRows.slice(0, pageSize);
   const hasNextPage = catalogRows.length > pageSize;

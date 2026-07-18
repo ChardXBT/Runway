@@ -1,10 +1,13 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
+import { actionError, readApiJson } from "@/lib/client-api";
+import { isValidTimeZone } from "@/lib/datetime";
+import { isRecord } from "@/lib/guards";
 
-type Settings = {
+export type Settings = {
   channel_name: string;
   channel_handle: string;
   timezone: string;
@@ -24,28 +27,144 @@ type Settings = {
   blocked_sources: { id: number; type: string; value: string }[];
 };
 
+type FormStatus = {
+  kind: "idle" | "saving" | "success" | "error";
+  message: string;
+};
+
+export function isSettings(value: unknown): value is Settings {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.channel_name === "string" &&
+    typeof value.channel_handle === "string" &&
+    typeof value.timezone === "string" &&
+    isValidTimeZone(value.timezone) &&
+    typeof value.default_post_time === "string" &&
+    /^([01]\d|2[0-3]):[0-5]\d$/.test(value.default_post_time) &&
+    typeof value.duplicate_window_days === "number" &&
+    Number.isInteger(value.duplicate_window_days) &&
+    value.duplicate_window_days >= 1 &&
+    typeof value.agent_runtime === "string" &&
+    typeof value.codex_model === "string" &&
+    typeof value.codex_reasoning_effort === "string" &&
+    typeof value.codex_chatgpt_auth_required === "boolean" &&
+    typeof value.paid_api_fallback_enabled === "boolean" &&
+    typeof value.openai_configured === "boolean" &&
+    typeof value.browser_search_enabled === "boolean" &&
+    typeof value.publishing_enabled === "boolean" &&
+    typeof value.caption_question_first === "boolean" &&
+    typeof value.publisher_channel_id === "string" &&
+    typeof value.publisher_browser_channel === "string" &&
+    Array.isArray(value.blocked_sources) &&
+    value.blocked_sources.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.id === "number" &&
+        typeof item.type === "string" &&
+        typeof item.value === "string",
+    )
+  );
+}
+
 export function SettingsForm({ initial }: { initial: Settings }) {
   const [settings, setSettings] = useState(initial);
-  const [message, setMessage] = useState("");
+  const [draft, setDraft] = useState({
+    channelName: initial.channel_name,
+    timezone: initial.timezone,
+    defaultPostTime: initial.default_post_time,
+    duplicateWindowDays: String(initial.duplicate_window_days),
+  });
+  const [status, setStatus] = useState<FormStatus>({
+    kind: "idle",
+    message: "",
+  });
+  const actionLock = useRef(false);
+  const channelNameInvalid = !draft.channelName.trim();
+  const timezoneInvalid = !isValidTimeZone(draft.timezone.trim());
+  const timeInvalid = !/^([01]\d|2[0-3]):[0-5]\d$/.test(
+    draft.defaultPostTime,
+  );
+  const duplicateWindow = Number(draft.duplicateWindowDays);
+  const duplicateWindowInvalid =
+    !Number.isInteger(duplicateWindow) || duplicateWindow < 1;
+
+  function updateDraft(
+    key: keyof typeof draft,
+    value: string,
+  ) {
+    setDraft((current) => ({ ...current, [key]: value }));
+    if (status.kind !== "saving") {
+      setStatus({ kind: "idle", message: "" });
+    }
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    setMessage("Saving…");
+    if (actionLock.current) return;
+
+    const channelName = draft.channelName.trim();
+    const duplicateWindowDays = Number(draft.duplicateWindowDays);
+    if (channelNameInvalid) {
+      setStatus({ kind: "error", message: "Channel name is required." });
+      return;
+    }
+    if (timezoneInvalid) {
+      setStatus({
+        kind: "error",
+        message: "Enter a valid IANA timezone, such as America/Toronto.",
+      });
+      return;
+    }
+    if (timeInvalid) {
+      setStatus({ kind: "error", message: "Choose a valid default post time." });
+      return;
+    }
+    if (duplicateWindowInvalid) {
+      setStatus({
+        kind: "error",
+        message: "Duplicate window must be a whole number of at least 1 day.",
+      });
+      return;
+    }
+
+    actionLock.current = true;
+    setStatus({ kind: "saving", message: "Saving settings…" });
     const fields = {
-      name: String(data.get("name")),
-      timezone: String(data.get("timezone")),
-      default_post_time: String(data.get("default_post_time")),
-      duplicate_window_days: Number(data.get("duplicate_window_days")),
+      name: channelName,
+      timezone: draft.timezone.trim(),
+      default_post_time: draft.defaultPostTime,
+      duplicate_window_days: duplicateWindowDays,
     };
-    const response = await fetch(`${API_URL}/api/settings/full`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fields }),
-    });
-    const payload = await response.json();
-    if (response.ok) setSettings(payload as Settings);
-    setMessage(response.ok ? "Saved." : payload.detail);
+    try {
+      const response = await fetch(`${API_URL}/api/settings/full`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields }),
+      });
+      const payload = await readApiJson(response, {
+        validate: isSettings,
+        failureMessage: "Settings could not be saved.",
+      });
+      setSettings(payload);
+      setDraft({
+        channelName: payload.channel_name,
+        timezone: payload.timezone,
+        defaultPostTime: payload.default_post_time,
+        duplicateWindowDays: String(payload.duplicate_window_days),
+      });
+      setStatus({ kind: "success", message: "Settings saved." });
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message: actionError(
+          error,
+          "Settings could not be saved. Check the local service and try again.",
+          "The save response could not be verified. Your entries are preserved; reload before trying again.",
+        ),
+      });
+    } finally {
+      actionLock.current = false;
+    }
   }
 
   const modelDescription =
@@ -71,10 +190,26 @@ export function SettingsForm({ initial }: { initial: Settings }) {
             : "Only local decisions and internal Lineup scheduling are available."}
         </span>
       </div>
-      <form className="panel settings-form" onSubmit={save}>
+      <form
+        className="panel settings-form"
+        onSubmit={save}
+        aria-busy={status.kind === "saving"}
+        noValidate
+      >
         <label>
           <span>Channel name</span>
-          <input className="field" name="name" defaultValue={settings.channel_name} />
+          <input
+            className="field"
+            name="name"
+            value={draft.channelName}
+            onChange={(event) => updateDraft("channelName", event.target.value)}
+            required
+            maxLength={120}
+            aria-invalid={
+              status.kind === "error" && channelNameInvalid ? "true" : undefined
+            }
+            disabled={status.kind === "saving"}
+          />
         </label>
         <label>
           <span>Handle</span>
@@ -83,7 +218,20 @@ export function SettingsForm({ initial }: { initial: Settings }) {
         <div className="two-fields">
           <label>
             <span>Timezone</span>
-            <input className="field" name="timezone" defaultValue={settings.timezone} />
+            <input
+              className="field"
+              name="timezone"
+              aria-label="Timezone"
+              value={draft.timezone}
+              onChange={(event) => updateDraft("timezone", event.target.value)}
+              required
+              aria-describedby="timezone-hint"
+              aria-invalid={
+                status.kind === "error" && timezoneInvalid ? "true" : undefined
+              }
+              disabled={status.kind === "saving"}
+            />
+            <small id="timezone-hint">IANA format, for example America/Toronto</small>
           </label>
           <label>
             <span>Default post time</span>
@@ -91,7 +239,15 @@ export function SettingsForm({ initial }: { initial: Settings }) {
               className="field"
               name="default_post_time"
               type="time"
-              defaultValue={settings.default_post_time}
+              value={draft.defaultPostTime}
+              onChange={(event) =>
+                updateDraft("defaultPostTime", event.target.value)
+              }
+              required
+              aria-invalid={
+                status.kind === "error" && timeInvalid ? "true" : undefined
+              }
+              disabled={status.kind === "saving"}
             />
           </label>
         </div>
@@ -102,13 +258,35 @@ export function SettingsForm({ initial }: { initial: Settings }) {
             name="duplicate_window_days"
             type="number"
             min="1"
-            defaultValue={settings.duplicate_window_days}
+            step="1"
+            value={draft.duplicateWindowDays}
+            onChange={(event) =>
+              updateDraft("duplicateWindowDays", event.target.value)
+            }
+            required
+            aria-invalid={
+              status.kind === "error" && duplicateWindowInvalid
+                ? "true"
+                : undefined
+            }
+            disabled={status.kind === "saving"}
           />
         </label>
-        <button className="button" type="submit">
-          Save settings
+        <button
+          className="button"
+          type="submit"
+          disabled={status.kind === "saving"}
+        >
+          {status.kind === "saving" ? "Saving settings…" : "Save settings"}
         </button>
-        <small role="status">{message}</small>
+        <small
+          className={`form-message form-message-${status.kind}`}
+          id="settings-form-message"
+          role={status.kind === "error" ? "alert" : "status"}
+          aria-live={status.kind === "error" ? "assertive" : "polite"}
+        >
+          {status.message}
+        </small>
       </form>
       <section className="profile-columns">
         <article className="panel">

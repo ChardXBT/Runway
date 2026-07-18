@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 import { RunwayLogo } from "@/components/runway-logo";
 
@@ -20,6 +21,42 @@ const secondaryLinks = [
 
 export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean }) {
   const pathname = usePathname();
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    function closeMenu(event: PointerEvent) {
+      const menu = menuRef.current;
+      if (
+        menu?.open &&
+        event.target instanceof Node &&
+        !menu.contains(event.target)
+      ) {
+        menu.open = false;
+        setMenuOpen(false);
+      }
+    }
+
+    function closeMenuWithKeyboard(event: KeyboardEvent) {
+      if (event.key !== "Escape" || !menuRef.current?.open) return;
+      menuRef.current.open = false;
+      setMenuOpen(false);
+      menuRef.current.querySelector("summary")?.focus();
+    }
+
+    document.addEventListener("pointerdown", closeMenu);
+    document.addEventListener("keydown", closeMenuWithKeyboard);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenu);
+      document.removeEventListener("keydown", closeMenuWithKeyboard);
+    };
+  }, []);
+
+  function dismissMenu() {
+    if (!menuRef.current) return;
+    menuRef.current.open = false;
+    setMenuOpen(false);
+  }
 
   return (
     <header className="topbar">
@@ -48,8 +85,14 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
             );
           })}
         </nav>
-        <details className="nav-menu">
-          <summary aria-label="Open RunWay menu">
+        <details
+          ref={menuRef}
+          className="nav-menu"
+          onToggle={(event) => setMenuOpen(event.currentTarget.open)}
+        >
+          <summary
+            aria-label={menuOpen ? "Close RunWay menu" : "Open RunWay menu"}
+          >
             <span aria-hidden="true" />
             <span aria-hidden="true" />
             <span aria-hidden="true" />
@@ -76,6 +119,7 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
                 <Link
                   href={href}
                   key={href}
+                  onClick={dismissMenu}
                   className={
                     pathname.startsWith(href.split("#")[0]) ? "active" : ""
                   }
