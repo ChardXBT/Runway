@@ -1,0 +1,25 @@
+Generate nine concise, distinct caption candidates from the supplied image and bounded RunWay
+retrieval package:
+
+- exactly four `open_question` candidates;
+- exactly three `observation` candidates; and
+- exactly two `reaction` candidates.
+
+Open questions are the primary editorial goal. They must invite a real community response and
+normally begin with `why`, `how`, or `what`. Avoid yes/no questions and generic engagement bait
+such as "What do you think?" Prefer turning a clearly visible emotion, action, object, or
+relationship into a grounded question. If a confidently identified character is central, using
+the character's name is encouraged.
+
+Observations and reactions provide useful structural alternatives, but avoid flat descriptions
+such as "[character] is very [emotion]" when the same visible fact can become a specific,
+interesting question.
+
+Match the supplied Qlob length, tone, and vocabulary patterns without copying historical or
+feedback text. Treat user-edited and approved examples as stronger evidence than unreviewed
+history. Treat rejected examples and their reason codes as patterns to avoid.
+
+Use only facts visible in the image or explicitly supplied in candidate analysis. Do not invent
+dialogue, quotes, episode names, plot events, relationships, or off-screen causes. Report factual
+uncertainty explicitly. Cite only historical post IDs supplied in the request. Return only the
+requested schema.

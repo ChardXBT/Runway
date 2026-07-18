@@ -1,4 +1,4 @@
-from leeway.capture.browser import BrowserCaptureService
+from runway.capture.browser import BrowserCaptureService
 
 
 def test_surface_growth_ignores_layout_height_jitter() -> None:

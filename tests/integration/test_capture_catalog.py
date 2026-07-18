@@ -3,13 +3,13 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from leeway.capture.schemas import BrowserDomSnapshot, ExtractedPost, ImageReference
-from leeway.capture.service import CaptureService
-from leeway.catalog.service import CatalogService
-from leeway.config import Settings
-from leeway.db.base import Database
-from leeway.db.models import CaptureRun, MediaAsset, Post, PostMedia, RawPostRecord
-from leeway.domain.enums import CaptureMode, PostType
+from runway.capture.schemas import BrowserDomSnapshot, ExtractedPost, ImageReference
+from runway.capture.service import CaptureService
+from runway.catalog.service import CatalogService
+from runway.config import Settings
+from runway.db.base import Database
+from runway.db.models import CaptureRun, MediaAsset, Post, PostMedia, RawPostRecord
+from runway.domain.enums import CaptureMode, PostType
 
 
 def test_fixture_capture_resumes_and_is_idempotent(database: Database, settings: Settings) -> None:

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from leeway.capture.adapter import (
+from runway.capture.adapter import (
     YouTubeCommunityPostsAdapterV1,
     canonicalize_youtube_image_url,
     fixture_dom_path,

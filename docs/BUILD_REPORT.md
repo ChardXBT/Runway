@@ -7,7 +7,7 @@ bounded live image search, real proposal, UI pass, and restart check were subseq
 production evidence.
 
 The completed source repository is privately hosted at
-`https://github.com/ChardXBT/LeeWay`, with `main` as the default branch. GitHub visibility was
+`https://github.com/ChardXBT/RunWay`, with `main` as the default branch. GitHub visibility was
 verified as `PRIVATE` after the initial push.
 
 ## 2026-07-17 runtime update
@@ -40,9 +40,9 @@ verified as `PRIVATE` after the initial push.
   rejections, including reason codes and image verdicts.
 - Replaced the original ten-frame queue with a continuous one-decision editorial conveyor. Caption
   edits are inline; approve, reject, and image replacement record learning and load the next option.
-- Added first-open-day allocation at 10:00 AM Toronto time, with a strict one-LeeWay-post-per-day
+- Added first-open-day allocation at 10:00 AM Toronto time, with a strict one-RunWay-post-per-day
   invariant and no fixed scheduling horizon.
-- Implemented approve-to-schedule publishing through a persisted serial outbox with Qlob/Editor
+- Implemented accept-to-schedule publishing through a persisted serial outbox with Qlob/Editor
   checks, payload hashing, session-expiry pause/resume, screenshots, Scheduled-tab verification,
   and conservative no-retry recovery after an ambiguous final click.
 - Source metadata remains preserved but is no longer an approval-form gate.
@@ -94,18 +94,18 @@ verified as `PRIVATE` after the initial push.
 ### Milestone 4 — editorial conveyor and guarded publishers
 
 - Added a restart-safe, DST-aware first-open-day allocator with no fixed horizon and no more than
-  one LeeWay-generated post per Toronto local date.
+  one RunWay-generated post per Toronto local date.
 - Added the focused Review conveyor, uncapped Schedule list, Archive, Settings, and Activity
   evidence surfaces. The primary decision supports inline editing, alternatives, approve, reject,
   and image replacement.
 - Added an internal publisher boundary plus a separate persisted FIFO outbox and guarded
   visible-browser scheduler. No model path can approve or publish; the operator's exact
-  `Approve & schedule` action is the proposal-specific instruction.
+  `Accept` action is the proposal-specific instruction.
 
 ## Repository tree
 
 ```text
-LeeWay/
+RunWay/
 ├── .github/workflows/ci.yml
 ├── alembic/                     # database migrations
 ├── apps/
@@ -114,7 +114,7 @@ LeeWay/
 ├── data/                        # ignored runtime data; README/.gitkeep tracked
 ├── docs/                        # product, architecture, operations, security, decisions
 ├── scripts/e2e_demo.py          # isolated fixture proof runner
-├── src/leeway/
+├── src/runway/
 │   ├── analysis/                # runtimes, prompts, schemas, analysis
 │   ├── api/                     # local HTTP routes
 │   ├── capture/                 # fixture and headed-browser capture
@@ -138,38 +138,38 @@ LeeWay/
 Run from PowerShell on Windows:
 
 ```powershell
-cd C:\path\to\LeeWay
+cd C:\path\to\RunWay
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 npm install
 .\.venv\Scripts\python.exe -m playwright install chromium
-.\.venv\Scripts\leeway.exe init
-.\.venv\Scripts\leeway.exe doctor
+.\.venv\Scripts\runway.exe init
+.\.venv\Scripts\runway.exe doctor
 ```
 
 `npm install` installs the isolated web package from `apps/web/package-lock.json`. Run
-`./run-leeway.ps1`, then open `http://127.0.0.1:3000`. Both services bind only to loopback.
+`./run-runway.ps1`, then open `http://127.0.0.1:3000`. Both services bind only to loopback.
 
 ## First Qlob capture
 
 ```powershell
-.\.venv\Scripts\leeway.exe capture youtube-posts --channel-url "https://www.youtube.com/@Qlob/posts" --headed --resume
+.\.venv\Scripts\runway.exe capture youtube-posts --channel-url "https://www.youtube.com/@Qlob/posts" --headed --resume
 ```
 
-Leeway prints the dedicated profile path and asks for confirmation before opening a visible
+RunWay prints the dedicated profile path and asks for confirmation before opening a visible
 browser. Handle sign-in, consent, account choice, or a challenge yourself. Press `Ctrl+C` once to
-stop safely, then rerun the same command with `--resume`. Capture state remains in `data/leeway.db`;
+stop safely, then rerun the same command with `--resume`. Capture state remains in `data/runway.db`;
 HTML, screenshot, and JSON failure diagnostics are saved under `data/snapshots/`.
 
 ## Catalogue inspection and verification
 
 ```powershell
-.\.venv\Scripts\leeway.exe capture status
-.\.venv\Scripts\leeway.exe catalog status
-.\.venv\Scripts\leeway.exe catalog list --limit 20
-.\.venv\Scripts\leeway.exe catalog show 1
-.\.venv\Scripts\leeway.exe catalog verify
+.\.venv\Scripts\runway.exe capture status
+.\.venv\Scripts\runway.exe catalog status
+.\.venv\Scripts\runway.exe catalog list --limit 20
+.\.venv\Scripts\runway.exe catalog show 1
+.\.venv\Scripts\runway.exe catalog verify
 ```
 
 Verification reports are written to `data/reports/catalog-verification.json` and
@@ -178,9 +178,9 @@ Verification reports are written to `data/reports/catalog-verification.json` and
 ## Analysis and profile generation
 
 ```powershell
-.\.venv\Scripts\leeway.exe analyze history --resume
-.\.venv\Scripts\leeway.exe profile build
-.\.venv\Scripts\leeway.exe profile evaluate
+.\.venv\Scripts\runway.exe analyze history --resume
+.\.venv\Scripts\runway.exe profile build
+.\.venv\Scripts\runway.exe profile evaluate
 ```
 
 Profile and evaluation evidence is written under `data/reports/`. Corrections stay in separate
@@ -209,14 +209,14 @@ The verified run is at `data/proofs/20260716T214847Z/`. Its 13 assertions all pa
 To operate the same stages individually:
 
 ```powershell
-.\.venv\Scripts\leeway.exe capture youtube-posts --fixture --yes
-.\.venv\Scripts\leeway.exe catalog verify
-.\.venv\Scripts\leeway.exe analyze history --resume
-.\.venv\Scripts\leeway.exe profile build
-.\.venv\Scripts\leeway.exe profile evaluate
-.\.venv\Scripts\leeway.exe discover images --days 10 --dry-run
-.\.venv\Scripts\leeway.exe generate batch --days 10
-.\.venv\Scripts\leeway.exe queue status
+.\.venv\Scripts\runway.exe capture youtube-posts --fixture --yes
+.\.venv\Scripts\runway.exe catalog verify
+.\.venv\Scripts\runway.exe analyze history --resume
+.\.venv\Scripts\runway.exe profile build
+.\.venv\Scripts\runway.exe profile evaluate
+.\.venv\Scripts\runway.exe discover images --days 10 --dry-run
+.\.venv\Scripts\runway.exe generate batch --days 10
+.\.venv\Scripts\runway.exe queue status
 ```
 
 ## Historical fixture verification results
@@ -232,7 +232,7 @@ To operate the same stages individually:
 - Browser smoke: all seven application pages rendered against the real Qlob database. The review
   proposal, safeguards, catalogue, profile, queue, and audit history remained intact after both
   services restarted.
-- `leeway doctor`: Python, Node, npm, Playwright Chromium, paths, migration `0004`, mock runtime,
+- `runway doctor`: Python, Node, npm, Playwright Chromium, paths, migration `0004`, mock runtime,
   and loopback API checks passed.
 - npm audits: 0 known vulnerabilities in both lockfiles. Next.js' inherited PostCSS version is
   overridden to the patched `8.5.19` release in the isolated web package.
@@ -240,11 +240,11 @@ To operate the same stages individually:
 ## Honest limitations
 
 - The real capture, Codex runtime, and a bounded browser-discovery pass are verified. Search
-  providers can still challenge, throttle, or change markup; LeeWay stops instead of bypassing
+  providers can still challenge, throttle, or change markup; RunWay stops instead of bypassing
   those controls.
 - Rights status for internet candidates defaults to `unknown`; it is retained as diagnostic
   metadata and does not add a checkbox to the fast approval path.
-- YouTube may expose relative dates only; Leeway records that reduced precision instead of
+- YouTube may expose relative dates only; RunWay records that reduced precision instead of
   inventing a timestamp. YouTube DOM changes can still require selector updates.
 - Exact historical image-to-caption recovery measured 0% on the real 40-post holdout; caption
   ranking measured 75%. Generated captions are reviewable suggestions, not proven matches.

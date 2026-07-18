@@ -6,18 +6,20 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from leeway.analysis.service import AnalysisService
-from leeway.capture.service import CaptureService
-from leeway.config import Settings
-from leeway.db.base import Database
-from leeway.db.models import CandidateImage, Proposal, PublishAttempt
-from leeway.discovery.service import DiscoveryService
-from leeway.intelligence.profile import StyleProfileService
-from leeway.proposals.service import ProposalService
-from leeway.publishing.base import PreparedPost, PublisherSessionStatus
-from leeway.publishing.internal import InternalPublisher
-from leeway.publishing.queue import PublisherQueueCoordinator
-from leeway.publishing.youtube import (
+from runway.analysis.service import AnalysisService
+from runway.capture.service import CaptureService
+from runway.config import Settings
+from runway.db.base import Database
+from runway.db.models import CandidateImage, Proposal, PublishAttempt
+from runway.db.repositories import get_channel
+from runway.discovery.service import DiscoveryService
+from runway.intelligence.profile import StyleProfileService
+from runway.proposals.service import ProposalService
+from runway.publishing.base import PreparedPost, PublisherSessionStatus
+from runway.publishing.internal import InternalPublisher
+from runway.publishing.queue import PublisherQueueCoordinator
+from runway.publishing.youtube import (
+    BrowserMutationReceipt,
     BrowserScheduleReceipt,
     YouTubeBrowserPublisher,
 )
@@ -30,6 +32,8 @@ class FakeYouTubeAdapter:
         self.session_detail = "Qlob Editor fixture session valid."
         self.schedule_calls: list[PreparedPost] = []
         self.verify_calls: list[PreparedPost] = []
+        self.edit_calls: list[tuple[PreparedPost, PreparedPost]] = []
+        self.remove_calls: list[PreparedPost] = []
         self.schedule_receipt = BrowserScheduleReceipt(
             submitted=True,
             verified=True,
@@ -38,6 +42,16 @@ class FakeYouTubeAdapter:
             detail="Fixture scheduled post verified.",
         )
         self.verify_receipt = self.schedule_receipt
+        self.edit_receipt = BrowserMutationReceipt(
+            applied=True,
+            verified=True,
+            detail="Fixture scheduled post edit verified.",
+        )
+        self.remove_receipt = BrowserMutationReceipt(
+            applied=True,
+            verified=True,
+            detail="Fixture scheduled post removal verified.",
+        )
 
     async def validate_session(self) -> PublisherSessionStatus:
         self.validate_calls += 1
@@ -54,6 +68,18 @@ class FakeYouTubeAdapter:
     async def verify(self, post: PreparedPost) -> BrowserScheduleReceipt:
         self.verify_calls.append(post)
         return self.verify_receipt
+
+    async def edit(
+        self,
+        current: PreparedPost,
+        updated: PreparedPost,
+    ) -> BrowserMutationReceipt:
+        self.edit_calls.append((current, updated))
+        return self.edit_receipt
+
+    async def remove(self, post: PreparedPost) -> BrowserMutationReceipt:
+        self.remove_calls.append(post)
+        return self.remove_receipt
 
 
 async def _scheduled_proposal(database: Database, settings: Settings) -> int:
@@ -72,6 +98,29 @@ async def _scheduled_proposal(database: Database, settings: Settings) -> int:
     result = await InternalPublisher(database, settings).schedule_post(proposal_id)
     assert result.status == "internally_scheduled"
     return proposal_id
+
+
+async def _scheduled_proposal_pair(
+    database: Database,
+    settings: Settings,
+) -> tuple[int, int]:
+    CaptureService(database, settings).run_fixture()
+    await AnalysisService(database, settings).analyze_history()
+    await StyleProfileService(database, settings).build()
+    await DiscoveryService(database, settings).discover(provider_name="fixture", dry_run=True)
+    local_today = datetime.now(ZoneInfo(settings.timezone)).date()
+    proposals = ProposalService(database, settings)
+    generated = await proposals.generate_batch(
+        days=2,
+        start_date=local_today + timedelta(days=2),
+    )
+    proposal_ids = tuple(int(value) for value in generated["proposal_ids"])
+    assert len(proposal_ids) == 2
+    publisher = InternalPublisher(database, settings)
+    for proposal_id in proposal_ids:
+        proposals.approve(proposal_id)
+        await publisher.schedule_post(proposal_id)
+    return proposal_ids
 
 
 @pytest.mark.asyncio
@@ -275,3 +324,175 @@ async def test_persisted_queue_starts_after_application_restart(
     assert publisher.attempt_status(int(queued["id"]))["status"] == "verified"
     assert len(adapter.schedule_calls) == 1
     assert coordinator.status()["queued"] == 0
+
+
+@pytest.mark.asyncio
+async def test_lineup_edit_preserves_punctuation_and_supersedes_stale_payload(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(database, enabled_settings, adapter)
+    queued = publisher.queue_attempt(proposal_id)
+    original = ProposalService(database, settings).detail(proposal_id)
+    original_slot = datetime.fromisoformat(str(original["scheduled_publish_at"]))
+    new_date = original_slot.astimezone(ZoneInfo(settings.timezone)).date() + timedelta(days=2)
+
+    result = await publisher.update_lineup(
+        proposal_id,
+        final_caption="Wait... what?!",
+        new_date=new_date,
+    )
+
+    assert result["requeue_proposal_ids"] == [proposal_id]
+    assert result["externally_synced"] is False
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "superseded"
+    updated = ProposalService(database, settings).detail(proposal_id)
+    assert updated["final_caption"] == "Wait... what?!"
+    assert (
+        datetime.fromisoformat(str(updated["scheduled_publish_at"]))
+        .astimezone(ZoneInfo(settings.timezone))
+        .date()
+        == new_date
+    )
+    assert adapter.edit_calls == []
+
+
+@pytest.mark.asyncio
+async def test_lineup_move_uses_saved_channel_timezone_and_time(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    with database.session() as session:
+        channel = get_channel(session, settings.channel_handle)
+        channel.timezone = "America/Vancouver"
+        channel.default_post_time = "09:15"
+    publisher = YouTubeBrowserPublisher(database, settings, FakeYouTubeAdapter())
+    new_date = datetime.now(ZoneInfo("America/Vancouver")).date() + timedelta(days=10)
+
+    await publisher.update_lineup(
+        proposal_id,
+        final_caption=None,
+        new_date=new_date,
+    )
+
+    updated = ProposalService(database, settings).detail(proposal_id)
+    slot = datetime.fromisoformat(str(updated["scheduled_publish_at"]))
+    configured = slot.astimezone(ZoneInfo("America/Vancouver"))
+    assert configured.date() == new_date
+    assert (configured.hour, configured.minute) == (9, 15)
+
+
+@pytest.mark.asyncio
+async def test_lineup_external_edit_and_remove_are_verified_before_local_commit(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(database, enabled_settings, adapter)
+    queued = publisher.queue_attempt(proposal_id)
+    await publisher.process_queued_attempt(int(queued["id"]))
+    before = ProposalService(database, settings).detail(proposal_id)
+    old_slot = datetime.fromisoformat(str(before["scheduled_publish_at"]))
+    new_date = old_slot.astimezone(ZoneInfo(settings.timezone)).date() + timedelta(days=3)
+
+    changed = await publisher.update_lineup(
+        proposal_id,
+        final_caption="Would you trust this look?!",
+        new_date=new_date,
+    )
+
+    assert changed["externally_synced"] is True
+    assert len(adapter.edit_calls) == 1
+    after = ProposalService(database, settings).detail(proposal_id)
+    assert after["final_caption"] == "Would you trust this look?!"
+    assert after["status"] == "externally_scheduled"
+
+    removed = await publisher.remove_from_lineup(proposal_id)
+    assert removed["externally_synced"] is True
+    assert len(adapter.remove_calls) == 1
+    final = ProposalService(database, settings).detail(proposal_id)
+    assert final["status"] == "cancelled"
+    assert final["scheduled_publish_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_lineup_occupied_date_swaps_slots_without_a_daily_conflict(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    publisher = YouTubeBrowserPublisher(database, settings, FakeYouTubeAdapter())
+    proposals = ProposalService(database, settings)
+    first_before = proposals.detail(first_id)
+    second_before = proposals.detail(second_id)
+    second_slot = datetime.fromisoformat(str(second_before["scheduled_publish_at"]))
+    with database.session() as session:
+        second = session.get(Proposal, second_id)
+        assert second is not None
+        second.scheduled_publish_at = second_slot.replace(hour=11, minute=30).isoformat()
+    second_before = proposals.detail(second_id)
+    second_date = (
+        datetime.fromisoformat(str(second_before["scheduled_publish_at"]))
+        .astimezone(ZoneInfo(settings.timezone))
+        .date()
+    )
+
+    result = await publisher.update_lineup(
+        first_id,
+        final_caption=None,
+        new_date=second_date,
+    )
+
+    assert result["swapped_with"] == second_id
+    first_after = proposals.detail(first_id)
+    second_after = proposals.detail(second_id)
+    assert second_after["scheduled_publish_at"] == first_before["scheduled_publish_at"]
+    assert (
+        datetime.fromisoformat(str(first_after["scheduled_publish_at"]))
+        .astimezone(ZoneInfo(settings.timezone))
+        .date()
+        == second_date
+    )
+    local_dates = {
+        datetime.fromisoformat(str(item["scheduled_publish_at"]))
+        .astimezone(ZoneInfo(settings.timezone))
+        .date()
+        for item in (first_after, second_after)
+    }
+    assert len(local_dates) == 2
+
+
+@pytest.mark.asyncio
+async def test_unverified_lineup_edit_keeps_local_record_unchanged(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(database, enabled_settings, adapter)
+    queued = publisher.queue_attempt(proposal_id)
+    await publisher.process_queued_attempt(int(queued["id"]))
+    before = ProposalService(database, settings).detail(proposal_id)
+    adapter.edit_receipt = BrowserMutationReceipt(
+        applied=False,
+        verified=False,
+        detail="Fixture edit was not verified.",
+    )
+
+    with pytest.raises(RuntimeError, match="not verified"):
+        await publisher.update_lineup(
+            proposal_id,
+            final_caption="Do not save this?!",
+            new_date=None,
+        )
+
+    after = ProposalService(database, settings).detail(proposal_id)
+    assert after["final_caption"] == before["final_caption"]
+    assert after["scheduled_publish_at"] == before["scheduled_publish_at"]

@@ -1,4 +1,4 @@
-from leeway.captions.service import CaptionService
+from runway.captions.service import CaptionService
 
 
 def test_caption_question_uses_natural_identity_reference() -> None:

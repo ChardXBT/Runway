@@ -66,8 +66,8 @@ export function SettingsForm({ initial }: { initial: Settings }) {
         </strong>
         <span>
           {settings.publishing_enabled
-            ? `Qlob channel ${settings.publisher_channel_id} · visible browser · approved posts enter the queue automatically.`
-            : "Only local approval and internal scheduling are available."}
+            ? `Qlob channel ${settings.publisher_channel_id} · visible browser · accepted posts enter Lineup automatically.`
+            : "Only local decisions and internal Lineup scheduling are available."}
         </span>
       </div>
       <form className="panel settings-form" onSubmit={save}>
@@ -124,7 +124,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
           <p className="eyebrow">Caption learning</p>
           <h2>{settings.caption_question_first ? "Question first" : "Balanced"}</h2>
           <p>
-            Edits, approvals, selections, and rejections become retrieval evidence for the next
+            Edits, accepts, selections, and rejections become retrieval evidence for the next
             caption pass.
           </p>
         </article>
@@ -132,8 +132,9 @@ export function SettingsForm({ initial }: { initial: Settings }) {
           <p className="eyebrow">Scheduling policy</p>
           <h2>One bot post daily</h2>
           <p>
-            Approvals take the next open 10:00 AM Eastern day. The horizon is uncapped and
-            manual channel posts do not consume LeeWay’s daily slot.
+            Accepted looks take the next open {settings.default_post_time}{" "}
+            {settings.timezone} day. The horizon is uncapped and manual channel posts do
+            not consume RunWay’s daily slot.
           </p>
         </article>
       </section>

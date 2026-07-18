@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from leeway.analysis.features import (
+from runway.analysis.features import (
     aggregate_caption_features,
     caption_features,
     text_embedding,

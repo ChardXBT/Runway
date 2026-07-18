@@ -2,7 +2,7 @@
 
 ## One repository
 
-Leeway uses one monorepo for the API, CLI, intelligence pipeline, capture adapter, and review UI.
+RunWay uses one monorepo for the API, CLI, intelligence pipeline, capture adapter, and review UI.
 Separate repositories were rejected because they would duplicate contracts and complicate an
 offline, single-user installation.
 
@@ -34,11 +34,11 @@ for completion. A general-purpose browser-to-database write endpoint was rejecte
 
 ## Human approval, daily allocation, and publisher outbox
 
-`Approve & schedule` is the proposal-specific human decision. It atomically reserves the first open
+`Accept` is the proposal-specific human decision. It atomically reserves the first open
 10:00 AM Toronto slot, records positive learning, and moves the item through `InternalPublisher`
 before adding a persisted outbox attempt. A single worker drains approvals in FIFO order while the
 UI immediately presents the next option. The allocator has no fixed horizon and reserves no more
-than one LeeWay-generated post per local day.
+than one RunWay-generated post per local day.
 
 `YouTubeBrowserPublisher` remains a separate visible-browser boundary using a dedicated profile.
 It validates the saved Qlob Editor session, hashes the approved payload, records screenshots/audit
@@ -68,7 +68,7 @@ cannot be reached from the configured Codex path.
 
 ## Retrieval instead of weight fine-tuning
 
-LeeWay adapts through a versioned profile and bounded retrieval from the local Qlob database. This
+RunWay adapts through a versioned profile and bounded retrieval from the local Qlob database. This
 keeps evidence inspectable, incorporates user corrections and rejections immediately, and avoids a
 training bill. Model-weight fine-tuning is not required for the current workflow.
 

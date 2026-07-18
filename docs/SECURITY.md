@@ -19,7 +19,7 @@
   usage-limit, timeout, and malformed-output failures stop the batch; no paid API fallback exists.
 - Model output is schema validated, treated as data, and never executed as SQL or a command.
 - External publishing is feature-gated. The guarded publisher requires the operator's explicit
-  `Approve & schedule` action, internal scheduling, a future timezone-aware daily slot, a valid
+  `Accept` action, internal scheduling, a future timezone-aware daily slot, a valid
   Qlob Editor session, and an unchanged payload hash. The normal UI has no rights declaration or
   typed-phrase step; an explicitly blocked candidate still cannot be scheduled.
 - Outbox attempts are persisted and serialized. A stale login pauses before composer interaction;

@@ -89,6 +89,15 @@ export type PublisherQueueStatus = {
   mode?: "youtube" | "internal_only";
 };
 
+export type LineupSchedule = {
+  timezone: string;
+  default_time: string;
+  posts_per_day: number;
+  coverage: number;
+  next_available_at: string;
+  scheduled: Proposal[];
+};
+
 export type EditorialEnvelope = {
   decision?: "approved" | "rejected" | "image_replaced";
   detail?: string;

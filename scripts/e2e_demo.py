@@ -6,12 +6,12 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from leeway.config import Settings
-from leeway.demo import run_fixture_demo
+from runway.config import Settings
+from runway.demo import run_fixture_demo
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Leeway's network-free fixture proof.")
+    parser = argparse.ArgumentParser(description="Run RunWay's network-free fixture proof.")
     parser.add_argument(
         "--data-dir",
         type=Path,

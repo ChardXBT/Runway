@@ -2,8 +2,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from leeway.config import Settings
-from leeway.media.service import (
+from runway.config import Settings
+from runway.media.service import (
     ensure_fixture_images,
     hamming_similarity,
     inspect_image,

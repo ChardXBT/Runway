@@ -14,7 +14,7 @@ caption structure, verdict, reason codes, image verdict, note, candidate, propos
 
 `proposals.scheduled_publish_at` is the reserved external slot. It is separate from the generation
 placeholder so unreviewed options do not occupy the calendar. The allocator enforces at most one
-LeeWay reservation per Toronto local date and has no fixed future-horizon limit.
+RunWay reservation per Toronto local date and has no fixed future-horizon limit.
 
 `publish_attempts` is the persisted FIFO outbox and publisher audit trail. It stores the
 publisher/state, a hash of the exact image/caption/time/channel payload, expiry/submission/completion

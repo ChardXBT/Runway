@@ -5,8 +5,8 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from leeway.db import models  # noqa: F401
-from leeway.db.base import Base
+from runway.db import models  # noqa: F401
+from runway.db.base import Base
 
 config = context.config
 if config.config_file_name is not None:

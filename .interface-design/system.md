@@ -1,154 +1,127 @@
-# LeeWay interface system
+# RunWay interface system
 
-This file is the source of truth for LeeWay product-interface work. The implementation lives in
-`apps/web/app/studio.css`.
+This is the source of truth for RunWay product-interface work. The implementation lives in
+`apps/web/app/runway.css`.
 
-## Direction and feel
+## Product intent
 
-LeeWay is a private editorial conveyor for one Qlob operator. The operator opens the app to make
-many fast calls: approve the image/caption pair, change the caption, request another image, or
-reject the option. The next option should appear immediately while learning and scheduling happen
-quietly behind the decision.
+RunWay is a private editorial desk for one Qlob operator making many fast image-and-caption
+decisions. It should feel like a calm fashion editor’s fitting room: decisive, image-led,
+prestigious, and unburdened by operational detail.
 
-The interface should feel decisive, image-led, prestigious, and calm—an editor’s private screening
-room rather than an admin dashboard. It is not a ten-day planner, analytics wall, rights-review
-form, generic SaaS dashboard, or creator-economy landing page.
+The two primary rooms are:
 
-Domain vocabulary:
+- **Runway** — one current image/caption pair and three decisions: Reject, Edit, Accept.
+- **Lineup** — the complete release calendar, with confirmed modify, move/swap, and remove actions.
 
-- editorial tray
-- screening room
-- final cut
-- approve and advance
-- daily slot
-- outbound queue
-- preference signal
-- continuous feed
+Archive, Profile, Activity, and Settings are backstage utilities inside the menu. They must never
+compete with the two primary rooms.
 
-The signature is the editorial conveyor: one large feed preview beside one authoritative caption,
-followed by `Reject`, `Another image`, and `Approve & schedule`. Every decision advances the tray.
+Domain vocabulary: runway, look, line, lineup, release slot, next opening, backstage, fit, pull,
+accept, and Qlob.
 
-Reject these defaults:
+Avoid generic dashboard cards, analytics walls, creator-economy language, rights gates in the
+decision flow, fixed scheduling horizons, decorative gradients, glass effects, and rainbow color.
 
-- Dashboard metrics and planning cards → a compact session counter and one current decision.
-- A duplicate original/crop comparison → one large YouTube feed preview.
-- Training forms and checkboxes → infer learning from edits and decisions automatically.
-- Provenance and copyright gates → keep source metadata in storage, outside the approval path.
-- Fixed calendar horizons → show the next open daily slot and an uncapped ordered schedule.
-- Multi-step publishing interlocks → the explicit `Approve & schedule` click is the human action.
+## Component intent checkpoint
 
-## Palette and tokens
+- **Intent:** make repeated judgment fast while keeping publishing changes explicit and verifiable.
+- **Hierarchy:** current image → caption → Reject/Edit/Accept → secondary context.
+- **Palette:** carbon, warm paper, and white dominate; amber, dusk blue, green, and red carry meaning.
+- **Depth:** borders and surface shifts only, plus one restrained floating menu/dialog shadow.
+- **Surfaces:** black screening stage, paper decision sheet, compact calendar cells.
+- **Typography:** narrow editorial display face, readable system body, monospaced operational data.
+- **Spacing:** 4px base; compact controls, generous media, no oversized empty hero space.
 
-Use semantic variables from `studio.css`; do not introduce route-level color values.
+## Signature
 
-- `--lightbox`, `--canvas`: cool screening-room daylight.
-- `--surface`, `--surface-raised`, `--surface-inset`: paperless editorial surfaces.
-- `--console-deep`, `--console`, `--console-raised`: screening-room media stage.
-- `--ink`, `--ink-secondary`, `--ink-tertiary`: four-level text hierarchy.
-- `--cue`, `--cue-deep`, `--cue-soft`: selection and navigation.
-- `--approval`, `--approval-deep`, `--approval-soft`: approve-and-schedule.
-- `--safety`, `--safety-soft`: rejection and destructive actions.
-- `--warning`, `--warning-soft`: safely paused publisher state.
+The mark is an arch over a converging runway with a broken amber centerline and two restrained
+runway lights. The screening stage repeats the centerline at very low contrast. This is the one
+recognizable visual motif; do not add competing decoration.
 
-Color communicates state. Most of the interface remains neutral.
+## Color tokens
+
+Use semantic tokens in `runway.css`; never add route-local hex values.
+
+- `--console-deep`, `--console`, `--console-raised`: carbon screening room.
+- `--canvas`, `--surface`, `--surface-raised`, `--surface-inset`: warm paper stack.
+- `--ink`, `--ink-secondary`, `--ink-tertiary`: text hierarchy.
+- `--runway-light`: restrained amber centerline and swap notice.
+- `--runway-dusk`, `--cue-*`: selection and editing.
+- `--approval-*`: Accept, verified, and ready states.
+- `--safety-*`: Reject, remove, and destructive states.
+- `--warning-*`: paused, ambiguous, and attention states.
+
+Most pixels must remain neutral. Green and red are reserved for the two judgment poles.
 
 ## Typography
 
 - Display and decisions: `Bahnschrift`, then `DIN Alternate` or `Arial Narrow`.
 - Reading and controls: `Aptos`, then `Avenir Next` or `Segoe UI`.
-- IDs, slots, and counters: `Cascadia Code`, then SF Mono or Consolas.
-- Body baseline: 15px/1.5.
-- Eyebrows: 10px utility face, uppercase, 0.11em tracking.
-- Review headline: responsive 42–68px.
-- Caption editor: responsive 22–30px display face.
+- Dates, slots, IDs, and counters: `Cascadia Code`, then SF Mono or Consolas.
 - Dynamic numbers use tabular figures.
+- Use weight and color before introducing another type size.
 
-Use weight and text color before adding another size.
+## Layout contracts
 
-## Spacing, radius, and depth
+### Global navigation
 
-- Base unit: 4px.
-- Micro: 4–8px.
-- Controls: 8–16px.
-- Decision console: 24–48px.
-- Main canvas: responsive 28–56px; 14px at the narrowest breakpoint.
-- Controls: 7px radius and at least 44px high.
-- Panels: 10px radius.
-- Decision stage: 14px radius.
+- Carbon top bar with the RunWay arch/runway mark.
+- Only Runway and Lineup are visible as primary links.
+- Hamburger menu contains Archive, Profile, Activity, Settings, and honest YouTube state.
+- At narrow widths, mark, two links, and menu remain on one row.
 
-Depth uses surface-color shifts and quiet low-opacity borders. No gradients, glass, decorative
-shadows, or mixed elevation systems.
+### Runway
 
-## Layout and hierarchy
+- Desktop: media stage and decision sheet share one contained focal surface.
+- Mobile/tablet: media first, decision sheet second, with no horizontal overflow.
+- Caption accepts and preserves ordinary Unicode and punctuation, including `!`, `?`, and emoji.
+- The primary command row is always Reject (red), Edit (white/dusk), Accept (green).
+- Accept saves positive image/caption feedback, assigns the first open daily slot, queues YouTube
+  publishing, and immediately advances.
+- Reject saves negative evidence and immediately advances.
+- Alternatives and model rationale remain collapsed secondary material.
 
-Every screen has one focal point:
+### Lineup
 
-- Review: current image/caption decision.
-- Schedule: the complete ordered list of LeeWay posts.
-- Archive: searchable historical material.
-- Settings: the few rules that govern the conveyor.
+- Desktop uses a month calendar plus a sticky selected-post inspector.
+- Below 820px, the month grid becomes a chronological agenda.
+- Modify can change caption and date in one confirmation.
+- Moving onto an occupied date swaps the two posts; it never creates a daily collision.
+- Remove requires a second explicit confirmation.
+- Externally scheduled changes are applied to YouTube first and committed locally only after
+  verification. In-flight or unverified posts refuse mutation.
+- Internal queued changes supersede stale payloads before replacement payloads are queued.
 
-Review is a two-column screening stage at desktop widths and a single image-then-decision flow
-below 1060px. The image remains the largest element. The three decision controls form one command
-row; `Approve & schedule` carries the strongest contrast.
+## Behavior and safeguards
 
-The global rail contains only Review, Schedule, Archive, and Settings. Profile and Activity remain
-available as secondary routes but do not compete in primary navigation.
+- At most one RunWay-created Qlob post occupies a Toronto local date, at 10:00 AM.
+- There is no fixed horizon or session-size cap.
+- Manual Qlob posts do not consume RunWay slots.
+- YouTube browser work is serialized and uses the dedicated persistent profile.
+- Google challenges are never bypassed.
+- Codex uses saved ChatGPT authentication; API keys are stripped and no paid fallback exists.
+- Ambiguous external submissions stop and remain inspectable; they are never blindly retried.
+- Every consequential mutation creates proposal and audit history.
 
-## Behavior contracts
+## Accessibility and motion
 
-- Approval captures positive caption/image feedback.
-- A changed caption captures the original as negative evidence and the edit as preferred evidence.
-- Rejection captures a negative option signal.
-- `Another image` captures a negative image signal before replacement.
-- Approval assigns the first open 10:00 AM `America/Toronto` slot.
-- LeeWay reserves at most one bot post per local date; manual Qlob posts are independent.
-- There is no scheduling-horizon cap.
-- Approved posts enter a persisted FIFO publisher outbox and browser submissions run serially.
-- A publisher/session failure pauses the outbox without duplicating submissions.
-- The next review option appears immediately; when the tray is empty, LeeWay replenishes accepted
-  candidates and can open a visible discovery pass.
-
-## Reusable patterns
-
-### Global rail
-
-- Compact sticky rail with split blue/graphite `LW` mark.
-- Primary links: Review, Schedule, Archive, Settings.
-- Publisher state reads `Auto-schedule on · One bot post daily` when enabled.
-
-### Editorial conveyor
-
-- Session counters: decisions this session, posts on the way, externally scheduled.
-- Large square feed preview on a graphite media stage.
-- Slot cue shows the next available Eastern date at 10:00 AM.
-- Caption is directly editable; no separate save button.
-- Alternatives are compact selectable rows.
-- Commands: Reject, Another image, Approve & schedule.
-- Model rationale is collapsed in native `details`.
-- No copyright, rights, source, score, or training form in the primary decision.
-
-### Schedule
-
-- No denominator or horizon language.
-- Ordered rows show slot, thumbnail, caption, and scheduling state.
-- Header shows total queued/scheduled posts and the next open slot.
-
-## Motion and accessibility
-
-- Repeated editorial decisions do not animate; speed wins.
-- Controls use 100–160ms color/press feedback and `scale(0.97)` on active.
-- Never use `transition: all`.
+- Native links, buttons, labels, details, date fields, and textareas are mandatory.
+- Interactive targets are at least 40px, normally 44–58px.
+- Every control has a visible focus state and meaningful accessible name.
+- Dialogs use `role="dialog"` and `aria-modal`; Escape/backdrop behavior must not interrupt work.
+- Repeated decisions do not animate. Feedback is limited to 100–160ms color/press transitions.
 - Respect `prefers-reduced-motion`.
-- Maintain visible focus, semantic native controls, and 44px hit areas.
-- Verify at normal desktop width and 390px mobile with no horizontal overflow.
+- Verify desktop, tablet, and 390px widths with no horizontal overflow.
 
 ## Acceptance checks
 
-1. The current image/caption pair wins the squint test.
-2. Approve is the single strongest action.
-3. No source/copyright gate appears before approval.
-4. The next option replaces the current one after every decision.
-5. Schedule language is uncapped and explicitly one bot post per day.
-6. The page remains usable at 390px without horizontal overflow.
-7. Visual QA never clicks `Approve & schedule` against production data.
+1. The squint test yields image, caption, then three decisions.
+2. Runway and Lineup are the only visible primary destinations.
+3. The logo reads as an arch and runway in monochrome before its two small color cues.
+4. `Wait... what?!` survives edit, API, persistence, and publishing payload unchanged.
+5. Acceptance advances immediately and never creates two RunWay slots on one day.
+6. Lineup changes require confirmation and stale queued payloads cannot publish.
+7. External edit/remove failures leave local state unchanged.
+8. The interface is complete at 390px without horizontal scrolling.
+9. Visual QA never clicks Accept or confirms a Lineup mutation against production data.

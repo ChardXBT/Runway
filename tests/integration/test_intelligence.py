@@ -4,13 +4,13 @@ import math
 import pytest
 from sqlalchemy import func, select
 
-from leeway.analysis.service import AnalysisService
-from leeway.capture.service import CaptureService
-from leeway.config import Settings
-from leeway.db.base import Database
-from leeway.db.models import MediaAsset, ModelRun, PostAnnotation
-from leeway.intelligence.profile import StyleProfileService
-from leeway.intelligence.retrieval import RetrievalService
+from runway.analysis.service import AnalysisService
+from runway.capture.service import CaptureService
+from runway.config import Settings
+from runway.db.base import Database
+from runway.db.models import MediaAsset, ModelRun, PostAnnotation
+from runway.intelligence.profile import StyleProfileService
+from runway.intelligence.retrieval import RetrievalService
 
 
 @pytest.mark.asyncio

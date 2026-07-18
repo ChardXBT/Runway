@@ -21,7 +21,7 @@ const slotFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Toronto",
 });
 
-type Action = "approve" | "reject" | "image" | "options" | "resume";
+type Action = "accept" | "reject" | "options" | "resume";
 
 function emptyQueue(): PublisherQueueStatus {
   return {
@@ -50,26 +50,29 @@ export function ReviewWorkspace({
     initialPublisherQueue ?? emptyQueue(),
   );
   const [busy, setBusy] = useState<Action | null>(null);
+  const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState("");
   const [sessionDecisions, setSessionDecisions] = useState(0);
   const warmingTray = useRef(false);
+  const captionRef = useRef<HTMLTextAreaElement>(null);
 
   function showProposal(next: Proposal | null) {
     setProposal(next);
     setCaption(next?.final_caption ?? "");
+    setEditing(false);
   }
 
   async function parseResponse(response: Response) {
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.detail || "LeeWay could not complete that decision.");
+      throw new Error(payload.detail || "RunWay could not complete that decision.");
     }
     return payload as EditorialEnvelope;
   }
 
   async function ensureOptions() {
     setBusy("options");
-    setMessage("Finding and ranking the next options…");
+    setMessage("Preparing the next looks…");
     try {
       const response = await fetch(`${API_URL}/api/editorial/options/ensure`, {
         method: "POST",
@@ -103,7 +106,7 @@ export function ReviewWorkspace({
       const payload = await parseResponse(response);
       setWorkflow(payload.workflow);
     } catch {
-      // Empty-tray refill remains the visible recovery path.
+      // Empty-runway refill remains the visible recovery path.
     } finally {
       warmingTray.current = false;
     }
@@ -123,9 +126,9 @@ export function ReviewWorkspace({
     await ensureOptions();
   }
 
-  async function approve() {
-    if (!proposal || busy) return;
-    setBusy("approve");
+  async function accept() {
+    if (!proposal || busy || !caption.trim()) return;
+    setBusy("accept");
     setMessage("");
     try {
       const response = await fetch(
@@ -141,11 +144,11 @@ export function ReviewWorkspace({
       await finishDecision(
         payload,
         scheduledAt
-          ? `Approved for ${slotFormatter.format(new Date(scheduledAt))}.`
-          : "Approved and added to the scheduling queue.",
+          ? `Accepted for ${slotFormatter.format(new Date(scheduledAt))}.`
+          : "Accepted and added to Lineup.",
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Approval failed.");
+      setMessage(error instanceof Error ? error.message : "Accept failed.");
     } finally {
       setBusy(null);
     }
@@ -164,7 +167,10 @@ export function ReviewWorkspace({
           body: JSON.stringify({ reason: "The complete option was not a fit." }),
         },
       );
-      await finishDecision(await parseResponse(response), "Rejected. LeeWay will avoid this fit.");
+      await finishDecision(
+        await parseResponse(response),
+        "Rejected. The negative signal is saved.",
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Rejection failed.");
     } finally {
@@ -172,21 +178,14 @@ export function ReviewWorkspace({
     }
   }
 
-  async function anotherImage() {
-    if (!proposal || busy) return;
-    setBusy("image");
-    setMessage("");
-    try {
-      const response = await fetch(
-        `${API_URL}/api/editorial/proposals/${proposal.id}/skip-image`,
-        { method: "POST" },
-      );
-      const payload = await parseResponse(response);
-      await finishDecision(payload, "Image rejected. Its negative signal is saved.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "No replacement image is ready.");
-    } finally {
-      setBusy(null);
+  function toggleEdit() {
+    const next = !editing;
+    setEditing(next);
+    if (next) {
+      requestAnimationFrame(() => {
+        captionRef.current?.focus();
+        captionRef.current?.setSelectionRange(caption.length, caption.length);
+      });
     }
   }
 
@@ -214,18 +213,18 @@ export function ReviewWorkspace({
     <main className="editorial-conveyor">
       <header className="conveyor-header">
         <div>
-          <p className="eyebrow">Qlob editorial feed</p>
-          <h1>{proposal ? "Make the call." : "Your tray is clear."}</h1>
+          <p className="eyebrow">Runway / Qlob</p>
+          <h1>{proposal ? "Next." : "Runway clear."}</h1>
         </div>
         <div className="conveyor-stats" aria-label="Editorial session status">
           <span>
-            <strong>{sessionDecisions}</strong> this session
+            <strong>{sessionDecisions}</strong> decisions
           </span>
           <span>
-            <strong>{workflow.queued}</strong> on the way
+            <strong>{workflow.queued + workflow.scheduled}</strong> in Lineup
           </span>
           <span>
-            <strong>{workflow.scheduled}</strong> scheduled
+            <strong>{workflow.needs_review}</strong> ready
           </span>
         </div>
       </header>
@@ -233,7 +232,7 @@ export function ReviewWorkspace({
       {publisherQueue.paused && (
         <section className="queue-pause" role="alert">
           <div>
-            <strong>Scheduling paused safely.</strong>
+            <strong>YouTube is waiting.</strong>
             <span>{publisherQueue.paused_reason}</span>
           </div>
           <button
@@ -241,7 +240,7 @@ export function ReviewWorkspace({
             disabled={busy !== null}
             onClick={resumePublisher}
           >
-            Resume
+            Resume after sign-in
           </button>
         </section>
       )}
@@ -257,44 +256,39 @@ export function ReviewWorkspace({
                 />
               )}
               <figcaption>
-                Option {proposal.id}
+                <span>Look {String(proposal.id).padStart(3, "0")}</span>
                 <span>{topic?.franchise || "Visual candidate"}</span>
               </figcaption>
             </figure>
 
             <section className="decision-console" aria-label="Editorial decision">
               <div className="slot-cue">
-                <span>Next open bot slot</span>
+                <span>Accept sends to Lineup</span>
                 <strong>{nextSlot}</strong>
               </div>
 
               <label htmlFor="editorial-caption">Caption</label>
               <textarea
+                ref={captionRef}
                 id="editorial-caption"
+                className={editing ? "caption-editing" : ""}
                 value={caption}
-                onChange={(event) => setCaption(event.target.value)}
+                onChange={(event) => {
+                  setCaption(event.target.value);
+                  setEditing(true);
+                }}
+                onFocus={() => setEditing(true)}
                 rows={4}
                 maxLength={1000}
-                autoFocus
+                spellCheck
+                autoCapitalize="sentences"
               />
+              <div className="caption-meta">
+                <span>{editing ? "Editing live" : "Ready to refine"}</span>
+                <span>{caption.length} / 1000</span>
+              </div>
 
-              {proposal.alternative_captions.length > 0 && (
-                <div className="caption-options" aria-label="Caption options">
-                  {proposal.alternative_captions.map((alternative) => (
-                    <button
-                      key={alternative}
-                      type="button"
-                      disabled={busy !== null}
-                      className={caption === alternative ? "selected" : ""}
-                      onClick={() => setCaption(alternative)}
-                    >
-                      {alternative}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div className="decision-actions">
+              <div className="decision-actions" aria-label="Decision controls">
                 <button
                   className="decision-reject"
                   disabled={busy !== null}
@@ -303,32 +297,55 @@ export function ReviewWorkspace({
                   {busy === "reject" ? "Rejecting…" : "Reject"}
                 </button>
                 <button
-                  className="decision-next"
+                  className={editing ? "decision-edit active" : "decision-edit"}
                   disabled={busy !== null}
-                  onClick={anotherImage}
+                  onClick={toggleEdit}
+                  aria-pressed={editing}
                 >
-                  {busy === "image" ? "Changing…" : "Another image"}
+                  Edit
                 </button>
                 <button
                   className="decision-approve"
                   disabled={busy !== null || !caption.trim()}
-                  onClick={approve}
+                  onClick={accept}
                 >
-                  {busy === "approve" ? "Queuing…" : "Approve & schedule"}
+                  {busy === "accept" ? "Accepting…" : "Accept"}
                 </button>
               </div>
 
               <p className="decision-message" role="status">
                 {message ||
                   (publishingEnabled
-                    ? "Approval schedules this post on Qlob and opens the next option."
-                    : "Approval reserves the next daily slot; YouTube publishing is currently off.")}
+                    ? "Accept schedules this exact image and caption on Qlob, then advances."
+                    : "Accept reserves the next daily slot; YouTube scheduling is off.")}
               </p>
+
+              {proposal.alternative_captions.length > 0 && (
+                <details className="caption-drawer">
+                  <summary>Other lines</summary>
+                  <div className="caption-options" aria-label="Caption options">
+                    {proposal.alternative_captions.map((alternative) => (
+                      <button
+                        key={alternative}
+                        type="button"
+                        disabled={busy !== null}
+                        className={caption === alternative ? "selected" : ""}
+                        onClick={() => {
+                          setCaption(alternative);
+                          setEditing(true);
+                        }}
+                      >
+                        {alternative}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              )}
             </section>
           </section>
 
           <details className="editorial-context">
-            <summary>Why LeeWay chose this option</summary>
+            <summary>Why this made the runway</summary>
             <div>
               <p>{proposal.caption_rationale || proposal.selection_reason}</p>
               <span>
@@ -345,17 +362,13 @@ export function ReviewWorkspace({
       ) : (
         <section className="editorial-empty">
           <span className="empty-counter">{sessionDecisions}</span>
-          <h2>{sessionDecisions ? "Good run." : "Feed the tray."}</h2>
+          <h2>{sessionDecisions ? "That’s the edit." : "Bring in the first look."}</h2>
           <p>
-            LeeWay will use unused ranked images first, then open a visible discovery pass when
-            it needs fresh material.
+            RunWay uses unused ranked images first, then opens a visible discovery pass for
+            fresh material.
           </p>
-          <button
-            className="button"
-            disabled={busy !== null}
-            onClick={ensureOptions}
-          >
-            {busy === "options" ? "Finding options…" : "Find more options"}
+          <button className="button" disabled={busy !== null} onClick={ensureOptions}>
+            {busy === "options" ? "Preparing looks…" : "Load more options"}
           </button>
           <small role="status">{message}</small>
         </section>

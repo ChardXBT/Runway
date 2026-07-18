@@ -7,21 +7,21 @@ from typing import Any
 
 import pytest
 
-from leeway.analysis import runtime as runtime_module
-from leeway.analysis.runtime import (
+from runway.analysis import runtime as runtime_module
+from runway.analysis.runtime import (
     AgentUsageLimitReached,
     CodexAgentRuntime,
     PaidApiAuthenticationBlocked,
     runtime_for,
 )
-from leeway.analysis.schemas import (
+from runway.analysis.schemas import (
     CandidateAnalysis,
     CaptionCandidateSet,
     HistoricalAnnotation,
     SearchPlan,
     StyleSummary,
 )
-from leeway.config import Settings
+from runway.config import Settings
 
 
 def _candidate_output() -> dict[str, object]:

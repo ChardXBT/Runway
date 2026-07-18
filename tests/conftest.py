@@ -5,15 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from leeway.config import Settings
-from leeway.db import Database, initialize_database
+from runway.config import Settings
+from runway.db import Database, initialize_database
 
 
 @pytest.fixture(autouse=True)
 def force_offline_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     """Automated tests must never consume ChatGPT/Codex or paid API usage."""
-    monkeypatch.setenv("LEWAY_AGENT_RUNTIME", "mock")
-    monkeypatch.setenv("LEWAY_PUBLISHING_ENABLED", "false")
+    monkeypatch.setenv("RUNWAY_AGENT_RUNTIME", "mock")
+    monkeypatch.setenv("RUNWAY_PUBLISHING_ENABLED", "false")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("CODEX_API_KEY", raising=False)
     monkeypatch.delenv("CODEX_ACCESS_TOKEN", raising=False)

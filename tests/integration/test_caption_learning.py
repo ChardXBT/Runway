@@ -6,16 +6,16 @@ from datetime import date
 import pytest
 from sqlalchemy import select
 
-from leeway.analysis.service import AnalysisService
-from leeway.captions.feedback import CaptionFeedbackService
-from leeway.captions.service import CaptionService
-from leeway.capture.service import CaptureService
-from leeway.config import Settings
-from leeway.db.base import Database
-from leeway.db.models import CandidateImage, CaptionFeedback
-from leeway.discovery.service import DiscoveryService
-from leeway.intelligence.profile import StyleProfileService
-from leeway.proposals.service import ProposalService
+from runway.analysis.service import AnalysisService
+from runway.captions.feedback import CaptionFeedbackService
+from runway.captions.service import CaptionService
+from runway.capture.service import CaptureService
+from runway.config import Settings
+from runway.db.base import Database
+from runway.db.models import CandidateImage, CaptionFeedback
+from runway.discovery.service import DiscoveryService
+from runway.intelligence.profile import StyleProfileService
+from runway.proposals.service import ProposalService
 
 
 @pytest.mark.asyncio

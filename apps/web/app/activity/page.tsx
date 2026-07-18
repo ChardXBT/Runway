@@ -19,7 +19,7 @@ export default async function ActivityPage() {
           <p className="eyebrow">Activity / immutable audit</p>
           <h1>Every consequential change.</h1>
           <p className="lede">
-            Capture, analysis, generation, approval, and internal scheduling remain inspectable
+            Capture, analysis, generation, decisions, and scheduling remain inspectable
             without exposing credentials.
           </p>
         </div>
@@ -52,7 +52,7 @@ export default async function ActivityPage() {
         <section className="panel empty">
           <div>
             <strong>No audit events yet.</strong>
-            Actions that change LeeWay’s local state will appear here.
+            Actions that change RunWay’s local state will appear here.
           </div>
         </section>
       )}

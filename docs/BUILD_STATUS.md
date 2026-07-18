@@ -10,7 +10,7 @@
 - [x] Question-first caption generation grounded in the image and Qlob history
 - [x] Automatic append-only learning from edits, approvals, replacements, and rejections
 - [x] Continuous one-decision review conveyor with immediate next-option loading
-- [x] Uncapped future scheduling at one LeeWay post per day, 10:00 AM Toronto time
+- [x] Uncapped future scheduling at one RunWay post per day, 10:00 AM Toronto time
 - [x] Approve-to-schedule persisted FIFO outbox
 - [x] Visible-browser Qlob publisher with channel/Editor validation and duplicate prevention
 - [x] Persisted pause-and-resume behavior when the Google session needs attention
@@ -36,6 +36,6 @@
 - Source metadata and automated warnings do not determine copyright permission. They are retained
   as diagnostic evidence but are no longer an approval-form gate.
 - A real Qlob schedule action is an external acceptance test. Routine automated and visual QA never
-  clicks `Approve & schedule` or YouTube's final Schedule button.
+  clicks `Accept` or YouTube's final Schedule button.
 
 See `docs/COMPLETION_GUIDE.md` and `docs/OPERATIONS.md` for the operating workflow.

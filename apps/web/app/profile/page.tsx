@@ -36,7 +36,7 @@ export default async function ProfilePage() {
   const profile = await apiGet<Profile | null>("/api/profiles/active", null);
   const evaluation = await apiGet<Evaluation | null>("/api/profiles/evaluation", null);
   if (!profile) {
-    return <><p className="eyebrow">Style intelligence</p><h1>No profile yet.</h1><section className="panel empty"><div><strong>Analyze the fixture catalogue first.</strong>Run <code>leeway analyze history --resume</code>, then <code>leeway profile build</code>.</div></section></>;
+    return <><p className="eyebrow">Style intelligence</p><h1>No profile yet.</h1><section className="panel empty"><div><strong>Analyze the fixture catalogue first.</strong>Run <code>runway analyze history --resume</code>, then <code>runway profile build</code>.</div></section></>;
   }
   return (
     <>
@@ -55,7 +55,7 @@ export default async function ProfilePage() {
         <article className="panel distribution"><p className="eyebrow">Topic rotation</p><h2>Franchises</h2>{profile.franchise_distribution.map(([name, count]) => <div key={name}><span>{name}</span><strong>{count}</strong></div>)}</article>
         <article className="panel distribution"><p className="eyebrow">Visual language</p><h2>Compositions</h2>{profile.visual_compositions.map(([name, count]) => <div key={name}><span>{name}</span><strong>{count}</strong></div>)}</article>
       </section>
-      <section className="panel"><p className="eyebrow">Representative images + captions</p><div className="quote-list">{profile.representative_positive_examples.map((example) => <Link href={`/catalogue/${example.post_id}`} key={example.post_id}>{example.media_url && <img src={`${process.env.NEXT_PUBLIC_LEEWAY_API_URL ?? "http://127.0.0.1:8000"}${example.media_url}`} alt="" />}<span>#{example.post_id}</span><q>{example.caption}</q></Link>)}</div></section>
+      <section className="panel"><p className="eyebrow">Representative images + captions</p><div className="quote-list">{profile.representative_positive_examples.map((example) => <Link href={`/catalogue/${example.post_id}`} key={example.post_id}>{example.media_url && <img src={`${process.env.NEXT_PUBLIC_RUNWAY_API_URL ?? "http://127.0.0.1:8000"}${example.media_url}`} alt="" />}<span>#{example.post_id}</span><q>{example.caption}</q></Link>)}</div></section>
       <section className="panel"><p className="eyebrow">Rotation observations</p><ul className="clean-list">{profile.rotation_patterns.map((item) => <li key={item}>{item}</li>)}</ul></section>
       {evaluation && <section className="panel"><p className="eyebrow">Measured holdout evaluation · v{evaluation.profile_version}</p><div className="evaluation-grid"><div><span>Image-caption matching</span><strong><Percent value={evaluation.image_caption_matching.accuracy} /></strong></div><div><span>Caption ranking</span><strong><Percent value={evaluation.qlob_caption_ranking_accuracy} /></strong></div><div><span>Retrieval relevance</span><strong><Percent value={evaluation.retrieval_top3_franchise_relevance} /></strong></div><div><span>Duplicate recall</span><strong><Percent value={evaluation.duplicate_detection.transformed_true_positive_rate} /></strong></div></div><small>Holdout metrics diagnose retrieval behavior; every generated caption still requires human judgment.</small></section>}
     </>

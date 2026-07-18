@@ -3,11 +3,11 @@ import type { ReactNode } from "react";
 
 import { Nav } from "@/components/nav";
 import { apiGet } from "@/lib/api";
-import "./studio.css";
+import "./runway.css";
 
 export const metadata: Metadata = {
-  title: "LeeWay — Qlob editorial desk",
-  description: "Local Qlob Community-post intelligence, review, and planning",
+  title: "RunWay — Qlob private editorial desk",
+  description: "Choose, refine, and line up Qlob Community posts",
 };
 
 export default async function RootLayout({

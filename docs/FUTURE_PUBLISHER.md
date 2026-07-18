@@ -13,18 +13,18 @@ needs_review
   -> externally_scheduled OR publish_unverified OR publish_failed
 ```
 
-`Approve & schedule` is the human authorization for that exact proposal. The API immediately
+`Accept` is the human authorization for that exact proposal. The API immediately
 returns the next review option while a single background worker processes the persisted FIFO
 outbox. A model runtime cannot call this path.
 
 Each approved item is assigned the first unreserved 10:00 AM `America/Toronto` slot. The scheduler
-has no fixed horizon and enforces one LeeWay-generated post per local day.
+has no fixed horizon and enforces one RunWay-generated post per local day.
 
 ## Interlocks
 
-- `LEWAY_PUBLISHING_ENABLED=false` blocks all external scheduling.
+- `RUNWAY_PUBLISHING_ENABLED=false` blocks all external scheduling.
 - The browser uses a dedicated persistent profile under `data/browser-profile/publisher`.
-- LeeWay validates the configured Qlob channel and Editor access before composer interaction.
+- RunWay validates the configured Qlob channel and Editor access before composer interaction.
 - The exact image bytes, caption, time, proposal ID, and channel ID are hashed.
 - Known-blocked candidates and missing media cannot enter the outbox.
 - Only one submission can run at a time; queue attempts are idempotent and persisted across restarts.
@@ -35,5 +35,5 @@ has no fixed horizon and enforces one LeeWay-generated post per local day.
 - Before/after/failure screenshots and audit events preserve the evidence.
 
 The older CLI `publisher prepare` / `publisher confirm` flow remains available for diagnostics,
-but the product UI does not require a token or typed phrase. The explicit `Approve & schedule`
+but the product UI does not require a token or typed phrase. The explicit `Accept`
 button is the normal proposal-specific confirmation.

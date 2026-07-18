@@ -4,15 +4,15 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy import select
 
-from leeway.analysis.service import AnalysisService
-from leeway.capture.service import CaptureService
-from leeway.config import Settings
-from leeway.db.base import Database
-from leeway.db.models import AuditEvent, ProposalEvent
-from leeway.discovery.service import DiscoveryService
-from leeway.intelligence.profile import StyleProfileService
-from leeway.proposals.service import ProposalService
-from leeway.publishing.internal import InternalPublisher
+from runway.analysis.service import AnalysisService
+from runway.capture.service import CaptureService
+from runway.config import Settings
+from runway.db.base import Database
+from runway.db.models import AuditEvent, ProposalEvent
+from runway.discovery.service import DiscoveryService
+from runway.intelligence.profile import StyleProfileService
+from runway.proposals.service import ProposalService
+from runway.publishing.internal import InternalPublisher
 
 
 @pytest.mark.asyncio
@@ -39,9 +39,9 @@ async def test_continuous_workflow_actions_and_restart_persistence(
     assert {value.utcoffset().total_seconds() for value in timestamps} == {-18000.0, -14400.0}
 
     first_id, second_id, third_id = (int(row["id"]) for row in rows[:3])
-    proposals.edit_caption(first_id, "Human-edited final caption.")
+    proposals.edit_caption(first_id, "Human-edited final caption?!")
     regenerated = await proposals.regenerate_captions(first_id)
-    assert regenerated["final_caption"] == "Human-edited final caption."
+    assert regenerated["final_caption"] == "Human-edited final caption?!"
 
     rejected = proposals.reject(second_id, "too repetitive")
     old_candidate = rejected["candidate_image_id"]
@@ -78,7 +78,7 @@ async def test_continuous_workflow_actions_and_restart_persistence(
     database.engine.dispose()
     restarted = Database(settings)
     persisted = ProposalService(restarted, settings).detail(first_id)
-    assert persisted["final_caption"] == "Human-edited final caption."
+    assert persisted["final_caption"] == "Human-edited final caption?!"
     assert persisted["status"] == "needs_review"
     restarted_proposals = ProposalService(restarted, settings)
     restarted_proposals.approve(first_id)

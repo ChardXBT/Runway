@@ -1,4 +1,4 @@
-"""Initial Leeway schema.
+"""Initial RunWay schema.
 
 Revision ID: 0001_initial
 Revises:
@@ -7,8 +7,8 @@ Revises:
 from __future__ import annotations
 
 from alembic import op
-from leeway.db import models  # noqa: F401
-from leeway.db.base import Base
+from runway.db import models  # noqa: F401
+from runway.db.base import Base
 
 revision = "0001_initial"
 down_revision = None

@@ -2,14 +2,14 @@ import json
 
 import pytest
 
-from leeway.analysis.service import AnalysisService
-from leeway.captions.service import CaptionService
-from leeway.capture.service import CaptureService
-from leeway.config import Settings
-from leeway.db.base import Database
-from leeway.discovery.providers import BrowserSearchProvider, ManualUrlProvider
-from leeway.discovery.service import DiscoveryService
-from leeway.intelligence.profile import StyleProfileService
+from runway.analysis.service import AnalysisService
+from runway.captions.service import CaptionService
+from runway.capture.service import CaptureService
+from runway.config import Settings
+from runway.db.base import Database
+from runway.discovery.providers import BrowserSearchProvider, ManualUrlProvider
+from runway.discovery.service import DiscoveryService
+from runway.intelligence.profile import StyleProfileService
 
 
 @pytest.mark.asyncio
@@ -54,7 +54,7 @@ async def test_offline_discovery_preserves_provenance_scores_and_captions(
 
 @pytest.mark.asyncio
 async def test_manual_provider_rejects_non_http_urls() -> None:
-    from leeway.analysis.schemas import SearchPlan
+    from runway.analysis.schemas import SearchPlan
 
     provider = ManualUrlProvider(["file:///secret.jpg"])
     with pytest.raises(ValueError, match="HTTP"):

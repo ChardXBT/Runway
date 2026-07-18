@@ -3,11 +3,18 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const links = [
-  ["Review", "/review"],
-  ["Schedule", "/queue"],
-  ["Archive", "/catalogue"],
-  ["Settings", "/settings"],
+import { RunwayLogo } from "@/components/runway-logo";
+
+const primaryLinks = [
+  ["Runway", "/review"],
+  ["Lineup", "/lineup"],
+] as const;
+
+const secondaryLinks = [
+  ["Archive", "/catalogue", "Past Qlob posts and source records"],
+  ["Profile", "/profile", "What RunWay has learned"],
+  ["Activity", "/activity", "Decision and publishing history"],
+  ["Settings", "/settings", "Model, channel, and safeguards"],
 ] as const;
 
 export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean }) {
@@ -16,19 +23,18 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
   return (
     <header className="topbar">
       <div className="topbar-inner">
-        <Link href="/review" className="brand" aria-label="LeeWay editorial desk">
-          <span className="brand-mark" aria-hidden="true">
-            <i>L</i>
-            <i>W</i>
-          </span>
+        <Link href="/review" className="brand" aria-label="RunWay editorial desk">
+          <RunwayLogo className="brand-mark" />
           <span className="brand-copy">
-            <strong>LeeWay</strong>
-            <small>Qlob editorial desk</small>
+            <strong>RunWay</strong>
+            <small>Qlob private desk</small>
           </span>
         </Link>
         <nav aria-label="Primary navigation">
-          {links.map(([label, href]) => {
-            const active = pathname.startsWith(href);
+          {primaryLinks.map(([label, href]) => {
+            const active =
+              pathname.startsWith(href) ||
+              (href === "/lineup" && pathname.startsWith("/queue"));
             return (
               <Link
                 key={href}
@@ -41,22 +47,44 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
             );
           })}
         </nav>
-        <div
-          className={publishingEnabled ? "publishing-lock armed" : "publishing-lock"}
-          title={
-            publishingEnabled
-              ? "Approved posts enter the visible-browser Qlob scheduling queue"
-              : "LeeWay cannot publish to YouTube"
-          }
-        >
-          <span className="lock-signal" aria-hidden="true" />
-          <span>
-            <strong>{publishingEnabled ? "Auto-schedule on" : "Publishing disabled"}</strong>
-            <small>
-              {publishingEnabled ? "One bot post daily" : "Local planning only"}
-            </small>
-          </span>
-        </div>
+        <details className="nav-menu">
+          <summary aria-label="Open RunWay menu">
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </summary>
+          <div className="nav-menu-popover">
+            <div className="nav-menu-status">
+              <span
+                className={publishingEnabled ? "status-dot armed" : "status-dot"}
+                aria-hidden="true"
+              />
+              <span>
+                <strong>
+                  {publishingEnabled ? "YouTube actions enabled" : "YouTube scheduling off"}
+                </strong>
+                <small>
+                  {publishingEnabled
+                    ? "Account sign-in is checked on use"
+                    : "One RunWay post per day"}
+                </small>
+              </span>
+            </div>
+            <nav aria-label="RunWay menu">
+              {secondaryLinks.map(([label, href, description]) => (
+                <Link
+                  href={href}
+                  key={href}
+                  className={pathname.startsWith(href) ? "active" : ""}
+                  aria-current={pathname.startsWith(href) ? "page" : undefined}
+                >
+                  <strong>{label}</strong>
+                  <small>{description}</small>
+                </Link>
+              ))}
+            </nav>
+          </div>
+        </details>
       </div>
     </header>
   );

@@ -1,7 +1,7 @@
-from leeway.analysis.schemas import CandidateAnalysis
-from leeway.media.service import ImageFeatures
-from leeway.ranking.duplicates import DuplicateResult
-from leeway.ranking.service import CandidateRanker
+from runway.analysis.schemas import CandidateAnalysis
+from runway.media.service import ImageFeatures
+from runway.ranking.duplicates import DuplicateResult
+from runway.ranking.service import CandidateRanker
 
 
 def test_fan_art_is_hard_rejected(database, settings) -> None:

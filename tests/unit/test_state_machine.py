@@ -1,7 +1,7 @@
 import pytest
 
-from leeway.domain.enums import ProposalStatus
-from leeway.domain.state_machine import InvalidTransition, require_transition, transition_allowed
+from runway.domain.enums import ProposalStatus
+from runway.domain.state_machine import InvalidTransition, require_transition, transition_allowed
 
 
 def test_approval_boundary_is_explicit() -> None:

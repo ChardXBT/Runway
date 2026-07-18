@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from leeway.config import Settings
-from leeway.demo import run_fixture_demo
+from runway.config import Settings
+from runway.demo import run_fixture_demo
 
 
 @pytest.mark.asyncio

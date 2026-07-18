@@ -16,7 +16,7 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy src/leeway
+      - run: mypy src/runway
       - run: pytest
 
   frontend:

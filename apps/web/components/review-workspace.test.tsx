@@ -65,7 +65,7 @@ afterEach(() => {
 });
 
 describe("ReviewWorkspace", () => {
-  it("edits, approves, schedules, and immediately advances", async () => {
+  it("preserves punctuation, accepts, schedules, and immediately advances", async () => {
     const next = {
       ...proposal,
       id: 43,
@@ -77,7 +77,7 @@ describe("ReviewWorkspace", () => {
       proposal: {
         ...proposal,
         status: "internally_scheduled",
-        final_caption: "Why is One so excited?",
+        final_caption: "Why is One so excited?!",
         scheduled_publish_at: "2026-03-08T10:00:00-04:00",
       },
       next_proposal: next,
@@ -116,20 +116,20 @@ describe("ReviewWorkspace", () => {
 
     expect(screen.queryByText(/rights|provenance|copyright/i)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Caption"), {
-      target: { value: "Why is One so excited?" },
+      target: { value: "Why is One so excited?!" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Approve & schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[0][0]).toContain(
       "/api/editorial/proposals/42/approve",
     );
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      final_caption: "Why is One so excited?",
+      final_caption: "Why is One so excited?!",
     });
     expect(await screen.findByDisplayValue("Next caption.")).toBeInTheDocument();
     expect(screen.getByLabelText("Editorial session status")).toHaveTextContent(
-      "1 this session",
+      "1 decisions",
     );
     expect(fetchMock.mock.calls[1][0]).toContain("/api/editorial/options/ensure");
   });
@@ -163,19 +163,7 @@ describe("ReviewWorkspace", () => {
     expect(await screen.findByDisplayValue("Another option.")).toBeInTheDocument();
   });
 
-  it("rejects an image as negative feedback and advances", async () => {
-    const next = { ...proposal, id: 45, final_caption: "Fresh image option." };
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        decision: "image_rejected",
-        proposal: { ...proposal, status: "rejected" },
-        next_proposal: next,
-        workflow: { ...workflow, needs_review: 3, rejected: 1 },
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("keeps the primary decision surface to Reject, Edit, and Accept", () => {
     render(
       <ReviewWorkspace
         initialProposal={proposal}
@@ -183,16 +171,11 @@ describe("ReviewWorkspace", () => {
         publishingEnabled
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Another image" }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(fetchMock.mock.calls[0][0]).toContain(
-      "/api/editorial/proposals/42/skip-image",
-    );
-    expect(await screen.findByDisplayValue("Fresh image option.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Editorial session status")).toHaveTextContent(
-      "1 this session",
-    );
+    const controls = screen.getByLabelText("Decision controls");
+    expect(controls).toHaveTextContent("Reject");
+    expect(controls).toHaveTextContent("Edit");
+    expect(controls).toHaveTextContent("Accept");
+    expect(screen.queryByRole("button", { name: "Another image" })).not.toBeInTheDocument();
   });
 
   it("replenishes the conveyor when the tray is empty", async () => {
@@ -213,7 +196,7 @@ describe("ReviewWorkspace", () => {
         publishingEnabled
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Find more options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Load more options" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0][0]).toContain("/api/editorial/options/ensure");

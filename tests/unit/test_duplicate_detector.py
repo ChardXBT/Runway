@@ -1,8 +1,8 @@
-from leeway.capture.service import CaptureService
-from leeway.config import Settings
-from leeway.db.base import Database
-from leeway.media.service import ensure_fixture_images, inspect_image
-from leeway.ranking.duplicates import DuplicateDetector
+from runway.capture.service import CaptureService
+from runway.config import Settings
+from runway.db.base import Database
+from runway.media.service import ensure_fixture_images, inspect_image
+from runway.ranking.duplicates import DuplicateDetector
 
 
 def test_exact_transformed_and_novel_images_are_distinguished(
