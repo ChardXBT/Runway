@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { RunwayLogo } from "@/components/runway-logo";
 
 const primaryLinks = [
-  ["Runway", "/review"],
+  ["Generator", "/review"],
   ["Lineup", "/lineup"],
 ] as const;
 
@@ -15,6 +15,7 @@ const secondaryLinks = [
   ["Profile", "/profile", "What RunWay has learned"],
   ["Activity", "/activity", "Decision and publishing history"],
   ["Settings", "/settings", "Model, channel, and safeguards"],
+  ["Platform connection", "/settings#platform-connection", "YouTube access and queue recovery"],
 ] as const;
 
 export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean }) {
@@ -75,8 +76,12 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
                 <Link
                   href={href}
                   key={href}
-                  className={pathname.startsWith(href) ? "active" : ""}
-                  aria-current={pathname.startsWith(href) ? "page" : undefined}
+                  className={
+                    pathname.startsWith(href.split("#")[0]) ? "active" : ""
+                  }
+                  aria-current={
+                    pathname.startsWith(href.split("#")[0]) ? "page" : undefined
+                  }
                 >
                   <strong>{label}</strong>
                   <small>{description}</small>

@@ -9,6 +9,7 @@ import secrets
 import shutil
 import subprocess
 import threading
+from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -201,11 +202,11 @@ class PlaywrightYouTubeAdapter:
                     valid=valid,
                     publisher="youtube-visible-browser",
                     detail=(
-                        "Qlob channel, Editor role, and Community composer verified."
+                        "Qlob channel identity, posting access, and Community composer verified."
                         if valid
-                        else "Qlob Editor session is not ready; missing "
+                        else "Qlob publishing session is not ready; missing "
                         + ", ".join(missing)
-                        + ". Run publisher login."
+                        + ". Reconnect the Qlob Editor identity."
                     ),
                 )
             finally:
@@ -231,83 +232,69 @@ class PlaywrightYouTubeAdapter:
                 if not self._session_contract_valid(page):
                     raise RuntimeError("Qlob Editor session validation failed")
 
-                composer = page.locator("ytd-backstage-post-dialog-renderer")
+                composer = page.locator("ytd-backstage-post-dialog-renderer:visible")
                 editor = composer.locator('#contenteditable-root[contenteditable="true"]')
                 self._require_one_visible(editor, "caption editor")
                 editor.fill(post.caption)
 
-                upload = composer.locator('input[type="file"][accept="image/*"][multiple]')
-                self._require_one_visible(upload, "multi-image upload input")
-                upload.set_input_files(post.local_image_path)
-                page.wait_for_timeout(1200)
-
-                action_menu = composer.locator(
-                    '#post-buttons-wrapper button[aria-label="Action menu"]'
+                image_button = self._one_visible(
+                    composer.get_by_role("button", name="Add an image", exact=True),
+                    "Add an image button",
                 )
-                self._require_one_visible(action_menu, "schedule action menu")
+                image_button.click()
+                image_selector = composer.locator(
+                    "ytd-backstage-multi-image-select-renderer:visible"
+                )
+                image_selector.wait_for(state="visible", timeout=10_000)
+                upload = image_selector.locator('input[type="file"][accept="image/*"][multiple]')
+                if upload.count() != 1:
+                    raise RuntimeError(
+                        f"expected one multi-image upload input; found {upload.count()}"
+                    )
+                upload.set_input_files(post.local_image_path)
+                preview = image_selector.locator("#thumbnail-images-container img")
+                preview.first.wait_for(state="visible", timeout=20_000)
+
+                action_menu_locator = composer.locator('button[aria-label="Action menu"]:visible')
+                action_menu_locator.first.wait_for(state="visible", timeout=20_000)
+                action_menu = self._one_visible(
+                    action_menu_locator,
+                    "schedule action menu",
+                )
                 if not action_menu.is_enabled():
                     raise RuntimeError("YouTube schedule action menu did not become enabled")
                 action_menu.click()
 
-                schedule_item = page.get_by_text("Schedule post", exact=True)
-                self._require_one_visible(schedule_item, "Schedule post menu item")
+                schedule_item = self._first_visible_named(
+                    page,
+                    ("Schedule post", "Schedule Post"),
+                    "Schedule post menu item",
+                )
                 schedule_item.click()
 
-                dialog = page.locator(
-                    "ytd-backstage-post-schedule-dialog-renderer, "
-                    "tp-yt-paper-dialog:has-text('Schedule post')"
-                )
-                self._require_one_visible(dialog, "schedule dialog")
-                planned = datetime.fromisoformat(post.planned_publish_at)
-                if planned.tzinfo is None:
-                    raise RuntimeError("the RunWay slot does not include a timezone")
-                configured_time = planned
-                system_time = planned.astimezone()
-                if (
-                    configured_time.replace(tzinfo=None) != system_time.replace(tzinfo=None)
-                    or configured_time.utcoffset() != system_time.utcoffset()
-                ):
-                    raise RuntimeError(
-                        "the visible browser's system timezone does not match the "
-                        "timezone encoded in the RunWay slot"
+                picker = page.locator("ytd-date-time-picker-renderer:visible")
+                with suppress(Exception):
+                    picker.wait_for(state="visible", timeout=5_000)
+                if picker.count() == 1:
+                    self._fill_inline_schedule_picker(picker, post)
+                    schedule_root = composer
+                else:
+                    dialog = page.locator(
+                        "ytd-backstage-post-schedule-dialog-renderer, "
+                        "tp-yt-paper-dialog:has-text('Schedule post')"
                     )
-                date_input = self._first_visible(
-                    dialog,
-                    (
-                        'input[aria-label*="Date"]',
-                        'input[type="date"]',
-                        "#datepicker input",
-                    ),
-                    "schedule date",
-                )
-                time_input = self._first_visible(
-                    dialog,
-                    (
-                        'input[aria-label*="Time"]',
-                        'input[type="time"]',
-                        "#time-input input",
-                    ),
-                    "schedule time",
-                )
-                date_type = date_input.get_attribute("type")
-                date_input.fill(
-                    planned.date().isoformat()
-                    if date_type == "date"
-                    else planned.strftime("%b %d, %Y")
-                )
-                time_type = time_input.get_attribute("type")
-                time_input.fill(
-                    planned.strftime("%H:%M")
-                    if time_type == "time"
-                    else planned.strftime("%I:%M %p").lstrip("0")
-                )
+                    self._require_one_visible(dialog, "schedule dialog")
+                    self._fill_schedule_inputs(dialog, post)
+                    schedule_root = dialog
 
                 before = self.capture_dir / f"{timestamp}-before-schedule.png"
                 page.screenshot(path=str(before), full_page=True)
                 screenshots.append(str(before))
 
-                schedule_button = dialog.get_by_role("button", name="Schedule", exact=True)
-                self._require_one_visible(schedule_button, "final Schedule button")
+                schedule_button = self._one_visible(
+                    schedule_root.get_by_role("button", name="Schedule", exact=True),
+                    "final Schedule button",
+                )
                 if not schedule_button.is_enabled():
                     raise RuntimeError("final Schedule button is disabled")
                 # From this point onward a browser/process failure is ambiguous. Mark it as
@@ -389,7 +376,7 @@ class PlaywrightYouTubeAdapter:
                 )
                 page.wait_for_timeout(1500)
                 self._stop_on_challenge(page)
-                if not self._session_contract_valid(page):
+                if not self._session_contract_valid(page, open_composer=False):
                     raise RuntimeError("Qlob Editor session validation failed")
 
                 card = self._scheduled_card(page, current)
@@ -417,10 +404,12 @@ class PlaywrightYouTubeAdapter:
                 self._require_one_visible(editor, "caption editor")
                 editor.fill(updated.caption)
 
-                action_menu = composer.locator(
-                    '#post-buttons-wrapper button[aria-label="Action menu"]'
+                action_menu_locator = composer.locator('button[aria-label="Action menu"]:visible')
+                action_menu_locator.first.wait_for(state="visible", timeout=20_000)
+                action_menu = self._one_visible(
+                    action_menu_locator,
+                    "schedule action menu",
                 )
-                self._require_one_visible(action_menu, "schedule action menu")
                 action_menu.click()
                 schedule_item = self._first_visible_named(
                     page,
@@ -429,19 +418,27 @@ class PlaywrightYouTubeAdapter:
                 )
                 schedule_item.click()
 
-                dialog = page.locator(
-                    "ytd-backstage-post-schedule-dialog-renderer, "
-                    "tp-yt-paper-dialog:has-text('Schedule post')"
-                )
-                self._require_one_visible(dialog, "schedule dialog")
-                self._fill_schedule_inputs(dialog, updated)
+                picker = page.locator("ytd-date-time-picker-renderer:visible")
+                with suppress(Exception):
+                    picker.wait_for(state="visible", timeout=5_000)
+                if picker.count() == 1:
+                    self._fill_inline_schedule_picker(picker, updated)
+                    schedule_root = composer
+                else:
+                    dialog = page.locator(
+                        "ytd-backstage-post-schedule-dialog-renderer, "
+                        "tp-yt-paper-dialog:has-text('Schedule post')"
+                    )
+                    self._require_one_visible(dialog, "schedule dialog")
+                    self._fill_schedule_inputs(dialog, updated)
+                    schedule_root = dialog
 
                 before = self.capture_dir / f"{timestamp}-before-lineup-edit.png"
                 page.screenshot(path=str(before), full_page=True)
                 screenshots.append(str(before))
 
                 save_button = self._first_visible_named(
-                    dialog,
+                    schedule_root,
                     ("Save", "Schedule"),
                     "final scheduled-post save button",
                 )
@@ -504,7 +501,7 @@ class PlaywrightYouTubeAdapter:
                 )
                 page.wait_for_timeout(1500)
                 self._stop_on_challenge(page)
-                if not self._session_contract_valid(page):
+                if not self._session_contract_valid(page, open_composer=False):
                     raise RuntimeError("Qlob Editor session validation failed")
 
                 card = self._scheduled_card(page, post)
@@ -710,19 +707,7 @@ class PlaywrightYouTubeAdapter:
         return date_markers, time_markers
 
     def _fill_schedule_inputs(self, dialog: Any, post: PreparedPost) -> None:
-        planned = datetime.fromisoformat(post.planned_publish_at)
-        if planned.tzinfo is None:
-            raise RuntimeError("the RunWay slot does not include a timezone")
-        configured_time = planned
-        system_time = planned.astimezone()
-        if (
-            configured_time.replace(tzinfo=None) != system_time.replace(tzinfo=None)
-            or configured_time.utcoffset() != system_time.utcoffset()
-        ):
-            raise RuntimeError(
-                "the visible browser's system timezone does not match the timezone "
-                "encoded in the RunWay slot"
-            )
+        planned = self._planned_time_in_system_timezone(post)
         date_input = self._first_visible(
             dialog,
             (
@@ -752,6 +737,71 @@ class PlaywrightYouTubeAdapter:
             else planned.strftime("%I:%M %p").lstrip("0")
         )
 
+    def _fill_inline_schedule_picker(self, picker: Any, post: PreparedPost) -> None:
+        planned = self._planned_time_in_system_timezone(post)
+        expected_date = f"{planned.strftime('%b')} {planned.day}, {planned.year}"
+        date_label = picker.locator("#date-label-text")
+        date_label.wait_for(state="visible", timeout=10_000)
+        if self._normalized_text(date_label.inner_text()) != expected_date:
+            date_picker = picker.locator("#date-picker")
+            self._require_one_visible(date_picker, "schedule date picker")
+            date_picker.click()
+            calendar = picker.locator("#calendar-dialog:visible")
+            calendar.wait_for(state="visible", timeout=10_000)
+            textbox = calendar.locator("#textbox")
+            self._require_one_visible(textbox, "schedule date textbox")
+            textbox.fill(expected_date)
+            textbox.press("Enter")
+            date_label.wait_for(state="visible", timeout=10_000)
+        if self._normalized_text(date_label.inner_text()) != expected_date:
+            raise RuntimeError("YouTube did not retain the requested schedule date")
+
+        expected_time = planned.strftime("%I:%M %p").lstrip("0")
+        time_label = picker.locator("#time-label-text")
+        time_label.wait_for(state="visible", timeout=10_000)
+        if self._normalized_text(time_label.inner_text()) != expected_time:
+            time_picker = picker.locator("#time-picker")
+            self._require_one_visible(time_picker, "schedule time picker")
+            time_picker.click()
+            options = picker.locator('tp-yt-paper-item[role="option"]:visible')
+            options.first.wait_for(state="visible", timeout=10_000)
+            matches = [
+                options.nth(index)
+                for index in range(options.count())
+                if self._normalized_text(options.nth(index).inner_text()) == expected_time
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(f"could not locate one visible {expected_time} schedule option")
+            matches[0].click()
+        if self._normalized_text(time_label.inner_text()) != expected_time:
+            raise RuntimeError("YouTube did not retain the requested schedule time")
+
+        timezone_label = picker.locator("#timezone-label-text")
+        timezone_label.wait_for(state="visible", timeout=10_000)
+        expected_offset = planned.strftime("%z")
+        if f"GMT{expected_offset}" not in self._normalized_text(timezone_label.inner_text()):
+            raise RuntimeError("YouTube's visible schedule timezone does not match RunWay")
+
+    @staticmethod
+    def _planned_time_in_system_timezone(post: PreparedPost) -> datetime:
+        planned = datetime.fromisoformat(post.planned_publish_at)
+        if planned.tzinfo is None:
+            raise RuntimeError("the RunWay slot does not include a timezone")
+        system_time = planned.astimezone()
+        if (
+            planned.replace(tzinfo=None) != system_time.replace(tzinfo=None)
+            or planned.utcoffset() != system_time.utcoffset()
+        ):
+            raise RuntimeError(
+                "the visible browser's system timezone does not match the timezone "
+                "encoded in the RunWay slot"
+            )
+        return planned
+
+    @staticmethod
+    def _normalized_text(value: str) -> str:
+        return " ".join(value.split())
+
     @staticmethod
     def _first_visible_named(root: Any, names: tuple[str, ...], label: str) -> Any:
         for role in ("button", "menuitem"):
@@ -775,21 +825,79 @@ class PlaywrightYouTubeAdapter:
                 return visible[0]
         raise RuntimeError(f"could not locate one visible {label}")
 
-    def _session_contract_valid(self, page: Any) -> bool:
-        return all(self._session_contract_checks(page).values())
+    def _session_contract_valid(
+        self,
+        page: Any,
+        *,
+        open_composer: bool = True,
+    ) -> bool:
+        return all(self._session_contract_checks(page, open_composer=open_composer).values())
 
-    def _session_contract_checks(self, page: Any) -> dict[str, bool]:
+    def _session_contract_checks(
+        self,
+        page: Any,
+        *,
+        open_composer: bool = True,
+    ) -> dict[str, bool]:
         heading = page.get_by_role("heading", name="Qlob, Verified", exact=True)
-        editor = page.get_by_text("You're an editor", exact=True)
-        composer = page.locator(
-            'ytd-backstage-post-dialog-renderer #contenteditable-root[contenteditable="true"]'
-        )
-        return {
+        identity_verified = self._active_qlob_identity(page)
+        posting_access = False
+        composer_ready = False
+        if identity_verified:
+            composer = page.locator("ytd-backstage-post-dialog-renderer:visible")
+            with suppress(Exception):
+                composer.wait_for(state="visible", timeout=10_000)
+            editor = composer.locator('#contenteditable-root[contenteditable="true"]')
+            if composer.count() == 1 and editor.count() == 1 and not editor.is_visible():
+                placeholder = composer.locator("#placeholder-area")
+                if placeholder.count() == 1 and placeholder.is_visible():
+                    placeholder.click()
+                    page.wait_for_timeout(300)
+            if composer.count() == 1 and editor.count() == 1 and editor.is_visible():
+                posting_access = True
+                composer_ready = True
+            else:
+                try:
+                    create_button = page.get_by_role("button", name="Create", exact=True)
+                    self._require_one_visible(create_button, "YouTube Create button")
+                    create_button.click()
+                    create_post = page.get_by_text("Create post", exact=True)
+                    self._require_one_visible(create_post, "Create post action")
+                    posting_access = True
+                    if open_composer:
+                        create_post.click()
+                        composer = page.locator("ytd-backstage-post-dialog-renderer:visible")
+                        composer.wait_for(state="visible", timeout=10_000)
+                        editor = composer.locator('#contenteditable-root[contenteditable="true"]')
+                        composer_ready = editor.count() == 1 and editor.is_visible()
+                    else:
+                        page.keyboard.press("Escape")
+                except Exception:
+                    page.keyboard.press("Escape")
+        checks = {
             "configured channel URL": self.settings.publisher_channel_id in page.url,
             "Qlob heading": heading.count() == 1 and heading.is_visible(),
-            "Editor badge": editor.count() == 1 and editor.is_visible(),
-            "Community composer": composer.count() == 1 and composer.is_visible(),
+            "active Qlob identity": identity_verified,
+            "Qlob posting access": posting_access,
         }
+        if open_composer:
+            checks["Community composer"] = composer_ready
+        return checks
+
+    def _active_qlob_identity(self, page: Any) -> bool:
+        try:
+            channel_marker = page.get_by_text("Qlob's channel", exact=True)
+            manage_videos = page.get_by_text("Manage videos", exact=True)
+            channel_marker.wait_for(state="visible", timeout=10_000)
+            manage_videos.wait_for(state="visible", timeout=10_000)
+            return bool(
+                channel_marker.count() == 1
+                and channel_marker.is_visible()
+                and manage_videos.count() == 1
+                and manage_videos.is_visible()
+            )
+        except Exception:
+            return False
 
     def _stop_on_challenge(self, page: Any) -> None:
         sample = f"{page.url} {page.title()}".lower()
@@ -802,6 +910,20 @@ class PlaywrightYouTubeAdapter:
         count = locator.count()
         if count != 1 or not locator.is_visible():
             raise RuntimeError(f"expected one visible {label}; found {count}")
+
+    @staticmethod
+    def _one_visible(locator: Any, label: str) -> Any:
+        visible = [
+            locator.nth(index)
+            for index in range(locator.count())
+            if locator.nth(index).is_visible()
+        ]
+        if len(visible) != 1:
+            raise RuntimeError(
+                f"expected one visible {label}; found {locator.count()} total, "
+                f"{len(visible)} visible"
+            )
+        return visible[0]
 
     @classmethod
     def _first_visible(
@@ -1080,7 +1202,10 @@ class YouTubeBrowserPublisher:
                 proposal = session.get(Proposal, proposal_id)
                 if proposal is None:
                     raise LookupError(f"proposal {proposal_id} not found")
-                self._require_lineup_mutable(proposal)
+                self._require_lineup_mutable(
+                    proposal,
+                    allow_overdue_internal=new_date is not None,
+                )
                 current = self._lineup_post(session, proposal)
                 old_caption = proposal.final_caption
                 cleaned_caption = (
@@ -1330,7 +1455,7 @@ class YouTubeBrowserPublisher:
                 proposal = session.get(Proposal, proposal_id)
                 if proposal is None:
                     raise LookupError(f"proposal {proposal_id} not found")
-                self._require_lineup_mutable(proposal)
+                self._require_lineup_mutable(proposal, allow_overdue_internal=True)
                 current = self._lineup_post(session, proposal)
                 original_status = proposal.status
 
@@ -1488,7 +1613,11 @@ class YouTubeBrowserPublisher:
             return self._attempt_dict(attempt) if attempt else None
 
     @staticmethod
-    def _require_lineup_mutable(proposal: Proposal) -> None:
+    def _require_lineup_mutable(
+        proposal: Proposal,
+        *,
+        allow_overdue_internal: bool = False,
+    ) -> None:
         allowed = {
             ProposalStatus.INTERNALLY_SCHEDULED.value,
             ProposalStatus.PUBLISH_FAILED.value,
@@ -1511,7 +1640,12 @@ class YouTubeBrowserPublisher:
         planned = datetime.fromisoformat(proposal.scheduled_publish_at)
         if planned.tzinfo is None:
             raise ValueError("Lineup time must include a timezone")
-        if planned.astimezone(UTC) <= datetime.now(UTC) + timedelta(minutes=5):
+        overdue = planned.astimezone(UTC) <= datetime.now(UTC) + timedelta(minutes=5)
+        recoverable_local_status = proposal.status in {
+            ProposalStatus.INTERNALLY_SCHEDULED.value,
+            ProposalStatus.PUBLISH_FAILED.value,
+        }
+        if overdue and not (allow_overdue_internal and recoverable_local_status):
             raise ValueError("only future Lineup posts can be changed")
 
     def _lineup_post(self, session: Any, proposal: Proposal) -> PreparedPost:

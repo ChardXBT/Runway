@@ -12,7 +12,7 @@ describe("Nav", () => {
 
   it("shows the two primary product sections and signed-out status", () => {
     render(<Nav />);
-    expect(screen.getByRole("link", { name: "Runway" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Generator" })).toHaveAttribute(
       "aria-current",
       "page",
     );

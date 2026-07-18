@@ -1,5 +1,7 @@
+import { PlatformConnection } from "@/components/platform-connection";
 import { SettingsForm } from "@/components/settings-form";
 import { apiGet } from "@/lib/api";
+import type { PublisherQueueStatus } from "@/lib/types";
 
 type Settings = Parameters<typeof SettingsForm>[0]["initial"];
 
@@ -19,11 +21,20 @@ const fallback: Settings = {
   publishing_enabled: false,
   caption_question_first: true,
   publisher_channel_id: "UCQ-nHijGwxNU3Go_wyLQ5Ng",
+  publisher_browser_channel: "chrome",
   blocked_sources: [],
 };
 
 export default async function SettingsPage() {
-  const settings = await apiGet<Settings>("/api/settings/full", fallback);
+  const [settings, publisherQueue] = await Promise.all([
+    apiGet<Settings>("/api/settings/full", fallback),
+    apiGet<PublisherQueueStatus>("/api/publisher/queue", {
+      running: false,
+      queued: 0,
+      paused: false,
+      paused_reason: null,
+    }),
+  ]);
   return (
     <>
       <header className="header-row">
@@ -36,6 +47,12 @@ export default async function SettingsPage() {
           </p>
         </div>
       </header>
+      <PlatformConnection
+        publishingEnabled={settings.publishing_enabled}
+        channelId={settings.publisher_channel_id}
+        browserChannel={settings.publisher_browser_channel}
+        initialQueue={publisherQueue}
+      />
       <SettingsForm initial={settings} />
     </>
   );

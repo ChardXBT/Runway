@@ -21,7 +21,13 @@ const slotFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Toronto",
 });
 
-type Action = "accept" | "reject" | "options" | "resume";
+type Action =
+  | "accept"
+  | "reject"
+  | "options"
+  | "resume"
+  | "regenerate"
+  | "replace";
 
 function emptyQueue(): PublisherQueueStatus {
   return {
@@ -68,6 +74,14 @@ export function ReviewWorkspace({
       throw new Error(payload.detail || "RunWay could not complete that decision.");
     }
     return payload as EditorialEnvelope;
+  }
+
+  async function parseProposalResponse(response: Response) {
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || "RunWay could not refresh this option.");
+    }
+    return payload as Proposal;
   }
 
   async function ensureOptions() {
@@ -178,6 +192,50 @@ export function ReviewWorkspace({
     }
   }
 
+  async function regenerateCaptions() {
+    if (!proposal || busy) return;
+    setBusy("regenerate");
+    setMessage("Generating fresh captions from the same image…");
+    try {
+      const response = await fetch(
+        `${API_URL}/api/proposals/${proposal.id}/regenerate`,
+        { method: "POST" },
+      );
+      const refreshed = await parseProposalResponse(response);
+      showProposal(refreshed);
+      setMessage("Fresh captions are ready.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Caption regeneration failed.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function replaceImage() {
+    if (!proposal || busy) return;
+    setBusy("replace");
+    setMessage("Finding another image and generating its captions…");
+    try {
+      const response = await fetch(
+        `${API_URL}/api/proposals/${proposal.id}/replace`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidate_id: null }),
+        },
+      );
+      const refreshed = await parseProposalResponse(response);
+      showProposal(refreshed);
+      setMessage("A replacement image and its captions are ready.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Image replacement failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function toggleEdit() {
     const next = !editing;
     setEditing(next);
@@ -213,8 +271,8 @@ export function ReviewWorkspace({
     <main className="editorial-conveyor">
       <header className="conveyor-header">
         <div>
-          <p className="eyebrow">Runway / Qlob</p>
-          <h1>{proposal ? "Next." : "Runway clear."}</h1>
+          <p className="eyebrow">Generator / Qlob</p>
+          <h1>{proposal ? "Choose the next post." : "Generator clear."}</h1>
         </div>
         <div className="conveyor-stats" aria-label="Editorial session status">
           <span>
@@ -247,6 +305,12 @@ export function ReviewWorkspace({
 
       {proposal ? (
         <>
+          <ol className="generator-loop" aria-label="Generator workflow">
+            <li className="complete">Discover image</li>
+            <li className="complete">Generate caption</li>
+            <li className="active">Review</li>
+            <li>Reject / Edit / Accept</li>
+          </ol>
           <section className="decision-stage">
             <figure className="decision-image">
               {proposal.candidate?.preview_url && (
@@ -267,7 +331,7 @@ export function ReviewWorkspace({
                 <strong>{nextSlot}</strong>
               </div>
 
-              <label htmlFor="editorial-caption">Caption</label>
+              <label htmlFor="editorial-caption">Primary caption</label>
               <textarea
                 ref={captionRef}
                 id="editorial-caption"
@@ -320,9 +384,31 @@ export function ReviewWorkspace({
                     : "Accept reserves the next daily slot; YouTube scheduling is off.")}
               </p>
 
+              <div className="generator-tools" aria-label="Regenerate this option">
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={replaceImage}
+                >
+                  {busy === "replace" ? "Replacing image…" : "Replace image"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={regenerateCaptions}
+                >
+                  {busy === "regenerate"
+                    ? "Generating captions…"
+                    : "Regenerate captions"}
+                </button>
+              </div>
+
               {proposal.alternative_captions.length > 0 && (
-                <details className="caption-drawer">
-                  <summary>Other lines</summary>
+                <section className="caption-drawer caption-drawer-open">
+                  <div className="caption-drawer-heading">
+                    <strong>Alternative captions</strong>
+                    <span>Choose one to edit or accept</span>
+                  </div>
                   <div className="caption-options" aria-label="Caption options">
                     {proposal.alternative_captions.map((alternative) => (
                       <button
@@ -339,7 +425,7 @@ export function ReviewWorkspace({
                       </button>
                     ))}
                   </div>
-                </details>
+                </section>
               )}
             </section>
           </section>

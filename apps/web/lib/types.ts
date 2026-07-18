@@ -33,6 +33,8 @@ export type Proposal = {
   warnings: string[];
   rights_decision: string | null;
   rights_reviewed_at: string | null;
+  approved_at?: string | null;
+  rejected_at?: string | null;
   external_post_id: string | null;
   external_post_url: string | null;
   scheduled_verified_at: string | null;

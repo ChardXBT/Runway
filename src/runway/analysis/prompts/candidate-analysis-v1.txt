@@ -2,4 +2,6 @@ Analyze only the supplied candidate image/context and return the requested schem
 unverified names or plot facts. Mark uncertainty through confidence and use null for unknown
 franchises. Estimate overlay, watermark, safety, caption potential, independently created personal
 artwork, and fan art conservatively. Treat portfolio illustrations and artist-uploaded fan work as
-personal artwork even when the source does not display a watermark.
+personal artwork even when the source does not display a watermark. A visually similar photograph
+is not relevant merely because its colors resemble the profile: identify the actual franchise when
+visible and leave franchise null when the image is unrelated or uncertain.

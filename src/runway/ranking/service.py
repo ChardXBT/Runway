@@ -9,7 +9,13 @@ from sqlalchemy import select
 from runway.analysis.schemas import CandidateAnalysis
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import BlockedSource, CandidateImage, MediaAsset, Proposal
+from runway.db.models import (
+    BlockedSource,
+    CandidateImage,
+    MediaAsset,
+    Proposal,
+    StyleProfile,
+)
 from runway.media.service import ImageFeatures, cosine_similarity
 from runway.ranking.duplicates import DuplicateResult
 
@@ -29,6 +35,12 @@ class RankingResult(BaseModel):
 
 
 class CandidateRanker:
+    personal_art_domains = {
+        "artstation.com",
+        "behance.net",
+        "deviantart.com",
+        "pixiv.net",
+    }
     weights = {
         "style": 0.25,
         "topic": 0.1,
@@ -134,6 +146,12 @@ class CandidateRanker:
             )
         if blocked:
             return "blocked_domain"
+        normalized_domain = source_domain.lower().removeprefix("www.")
+        if any(
+            normalized_domain == domain or normalized_domain.endswith(f".{domain}")
+            for domain in self.personal_art_domains
+        ):
+            return "personal_artwork_source"
         if analysis.unsafe_probability >= 0.5:
             return "unsafe_content"
         if analysis.watermark_probability >= 0.65:
@@ -142,7 +160,50 @@ class CandidateRanker:
             return "personal_artwork"
         if analysis.fan_art_probability >= 0.5:
             return "fan_art"
+        supported_franchises = self._supported_franchises()
+        if supported_franchises:
+            candidate_franchise = self._normalize_franchise(analysis.franchise)
+            if candidate_franchise not in supported_franchises:
+                return "off_topic"
         return None
+
+    def _supported_franchises(self) -> set[str]:
+        with self.database.session() as session:
+            profile = session.scalar(
+                select(StyleProfile)
+                .where(StyleProfile.is_active.is_(True))
+                .order_by(StyleProfile.version.desc())
+                .limit(1)
+            )
+            if profile is None:
+                return set()
+            payload = json.loads(profile.profile_json)
+        statistics = payload.get("caption_statistics", {})
+        sample_size = (
+            int(statistics.get("sample_size", 0))
+            if isinstance(statistics, dict)
+            else 0
+        )
+        minimum_support = max(2, round(sample_size * 0.01))
+        distribution = payload.get("franchise_distribution", [])
+        if not isinstance(distribution, list):
+            return set()
+        supported: set[str] = set()
+        for row in distribution:
+            if not isinstance(row, (list, tuple)) or len(row) < 2:
+                continue
+            name = self._normalize_franchise(str(row[0]))
+            try:
+                count = int(row[1])
+            except (TypeError, ValueError):
+                continue
+            if name and name not in {"unknown", "none", "null"} and count >= minimum_support:
+                supported.add(name)
+        return supported
+
+    @staticmethod
+    def _normalize_franchise(value: str | None) -> str:
+        return " ".join((value or "").strip().lower().split())
 
     @staticmethod
     def _quality(features: ImageFeatures) -> float:

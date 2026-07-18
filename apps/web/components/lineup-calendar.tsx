@@ -71,6 +71,7 @@ function statusLabel(status: string) {
 }
 
 type DialogMode = "edit" | "remove" | null;
+type LineupAction = "edit" | "remove" | "retry" | "verify" | null;
 
 export function LineupCalendar({
   initialLineup,
@@ -92,7 +93,7 @@ export function LineupCalendar({
   const [dialog, setDialog] = useState<DialogMode>(null);
   const [draftCaption, setDraftCaption] = useState("");
   const [draftDate, setDraftDate] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<LineupAction>(null);
   const [message, setMessage] = useState("");
 
   const selected =
@@ -156,7 +157,7 @@ export function LineupCalendar({
   }
 
   function closeDialog() {
-    if (busy) return;
+    if (busy !== null) return;
     setDialog(null);
   }
 
@@ -170,7 +171,7 @@ export function LineupCalendar({
 
   async function confirmEdit() {
     if (!selected || busy) return;
-    setBusy(true);
+    setBusy("edit");
     setMessage("");
     try {
       const response = await fetch(`${API_URL}/api/lineup/${selected.id}`, {
@@ -203,13 +204,13 @@ export function LineupCalendar({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The change failed.");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
   async function confirmRemove() {
     if (!selected || busy) return;
-    setBusy(true);
+    setBusy("remove");
     setMessage("");
     try {
       const response = await fetch(
@@ -228,7 +229,48 @@ export function LineupCalendar({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Remove failed.");
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  }
+
+  async function retryOrVerify() {
+    if (!selected || busy) return;
+    const verifying = selected.status === "publish_unverified";
+    setBusy(verifying ? "verify" : "retry");
+    setMessage("");
+    try {
+      const response = await fetch(
+        verifying
+          ? `${API_URL}/api/proposals/${selected.id}/youtube/verify`
+          : `${API_URL}/api/lineup/${selected.id}/retry`,
+        { method: "POST" },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "YouTube recovery could not start.");
+      }
+      if (payload.lineup) {
+        setLineup(payload.lineup as LineupSchedule);
+      } else if (payload.proposal) {
+        const refreshed = payload.proposal as Proposal;
+        setLineup((current) => ({
+          ...current,
+          scheduled: current.scheduled.map((item) =>
+            item.id === refreshed.id ? refreshed : item,
+          ),
+        }));
+      }
+      setMessage(
+        verifying
+          ? "YouTube verification finished. The synchronization status is refreshed."
+          : "YouTube scheduling was queued again.",
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "YouTube recovery failed.",
+      );
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -249,9 +291,10 @@ export function LineupCalendar({
     <main className="lineup-page">
       <header className="lineup-header">
         <div>
-          <p className="eyebrow">Lineup / Qlob releases</p>
-          <h1>{lineup.coverage} ready to go.</h1>
+          <p className="eyebrow">Scheduler / Qlob Lineup</p>
+          <h1>Your release lineup.</h1>
           <p className="lede">
+            {lineup.coverage} {lineup.coverage === 1 ? "post" : "posts"} organized.
             One RunWay post per day at {displayTime(lineup.default_time)}{" "}
             {displayTimezone(lineup.timezone)}. Select any look to refine, move, swap,
             or remove it.
@@ -280,6 +323,10 @@ export function LineupCalendar({
       {lineup.scheduled.length ? (
         <div className="lineup-layout">
           <section className="lineup-calendar" aria-label="RunWay release calendar">
+            <div className="lineup-section-label">
+              <strong>Calendar</strong>
+              <span>{monthFormatter.format(month)}</span>
+            </div>
             <div className="lineup-weekdays" aria-hidden="true">
               {"Sun Mon Tue Wed Thu Fri Sat".split(" ").map((day) => (
                 <span key={day}>{day}</span>
@@ -331,87 +378,126 @@ export function LineupCalendar({
             </div>
           </section>
 
-          <section className="lineup-agenda" aria-label="Scheduled posts agenda">
-            {lineup.scheduled.map((proposal) => {
-              const slot = proposal.scheduled_publish_at ?? proposal.planned_publish_at;
-              return (
-                <button
-                  type="button"
-                  key={proposal.id}
-                  className={selectedId === proposal.id ? "selected" : ""}
-                  onClick={() => select(proposal)}
-                >
-                  <time>{slotFormatter.format(new Date(slot))}</time>
-                  <span>{proposal.final_caption}</span>
-                  <small>{statusLabel(proposal.status)}</small>
-                </button>
-              );
-            })}
-          </section>
-
-          <aside className="lineup-inspector" aria-label="Selected post">
-            {selected ? (
-              <>
-                <div className="lineup-inspector-image">
-                  {selected.candidate?.preview_url && (
-                    <img
-                      src={`${API_URL}${selected.candidate.preview_url}`}
-                      alt="Selected scheduled Qlob post"
-                    />
-                  )}
-                </div>
-                <div className="lineup-inspector-copy">
-                  <span className={`status status-${selected.status}`}>
-                    {statusLabel(selected.status)}
-                  </span>
-                  <time>
-                    {slotFormatter.format(
-                      new Date(
-                        selected.scheduled_publish_at ?? selected.planned_publish_at,
-                      ),
-                    )}
-                  </time>
-                  <h2>{selected.final_caption}</h2>
-                </div>
-                <div className="lineup-inspector-actions">
-                  <button
-                    type="button"
-                    className="button secondary"
-                    onClick={openEdit}
-                    disabled={!selectedMutable}
-                  >
-                    Modify
-                  </button>
-                  <button
-                    type="button"
-                    className="text-danger"
-                    onClick={() => setDialog("remove")}
-                    disabled={!selectedMutable}
-                  >
-                    Remove
-                  </button>
-                  {selected.external_post_url && (
-                    <a
-                      href={selected.external_post_url}
-                      target="_blank"
-                      rel="noreferrer"
+          <div className="lineup-side">
+            <section className="lineup-upcoming" aria-label="Upcoming posts">
+              <div className="lineup-section-label">
+                <strong>Upcoming</strong>
+                <span>{lineup.coverage} total</span>
+              </div>
+              <div className="lineup-upcoming-list">
+                {lineup.scheduled.slice(0, 12).map((proposal) => {
+                  const slot =
+                    proposal.scheduled_publish_at ?? proposal.planned_publish_at;
+                  return (
+                    <button
+                      type="button"
+                      key={proposal.id}
+                      className={selectedId === proposal.id ? "selected" : ""}
+                      onClick={() => select(proposal)}
                     >
-                      View on YouTube ↗
-                    </a>
-                  )}
-                </div>
-                <p className="lineup-sync-note">
-                  {publishingEnabled
-                    ? selectedMutable
-                      ? "Confirmed changes are applied to YouTube first and saved here only after verification."
-                      : "This release is in flight or no longer safely editable. Activity keeps the full record."
-                    : selected.status === "externally_scheduled"
-                      ? "YouTube scheduling is off, so an existing YouTube release cannot be changed here."
-                      : "YouTube scheduling is off; changes affect the local Lineup only."}
-                </p>
-              </>
-            ) : null}
-          </aside>
+                      {proposal.candidate?.preview_url && (
+                        <img
+                          src={`${API_URL}${proposal.candidate.preview_url}`}
+                          alt=""
+                        />
+                      )}
+                      <span>
+                        <time>{slotFormatter.format(new Date(slot))}</time>
+                        <strong>{proposal.final_caption}</strong>
+                        <small>{statusLabel(proposal.status)}</small>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <aside className="lineup-inspector" aria-label="Selected post">
+              {selected ? (
+                <>
+                  <div className="lineup-inspector-image">
+                    {selected.candidate?.preview_url && (
+                      <img
+                        src={`${API_URL}${selected.candidate.preview_url}`}
+                        alt="Selected scheduled Qlob post"
+                      />
+                    )}
+                  </div>
+                  <div className="lineup-inspector-copy">
+                    <span className={`status status-${selected.status}`}>
+                      {statusLabel(selected.status)}
+                    </span>
+                    <time>
+                      {slotFormatter.format(
+                        new Date(
+                          selected.scheduled_publish_at ??
+                            selected.planned_publish_at,
+                        ),
+                      )}
+                    </time>
+                    <h2>{selected.final_caption}</h2>
+                  </div>
+                  <div className="lineup-inspector-actions">
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={openEdit}
+                      disabled={!selectedMutable || busy !== null}
+                    >
+                      Edit or move
+                    </button>
+                    {publishingEnabled &&
+                      [
+                        "internally_scheduled",
+                        "publish_failed",
+                        "publish_unverified",
+                      ].includes(selected.status) && (
+                        <button
+                          type="button"
+                          className="button sync"
+                          onClick={retryOrVerify}
+                          disabled={busy !== null}
+                        >
+                          {busy === "retry"
+                            ? "Retrying…"
+                            : busy === "verify"
+                              ? "Verifying…"
+                              : selected.status === "publish_unverified"
+                                ? "Verify YouTube"
+                                : "Retry YouTube"}
+                        </button>
+                      )}
+                    <button
+                      type="button"
+                      className="text-danger"
+                      onClick={() => setDialog("remove")}
+                      disabled={!selectedMutable || busy !== null}
+                    >
+                      Remove
+                    </button>
+                    {selected.external_post_url && (
+                      <a
+                        href={selected.external_post_url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View on YouTube ↗
+                      </a>
+                    )}
+                  </div>
+                  <p className="lineup-sync-note">
+                    {publishingEnabled
+                      ? selectedMutable
+                        ? "Confirmed changes are applied to YouTube first and saved here only after verification."
+                        : "This release is in flight or no longer safely editable. Activity keeps the full record."
+                      : selected.status === "externally_scheduled"
+                        ? "YouTube scheduling is off, so an existing YouTube release cannot be changed here."
+                        : "YouTube scheduling is off; changes affect the local Lineup only."}
+                  </p>
+                </>
+              ) : null}
+            </aside>
+          </div>
         </div>
       ) : (
         <section className="lineup-empty">
@@ -485,7 +571,7 @@ export function LineupCalendar({
                     type="button"
                     className="button secondary"
                     onClick={closeDialog}
-                    disabled={busy}
+                    disabled={busy !== null}
                   >
                     Keep current
                   </button>
@@ -493,9 +579,9 @@ export function LineupCalendar({
                     type="button"
                     className="button approve"
                     onClick={confirmEdit}
-                    disabled={busy || !draftCaption.trim() || !draftDate}
+                    disabled={busy !== null || !draftCaption.trim() || !draftDate}
                   >
-                    {busy ? "Verifying…" : "Confirm changes"}
+                    {busy === "edit" ? "Verifying…" : "Confirm changes"}
                   </button>
                 </div>
               </>
@@ -512,7 +598,7 @@ export function LineupCalendar({
                     type="button"
                     className="button secondary"
                     onClick={closeDialog}
-                    disabled={busy}
+                    disabled={busy !== null}
                   >
                     Keep it
                   </button>
@@ -520,9 +606,9 @@ export function LineupCalendar({
                     type="button"
                     className="button reject"
                     onClick={confirmRemove}
-                    disabled={busy}
+                    disabled={busy !== null}
                   >
-                    {busy ? "Verifying…" : "Confirm remove"}
+                    {busy === "remove" ? "Verifying…" : "Confirm remove"}
                   </button>
                 </div>
               </>

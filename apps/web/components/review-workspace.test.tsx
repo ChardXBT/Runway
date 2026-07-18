@@ -115,7 +115,7 @@ describe("ReviewWorkspace", () => {
     );
 
     expect(screen.queryByText(/rights|provenance|copyright/i)).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Caption"), {
+    fireEvent.change(screen.getByLabelText("Primary caption"), {
       target: { value: "Why is One so excited?!" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Accept" }));
@@ -175,7 +175,40 @@ describe("ReviewWorkspace", () => {
     expect(controls).toHaveTextContent("Reject");
     expect(controls).toHaveTextContent("Edit");
     expect(controls).toHaveTextContent("Accept");
-    expect(screen.queryByRole("button", { name: "Another image" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Replace image" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Regenerate captions" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Alternative captions")).toBeInTheDocument();
+  });
+
+  it("regenerates captions without changing the image", async () => {
+    const refreshed = {
+      ...proposal,
+      recommended_caption: "What has One so excited?",
+      final_caption: "What has One so excited?",
+      alternative_captions: ["What happens next?"],
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => refreshed,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate captions" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/proposals/42/regenerate");
+    expect(
+      await screen.findByDisplayValue("What has One so excited?"),
+    ).toBeInTheDocument();
   });
 
   it("replenishes the conveyor when the tray is empty", async () => {

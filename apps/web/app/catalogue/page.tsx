@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { API_URL, apiGet } from "@/lib/api";
+import type { Proposal } from "@/lib/types";
 
 type Media = { id: number; url: string; width: number; height: number };
 type Post = {
@@ -43,13 +44,14 @@ export default async function CataloguePage({
   if (params.eligible) query.set("training_eligible", params.eligible);
   if (params.franchise) query.set("franchise", params.franchise);
   if (params.character) query.set("character", params.character);
-  const [catalogRows, status] = await Promise.all([
+  const [catalogRows, status, rejected] = await Promise.all([
     apiGet<Post[]>(`/api/catalog?${query}`, []),
     apiGet<CatalogStatus>("/api/catalog/status", {
       total_posts: 0,
       training_eligible: 0,
       media_assets: 0,
     }),
+    apiGet<Proposal[]>("/api/proposals?status=rejected&limit=100", []),
   ]);
   const posts = catalogRows.slice(0, pageSize);
   const hasNextPage = catalogRows.length > pageSize;
@@ -81,6 +83,49 @@ export default async function CataloguePage({
           <span>{posts.length} shown on page {page}</span>
         </div>
       </header>
+      {rejected.length > 0 && (
+        <section className="rejected-archive" aria-labelledby="rejected-heading">
+          <div className="archive-section-heading">
+            <div>
+              <p className="eyebrow">Rejected by you</p>
+              <h2 id="rejected-heading">Looks that did not make the Lineup.</h2>
+            </div>
+            <span>{rejected.length} learning signals</span>
+          </div>
+          <div className="rejected-strip">
+            {rejected.slice(0, 12).map((proposal) => (
+              <article key={proposal.id}>
+                <div>
+                  {proposal.candidate?.preview_url ? (
+                    // Local API media is served as captured.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`${API_URL}${proposal.candidate.preview_url}`}
+                      alt=""
+                    />
+                  ) : (
+                    <span>No image</span>
+                  )}
+                </div>
+                <p>{proposal.final_caption}</p>
+                <small>
+                  Rejected{" "}
+                  {proposal.rejected_at
+                    ? new Date(proposal.rejected_at).toLocaleDateString()
+                    : `as look ${proposal.id}`}
+                </small>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+      <div className="archive-section-heading published-heading">
+        <div>
+          <p className="eyebrow">Published history</p>
+          <h2>Every captured Qlob post.</h2>
+        </div>
+        <span>{status.total_posts} records</span>
+      </div>
       <form className="filter-bar" method="get">
         <label>
           <span>Search captions</span>

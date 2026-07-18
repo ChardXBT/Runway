@@ -503,6 +503,28 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @router.post("/lineup/{proposal_id}/retry")
+    def retry_lineup_publish(proposal_id: int) -> dict[str, object]:
+        try:
+            proposal = proposals.detail(proposal_id)
+            if proposal["status"] not in {
+                "internally_scheduled",
+                "publish_failed",
+            }:
+                raise ValueError("only a waiting or failed YouTube action can be retried")
+            queued = publisher_queue.enqueue(proposal_id)
+            return {
+                "proposal": proposals.detail(proposal_id),
+                "lineup": proposals.queue_status(),
+                "publisher_queue": queued,
+            }
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @router.get("/activity")
     def activity(
         event_type: str | None = None,

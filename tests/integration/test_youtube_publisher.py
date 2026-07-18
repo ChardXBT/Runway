@@ -496,3 +496,32 @@ async def test_unverified_lineup_edit_keeps_local_record_unchanged(
     after = ProposalService(database, settings).detail(proposal_id)
     assert after["final_caption"] == before["final_caption"]
     assert after["scheduled_publish_at"] == before["scheduled_publish_at"]
+
+
+@pytest.mark.asyncio
+async def test_overdue_internal_lineup_post_can_move_to_a_future_slot(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    timezone = ZoneInfo(settings.timezone)
+    overdue = datetime.now(timezone) - timedelta(days=1)
+    overdue = overdue.replace(hour=10, minute=0, second=0, microsecond=0)
+    with database.session() as session:
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        proposal.scheduled_publish_at = overdue.isoformat()
+
+    future_date = datetime.now(timezone).date() + timedelta(days=2)
+    publisher = YouTubeBrowserPublisher(database, settings, FakeYouTubeAdapter())
+    result = await publisher.update_lineup(
+        proposal_id,
+        final_caption=None,
+        new_date=future_date,
+    )
+
+    assert result["requeue_proposal_ids"] == [proposal_id]
+    updated = ProposalService(database, settings).detail(proposal_id)
+    moved = datetime.fromisoformat(str(updated["scheduled_publish_at"]))
+    assert moved.astimezone(timezone).date() == future_date
+    assert moved.astimezone(timezone).hour == 10

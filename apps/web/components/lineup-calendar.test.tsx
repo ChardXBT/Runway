@@ -78,7 +78,7 @@ describe("LineupCalendar", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
-    fireEvent.click(screen.getByRole("button", { name: "Modify" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit or move" }));
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Caption"), {
       target: { value: "Wait... what?!" },
@@ -126,7 +126,7 @@ describe("LineupCalendar", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
-    fireEvent.click(screen.getByRole("button", { name: "Modify" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit or move" }));
     fireEvent.change(screen.getByLabelText("Caption"), {
       target: { value: "Why now?!" },
     });
@@ -145,11 +145,33 @@ describe("LineupCalendar", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
-    fireEvent.click(screen.getByRole("button", { name: "Modify" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit or move" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.keyDown(dialog, { key: "Escape" });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the calendar and upcoming-post list together", () => {
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+
+    expect(screen.getByLabelText("RunWay release calendar")).toBeInTheDocument();
+    expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("First line");
+    expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("Second line");
+  });
+
+  it("retries a waiting YouTube action from the selected post", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ lineup }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    fireEvent.click(screen.getByRole("button", { name: "Retry YouTube" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/lineup/12/retry");
   });
 });

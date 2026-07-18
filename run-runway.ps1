@@ -40,6 +40,32 @@ function Test-PortInUse([int]$Port) {
     )
 }
 
+function Get-PortProcessId([int]$Port) {
+    $listener = (
+        Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { $_.LocalPort -eq $Port } |
+            Select-Object -First 1
+    )
+    return $listener.OwningProcess
+}
+
+function Test-RunWayWebProcess([int]$ProcessId) {
+    if (-not $ProcessId) {
+        return $false
+    }
+    try {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId"
+        $webRoot = Join-Path $root "apps\web"
+        return (
+            $process.Name -eq "node.exe" -and
+            $process.CommandLine -like "*$webRoot*"
+        )
+    }
+    catch {
+        return $false
+    }
+}
+
 if (-not $WebOnly) {
     if (Test-RunWayApi) {
         Write-Host "RunWay API is already running at http://127.0.0.1:8000"
@@ -67,9 +93,17 @@ if (-not $ApiOnly) {
         Write-Host "RunWay is already running at $webUrl"
     }
     elseif (Test-PortInUse 3000) {
-        throw "Port 3000 is occupied by another program. Stop that program, then try again."
+        $webProcessId = Get-PortProcessId 3000
+        if (Test-RunWayWebProcess $webProcessId) {
+            Write-Host "RunWay web process is not responding; restarting it."
+            Stop-Process -Id $webProcessId -Force
+            Start-Sleep -Milliseconds 500
+        }
+        else {
+            throw "Port 3000 is occupied by another program. Stop that program, then try again."
+        }
     }
-    else {
+    if (-not (Test-RunWayWeb)) {
         Write-Host "Starting RunWay at $webUrl"
         npm --prefix $root run web:dev
     }

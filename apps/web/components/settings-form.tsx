@@ -20,6 +20,7 @@ type Settings = {
   publishing_enabled: boolean;
   caption_question_first: boolean;
   publisher_channel_id: string;
+  publisher_browser_channel: string;
   blocked_sources: { id: number; type: string; value: string }[];
 };
 

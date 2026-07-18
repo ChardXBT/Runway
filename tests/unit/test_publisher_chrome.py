@@ -65,3 +65,32 @@ def test_guarded_publisher_reopens_the_profile_with_installed_chrome(
     assert captured["channel"] == "chrome"
     assert captured["user_data_dir"] == str(adapter.settings.publisher_profile_dir)
     assert captured["headless"] is False
+
+
+def test_publisher_selects_the_only_visible_control_from_responsive_duplicates() -> None:
+    class Item:
+        def __init__(self, visible: bool) -> None:
+            self.visible = visible
+
+        def is_visible(self) -> bool:
+            return self.visible
+
+    class Locator:
+        def __init__(self, items: list[Item]) -> None:
+            self.items = items
+
+        def count(self) -> int:
+            return len(self.items)
+
+        def nth(self, index: int) -> Item:
+            return self.items[index]
+
+    hidden = Item(False)
+    visible = Item(True)
+
+    selected = PlaywrightYouTubeAdapter._one_visible(
+        Locator([hidden, visible]),
+        "schedule action menu",
+    )
+
+    assert selected is visible

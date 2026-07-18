@@ -1,4 +1,9 @@
+import json
+from datetime import UTC, datetime
+
 from runway.analysis.schemas import CandidateAnalysis
+from runway.db.models import StyleProfile
+from runway.db.repositories import get_channel
 from runway.media.service import ImageFeatures
 from runway.ranking.duplicates import DuplicateResult
 from runway.ranking.service import CandidateRanker
@@ -53,3 +58,101 @@ def test_fan_art_is_hard_rejected(database, settings) -> None:
     assert result.hard_rejection_reason == "fan_art"
     assert result.final_rank_score == 0.0
     assert "possible fan art" in result.warnings
+
+
+def test_artist_portfolio_domain_is_rejected_even_when_model_confidence_is_low(
+    database, settings
+) -> None:
+    features, analysis, duplicate = _rank_inputs(franchise="The Simpsons")
+
+    result = CandidateRanker(database, settings).rank(
+        features,
+        analysis,
+        duplicate,
+        source_domain="www.deviantart.com",
+        rights_status="unknown",
+    )
+
+    assert result.hard_rejection_reason == "personal_artwork_source"
+    assert result.final_rank_score == 0.0
+
+
+def test_unrelated_candidate_is_rejected_against_active_franchise_profile(
+    database, settings
+) -> None:
+    with database.session() as session:
+        channel = get_channel(session, settings.channel_handle)
+        session.add(
+            StyleProfile(
+                channel_id=channel.id,
+                version=1,
+                catalogue_cutoff=datetime.now(UTC),
+                profile_json=json.dumps(
+                    {
+                        "caption_statistics": {"sample_size": 200},
+                        "franchise_distribution": [
+                            ["The Simpsons", 196],
+                            ["unknown", 4],
+                        ],
+                    }
+                ),
+                representative_post_ids_json="[]",
+                excluded_post_ids_json="[]",
+                is_active=True,
+            )
+        )
+    features, analysis, duplicate = _rank_inputs(franchise=None)
+
+    result = CandidateRanker(database, settings).rank(
+        features,
+        analysis,
+        duplicate,
+        source_domain="example.test",
+        rights_status="unknown",
+    )
+
+    assert result.hard_rejection_reason == "off_topic"
+    assert result.final_rank_score == 0.0
+
+
+def _rank_inputs(
+    *, franchise: str | None
+) -> tuple[ImageFeatures, CandidateAnalysis, DuplicateResult]:
+    return (
+        ImageFeatures(
+            sha256="b" * 64,
+            mime_type="image/jpeg",
+            width=1280,
+            height=720,
+            file_size=200_000,
+            perceptual_hash="1" * 16,
+            crop_resistant_hash="[]",
+            embedding=[1.0, 0.0],
+            blur_score=120.0,
+            quality_metrics={"bytes_per_pixel": 0.1},
+        ),
+        CandidateAnalysis(
+            franchise=franchise,
+            characters=[],
+            scene_archetype="reaction",
+            composition="centered",
+            emotion="surprise",
+            text_overlay=False,
+            watermark_probability=0.0,
+            unsafe_probability=0.0,
+            personal_artwork_probability=0.01,
+            fan_art_probability=0.01,
+            caption_potential=0.8,
+            confidence=0.9,
+        ),
+        DuplicateResult(
+            is_exact=False,
+            is_transformed_duplicate=False,
+            highest_visual_similarity=0.0,
+            highest_semantic_similarity=0.0,
+            closest_asset_ids=[],
+            within_180_day_window=False,
+            hard_block=False,
+            warnings=[],
+        ),
+    )

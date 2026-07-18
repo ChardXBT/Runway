@@ -117,10 +117,7 @@ class Settings(BaseSettings):
 
     @property
     def publisher_channel_url(self) -> str:
-        return (
-            f"https://www.youtube.com/channel/{self.publisher_channel_id}/posts"
-            "?show_create_dialog=1"
-        )
+        return f"https://www.youtube.com/channel/{self.publisher_channel_id}/posts"
 
     def ensure_directories(self) -> list[Path]:
         directories = [

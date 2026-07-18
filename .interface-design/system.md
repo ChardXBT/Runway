@@ -11,7 +11,7 @@ prestigious, and unburdened by operational detail.
 
 The two primary rooms are:
 
-- **Runway** — one current image/caption pair and three decisions: Reject, Edit, Accept.
+- **Generator** — one current image/caption pair and three decisions: Reject, Edit, Accept.
 - **Lineup** — the complete release calendar, with confirmed modify, move/swap, and remove actions.
 
 Archive, Profile, Activity, and Settings are backstage utilities inside the menu. They must never
@@ -67,16 +67,17 @@ Most pixels must remain neutral. Green and red are reserved for the two judgment
 ### Global navigation
 
 - Carbon top bar with the RunWay arch/runway mark.
-- Only Runway and Lineup are visible as primary links.
+- Only Generator and Lineup are visible as primary links.
 - Hamburger menu contains Archive, Profile, Activity, Settings, and honest YouTube state.
 - At narrow widths, mark, two links, and menu remain on one row.
 
-### Runway
+### Generator
 
 - Desktop: media stage and decision sheet share one contained focal surface.
 - Mobile/tablet: media first, decision sheet second, with no horizontal overflow.
 - Caption accepts and preserves ordinary Unicode and punctuation, including `!`, `?`, and emoji.
 - The primary command row is always Reject (red), Edit (white/dusk), Accept (green).
+- Replacement-image and regenerated-caption controls stay secondary but visible.
 - Accept saves positive image/caption feedback, assigns the first open daily slot, queues YouTube
   publishing, and immediately advances.
 - Reject saves negative evidence and immediately advances.
@@ -84,7 +85,7 @@ Most pixels must remain neutral. Green and red are reserved for the two judgment
 
 ### Lineup
 
-- Desktop uses a month calendar plus a sticky selected-post inspector.
+- Desktop uses a month calendar, a visible upcoming-post list, and a selected-post inspector.
 - Below 820px, the month grid becomes a chronological agenda.
 - Modify can change caption and date in one confirmation.
 - Moving onto an occupied date swaps the two posts; it never creates a daily collision.
@@ -92,6 +93,12 @@ Most pixels must remain neutral. Green and red are reserved for the two judgment
 - Externally scheduled changes are applied to YouTube first and committed locally only after
   verification. In-flight or unverified posts refuse mutation.
 - Internal queued changes supersede stale payloads before replacement payloads are queued.
+- Waiting, failed, and unverified YouTube actions expose explicit retry or verify controls.
+
+### Backstage
+
+- Archive combines captured published history with rejected Generator options.
+- Settings owns an explicit Platform Connection panel for status checks and queue recovery.
 
 ## Behavior and safeguards
 
@@ -102,6 +109,9 @@ Most pixels must remain neutral. Green and red are reserved for the two judgment
 - Google challenges are never bypassed.
 - Codex uses saved ChatGPT authentication; API keys are stripped and no paid fallback exists.
 - Ambiguous external submissions stop and remain inspectable; they are never blindly retried.
+- Candidate images must match a supported franchise from the active Qlob profile; visually similar
+  but unrelated photographs are rejected before Generator.
+- Artist portfolio domains are rejected even when automated fan-art confidence is low.
 - Every consequential mutation creates proposal and audit history.
 
 ## Accessibility and motion
