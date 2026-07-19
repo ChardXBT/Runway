@@ -1358,7 +1358,7 @@ def _runway_api_healthy(host: str, port: int) -> bool:
     if not isinstance(payload, dict):
         return False
     product = payload.get("product")
-    return response.status == 200 and isinstance(product, str) and product == "Runway"
+    return response.status == 200 and isinstance(product, str) and product.casefold() == "runway"
 
 
 @app.command()
