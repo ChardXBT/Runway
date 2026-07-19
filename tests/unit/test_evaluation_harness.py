@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -8,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from runway.evaluation.checksums import canonical_text_sha256
 from runway.evaluation.datasets import DatasetRepository
 from runway.evaluation.experiments import ExperimentRunner
 from runway.evaluation.gates import (
@@ -83,12 +83,21 @@ def test_frozen_baseline_checksums_are_immutable() -> None:
     root = DatasetRepository().root.parent / "baseline-876fe5f"
     for line in (root / "checksums.sha256").read_text(encoding="utf-8").splitlines():
         expected, filename = line.split(maxsplit=1)
-        actual = hashlib.sha256((root / filename).read_bytes()).hexdigest()
+        actual = canonical_text_sha256(root / filename)
         assert actual == expected
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["baseline_commit"] == "876fe5f814b1a58f0d11b9eaf29f4c508f20595d"
     assert manifest["paid_provider_calls"] == 0
     assert manifest["publishing_enabled"] is False
+
+
+def test_frozen_baseline_checksum_is_line_ending_independent(tmp_path: Path) -> None:
+    lf_path = tmp_path / "lf.json"
+    crlf_path = tmp_path / "crlf.json"
+    lf_path.write_bytes(b'{\n  "status": "frozen"\n}\n')
+    crlf_path.write_bytes(b'{\r\n  "status": "frozen"\r\n}\r\n')
+
+    assert canonical_text_sha256(lf_path) == canonical_text_sha256(crlf_path)
 
 
 def test_tuning_is_reproducible_and_holdout_can_run_only_once(

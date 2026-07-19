@@ -20,6 +20,7 @@ from runway.config import Settings
 from runway.db import initialize_database
 from runway.db.models import CandidateImage, ModelRun
 from runway.discovery.service import DiscoveryService
+from runway.evaluation.checksums import canonical_text_sha256
 from runway.intelligence.profile import StyleProfileService
 from runway.ranking.service import ranking_weights_json
 
@@ -34,7 +35,7 @@ def _json_hash(value: object) -> str:
 
 
 def _file_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return canonical_text_sha256(path)
 
 
 def _git_sha(root: Path) -> str:

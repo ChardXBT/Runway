@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import importlib.util
 import json
 import shutil
@@ -26,6 +25,7 @@ from runway.catalog.service import CatalogService
 from runway.config import get_settings
 from runway.db import initialize_database
 from runway.discovery.service import DiscoveryService
+from runway.evaluation.checksums import canonical_text_sha256
 from runway.evaluation.datasets import DatasetRepository
 from runway.evaluation.experiments import ExperimentRunner
 from runway.evaluation.generalization import evaluate_generalization_fixtures
@@ -926,7 +926,7 @@ def intelligence_baseline() -> None:
     for line in (root / "checksums.sha256").read_text(encoding="utf-8").splitlines():
         expected, filename = line.split(maxsplit=1)
         path = root / filename.strip()
-        observed = hashlib.sha256(path.read_bytes()).hexdigest()
+        observed = canonical_text_sha256(path)
         if observed != expected:
             failures.append(filename.strip())
     payload = load_frozen_baseline()
