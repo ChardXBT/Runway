@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
@@ -456,11 +457,19 @@ export function ReviewWorkspace({
   const topic = proposal?.candidate?.detected_topic;
 
   return (
-    <main className="editorial-conveyor">
+    <div className="editorial-conveyor">
       <header className="conveyor-header">
         <div>
           <p className="eyebrow">Generator / Qlob</p>
-          <h1>{proposal ? "Choose the next post." : "Generator clear."}</h1>
+          <h1>
+            {proposal
+              ? "Choose the next post."
+              : generation.running
+                ? "Generator is working."
+                : generation.detail
+                  ? "No fresh options."
+                  : "Generator ready."}
+          </h1>
         </div>
         <div className="conveyor-stats" aria-label="Editorial session status">
           <span>
@@ -506,7 +515,11 @@ export function ReviewWorkspace({
               {proposal.candidate?.preview_url && (
                 <img
                   src={`${API_URL}${proposal.candidate.preview_url}`}
-                  alt="Proposed Qlob Community post"
+                  alt={
+                    topic?.franchise
+                      ? `Proposed ${topic.franchise} image for a Qlob Community post`
+                      : "Proposed image for a Qlob Community post"
+                  }
                 />
               )}
               <figcaption>
@@ -613,11 +626,11 @@ export function ReviewWorkspace({
               </div>
 
               {proposal.alternative_captions.length > 0 && (
-                <section className="caption-drawer caption-drawer-open">
-                  <div className="caption-drawer-heading">
+                <details className="caption-drawer">
+                  <summary>
                     <strong>Alternative captions</strong>
-                    <span>Choose one to edit or accept</span>
-                  </div>
+                    <span>{proposal.alternative_captions.length} options</span>
+                  </summary>
                   <div className="caption-options" aria-label="Caption options">
                     {proposal.alternative_captions.map((alternative, index) => (
                       <button
@@ -634,7 +647,7 @@ export function ReviewWorkspace({
                       </button>
                     ))}
                   </div>
-                </section>
+                </details>
               )}
             </section>
           </section>
@@ -666,26 +679,37 @@ export function ReviewWorkspace({
               ? "Building the next look."
               : sessionDecisions
                 ? "That’s the edit."
-                : "Bring in the first look."}
+                : generation.detail
+                  ? "Choose the next move."
+                  : "Bring in the first look."}
           </h2>
           <p>
             {generation.running
               ? "Runway is searching for a usable image, checking it, and asking Codex for captions. You can visit another section and come back."
-              : "Runway uses unused ranked images first, then opens a visible discovery pass for fresh material."}
+              : generation.detail
+                ? "Try a new discovery pass, or review the archive before changing source and duplicate safeguards."
+                : "Runway uses unused ranked images first, then opens a visible discovery pass for fresh material."}
           </p>
-          <button
-            type="button"
-            className="button"
-            disabled={busy !== null || generation.running}
-            onClick={ensureOptions}
-            aria-busy={busy === "options"}
-          >
-            {generation.running
-              ? "Generating…"
-              : busy === "options"
-                ? "Starting generation…"
-                : "Generate more"}
-          </button>
+          <div className="empty-actions">
+            <button
+              type="button"
+              className="button"
+              disabled={busy !== null || generation.running}
+              onClick={ensureOptions}
+              aria-busy={busy === "options"}
+            >
+              {generation.running
+                ? "Generating…"
+                : busy === "options"
+                  ? "Starting generation…"
+                  : "Generate more"}
+            </button>
+            {!generation.running && generation.detail && (
+              <Link className="button secondary" href="/catalogue">
+                Review archive
+              </Link>
+            )}
+          </div>
           <small
             id="generation-status"
             role={messageIsError ? "alert" : "status"}
@@ -698,6 +722,6 @@ export function ReviewWorkspace({
           </small>
         </section>
       )}
-    </main>
+    </div>
   );
 }

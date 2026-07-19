@@ -27,9 +27,12 @@ export default async function RootLayout({
   return (
     <html lang="en">
       <body>
+        <a className="skip-link" href="#main-content">
+          Skip to content
+        </a>
         <div className="app-shell">
           <Nav publishingEnabled={settings.publishing_enabled} />
-          <main className="main">
+          <main id="main-content" className="main" tabIndex={-1}>
             <div className="page-frame">{children}</div>
           </main>
         </div>

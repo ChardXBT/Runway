@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Runway arrow for dark backgrounds</title>
+  <desc id="desc">A straight upward arrow with vivid coral and mint wave bands.</desc>
+  <defs>
+    <linearGradient id="runway-base-dark" x1="112" y1="88" x2="394" y2="438" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF746F"/>
+      <stop offset="1" stop-color="#55DDB5"/>
+    </linearGradient>
+    <clipPath id="runway-arrow-dark">
+      <path d="M242 68a20 20 0 0 1 28 0l168 166c26 26 8 70-29 70h-65v102c0 24-19 43-43 43h-90c-24 0-43-19-43-43V304h-65c-37 0-55-44-29-70L242 68Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#runway-arrow-dark)">
+    <rect x="56" y="52" width="400" height="408" fill="url(#runway-base-dark)"/>
+    <path d="M42 206c78-58 151-43 214 8 69 56 143 63 222-6v102c-82 53-158 45-226-10-61-49-129-58-210-4v-90Z" fill="#FF9A88"/>
+    <path d="M38 301c87-56 158-37 222 17 67 56 140 62 220-4v118H38V301Z" fill="#86E5C7"/>
+    <path d="M34 382c83-43 151-24 214 23 67 50 143 55 232-8v80H34v-95Z" fill="#4BD2A9"/>
+  </g>
+</svg>

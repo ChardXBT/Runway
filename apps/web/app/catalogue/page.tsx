@@ -141,6 +141,7 @@ export default async function CataloguePage({
                     <img
                       src={`${API_URL}${proposal.candidate.preview_url}`}
                       alt=""
+                      loading="lazy"
                     />
                   ) : (
                     <span>No image</span>
@@ -204,7 +205,13 @@ export default async function CataloguePage({
                 {post.media[0] ? (
                   // Local API media; originals are not optimized or transformed by Next.js.
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={`${API_URL}${post.media[0].url}`} alt="Historical post media" />
+                  <img
+                    src={`${API_URL}${post.media[0].url}`}
+                    alt="Historical post media"
+                    width={post.media[0].width}
+                    height={post.media[0].height}
+                    loading="lazy"
+                  />
                 ) : (
                   <span>No image</span>
                 )}

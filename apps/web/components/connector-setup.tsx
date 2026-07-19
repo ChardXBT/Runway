@@ -39,7 +39,9 @@ export function ConnectorSetup({
   const [copyLabel, setCopyLabel] = useState("Copy email");
   const [state, setState] = useState<ConnectionState>("ready");
   const [detail, setDetail] = useState(
-    "Paste your channel URL after the invitation has been accepted.",
+    configuredChannelId
+      ? "Saved channel loaded. Run the read-only check after the invitation has been accepted."
+      : "Paste your channel URL after the invitation has been accepted.",
   );
   const requestLock = useRef(false);
 
@@ -97,7 +99,7 @@ export function ConnectorSetup({
           : "Ready to verify";
 
   return (
-    <main className="connector-page">
+    <div className="connector-page">
       <header className="connector-hero">
         <div className="connector-hero-copy">
           <p className="eyebrow">Connector / YouTube</p>
@@ -110,13 +112,13 @@ export function ConnectorSetup({
         </div>
         <section className="connector-pass" aria-label="Runway invitation account">
           <div>
-            <RunwayLogo className="connector-pass-mark" />
+            <RunwayLogo className="connector-pass-mark" dark />
             <span>
-              <small>Invite this account</small>
+              <small>Runway connector account</small>
               <strong>{connectorEmail}</strong>
             </span>
           </div>
-          <button type="button" onClick={copyEmail}>
+          <button type="button" onClick={copyEmail} aria-live="polite">
             {copyLabel}
           </button>
         </section>
@@ -135,7 +137,7 @@ export function ConnectorSetup({
               target="_blank"
               rel="noreferrer"
             >
-              Open YouTube Studio
+              Open YouTube Studio ↗
             </a>
           </div>
           <ol className="connector-steps" aria-label="Channel connection steps">
@@ -209,6 +211,9 @@ export function ConnectorSetup({
             <span>YouTube channel URL, handle, or channel ID</span>
             <input
               id="connector-channel"
+              name="channel-url"
+              type="url"
+              inputMode="url"
               value={channelUrl}
               onChange={(event) => setChannelUrl(event.target.value)}
               placeholder="youtube.com/@yourchannel"
@@ -239,6 +244,6 @@ export function ConnectorSetup({
           </small>
         </section>
       </section>
-    </main>
+    </div>
   );
 }

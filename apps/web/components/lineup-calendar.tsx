@@ -179,7 +179,7 @@ export function LineupCalendar({
   const dialogRef = useRef<HTMLElement>(null);
   const dialogOpener = useRef<HTMLElement | null>(null);
   const inspectorRef = useRef<HTMLElement>(null);
-  const pageRef = useRef<HTMLElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
 
   const activeIds = useMemo(
     () => new Set(lineup.scheduled.map((proposal) => proposal.id)),
@@ -684,7 +684,7 @@ export function LineupCalendar({
   const today = localDate(new Date(), lineup.timezone) ?? undefined;
 
   return (
-    <main ref={pageRef} className="lineup-page" tabIndex={-1}>
+    <div ref={pageRef} className="lineup-page" tabIndex={-1}>
       <header className="lineup-header">
         <div>
           <p className="eyebrow">Scheduler / Qlob Lineup</p>
@@ -698,7 +698,7 @@ export function LineupCalendar({
           </p>
         </div>
         <Link href="/review" className="button lineup-return">
-          Back to Runway
+          Back to Generator
         </Link>
       </header>
 
@@ -788,6 +788,7 @@ export function LineupCalendar({
                           <img
                             src={`${API_URL}${proposal.candidate.preview_url}`}
                             alt=""
+                            loading="lazy"
                           />
                         )}
                         <span>{proposal.final_caption}</span>
@@ -857,6 +858,7 @@ export function LineupCalendar({
                         <img
                           src={`${API_URL}${proposal.candidate.preview_url}`}
                           alt=""
+                          loading="lazy"
                         />
                       )}
                       <span>
@@ -902,6 +904,7 @@ export function LineupCalendar({
                         <img
                           src={`${API_URL}${proposal.candidate.preview_url}`}
                           alt=""
+                          loading="lazy"
                         />
                       )}
                       <span>
@@ -931,7 +934,7 @@ export function LineupCalendar({
                     {selected.candidate?.preview_url && (
                       <img
                         src={`${API_URL}${selected.candidate.preview_url}`}
-                        alt="Selected Qlob post"
+                        alt={`Selected image for “${selected.final_caption}”`}
                       />
                     )}
                   </div>
@@ -1228,6 +1231,6 @@ export function LineupCalendar({
           </section>
         </div>
       )}
-    </main>
+    </div>
   );
 }
