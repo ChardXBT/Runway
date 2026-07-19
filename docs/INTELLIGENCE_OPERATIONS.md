@@ -1,4 +1,4 @@
-# RunWay intelligence operations
+# Runway intelligence operations
 
 This runbook covers migration, backup, representation and model lifecycle,
 feedback reconciliation, annotation refresh, blind studies, rollback, and the
@@ -47,12 +47,12 @@ critical invariant fails.
 
 ## Backup before migration
 
-SQLite may use WAL while RunWay is running. Prefer the SQLite online backup API,
+SQLite may use WAL while Runway is running. Prefer the SQLite online backup API,
 or stop all writers and copy the database together with any `-wal` and `-shm`
 companions.
 
 The following PowerShell block uses Python's standard-library SQLite backup API
-without importing RunWay or starting a service:
+without importing Runway or starting a service:
 
 ```powershell
 $source = "data/qlob-production/runway.db"
@@ -315,7 +315,7 @@ the optional dependency group:
 .\.venv\Scripts\runway.exe intelligence provider-status
 ```
 
-Installing dependencies does not download weights. RunWay uses
+Installing dependencies does not download weights. Runway uses
 `local_files_only=True` and `trust_remote_code=False`. Do not set an adapter as
 the configured provider until its exact revision, license, frozen evaluation,
 resource measurements, creator study, and rollback rehearsal pass.

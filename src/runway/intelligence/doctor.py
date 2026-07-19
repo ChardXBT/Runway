@@ -133,7 +133,7 @@ class DoctorReport:
     def human_text(self) -> str:
         status = "FAILED" if self.critical_count else "PASSED"
         lines = [
-            f"RunWay intelligence doctor: {status}",
+            f"Runway intelligence doctor: {status}",
             f"Database: {self.database_path}",
             (
                 f"Findings: {self.critical_count} critical, "

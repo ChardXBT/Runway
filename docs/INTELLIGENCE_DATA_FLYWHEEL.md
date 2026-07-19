@@ -1,4 +1,4 @@
-# RunWay Intelligence Data Flywheel
+# Runway Intelligence Data Flywheel
 
 This is the persistent implementation ledger for the canonical intelligence-data
 flywheel milestone. It is updated as work is implemented and validated. Status values
@@ -10,7 +10,7 @@ are limited to `not_started`, `in_progress`, `blocked`, `implemented`, `validate
 - Milestone: `intelligence-data-flywheel`
 - Starting commit: `ff70f0ee5bb659554a4e6f2be7a5f32afefd5efb`
 - Working branch: `main`
-- Repository: private `ChardXBT/RunWay`
+- Repository: private `ChardXBT/Runway`
 - Audit date: 2026-07-19
 - Intended migration head: `0008_intelligence_data_flywheel`
 - Current canonical migration head: `0008_intelligence_data_flywheel`

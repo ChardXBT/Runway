@@ -94,3 +94,32 @@ def test_publisher_selects_the_only_visible_control_from_responsive_duplicates()
     )
 
     assert selected is visible
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            "https://www.youtube.com/@creator/videos",
+            "https://www.youtube.com/@creator/posts",
+        ),
+        (
+            "@creator",
+            "https://www.youtube.com/@creator/posts",
+        ),
+        (
+            "UCQ-nHijGwxNU3Go_wyLQ5Ng",
+            "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts",
+        ),
+    ],
+)
+def test_connector_channel_url_is_restricted_to_youtube(
+    value: str,
+    expected: str,
+) -> None:
+    assert PlaywrightYouTubeAdapter._normalize_connector_channel_url(value) == expected
+
+
+def test_connector_channel_url_rejects_external_hosts() -> None:
+    with pytest.raises(ValueError, match="youtube.com"):
+        PlaywrightYouTubeAdapter._normalize_connector_channel_url("https://example.com/@creator")

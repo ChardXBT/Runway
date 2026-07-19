@@ -10,7 +10,7 @@ rotation state, and the profile version. The full catalogue is never sent to a m
 
 Historical annotations, candidate analysis, and caption generation include the actual local image,
 not only image metadata. Caption generation produces a nine-item pool: four open questions, three
-observations, and two reactions. When character and visible emotion are confidently known, RunWay
+observations, and two reactions. When character and visible emotion are confidently known, Runway
 injects a grounded question such as `Why is Homer so excited?`.
 
 A deterministic reranker rewards open-ended question structure, Qlob style fit, length, novelty,

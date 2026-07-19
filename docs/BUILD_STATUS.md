@@ -10,7 +10,7 @@
 - [x] Question-first caption generation grounded in the image and Qlob history
 - [x] Automatic append-only learning from edits, approvals, replacements, and rejections
 - [x] Continuous one-decision review conveyor with immediate next-option loading
-- [x] Uncapped future scheduling at one RunWay post per day, 10:00 AM Toronto time
+- [x] Uncapped future scheduling at one Runway post per day, 10:00 AM Toronto time
 - [x] Approve-to-schedule persisted FIFO outbox
 - [x] Visible-browser Qlob publisher with channel/Editor validation and duplicate prevention
 - [x] Persisted pause-and-resume behavior when the Google session needs attention

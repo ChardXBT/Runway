@@ -21,7 +21,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     database = initialize_database(active_settings)
 
     application = FastAPI(
-        title="RunWay API",
+        title="Runway API",
         version=__version__,
         description=(
             "Local-only YouTube Community-post intelligence and planning API "

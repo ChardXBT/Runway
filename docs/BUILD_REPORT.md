@@ -7,7 +7,7 @@ bounded live image search, real proposal, UI pass, and restart check were subseq
 production evidence.
 
 The completed source repository is privately hosted at
-`https://github.com/ChardXBT/RunWay`, with `main` as the default branch. GitHub visibility was
+`https://github.com/ChardXBT/Runway`, with `main` as the default branch. GitHub visibility was
 verified as `PRIVATE` after the initial push.
 
 ## 2026-07-17 runtime update
@@ -40,7 +40,7 @@ verified as `PRIVATE` after the initial push.
   rejections, including reason codes and image verdicts.
 - Replaced the original ten-frame queue with a continuous one-decision editorial conveyor. Caption
   edits are inline; approve, reject, and image replacement record learning and load the next option.
-- Added first-open-day allocation at 10:00 AM Toronto time, with a strict one-RunWay-post-per-day
+- Added first-open-day allocation at 10:00 AM Toronto time, with a strict one-Runway-post-per-day
   invariant and no fixed scheduling horizon.
 - Implemented accept-to-schedule publishing through a persisted serial outbox with Qlob/Editor
   checks, payload hashing, session-expiry pause/resume, screenshots, Scheduled-tab verification,
@@ -94,7 +94,7 @@ verified as `PRIVATE` after the initial push.
 ### Milestone 4 — editorial conveyor and guarded publishers
 
 - Added a restart-safe, DST-aware first-open-day allocator with no fixed horizon and no more than
-  one RunWay-generated post per Toronto local date.
+  one Runway-generated post per Toronto local date.
 - Added the focused Review conveyor, uncapped Schedule list, Archive, Settings, and Activity
   evidence surfaces. The primary decision supports inline editing, alternatives, approve, reject,
   and image replacement.
@@ -105,7 +105,7 @@ verified as `PRIVATE` after the initial push.
 ## Repository tree
 
 ```text
-RunWay/
+Runway/
 ├── .github/workflows/ci.yml
 ├── alembic/                     # database migrations
 ├── apps/
@@ -138,7 +138,7 @@ RunWay/
 Run from PowerShell on Windows:
 
 ```powershell
-cd C:\path\to\RunWay
+cd C:\path\to\Runway
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
@@ -157,7 +157,7 @@ npm install
 .\.venv\Scripts\runway.exe capture youtube-posts --channel-url "https://www.youtube.com/@Qlob/posts" --headed --resume
 ```
 
-RunWay prints the dedicated profile path and asks for confirmation before opening a visible
+Runway prints the dedicated profile path and asks for confirmation before opening a visible
 browser. Handle sign-in, consent, account choice, or a challenge yourself. Press `Ctrl+C` once to
 stop safely, then rerun the same command with `--resume`. Capture state remains in `data/runway.db`;
 HTML, screenshot, and JSON failure diagnostics are saved under `data/snapshots/`.
@@ -240,11 +240,11 @@ To operate the same stages individually:
 ## Honest limitations
 
 - The real capture, Codex runtime, and a bounded browser-discovery pass are verified. Search
-  providers can still challenge, throttle, or change markup; RunWay stops instead of bypassing
+  providers can still challenge, throttle, or change markup; Runway stops instead of bypassing
   those controls.
 - Rights status for internet candidates defaults to `unknown`; it is retained as diagnostic
   metadata and does not add a checkbox to the fast approval path.
-- YouTube may expose relative dates only; RunWay records that reduced precision instead of
+- YouTube may expose relative dates only; Runway records that reduced precision instead of
   inventing a timestamp. YouTube DOM changes can still require selector updates.
 - Exact historical image-to-caption recovery measured 0% on the real 40-post holdout; caption
   ranking measured 75%. Generated captions are reviewable suggestions, not proven matches.

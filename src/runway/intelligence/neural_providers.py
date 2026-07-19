@@ -106,7 +106,7 @@ class SentenceTransformerTextProvider:
             raise ValueError("model_id and revision must be explicit")
         if importlib.util.find_spec("sentence_transformers") is None:
             raise OptionalProviderError(
-                "sentence-transformers is not installed; install RunWay's "
+                "sentence-transformers is not installed; install Runway's "
                 "`intelligence-ml` optional dependency"
             )
         self.model = model_id.strip()
@@ -208,7 +208,7 @@ class Siglip2EmbeddingProvider:
         ):
             raise OptionalProviderError(
                 "torch and transformers are required for SigLIP 2; install "
-                "RunWay's `intelligence-ml` optional dependency"
+                "Runway's `intelligence-ml` optional dependency"
             )
         if not model_id.strip() or not revision.strip():
             raise ValueError("model_id and revision must be explicit")

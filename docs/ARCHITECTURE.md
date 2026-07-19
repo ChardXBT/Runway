@@ -1,6 +1,6 @@
 # Architecture
 
-RunWay has one canonical production intelligence path. The CLI, FastAPI routes,
+Runway has one canonical production intelligence path. The CLI, FastAPI routes,
 and Next.js UI call service-layer operations; services own capture, catalogue,
 analysis, retrieval, captions, generation, proposals, feedback, scheduling, and
 audit events. SQLAlchemy repositories and lifecycle services own SQLite
@@ -96,7 +96,7 @@ artifacts.
 The visible YouTube publisher is a separate service boundary. It cannot be
 invoked by the intelligence harness, requires the operator's explicit `Accept`
 decision, and is feature-gated. Approvals reserve the first open 10:00 AM
-Toronto slot with a strict one-RunWay-post-per-day invariant, then enter a
+Toronto slot with a strict one-Runway-post-per-day invariant, then enter a
 restart-safe serial FIFO outbox.
 
 The API listens only on `127.0.0.1` and serves media from the configured local

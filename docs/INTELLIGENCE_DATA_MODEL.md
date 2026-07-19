@@ -1,11 +1,11 @@
-# RunWay intelligence data model
+# Runway intelligence data model
 
 This document describes the canonical intelligence-data flywheel introduced by
 Alembic revision `0008_intelligence_data_flywheel`. It supplements
 [`DATA_MODEL.md`](DATA_MODEL.md) and the committed structural contract at
 [`schema/intelligence-data-flywheel.json`](schema/intelligence-data-flywheel.json).
 
-RunWay still has one production intelligence path. The lifecycle records below
+Runway still has one production intelligence path. The lifecycle records below
 version and audit that path; they do not create a second engine or a user-facing
 model selector.
 
@@ -260,7 +260,7 @@ The following sources must never be collapsed:
 - `audience`: future measured platform-performance outcome.
 
 Blind-study imports create `human` evidence only from an explicit imported
-review response. RunWay never infers or fabricates creator labels.
+review response. Runway never infers or fabricates creator labels.
 
 ## Current Qlob production state
 

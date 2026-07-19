@@ -9,7 +9,7 @@ export default function ErrorPage({
   return (
     <section className="route-error" role="alert">
       <p className="eyebrow danger">Interface unavailable</p>
-      <h1>RunWay could not open this view.</h1>
+      <h1>Runway could not open this view.</h1>
       <p>
         Nothing was submitted. Check that the local service is running, then try
         loading the page again.

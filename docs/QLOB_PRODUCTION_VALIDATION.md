@@ -14,7 +14,7 @@ Schedule control.
 - Verification found zero missing captions, missing images, broken files, duplicate external post
   IDs, unmatched raw records, capture errors, or non-fatal diagnostics.
 - Fifteen exact duplicate-media groups and 34 near-duplicate clusters were preserved and labeled.
-- YouTube exposed relative publication labels; RunWay preserved `relative` precision instead of
+- YouTube exposed relative publication labels; Runway preserved `relative` precision instead of
   inventing source timestamps.
 
 Evidence:
@@ -28,7 +28,7 @@ The production runtime used saved ChatGPT authentication, `gpt-5.6-luna`, low re
 OpenAI API key or paid fallback.
 
 - 140 resumable batches produced 698 `historical-annotation-v2` annotations.
-- RunWay built all 243,253 unique pairwise similarity edges for 698 posts.
+- Runway built all 243,253 unique pairwise similarity edges for 698 posts.
 - Seven uncertainty records received correction overlays; original model outputs remain immutable.
 - Style profile v4 uses 558 training records and a deterministic 140-record holdout.
 - The training profile has a median caption length of five words and 26 characters.
@@ -55,7 +55,7 @@ Evidence:
 ## Discovery safeguard pass
 
 A deliberately bounded headed Bing Images pass downloaded six candidates after Google showed a
-challenge that RunWay did not bypass.
+challenge that Runway did not bypass.
 
 - Three candidates passed the hard automated filters.
 - One historical duplicate and two prominent-watermark results were rejected.
@@ -79,7 +79,7 @@ The original dense review surface was subsequently replaced by:
 - immediate next-option loading and automatic tray refill;
 - append-only positive/negative learning from every decision;
 - a persisted serial YouTube outbox; and
-- no fixed horizon, with at most one RunWay-created post per Toronto local date.
+- no fixed horizon, with at most one Runway-created post per Toronto local date.
 
 The source, warning, model rationale, and activity records remain available as evidence without
 occupying the primary approval flow.
@@ -99,5 +99,5 @@ occupying the primary approval flow.
 The software and offline browser contract are complete. A real Qlob Schedule click is deliberately
 excluded from routine tests and visual QA. The first operator click on `Accept` with
 publishing enabled is the proposal-specific authorization for that exact image, caption, and
-allocated time. RunWay must then verify the matching Scheduled item or stop in a verification-only
+allocated time. Runway must then verify the matching Scheduled item or stop in a verification-only
 state; it must never infer success or submit a duplicate.

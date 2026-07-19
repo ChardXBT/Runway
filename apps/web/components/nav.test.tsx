@@ -10,13 +10,15 @@ vi.mock("next/navigation", () => ({
 describe("Nav", () => {
   afterEach(cleanup);
 
-  it("shows the two primary product sections and signed-out status", () => {
+  it("shows the three primary product sections and signed-out status", () => {
     render(<Nav />);
     expect(screen.getByRole("link", { name: "Generator" })).toHaveAttribute(
       "aria-current",
       "page",
     );
     expect(screen.getByRole("link", { name: "Lineup" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connector" })).toBeInTheDocument();
+    expect(screen.getByText("Your fans can't wait")).toBeInTheDocument();
     expect(screen.getByText("YouTube scheduling off")).toBeInTheDocument();
   });
 
@@ -28,14 +30,14 @@ describe("Nav", () => {
 
   it("closes the backstage menu with Escape and restores focus", async () => {
     render(<Nav />);
-    const openMenu = screen.getByLabelText("Open RunWay menu");
+    const openMenu = screen.getByLabelText("Open Runway menu");
     fireEvent.click(openMenu);
-    const closeMenu = await screen.findByLabelText("Close RunWay menu");
+    const closeMenu = await screen.findByLabelText("Close Runway menu");
     expect(closeMenu.closest("details")).toHaveAttribute("open");
 
     fireEvent.keyDown(document, { key: "Escape" });
 
-    const reopenedLabel = await screen.findByLabelText("Open RunWay menu");
+    const reopenedLabel = await screen.findByLabelText("Open Runway menu");
     expect(reopenedLabel.closest("details")).not.toHaveAttribute("open");
     expect(reopenedLabel).toHaveFocus();
   });

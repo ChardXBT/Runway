@@ -1,4 +1,4 @@
-# Exact Python environment used for the verified RunWay build on 2026-07-16.
+# Exact Python environment used for the verified Runway build on 2026-07-16.
 # Install the project itself separately with: python -m pip install -e .
 alembic==1.18.5
 annotated-doc==0.0.4

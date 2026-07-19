@@ -43,7 +43,7 @@ export default async function SettingsPage() {
           <p className="eyebrow">Local configuration</p>
           <h1>Quiet rules behind the feed.</h1>
           <p className="lede">
-            Secret values never appear here. Every accepted look teaches RunWay and takes
+            Secret values never appear here. Every accepted look teaches Runway and takes
             the next open daily slot through the visible Qlob publisher.
           </p>
         </div>

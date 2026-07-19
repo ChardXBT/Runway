@@ -13,17 +13,17 @@ if (-not (Test-Path $python)) {
     throw "Missing .venv. Run: py -3.13 -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e '.[dev]'"
 }
 
-function Test-RunWayApi {
+function Test-RunwayApi {
     try {
         $health = Invoke-RestMethod -Uri $apiUrl -TimeoutSec 2
-        return $health.product -eq "RunWay"
+        return $health.product -eq "Runway"
     }
     catch {
         return $false
     }
 }
 
-function Test-RunWayWeb {
+function Test-RunwayWeb {
     try {
         return (Invoke-WebRequest -UseBasicParsing -Uri $webUrl -TimeoutSec 2).StatusCode -eq 200
     }
@@ -49,7 +49,7 @@ function Get-PortProcessId([int]$Port) {
     return $listener.OwningProcess
 }
 
-function Test-RunWayWebProcess([int]$ProcessId) {
+function Test-RunwayWebProcess([int]$ProcessId) {
     if (-not $ProcessId) {
         return $false
     }
@@ -67,8 +67,8 @@ function Test-RunWayWebProcess([int]$ProcessId) {
 }
 
 if (-not $WebOnly) {
-    if (Test-RunWayApi) {
-        Write-Host "RunWay API is already running at http://127.0.0.1:8000"
+    if (Test-RunwayApi) {
+        Write-Host "Runway API is already running at http://127.0.0.1:8000"
     }
     elseif (Test-PortInUse 8000) {
         throw "Port 8000 is occupied by another program. Stop that program, then try again."
@@ -76,26 +76,26 @@ if (-not $WebOnly) {
     else {
         Start-Process -FilePath $python -ArgumentList "-m", "uvicorn", "runway.api.app:app", "--host", "127.0.0.1", "--port", "8000" -WorkingDirectory $root -WindowStyle Hidden
         for ($attempt = 0; $attempt -lt 30; $attempt++) {
-            if (Test-RunWayApi) {
+            if (Test-RunwayApi) {
                 break
             }
             Start-Sleep -Milliseconds 500
         }
-        if (-not (Test-RunWayApi)) {
-            throw "RunWay API did not become ready at http://127.0.0.1:8000"
+        if (-not (Test-RunwayApi)) {
+            throw "Runway API did not become ready at http://127.0.0.1:8000"
         }
-        Write-Host "RunWay API started at http://127.0.0.1:8000"
+        Write-Host "Runway API started at http://127.0.0.1:8000"
     }
 }
 
 if (-not $ApiOnly) {
-    if (Test-RunWayWeb) {
-        Write-Host "RunWay is already running at $webUrl"
+    if (Test-RunwayWeb) {
+        Write-Host "Runway is already running at $webUrl"
     }
     elseif (Test-PortInUse 3000) {
         $webProcessId = Get-PortProcessId 3000
-        if (Test-RunWayWebProcess $webProcessId) {
-            Write-Host "RunWay web process is not responding; restarting it."
+        if (Test-RunwayWebProcess $webProcessId) {
+            Write-Host "Runway web process is not responding; restarting it."
             Stop-Process -Id $webProcessId -Force
             Start-Sleep -Milliseconds 500
         }
@@ -103,8 +103,8 @@ if (-not $ApiOnly) {
             throw "Port 3000 is occupied by another program. Stop that program, then try again."
         }
     }
-    if (-not (Test-RunWayWeb)) {
-        Write-Host "Starting RunWay at $webUrl"
+    if (-not (Test-RunwayWeb)) {
+        Write-Host "Starting Runway at $webUrl"
         npm --prefix $root run web:dev
     }
 }

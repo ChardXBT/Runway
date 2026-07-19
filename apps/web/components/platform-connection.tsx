@@ -161,7 +161,7 @@ export function PlatformConnection({
             <strong>Save the publisher login</strong>
             <p>
               Run <code>.\.venv\Scripts\runway.exe publisher login</code> in the
-              RunWay terminal, sign in inside the dedicated Chrome window, confirm
+              Runway terminal, sign in inside the dedicated Chrome window, confirm
               Qlob’s Posts page, then close the window and press Enter.
             </p>
           </div>
@@ -181,7 +181,7 @@ export function PlatformConnection({
           <div>
             <strong>Recover safely</strong>
             <p>
-              If Google asks for sign-in or verification, RunWay pauses. Repeat the
+              If Google asks for sign-in or verification, Runway pauses. Repeat the
               publisher login step, check the session, then resume failed actions.
             </p>
           </div>
@@ -198,7 +198,7 @@ export function PlatformConnection({
         </div>
         <div>
           <dt>Automation</dt>
-          <dd>One RunWay post daily at the configured Eastern time</dd>
+          <dd>One Runway post daily at the configured Eastern time</dd>
         </div>
         <div>
           <dt>Queue</dt>
@@ -241,7 +241,7 @@ export function PlatformConnection({
         )}
       </div>
       <small>
-        Sign-in stays in RunWay’s private Chrome profile. Passwords and verification codes
+        Sign-in stays in Runway’s private Chrome profile. Passwords and verification codes
         are never handled by the application.
       </small>
     </section>

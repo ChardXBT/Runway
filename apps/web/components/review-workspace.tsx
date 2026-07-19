@@ -116,14 +116,14 @@ export function ReviewWorkspace({
   async function parseResponse(response: Response) {
     return readApiJson(response, {
       validate: isEditorialEnvelope,
-      failureMessage: "RunWay could not complete that decision.",
+      failureMessage: "Runway could not complete that decision.",
     });
   }
 
   async function parseProposalResponse(response: Response) {
     return readApiJson(response, {
       validate: isProposal,
-      failureMessage: "RunWay could not refresh this option.",
+      failureMessage: "Runway could not refresh this option.",
     });
   }
 
@@ -148,7 +148,7 @@ export function ReviewWorkspace({
         ? "The next option is ready."
         : payload.generation?.running
           ? payload.generation.detail ||
-            "Generation is running. RunWay will show the option when it is ready."
+            "Generation is running. Runway will show the option when it is ready."
           : payload.generation?.detail ||
             payload.detail ||
             "No usable options were found.",
@@ -407,7 +407,7 @@ export function ReviewWorkspace({
         });
         const payload = await readApiJson(response, {
           validate: isEditorialEnvelope,
-          failureMessage: "RunWay could not check generation progress.",
+          failureMessage: "Runway could not check generation progress.",
         });
         if (cancelled) return;
         applyEditorialStatus(payload);
@@ -433,7 +433,7 @@ export function ReviewWorkspace({
         setNotice(
           actionError(
             error,
-            "Generation may still be running, but RunWay could not check its progress.",
+            "Generation may still be running, but Runway could not check its progress.",
           ),
           true,
         );
@@ -670,8 +670,8 @@ export function ReviewWorkspace({
           </h2>
           <p>
             {generation.running
-              ? "RunWay is searching for a usable image, checking it, and asking Codex for captions. You can visit another section and come back."
-              : "RunWay uses unused ranked images first, then opens a visible discovery pass for fresh material."}
+              ? "Runway is searching for a usable image, checking it, and asking Codex for captions. You can visit another section and come back."
+              : "Runway uses unused ranked images first, then opens a visible discovery pass for fresh material."}
           </p>
           <button
             type="button"

@@ -9,14 +9,14 @@ import { RunwayLogo } from "@/components/runway-logo";
 const primaryLinks = [
   ["Generator", "/review"],
   ["Lineup", "/lineup"],
+  ["Connector", "/connector"],
 ] as const;
 
 const secondaryLinks = [
   ["Archive", "/catalogue", "Past Qlob posts and source records"],
-  ["Profile", "/profile", "What RunWay has learned"],
+  ["Profile", "/profile", "What Runway has learned"],
   ["Activity", "/activity", "Decision and publishing history"],
   ["Settings", "/settings", "Model, channel, and safeguards"],
-  ["Platform connection", "/settings#platform-connection", "YouTube access and queue recovery"],
 ] as const;
 
 export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean }) {
@@ -61,11 +61,11 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
   return (
     <header className="topbar">
       <div className="topbar-inner">
-        <Link href="/review" className="brand" aria-label="RunWay editorial desk">
+        <Link href="/review" className="brand" aria-label="Runway editorial desk">
           <RunwayLogo className="brand-mark" />
           <span className="brand-copy">
-            <strong>RunWay</strong>
-            <small>Qlob private desk</small>
+            <strong>Runway</strong>
+            <small>Your fans can&apos;t wait</small>
           </span>
         </Link>
         <nav aria-label="Primary navigation">
@@ -91,7 +91,7 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
           onToggle={(event) => setMenuOpen(event.currentTarget.open)}
         >
           <summary
-            aria-label={menuOpen ? "Close RunWay menu" : "Open RunWay menu"}
+            aria-label={menuOpen ? "Close Runway menu" : "Open Runway menu"}
           >
             <span aria-hidden="true" />
             <span aria-hidden="true" />
@@ -110,11 +110,11 @@ export function Nav({ publishingEnabled = false }: { publishingEnabled?: boolean
                 <small>
                   {publishingEnabled
                     ? "Account sign-in is checked on use"
-                    : "One RunWay post per day"}
+                    : "One Runway post per day"}
                 </small>
               </span>
             </div>
-            <nav aria-label="RunWay menu">
+            <nav aria-label="Runway menu">
               {secondaryLinks.map(([label, href, description]) => (
                 <Link
                   href={href}

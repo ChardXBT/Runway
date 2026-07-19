@@ -1,4 +1,4 @@
-# RunWay blind creator study
+# Runway blind creator study
 
 This procedure measures creator preference without exposing which caption,
 image, or pairing came from the baseline or challenger. The tooling can prepare,

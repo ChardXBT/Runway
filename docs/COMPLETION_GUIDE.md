@@ -1,6 +1,6 @@
-# RunWay operating and completion guide
+# Runway operating and completion guide
 
-RunWay is a continuous Qlob editorial conveyor. It retrieves from the local Qlob history, finds and
+Runway is a continuous Qlob editorial conveyor. It retrieves from the local Qlob history, finds and
 ranks images, proposes question-first captions, learns from every decision, and schedules approved
 posts through a visible YouTube browser.
 
@@ -15,12 +15,12 @@ posts through a visible YouTube browser.
    - `Reject` records the complete image/caption option as negative evidence and opens the next option.
 5. Continue for as many options as desired. There is no schedule-horizon cap.
 
-The schedule rule applies only to RunWay: at most one bot post per `America/Toronto` local date.
+The schedule rule applies only to Runway: at most one bot post per `America/Toronto` local date.
 Manually created Qlob posts are independent.
 
-## What RunWay learns
+## What Runway learns
 
-RunWay does not alter Codex model weights. It adapts immediately through local retrieval:
+Runway does not alter Codex model weights. It adapts immediately through local retrieval:
 
 - Qlob history supplies tone, caption structures, visual patterns, and novelty evidence.
 - Every caption pass requests four open questions, three observations, and two reactions.
@@ -37,7 +37,7 @@ authentication and stops when included usage is unavailable.
 
 ## Keeping the feed supplied
 
-RunWay first converts unused accepted candidates into review options. When none remain, `Find more
+Runway first converts unused accepted candidates into review options. When none remain, `Find more
 options` opens the configured visible discovery browser, downloads candidates, applies hard safety
 and duplicate filters, analyzes them with Codex, and returns accepted options to the tray. Search
 challenges are never bypassed.
@@ -83,7 +83,7 @@ RUNWAY_PUBLISHING_ENABLED=true
 RUNWAY_PUBLISHER_CHANNEL_ID=UCQ-nHijGwxNU3Go_wyLQ5Ng
 ```
 
-Restart RunWay. The primary navigation should read `Auto-schedule on · One bot post daily`.
+Restart Runway. The primary navigation should read `Auto-schedule on · One bot post daily`.
 
 The legacy CLI prepare/confirm commands remain available for diagnostics, but the normal product
 flow uses the explicit `Accept` action as the human scheduling instruction.
@@ -93,7 +93,7 @@ flow uses the explicit `Accept` action as the human scheduling instruction.
 Software completion requires:
 
 - migration from an empty database and upgrade of the production database;
-- uncapped next-slot allocation with one RunWay post per local date;
+- uncapped next-slot allocation with one Runway post per local date;
 - automatic positive/negative feedback capture;
 - a persistent serial publisher outbox with pause-on-error behavior;
 - desktop and mobile conveyor verification;

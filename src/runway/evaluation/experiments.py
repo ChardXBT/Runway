@@ -118,7 +118,7 @@ class ExperimentRunner:
         write_json(self.artifact_root / "tuning-summary.json", summary)
         write_markdown(
             self.artifact_root / "tuning-summary.md",
-            "RunWay Bounded Tuning",
+            "Runway Bounded Tuning",
             summary,
         )
         return summary
@@ -176,7 +176,7 @@ class ExperimentRunner:
         write_json(self.artifact_root / "ablation.json", result)
         write_markdown(
             self.artifact_root / "ablation.md",
-            "RunWay Intelligence Ablation",
+            "Runway Intelligence Ablation",
             result,
         )
         return result
@@ -214,7 +214,7 @@ class ExperimentRunner:
         write_json(marker, result)
         write_markdown(
             self.artifact_root / "holdout-result.md",
-            "RunWay Locked Holdout",
+            "Runway Locked Holdout",
             result,
         )
         return result
@@ -291,7 +291,7 @@ class ExperimentRunner:
         write_json(self.artifact_root / "paired-comparison.json", result)
         write_markdown(
             self.artifact_root / "paired-comparison.md",
-            "RunWay Paired Baseline Comparison",
+            "Runway Paired Baseline Comparison",
             result,
         )
         return result

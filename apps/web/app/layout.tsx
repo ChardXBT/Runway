@@ -7,8 +7,12 @@ import { isRecord } from "@/lib/guards";
 import "./runway.css";
 
 export const metadata: Metadata = {
-  title: "RunWay — Qlob private editorial desk",
-  description: "Choose, refine, and line up Qlob Community posts",
+  title: {
+    default: "Runway — Your fans can't wait",
+    template: "%s · Runway",
+  },
+  description:
+    "Runway helps channels choose, refine, connect, and line up Community posts.",
 };
 
 export default async function RootLayout({

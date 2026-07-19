@@ -389,7 +389,7 @@ class RepresentationProviderRegistry:
         except KeyError as exc:
             raise LookupError(
                 f"text representation provider {name!r} is unavailable; "
-                "RunWay will not fall back to another provider"
+                "Runway will not fall back to another provider"
             ) from exc
 
     def image(self, name: str = "runway-local") -> ImageEmbeddingProvider:
@@ -398,7 +398,7 @@ class RepresentationProviderRegistry:
         except KeyError as exc:
             raise LookupError(
                 f"image representation provider {name!r} is unavailable; "
-                "RunWay will not fall back to another provider"
+                "Runway will not fall back to another provider"
             ) from exc
 
     def multimodal(self, name: str = "runway-local") -> MultimodalEmbeddingProvider:
@@ -407,7 +407,7 @@ class RepresentationProviderRegistry:
         except KeyError as exc:
             raise LookupError(
                 f"multimodal representation provider {name!r} is unavailable; "
-                "RunWay will not fall back to another provider"
+                "Runway will not fall back to another provider"
             ) from exc
 
     def multi_vector(self, name: str = "runway-local") -> MultiVectorEmbeddingProvider:
@@ -416,7 +416,7 @@ class RepresentationProviderRegistry:
         except KeyError as exc:
             raise LookupError(
                 f"multi-vector provider {name!r} is unavailable; "
-                "RunWay will not fall back to another provider"
+                "Runway will not fall back to another provider"
             ) from exc
 
     def status(self) -> dict[str, list[str]]:

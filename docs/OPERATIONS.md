@@ -15,7 +15,7 @@ allowance:
 ```
 
 Choose `Sign in with ChatGPT`. `agent status` must report `codex-chatgpt`, the configured low- or
-medium-reasoning model, and `paid_api_fallback_enabled: false`. RunWay strips API-key credentials
+medium-reasoning model, and `paid_api_fallback_enabled: false`. Runway strips API-key credentials
 from model subprocesses and stops when included usage is exhausted. It never switches to paid API
 billing.
 
@@ -43,8 +43,8 @@ access to Qlob. The dedicated browser profile retains the local session until Go
 4. Continue for as many options as desired; the next decision loads immediately.
 
 Approvals are assigned the first open 10:00 AM `America/Toronto` slot. There is no fixed horizon,
-and the allocator reserves at most one RunWay-generated post per local day. Manual posts made
-outside RunWay do not consume a RunWay slot.
+and the allocator reserves at most one Runway-generated post per local day. Manual posts made
+outside Runway do not consume a Runway slot.
 
 The review tray refills from already accepted candidates first. If none remain, visible bounded
 image discovery runs and then caption generation resumes. Model-usage exhaustion stops refill
@@ -66,14 +66,14 @@ Set up the dedicated publisher profile once:
 The command opens ordinary installed Google Chrome. Use the Google account
 YouTube identifies as an Editor for Qlob, confirm the Qlob Posts page, close
 that Chrome window, and then press Enter. The ignored isolated profile lives at
-`data/browser-profile/publisher`. RunWay does not automate Google credentials
+`data/browser-profile/publisher`. Runway does not automate Google credentials
 or bypass account warnings.
 
 With `RUNWAY_PUBLISHING_ENABLED=true`, the `Accept` decision adds the exact accepted
 payload to a persisted FIFO outbox. One visible-browser worker schedules items serially while the
 UI advances immediately.
 
-If Google requires sign-in, RunWay stops before touching the composer and shows the queue as
+If Google requires sign-in, Runway stops before touching the composer and shows the queue as
 paused. Sign in through `publisher login`, then select `Resume scheduling` in Review. If a final
 Schedule click produced an ambiguous result, verify the proposal instead of retrying it.
 
@@ -86,7 +86,7 @@ Routine reports are under `data/reports/`; capture diagnostics are under `data/s
 publisher screenshots are under the configured publisher screenshot directory. Runtime data,
 media, browser sessions, and `.env` are ignored by Git.
 
-SQLite uses WAL. Stop RunWay before copying the database and its `-wal`/`-shm` companions, or use
+SQLite uses WAL. Stop Runway before copying the database and its `-wal`/`-shm` companions, or use
 SQLite's backup API.
 
 ## Intelligence lifecycle

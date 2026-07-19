@@ -288,7 +288,7 @@ only new intelligence tables/columns. Production data is never rewritten.
 
 Rollback procedure:
 
-1. stop local RunWay services;
+1. stop local Runway services;
 2. copy `runway.db`, `runway.db-wal`, and `runway.db-shm` as one backup set when present;
 3. run `alembic downgrade 0006_uncapped_lineup` only if new intelligence records may be discarded;
 4. check out baseline commit `876fe5f...` or revert the upgrade commit;

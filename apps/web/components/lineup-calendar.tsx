@@ -309,7 +309,7 @@ export function LineupCalendar({
 
   function immutableReason(proposal: Proposal) {
     if (!lineupIntegritySafe) {
-      return "RunWay detected more than one active post on a date. Changes are locked until the Lineup is refreshed and verified.";
+      return "Runway detected more than one active post on a date. Changes are locked until the Lineup is refreshed and verified.";
     }
     if (proposal.status === "published") {
       return "Published posts stay visible as locked history and cannot be edited, moved, or removed.";
@@ -403,7 +403,7 @@ export function LineupCalendar({
       (proposal) => proposal.id !== selected.id,
     );
     if (occupants.length > 1) {
-      return "That date already has conflicting RunWay posts. Refresh and verify Lineup before making changes.";
+      return "That date already has conflicting Runway posts. Refresh and verify Lineup before making changes.";
     }
     const occupant = occupants[0];
     if (occupant && !canEditProposal(occupant)) {
@@ -428,7 +428,7 @@ export function LineupCalendar({
     });
     if (conflictingLineupDates(payload.lineup).length) {
       throw new ApiError(
-        "RunWay received conflicting daily slots. Nothing has been confirmed in this view; refresh and verify Lineup.",
+        "Runway received conflicting daily slots. Nothing has been confirmed in this view; refresh and verify Lineup.",
         { uncertainOutcome: true },
       );
     }
@@ -691,7 +691,7 @@ export function LineupCalendar({
           <h1>Your release lineup.</h1>
           <p className="lede">
             {lineup.coverage} upcoming{" "}
-            {lineup.coverage === 1 ? "post" : "posts"} organized. One RunWay post
+            {lineup.coverage === 1 ? "post" : "posts"} organized. One Runway post
             per day at {displayTime(lineup.default_time)}{" "}
             {displayTimezone(lineup.timezone)}. Published posts remain visible as
             locked history.
@@ -731,7 +731,7 @@ export function LineupCalendar({
           <strong>Daily-slot conflict detected.</strong>
           <span>
             {integrityConflicts.join(", ")} currently has more than one active
-            RunWay post. Editing and removal are locked; refresh and verify Activity
+            Runway post. Editing and removal are locked; refresh and verify Activity
             before continuing.
           </span>
         </section>
@@ -741,7 +741,7 @@ export function LineupCalendar({
         <div className="lineup-layout">
           <section
             className="lineup-calendar"
-            aria-label="RunWay release calendar"
+            aria-label="Runway release calendar"
           >
             <div className="lineup-section-label">
               <strong>Calendar</strong>
@@ -805,7 +805,7 @@ export function LineupCalendar({
             </div>
           </section>
 
-          <section className="lineup-agenda" aria-label="RunWay release agenda">
+          <section className="lineup-agenda" aria-label="Runway release agenda">
             <div className="lineup-section-label">
               <strong>{monthFormatter.format(month)}</strong>
               <span>{agendaPosts.length} posts</span>
@@ -829,7 +829,7 @@ export function LineupCalendar({
                 </button>
               ))
             ) : (
-              <p className="lineup-list-empty">No RunWay posts this month.</p>
+              <p className="lineup-list-empty">No Runway posts this month.</p>
             )}
           </section>
 
@@ -1143,7 +1143,7 @@ export function LineupCalendar({
                   <p className="swap-notice">
                     <strong>Swap on confirmation.</strong> {draftDate} currently
                     holds “{occupiedOther.final_caption}.” Confirming moves that post
-                    to this post’s current date—there will still be only one RunWay
+                    to this post’s current date—there will still be only one Runway
                     post per day.
                   </p>
                 )}
@@ -1189,7 +1189,7 @@ export function LineupCalendar({
                 <h2 id="lineup-dialog-title">Pull this release?</h2>
                 <p id="lineup-remove-copy" className="dialog-copy">
                   This explicitly removes the scheduled post from YouTube and cancels
-                  its RunWay slot. The decision remains in Activity.
+                  its Runway slot. The decision remains in Activity.
                 </p>
                 {dialogOutcomeUncertain && (
                   <a className="dialog-recovery" href="/lineup">

@@ -1,6 +1,6 @@
-# RunWay
+# Runway
 
-RunWay is a local-only intelligence and planning application for image-based YouTube Community
+Runway is a local-only intelligence and planning application for image-based YouTube Community
 posts. Qlob is the configured MVP channel, while the canonical intelligence kernel is
 channel-generic: it builds isolated, layered channel profiles; compiles persisted hybrid-retrieval
 evidence; verifies grounded caption slates; and learns separately from image, caption, and pairing
@@ -10,7 +10,7 @@ evidence, so later passes improve without model-weight training.
 
 When the visible-browser publisher is enabled, the explicit `Accept` action assigns
 the first open 10:00 AM Eastern day and adds the post to a persisted FIFO outbox. Browser
-submissions run one at a time, and RunWay reserves at most one bot post per local day. The schedule
+submissions run one at a time, and Runway reserves at most one bot post per local day. The schedule
 has no horizon cap; manually added Qlob posts are independent.
 
 The real Qlob catalogue, retrieval profile, bounded live discovery, one-proposal review flow, and
@@ -43,7 +43,7 @@ restart persistence were validated on 2026-07-17 without posting. See
 - Creator decisions derive replay-safe target-separated feedback and immutable feature snapshots.
   Persisted preference models train only in explicit jobs and never refit during request scoring.
 - Optional Sentence Transformers and SigLIP 2 adapters require explicit trusted local weights,
-  never download or auto-activate, and remain inactive until RunWay-specific evaluation passes.
+  never download or auto-activate, and remain inactive until Runway-specific evaluation passes.
 - Provider registries require explicit selection and never fall back to a paid service.
 - Reference-image-plus-text retrieval combines visual evidence, instructions, structured
   constraints, source policy, and rights policy without downloading model weights.
@@ -58,7 +58,7 @@ restart persistence were validated on 2026-07-17 without posting. See
 ## Windows setup
 
 ```powershell
-cd C:\path\to\RunWay
+cd C:\path\to\Runway
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
@@ -132,7 +132,7 @@ After reviewing `docs/CAPTURE.md` and installing Chromium:
 .\.venv\Scripts\runway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts" --headed --resume
 ```
 
-RunWay prints the dedicated profile path, asks for confirmation, opens a visible browser, and
+Runway prints the dedicated profile path, asks for confirmation, opens a visible browser, and
 pauses for manual authentication, consent, account selection, or CAPTCHA handling. Press
 `Ctrl+C` once to stop safely; checkpoints are committed every ten unique posts by default. Run the
 same command with `--resume` to continue. Diagnostics are written to `data/snapshots/` and capture
@@ -174,7 +174,7 @@ ChatGPT account that has the paid Codex allowance, then verify the configuration
 ```
 
 Every Codex call is ephemeral, serialized, read-only, web-search-disabled, and run outside the
-repository workspace. API-key environment variables are removed. RunWay requires the CLI to report
+repository workspace. API-key environment variables are removed. Runway requires the CLI to report
 `Logged in using ChatGPT`; API-key authentication, expired authentication, invalid output,
 timeouts, or an included-usage limit stop the current batch. There is no provider fallback.
 
@@ -213,14 +213,14 @@ The dedicated publisher profile is separate from the capture/discovery profiles:
 ```
 
 `publisher login` opens ordinary installed Google Chrome—not Playwright's
-automation browser—with an isolated RunWay profile. Sign in manually with the
+automation browser—with an isolated Runway profile. Sign in manually with the
 Google account that has Qlob Editor access, confirm the Posts page is visible,
 close that Chrome window, and then press Enter in the terminal. Guarded
 publishing later reopens the saved profile through installed Chrome. Never
-disable Google account protections or copy cookies into RunWay.
+disable Google account protections or copy cookies into Runway.
 
 With `RUNWAY_PUBLISHING_ENABLED=true`, every click on `Accept` is an explicit scheduling
-instruction for that exact image and caption. RunWay assigns the next free daily slot, advances the
+instruction for that exact image and caption. Runway assigns the next free daily slot, advances the
 Runway immediately, and processes the persisted outbox serially. Confirmed Lineup edits, moves,
 swaps, and removals are applied to YouTube first and saved locally only after verification. A
 session or YouTube error
@@ -229,7 +229,7 @@ pauses the outbox. Once a Schedule click may have happened, an inconclusive resu
 
 ## Known limitations
 
-- YouTube may expose only relative publication text; RunWay records `relative` precision and does
+- YouTube may expose only relative publication text; Runway records `relative` precision and does
   not invent exact dates.
 - YouTube DOM capture is inherently fragile. Selectors are versioned and failures produce local
   snapshots, but a layout change can require an adapter update.

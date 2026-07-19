@@ -312,7 +312,7 @@ async def _freeze(root: Path, output_dir: Path) -> None:
         (output_dir / "README.md").write_text(
             "\n".join(
                 [
-                    "# Frozen RunWay intelligence baseline",
+                    "# Frozen Runway intelligence baseline",
                     "",
                     f"- Baseline commit: `{current_sha}`",
                     f"- Schema revision: `{schema_revision}`",

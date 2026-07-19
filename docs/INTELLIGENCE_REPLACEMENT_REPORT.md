@@ -1,4 +1,4 @@
-# RunWay canonical intelligence replacement report
+# Runway canonical intelligence replacement report
 
 This report is the implementation record for the canonical intelligence-engine upgrade. It
 distinguishes measured behavior from architecture, proxies from human labels, and completed work
@@ -18,7 +18,7 @@ image, caption, and pairing.
 
 ### Final canonical architecture
 
-RunWay now has one channel-generic intelligence path:
+Runway now has one channel-generic intelligence path:
 
 ```text
 versioned channel history + explicit policy + recent mode + creator feedback
@@ -524,7 +524,7 @@ human-quality or statistical-superiority claim.
 
 Rollback:
 
-1. Stop RunWay services and disable publishing.
+1. Stop Runway services and disable publishing.
 2. Preserve the SQLite database transactionally, including WAL state.
 3. Prefer restoring the verified pre-migration backup for exact recovery.
 4. If new intelligence evidence may be discarded, run

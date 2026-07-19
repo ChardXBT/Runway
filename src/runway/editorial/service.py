@@ -65,7 +65,7 @@ class EditorialService:
             result = self._result(
                 [],
                 None,
-                "Generation is already running. RunWay will show the option here when it is ready.",
+                "Generation is already running. Runway will show the option here when it is ready.",
             )
             result["generation"] = self.generation_status()
             return result

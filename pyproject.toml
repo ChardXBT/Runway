@@ -9,7 +9,7 @@ description = "Local-only, channel-adaptive YouTube Community-post intelligence 
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "Proprietary" }
-authors = [{ name = "RunWay" }]
+authors = [{ name = "Runway" }]
 dependencies = [
   "alembic>=1.14,<2",
   "beautifulsoup4>=4.12,<5",

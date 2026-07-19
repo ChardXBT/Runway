@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Typed RunWay settings; secret values are never returned by the API."""
+    """Typed Runway settings; secret values are never returned by the API."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -18,7 +18,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    product_name: str = "RunWay"
+    product_name: str = "Runway"
+    connector_account_email: str = "tryrunwaytoday@gmail.com"
     channel_name: str = "Qlob"
     channel_handle: str = "Qlob"
     timezone: str = "America/Toronto"
@@ -79,7 +80,7 @@ class Settings(BaseSettings):
     @classmethod
     def loopback_only(cls, value: str) -> str:
         if value not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError("RunWay may only bind to a loopback host")
+            raise ValueError("Runway may only bind to a loopback host")
         return value
 
     @field_validator(
@@ -158,6 +159,7 @@ class Settings(BaseSettings):
     def public_dict(self) -> dict[str, object]:
         return {
             "product_name": self.product_name,
+            "connector_account_email": self.connector_account_email,
             "channel_name": self.channel_name,
             "channel_handle": self.channel_handle,
             "timezone": self.timezone,

@@ -1,4 +1,4 @@
-# RunWay Intelligence Data Flywheel implementation report
+# Runway Intelligence Data Flywheel implementation report
 
 Date: 2026-07-19
 
@@ -6,13 +6,13 @@ Starting commit: `ff70f0ee5bb659554a4e6f2be7a5f32afefd5efb`
 
 Branch: `main`
 
-Repository: private `ChardXBT/RunWay`
+Repository: private `ChardXBT/Runway`
 
 Canonical migration: `0008_intelligence_data_flywheel`
 
 ## 1. Architectural assessment
 
-The implementation preserves one canonical RunWay intelligence path and turns
+The implementation preserves one canonical Runway intelligence path and turns
 its database into an explicit evidence, representation, training, activation,
 and rollback layer.
 
@@ -456,7 +456,7 @@ allowance and was not authorized for unattended execution.
 ## 11. Provider research and adapters
 
 The provider matrix records official source, license, approximate size,
-resource profile, RunWay relevance, and activation decision for:
+resource profile, Runway relevance, and activation decision for:
 
 - Qwen3 Embedding 0.6B;
 - BGE-M3;
@@ -779,7 +779,7 @@ Model**, not another architecture expansion.
 
 Recommended sequence:
 
-1. Continue ordinary RunWay review to collect genuine, target-separated
+1. Continue ordinary Runway review to collect genuine, target-separated
    accept/edit/reject/replace decisions with no additional training form.
 2. Use active learning to present diverse, uncertain development/tuning cases
    while preserving untouched holdout groups.
@@ -796,7 +796,7 @@ Recommended sequence:
    inactive unless it provides relevant measured value.
 7. Defer image and pairing models until each target has enough genuine labels.
 
-RunWay now has an unusually strong architecture and evidence discipline for a
+Runway now has an unusually strong architecture and evidence discipline for a
 local creator-specific system. It does not yet have evidence that its
 deterministic representations or generated captions are world-best. The next
 real gain must come from genuine creator labels and frozen comparative

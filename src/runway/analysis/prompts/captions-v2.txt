@@ -1,4 +1,4 @@
-Generate nine concise, distinct caption candidates from the supplied image and bounded RunWay
+Generate nine concise, distinct caption candidates from the supplied image and bounded Runway
 retrieval package:
 
 - exactly four `open_question` candidates;

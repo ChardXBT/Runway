@@ -164,8 +164,8 @@ describe("LineupCalendar", () => {
   it("shows the calendar and upcoming-post list together", () => {
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
 
-    expect(screen.getByLabelText("RunWay release calendar")).toBeInTheDocument();
-    expect(screen.getByLabelText("RunWay release agenda")).toBeInTheDocument();
+    expect(screen.getByLabelText("Runway release calendar")).toBeInTheDocument();
+    expect(screen.getByLabelText("Runway release agenda")).toBeInTheDocument();
     expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("First line");
     expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("Second line");
   });
@@ -193,7 +193,7 @@ describe("LineupCalendar", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("Swap on confirmation.")).toBeInTheDocument();
-    expect(dialog).toHaveTextContent("there will still be only one RunWay post per day");
+    expect(dialog).toHaveTextContent("there will still be only one Runway post per day");
     expect(screen.getByLabelText("Release date")).toHaveValue("2026-08-09");
     expect(fetchMock).not.toHaveBeenCalled();
   });

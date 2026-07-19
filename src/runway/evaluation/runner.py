@@ -244,7 +244,7 @@ async def run_candidate_evaluation(
     write_json(destination / "candidate-results.json", artifact)
     write_markdown(
         destination / "candidate-results.md",
-        "RunWay Canonical Intelligence Evaluation",
+        "Runway Canonical Intelligence Evaluation",
         artifact,
     )
     if "locked_holdout" in splits:

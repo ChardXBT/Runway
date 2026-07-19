@@ -74,7 +74,7 @@ export default async function ActivityPage() {
         <section className="panel empty">
           <div>
             <strong>No audit events yet.</strong>
-            Actions that change RunWay’s local state will appear here.
+            Actions that change Runway’s local state will appear here.
           </div>
         </section>
       )}

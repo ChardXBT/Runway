@@ -29,7 +29,7 @@ export async function readApiJson<T>(
   {
     validate,
     failureMessage,
-    malformedMessage = "RunWay received an unexpected response. Nothing has been confirmed; refresh before retrying.",
+    malformedMessage = "Runway received an unexpected response. Nothing has been confirmed; refresh before retrying.",
   }: {
     validate: Validator<T>;
     failureMessage: string;

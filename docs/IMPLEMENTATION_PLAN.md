@@ -2,7 +2,7 @@
 
 This plan records the original milestone structure. The approval-queue portion was superseded on
 2026-07-17 by the continuous editorial conveyor described in `docs/PRODUCT.md`: no fixed scheduling
-horizon, at most one RunWay post per day, automatic feedback, and accept-to-schedule publishing.
+horizon, at most one Runway post per day, automatic feedback, and accept-to-schedule publishing.
 
 ## Milestone 0 — foundation
 
@@ -42,7 +42,7 @@ horizon, at most one RunWay post per day, automatic feedback, and accept-to-sche
   Toronto date only when the operator approves.
 - Present one image/caption decision at a time with inline editing, reject, image replacement,
   accept-and-schedule, immediate next-option loading, and automatic learning signals.
-- Enforce at most one RunWay-generated post per local day with no fixed horizon.
+- Enforce at most one Runway-generated post per local day with no fixed horizon.
 - Move approved payloads through `InternalPublisher` into a persisted serial outbox and guarded
   visible-browser Qlob publisher.
 
@@ -53,5 +53,5 @@ horizon, at most one RunWay post per day, automatic feedback, and accept-to-sche
   uncapped daily-slot allocation, outbox recovery, service restart/persistence checks, backend
   tests/lint/types, and frontend tests/lint/build.
 - Record exact outcomes and honest external-adapter limitations in `docs/BUILD_REPORT.md`.
-- Commit only the RunWay repository scope, create `ChardXBT/RunWay` as private, and push after every
+- Commit only the Runway repository scope, create `ChardXBT/Runway` as private, and push after every
   feasible check passes, as explicitly requested by the user.

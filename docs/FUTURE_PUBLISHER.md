@@ -18,13 +18,13 @@ returns the next review option while a single background worker processes the pe
 outbox. A model runtime cannot call this path.
 
 Each approved item is assigned the first unreserved 10:00 AM `America/Toronto` slot. The scheduler
-has no fixed horizon and enforces one RunWay-generated post per local day.
+has no fixed horizon and enforces one Runway-generated post per local day.
 
 ## Interlocks
 
 - `RUNWAY_PUBLISHING_ENABLED=false` blocks all external scheduling.
 - The browser uses a dedicated persistent profile under `data/browser-profile/publisher`.
-- RunWay validates the configured Qlob channel and Editor access before composer interaction.
+- Runway validates the configured Qlob channel and Editor access before composer interaction.
 - The exact image bytes, caption, time, proposal ID, and channel ID are hashed.
 - Known-blocked candidates and missing media cannot enter the outbox.
 - Only one submission can run at a time; queue attempts are idempotent and persisted across restarts.

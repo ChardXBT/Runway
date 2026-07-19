@@ -313,7 +313,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
           <p>
             Accepted looks take the next open {settings.default_post_time}{" "}
             {settings.timezone} day. The horizon is uncapped and manual channel posts do
-            not consume RunWay’s daily slot.
+            not consume Runway’s daily slot.
           </p>
         </article>
       </section>

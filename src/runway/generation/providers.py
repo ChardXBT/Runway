@@ -125,7 +125,7 @@ class ImageGenerationProviderRegistry:
         except KeyError as exc:
             raise LookupError(
                 f"image-generation provider {name!r} is not registered; "
-                "RunWay will not fall back implicitly"
+                "Runway will not fall back implicitly"
             ) from exc
 
     def status(self) -> list[dict[str, object]]:

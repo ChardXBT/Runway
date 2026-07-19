@@ -257,7 +257,7 @@ class CaptionService:
             return CaptionOptions(
                 recommended="",
                 alternatives=[],
-                rationale="RunWay abstained instead of displaying generic filler.",
+                rationale="Runway abstained instead of displaying generic filler.",
                 confidence=0.0,
                 referenced_historical_post_ids=[],
                 factual_uncertainty_warning=("No grounded caption slate survived verification."),
@@ -579,7 +579,7 @@ class CaptionService:
             sum(float(row["verification"].grounding_score) for row in displayed) / len(displayed),
         )
         rationale = (
-            "RunWay planned channel-specific angles, verified visible claims, applied explicit "
+            "Runway planned channel-specific angles, verified visible claims, applied explicit "
             "policy, ranked creator preference evidence, and selected a diverse slate. "
             + attempts[-1].rationale.strip()
         )

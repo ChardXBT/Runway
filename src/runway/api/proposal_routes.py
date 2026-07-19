@@ -59,6 +59,10 @@ class PublishConfirmationRequest(BaseModel):
     confirmation_phrase: str = Field(min_length=1, max_length=100)
 
 
+class ConnectorAccessRequest(BaseModel):
+    channel_url: str = Field(min_length=2, max_length=500)
+
+
 class ReplacementRequest(BaseModel):
     candidate_id: int | None = None
 
@@ -382,6 +386,19 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     def validate_publisher_session() -> dict[str, object]:
         try:
             return asyncio.run(youtube_publisher.validate_session()).model_dump()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @router.post("/publisher/connectors/validate")
+    def validate_connector_access(
+        payload: ConnectorAccessRequest,
+    ) -> dict[str, object]:
+        try:
+            return asyncio.run(
+                youtube_publisher.validate_channel_access(payload.channel_url)
+            ).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

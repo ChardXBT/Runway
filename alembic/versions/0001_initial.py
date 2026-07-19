@@ -1,4 +1,4 @@
-"""Initial RunWay schema.
+"""Initial Runway schema.
 
 Revision ID: 0001_initial
 Revises:

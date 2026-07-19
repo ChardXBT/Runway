@@ -13,7 +13,7 @@ from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
@@ -64,6 +64,11 @@ class StalePublishAttempt(ValueError):
 class YouTubeBrowserAdapter(Protocol):
     async def validate_session(self) -> PublisherSessionStatus: ...
 
+    async def validate_channel_access(
+        self,
+        channel_url: str,
+    ) -> PublisherSessionStatus: ...
+
     async def schedule(self, post: PreparedPost) -> BrowserScheduleReceipt: ...
 
     async def verify(self, post: PreparedPost) -> BrowserScheduleReceipt: ...
@@ -96,6 +101,16 @@ class PlaywrightYouTubeAdapter:
     async def validate_session(self) -> PublisherSessionStatus:
         return await asyncio.to_thread(self._validate_session_sync)
 
+    async def validate_channel_access(
+        self,
+        channel_url: str,
+    ) -> PublisherSessionStatus:
+        normalized = self._normalize_connector_channel_url(channel_url)
+        return await asyncio.to_thread(
+            self._validate_channel_access_sync,
+            normalized,
+        )
+
     async def schedule(self, post: PreparedPost) -> BrowserScheduleReceipt:
         return await asyncio.to_thread(self._schedule_sync, post)
 
@@ -127,7 +142,7 @@ class PlaywrightYouTubeAdapter:
         ]
         subprocess.Popen(command)
         input(
-            "A normal Google Chrome window opened with RunWay's isolated profile. "
+            "A normal Google Chrome window opened with Runway's isolated profile. "
             f"Sign into the {self.settings.channel_name} Editor account, confirm the "
             f"{self.settings.channel_name} Posts page is visible, "
             "then CLOSE that Chrome window and press Enter here..."
@@ -214,6 +229,122 @@ class PlaywrightYouTubeAdapter:
                 )
             finally:
                 context.close()
+
+    def _validate_channel_access_sync(
+        self,
+        channel_url: str,
+    ) -> PublisherSessionStatus:
+        from playwright.sync_api import sync_playwright
+
+        with self._browser_lock, sync_playwright() as playwright:
+            context = self._launch_publisher_context(playwright)
+            page = context.pages[0] if context.pages else context.new_page()
+            try:
+                page.goto(
+                    channel_url,
+                    wait_until="domcontentloaded",
+                    timeout=60_000,
+                )
+                page.wait_for_timeout(1500)
+                self._stop_on_challenge(page)
+
+                expected_path = urlparse(channel_url).path.removesuffix("/posts").casefold()
+                current = urlparse(page.url)
+                target_loaded = (
+                    current.hostname in {"youtube.com", "www.youtube.com", "m.youtube.com"}
+                    and expected_path in current.path.casefold()
+                )
+                management_access = False
+                posting_access = False
+                with suppress(Exception):
+                    manage_videos = page.get_by_text("Manage videos", exact=True)
+                    manage_videos.wait_for(state="visible", timeout=10_000)
+                    management_access = manage_videos.count() == 1 and manage_videos.is_visible()
+                if management_access:
+                    try:
+                        create_button = page.get_by_role(
+                            "button",
+                            name="Create",
+                            exact=True,
+                        )
+                        self._require_one_visible(
+                            create_button,
+                            "YouTube Create button",
+                        )
+                        create_button.click()
+                        create_post = page.get_by_text("Create post", exact=True)
+                        self._require_one_visible(
+                            create_post,
+                            "Create post action",
+                        )
+                        posting_access = True
+                    except Exception:
+                        posting_access = False
+                    finally:
+                        page.keyboard.press("Escape")
+
+                checks = {
+                    "requested channel page": target_loaded,
+                    "channel management controls": management_access,
+                    "Editor post controls": posting_access,
+                }
+                valid = all(checks.values())
+                missing = [label for label, matched in checks.items() if not matched]
+                if not valid:
+                    diagnostic = self.capture_dir / (
+                        datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-connector-not-ready.png"
+                    )
+                    page.screenshot(path=str(diagnostic), full_page=True)
+                return PublisherSessionStatus(
+                    valid=valid,
+                    publisher="youtube-visible-browser",
+                    detail=(
+                        "Editor access and Community publishing controls verified. "
+                        "No post was created."
+                        if valid
+                        else "The invitation is not ready yet; missing "
+                        + ", ".join(missing)
+                        + ". Confirm that tryrunwaytoday@gmail.com accepted an "
+                        "Editor (limited) invitation, then retry."
+                    ),
+                )
+            finally:
+                context.close()
+
+    @staticmethod
+    def _normalize_connector_channel_url(value: str) -> str:
+        candidate = value.strip()
+        if not candidate:
+            raise ValueError("channel URL is required")
+        if candidate.startswith("@"):
+            candidate = f"https://www.youtube.com/{candidate}"
+        elif candidate.startswith("UC") and "/" not in candidate:
+            candidate = f"https://www.youtube.com/channel/{candidate}"
+        elif "://" not in candidate:
+            candidate = f"https://{candidate}"
+
+        parsed = urlparse(candidate)
+        hostname = (parsed.hostname or "").casefold()
+        if parsed.scheme != "https" or hostname not in {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+        }:
+            raise ValueError("Use a secure youtube.com channel URL, @handle, or channel ID.")
+
+        parts = [part for part in parsed.path.split("/") if part]
+        if not parts:
+            raise ValueError("YouTube channel path is missing")
+        if parts[0] == "channel":
+            if len(parts) < 2 or not parts[1].startswith("UC"):
+                raise ValueError("YouTube channel ID is invalid")
+            channel_path = f"/channel/{parts[1]}"
+        elif parts[0].startswith("@") and len(parts[0]) > 1:
+            channel_path = f"/{parts[0]}"
+        else:
+            raise ValueError("Use a youtube.com/@handle URL or a youtube.com/channel/UC… URL.")
+
+        return urlunparse(("https", "www.youtube.com", f"{channel_path}/posts", "", "", ""))
 
     def _schedule_sync(self, post: PreparedPost) -> BrowserScheduleReceipt:
         from playwright.sync_api import sync_playwright
@@ -303,7 +434,7 @@ class PlaywrightYouTubeAdapter:
                 if not schedule_button.is_enabled():
                     raise RuntimeError("final Schedule button is disabled")
                 # From this point onward a browser/process failure is ambiguous. Mark it as
-                # possibly submitted before clicking so RunWay never offers an unsafe retry.
+                # possibly submitted before clicking so Runway never offers an unsafe retry.
                 submitted = True
                 schedule_button.click()
                 page.wait_for_timeout(1800)
@@ -700,7 +831,7 @@ class PlaywrightYouTubeAdapter:
     def _schedule_markers(self, post: PreparedPost) -> tuple[set[str], set[str]]:
         planned = datetime.fromisoformat(post.planned_publish_at)
         if planned.tzinfo is None:
-            raise RuntimeError("the RunWay slot does not include a timezone")
+            raise RuntimeError("the Runway slot does not include a timezone")
         month_short = planned.strftime("%b").lower()
         month_long = planned.strftime("%B").lower()
         date_markers = {
@@ -790,13 +921,13 @@ class PlaywrightYouTubeAdapter:
         timezone_label.wait_for(state="visible", timeout=10_000)
         expected_offset = planned.strftime("%z")
         if f"GMT{expected_offset}" not in self._normalized_text(timezone_label.inner_text()):
-            raise RuntimeError("YouTube's visible schedule timezone does not match RunWay")
+            raise RuntimeError("YouTube's visible schedule timezone does not match Runway")
 
     @staticmethod
     def _planned_time_in_system_timezone(post: PreparedPost) -> datetime:
         planned = datetime.fromisoformat(post.planned_publish_at)
         if planned.tzinfo is None:
-            raise RuntimeError("the RunWay slot does not include a timezone")
+            raise RuntimeError("the Runway slot does not include a timezone")
         system_time = planned.astimezone()
         if (
             planned.replace(tzinfo=None) != system_time.replace(tzinfo=None)
@@ -804,7 +935,7 @@ class PlaywrightYouTubeAdapter:
         ):
             raise RuntimeError(
                 "the visible browser's system timezone does not match the timezone "
-                "encoded in the RunWay slot"
+                "encoded in the Runway slot"
             )
         return planned
 
@@ -982,6 +1113,12 @@ class YouTubeBrowserPublisher:
                 detail="Publishing is locked by RUNWAY_PUBLISHING_ENABLED=false.",
             )
         return await self.adapter.validate_session()
+
+    async def validate_channel_access(
+        self,
+        channel_url: str,
+    ) -> PublisherSessionStatus:
+        return await self.adapter.validate_channel_access(channel_url)
 
     async def prepare_attempt(self, proposal_id: int) -> PublishPreparation:
         self._require_enabled()
