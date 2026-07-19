@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from contextlib import suppress
 from typing import Any, Protocol
@@ -12,6 +13,7 @@ from playwright.async_api import async_playwright
 
 from runway.analysis.schemas import SearchPlan
 from runway.config import Settings
+from runway.discovery.safety import is_known_adult_result, is_likely_query_match
 from runway.discovery.schemas import ImageSearchResult, SearchPage
 
 
@@ -131,6 +133,9 @@ class BrowserSearchProvider:
             try:
                 for query in _diverse_queries(plan)[: self.settings.browser_search_max_queries]:
                     url = self.settings.browser_search_url.format(query=quote_plus(query))
+                    if "bing.com/" in url and "safesearch=" not in url.casefold():
+                        separator = "&" if "?" in url else "?"
+                        url = f"{url}{separator}safeSearch=Strict"
                     await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
                     sample = (page.url + " " + (await page.title())).lower()
                     body = (await page.locator("body").inner_text())[:2000].lower()
@@ -185,22 +190,24 @@ class BrowserSearchProvider:
                             continue
                         seen_direct_urls.add(direct)
                         source_page = str(item["page"])
-                        results.append(
-                            ImageSearchResult(
-                                search_query=query,
-                                result_rank=len(results) + 1,
-                                source_page_url=source_page,
-                                direct_image_url=direct,
-                                source_domain=urlparse(source_page).netloc,
-                                original_width=int(item["width"]),
-                                original_height=int(item["height"]),
-                                rights_status="unknown",
-                                provider_metadata={
-                                    "headed_browser": True,
-                                    "source_adapter": str(item.get("adapter", "unknown")),
-                                },
-                            )
+                        result = ImageSearchResult(
+                            search_query=query,
+                            result_rank=len(results) + 1,
+                            source_page_url=source_page,
+                            direct_image_url=direct,
+                            source_domain=urlparse(source_page).netloc,
+                            original_width=int(item["width"]),
+                            original_height=int(item["height"]),
+                            rights_status="unknown",
+                            provider_metadata={
+                                "headed_browser": True,
+                                "source_adapter": str(item.get("adapter", "unknown")),
+                                "result_title": str(item.get("title", "")),
+                            },
                         )
+                        if is_known_adult_result(result) or not is_likely_query_match(result):
+                            continue
+                        results.append(result)
                         added += 1
                         if added >= per_query:
                             break
@@ -232,9 +239,150 @@ class BrowserSearchProvider:
                     "height": int(item.get("oh") or 0),
                     "index": index,
                     "adapter": "bing-metadata",
+                    "title": str(item.get("t") or item.get("desc") or ""),
                 }
             )
         return images
+
+
+class FrinkiacSearchProvider:
+    """Public Simpsons-frame fallback; all returned frames still pass canonical safeguards."""
+
+    name = "frinkiac"
+    api_url = "https://frinkiac.com/api/search"
+    character_markers = (
+        "Homer",
+        "Marge",
+        "Bart",
+        "Lisa",
+        "Maggie",
+        "Krusty",
+        "Burns",
+        "Smithers",
+        "Flanders",
+        "Milhouse",
+        "Nelson",
+        "Moe",
+    )
+    action_markers = (
+        "arguing",
+        "barbecue",
+        "dancing",
+        "eating",
+        "fishing",
+        "grocery",
+        "laughing",
+        "reading",
+        "running",
+        "saxophone",
+        "shopping",
+        "skateboard",
+        "television",
+    )
+
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+    async def search(self, plan: SearchPlan, cursor: str | None = None) -> SearchPage:
+        del cursor
+        results: list[ImageSearchResult] = []
+        seen_frames: set[tuple[str, int]] = set()
+        queries = _diverse_queries(plan)[: self.settings.browser_search_max_queries]
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            for original_query in queries:
+                compact_query = self._compact_query(original_query)
+                response = await client.get(self.api_url, params={"q": compact_query})
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, list):
+                    continue
+                added = 0
+                for raw in self._spread_sample(
+                    payload,
+                    self.settings.browser_search_results_per_query,
+                ):
+                    if not isinstance(raw, dict):
+                        continue
+                    episode = str(raw.get("Episode") or "").strip()
+                    timestamp = raw.get("Timestamp")
+                    if (
+                        not re.fullmatch(r"S\d{2}E\d{2}", episode)
+                        or isinstance(timestamp, bool)
+                        or not isinstance(timestamp, int)
+                        or timestamp < 0
+                        or (episode, timestamp) in seen_frames
+                    ):
+                        continue
+                    seen_frames.add((episode, timestamp))
+                    source_page = f"https://frinkiac.com/caption/{episode}/{timestamp}"
+                    direct = (
+                        f"https://frinkiac.com/img/{episode}/{timestamp}.jpg"
+                        f"?cb={episode}-{timestamp}"
+                    )
+                    results.append(
+                        ImageSearchResult(
+                            search_query=original_query,
+                            result_rank=len(results) + 1,
+                            source_page_url=source_page,
+                            direct_image_url=direct,
+                            source_domain="frinkiac.com",
+                            rights_status="unknown",
+                            provider_metadata={
+                                "source_adapter": "frinkiac-public-search",
+                                "frinkiac_query": compact_query,
+                                "episode": episode,
+                                "timestamp": timestamp,
+                                "subtitle": str(raw.get("Content") or ""),
+                                "episode_title": str(raw.get("Title") or ""),
+                            },
+                        )
+                    )
+                    added += 1
+                    if (
+                        added >= self.settings.browser_search_results_per_query
+                        or len(results) >= self.settings.browser_search_max_results
+                    ):
+                        break
+                if len(results) >= self.settings.browser_search_max_results:
+                    break
+        return SearchPage(results=results)
+
+    @staticmethod
+    def _spread_sample(values: list[Any], count: int) -> list[Any]:
+        if count <= 0 or not values:
+            return []
+        if len(values) <= count:
+            return list(values)
+        if count == 1:
+            return [values[0]]
+        indexes = [round(position * (len(values) - 1) / (count - 1)) for position in range(count)]
+        return [values[index] for index in indexes]
+
+    @classmethod
+    def _compact_query(cls, value: str) -> str:
+        words = set(re.sub(r"[^a-z]+", " ", value.casefold()).split())
+        characters = [marker for marker in cls.character_markers if marker.casefold() in words]
+        actions = [marker for marker in cls.action_markers if marker in words]
+        selected = [*characters[:1], *actions[:1]]
+        if selected:
+            return " ".join(selected)
+        fallback = [
+            word
+            for word in re.sub(r"[^a-z0-9]+", " ", value.casefold()).split()
+            if word
+            not in {
+                "animated",
+                "frame",
+                "scene",
+                "screencap",
+                "screenshot",
+                "simpson",
+                "simpsons",
+                "still",
+                "the",
+            }
+        ]
+        return " ".join(fallback[:2]) or "Springfield"
 
 
 class ApiSearchProvider:

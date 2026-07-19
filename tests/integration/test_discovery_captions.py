@@ -10,6 +10,7 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.discovery.providers import (
     BrowserSearchProvider,
+    FrinkiacSearchProvider,
     ManualUrlProvider,
     _diverse_queries,
 )
@@ -98,6 +99,9 @@ def test_search_plan_uses_supported_named_franchises() -> None:
     )
     assert payload["primary_franchise"] == "The Simpsons"
     assert payload["underused_franchises"] == ["The Simpsons"]
+    assert payload["primary_topic_share"] == pytest.approx(196 / 198)
+    assert payload["minimum_primary_topic_query_share"] == 0.8
+    assert payload["recent_exclusions"] == []
 
 
 def test_bing_metadata_parser_preserves_direct_and_source_urls() -> None:
@@ -109,6 +113,7 @@ def test_bing_metadata_parser_preserves_direct_and_source_urls() -> None:
                     "purl": "https://source.example.test/article",
                     "ow": 1280,
                     "oh": 720,
+                    "t": "The Simpsons frame",
                 }
             ),
             "{not-json",
@@ -123,6 +128,7 @@ def test_bing_metadata_parser_preserves_direct_and_source_urls() -> None:
             "height": 720,
             "index": 0,
             "adapter": "bing-metadata",
+            "title": "The Simpsons frame",
         }
     ]
 
@@ -152,3 +158,17 @@ def test_live_browser_queries_rotate_across_families_before_repeating() -> None:
         "reaction two",
         "group two",
     ]
+
+
+def test_frinkiac_query_compaction_keeps_character_and_action() -> None:
+    assert (
+        FrinkiacSearchProvider._compact_query(
+            '"Homer Simpson" quietly fishing lake animated screencap'
+        )
+        == "Homer fishing"
+    )
+    assert (
+        FrinkiacSearchProvider._compact_query('"Lisa Simpson" performing saxophone stage frame')
+        == "Lisa saxophone"
+    )
+    assert FrinkiacSearchProvider._spread_sample(list(range(10)), 3) == [0, 4, 9]

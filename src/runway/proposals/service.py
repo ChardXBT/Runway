@@ -30,6 +30,7 @@ from runway.db.repositories import audit, get_channel
 from runway.domain.enums import ProposalStatus, RunStatus
 from runway.domain.state_machine import require_transition
 from runway.intelligence.retrieval import RetrievalService
+from runway.ranking.diversity import CandidateDiversitySelector
 
 
 class ProposalService:
@@ -40,6 +41,7 @@ class ProposalService:
         self.feedback = CaptionFeedbackService(database, settings)
         self.exposures = CaptionExposureService(database, settings)
         self.retrieval = RetrievalService(database, settings)
+        self.diversity = CandidateDiversitySelector()
         self._schedule_lock = threading.Lock()
 
     async def generate_batch(
@@ -77,7 +79,21 @@ class ProposalService:
                     select(Proposal.candidate_image_id).where(Proposal.channel_id == channel.id)
                 ).all()
             )
-            candidates = [candidate for candidate in accepted if candidate.id not in used_ids]
+            recent_anchor_ids = session.scalars(
+                select(Proposal.candidate_image_id)
+                .where(Proposal.channel_id == channel.id)
+                .order_by(Proposal.created_at.desc(), Proposal.id.desc())
+                .limit(20)
+            ).all()
+            accepted_by_id = {candidate.id: candidate for candidate in accepted}
+            candidates = self.diversity.order(
+                [candidate for candidate in accepted if candidate.id not in used_ids],
+                anchors=[
+                    accepted_by_id[candidate_id]
+                    for candidate_id in recent_anchor_ids
+                    if candidate_id in accepted_by_id
+                ],
+            )
             target_times = [
                 self._planned_datetime(
                     local_start + timedelta(days=offset), timezone_name, default_time
@@ -93,11 +109,10 @@ class ProposalService:
                 ).all()
             )
             missing_count = days - len(occupied)
-            if len(candidates) < missing_count:
+            if not candidates and missing_count:
                 raise ValueError(
-                    f"{missing_count} queue gaps require {missing_count} "
-                    "unused accepted candidates; "
-                    f"only {len(candidates)} are available"
+                    "no sufficiently distinct unused candidate is available; "
+                    "Runway will not create repetitive filler"
                 )
             run = GenerationRun(
                 channel_id=channel.id,
@@ -147,10 +162,7 @@ class ProposalService:
                     captions = current_captions
                     break
                 if candidate is None or captions is None:
-                    raise ValueError(
-                        "no unused candidate produced a grounded caption slate; "
-                        "RunWay did not create filler"
-                    )
+                    break
                 context = self.retrieval.context_for_candidate(
                     candidate.media_asset_id,
                     candidate_id=candidate.id,
@@ -599,8 +611,6 @@ class ProposalService:
                 media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
                 if candidate is None or media is None:
                     raise ValueError("proposal cannot be approved without a local candidate image")
-                if candidate.rights_status == "blocked":
-                    raise ValueError("a blocked image cannot be approved")
                 old_slot = proposal.scheduled_publish_at
                 proposal.scheduled_publish_at = scheduled_for.isoformat()
                 self._event(
@@ -1168,6 +1178,7 @@ class ProposalService:
             if candidate and candidate.preview_asset_id
             else None
         )
+        display_media = preview or media
         slate = (
             session.get(CaptionSlate, proposal.caption_slate_id)
             if proposal.caption_slate_id
@@ -1220,8 +1231,8 @@ class ProposalService:
                         else None
                     ),
                     "preview_url": (
-                        f"/media/{Path(preview.local_path).relative_to('media').as_posix()}"
-                        if preview
+                        f"/media/{Path(display_media.local_path).relative_to('media').as_posix()}"
+                        if display_media
                         else None
                     ),
                     "source_page_url": candidate.source_page_url,
@@ -1229,6 +1240,10 @@ class ProposalService:
                     "source_domain": candidate.source_domain,
                     "rights_status": candidate.rights_status,
                     "detected_topic": json.loads(candidate.detected_topic_json),
+                    "diversity_cluster_key": candidate.diversity_cluster_key,
+                    "diversity_fingerprint": json.loads(
+                        candidate.diversity_fingerprint_json or "{}"
+                    ),
                 }
                 if candidate
                 else None

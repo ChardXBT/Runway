@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import select
 
@@ -79,7 +81,7 @@ async def test_mock_image_generation_preserves_lineage_and_reenters_candidates(
 
 
 @pytest.mark.asyncio
-async def test_unknown_rights_reference_is_ineligible_for_generation(
+async def test_unknown_rights_reference_is_allowed_with_provenance(
     database: Database,
     settings: Settings,
 ) -> None:
@@ -96,15 +98,27 @@ async def test_unknown_rights_reference_is_ineligible_for_generation(
         reference.rights_status = "unknown"
     assert reference_id is not None
 
-    with pytest.raises(ValueError, match="unknown-rights media"):
-        await ImageGenerationService(database, settings).generate(
-            CreativeBrief(
-                capability="variation",
-                instruction="Create a restrained variation of this composition",
-                reference_media_ids=[reference_id],
-                consent_state="creator_confirmed",
-                seed=10,
-                width=640,
-                height=640,
-            )
+    result = await ImageGenerationService(database, settings).generate(
+        CreativeBrief(
+            capability="variation",
+            instruction="Create a restrained variation of this composition",
+            reference_media_ids=[reference_id],
+            consent_state="creator_confirmed",
+            seed=10,
+            width=640,
+            height=640,
         )
+    )
+
+    with database.session() as session:
+        generation = session.get(
+            ImageGenerationRun,
+            int(result["generation_run_id"]),
+        )
+        assert generation is not None
+        reference_rights = json.loads(generation.reference_rights_json)
+    assert len(reference_rights) == 1
+    assert reference_rights[0]["media_asset_id"] == reference_id
+    assert reference_rights[0]["rights_status"] == "unknown"
+    assert reference_rights[0]["decision"]["outcome"] == "allowed"
+    assert reference_rights[0]["decision"]["reason"] == "unknown retained as provenance only"

@@ -98,6 +98,10 @@ class IntelligenceCapabilityRegistry:
             ("retrieval_planning", "Plan channel-scoped retrieval constraints."),
             ("caption_generation", "Generate a grounded caption candidate slate."),
             ("caption_verification", "Verify visible evidence and policy constraints."),
+            (
+                "shadow_editorial_simulation",
+                "Recommend an isolated editorial decision without changing creator labels.",
+            ),
             ("image_generation_mock", "Create deterministic local image fixtures only."),
         ):
             self.register(

@@ -9,7 +9,7 @@ from runway.ranking.duplicates import DuplicateResult
 from runway.ranking.service import CandidateRanker
 
 
-def test_fan_art_is_hard_rejected(database, settings) -> None:
+def test_fan_art_is_allowed_and_preserved_as_metadata(database, settings) -> None:
     features = ImageFeatures(
         sha256="a" * 64,
         mime_type="image/png",
@@ -41,7 +41,13 @@ def test_fan_art_is_hard_rejected(database, settings) -> None:
         relationships=[],
         setting="unknown",
         ocr_text=[],
-        field_confidence={},
+        field_confidence={
+            "entities": 0.9,
+            "emotion": 0.9,
+            "actions": 0.9,
+            "scene": 0.9,
+            "ocr": 0.9,
+        },
     )
     duplicate = DuplicateResult(
         is_exact=False,
@@ -62,12 +68,12 @@ def test_fan_art_is_hard_rejected(database, settings) -> None:
         rights_status="unknown",
     )
 
-    assert result.hard_rejection_reason == "fan_art"
-    assert result.final_rank_score == 0.0
-    assert "possible fan art" in result.warnings
+    assert result.hard_rejection_reason is None
+    assert result.final_rank_score > 0.0
+    assert "possible fan art" not in result.warnings
 
 
-def test_artist_portfolio_domain_is_rejected_even_when_model_confidence_is_low(
+def test_artist_portfolio_domain_is_allowed_unless_creator_explicitly_blocks_it(
     database, settings
 ) -> None:
     features, analysis, duplicate = _rank_inputs(franchise="The Simpsons")
@@ -80,7 +86,23 @@ def test_artist_portfolio_domain_is_rejected_even_when_model_confidence_is_low(
         rights_status="unknown",
     )
 
-    assert result.hard_rejection_reason == "personal_artwork_source"
+    assert result.hard_rejection_reason is None
+    assert result.final_rank_score > 0.0
+
+
+def test_nsfw_candidate_is_always_hard_rejected(database, settings) -> None:
+    features, analysis, duplicate = _rank_inputs(franchise="The Simpsons")
+    analysis = analysis.model_copy(update={"unsafe_probability": 0.91})
+
+    result = CandidateRanker(database, settings).rank(
+        features,
+        analysis,
+        duplicate,
+        source_domain="example.test",
+        rights_status="public_domain",
+    )
+
+    assert result.hard_rejection_reason == "nsfw_content"
     assert result.final_rank_score == 0.0
 
 
@@ -157,7 +179,13 @@ def _rank_inputs(
             relationships=[],
             setting="unknown",
             ocr_text=[],
-            field_confidence={},
+            field_confidence={
+                "entities": 0.9,
+                "emotion": 0.9,
+                "actions": 0.9,
+                "scene": 0.9,
+                "ocr": 0.9,
+            },
         ),
         DuplicateResult(
             is_exact=False,

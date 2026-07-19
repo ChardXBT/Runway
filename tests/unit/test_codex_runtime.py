@@ -19,6 +19,7 @@ from runway.analysis.schemas import (
     CaptionCandidateSet,
     HistoricalAnnotation,
     SearchPlan,
+    ShadowEditorialRecommendation,
     StyleSummary,
 )
 from runway.config import Settings
@@ -44,7 +45,13 @@ def _candidate_output() -> dict[str, object]:
         "relationships": [],
         "setting": "unknown",
         "ocr_text": [],
-        "field_confidence": {},
+        "field_confidence": {
+            "entities": 0.9,
+            "emotion": 0.9,
+            "actions": 0.9,
+            "scene": 0.9,
+            "ocr": 0.9,
+        },
     }
 
 
@@ -71,6 +78,7 @@ def _assert_strict_object_schemas(value: object) -> None:
         SearchPlan,
         CandidateAnalysis,
         CaptionCandidateSet,
+        ShadowEditorialRecommendation,
     ],
 )
 def test_codex_output_schemas_require_every_property(schema: type[Any]) -> None:

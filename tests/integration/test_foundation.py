@@ -47,7 +47,7 @@ def test_migrations_seed_channel_and_enable_wal(database: Database) -> None:
     assert channel_count == 1
     assert journal_mode.lower() == "wal"
     assert foreign_keys == 1
-    assert migration == "0008_intelligence_data_flywheel"
+    assert migration == "0009_editorial_diversity"
     assert feedback_table == 1
     assert publisher_table == 1
     assert schedule_slot == 1

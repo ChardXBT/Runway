@@ -76,14 +76,14 @@ class ChannelPolicyService:
                 (
                     "rights",
                     300,
-                    {"policy": "unknown_requires_review"},
-                    "Unknown rights require an explicit human decision.",
+                    {"policy": "provenance_only"},
+                    "Copyright and licensing are retained as provenance, not ranking vetoes.",
                 ),
                 (
                     "source",
                     300,
-                    {"policy": "preserve_and_review"},
-                    "Preserve source provenance and block explicitly unsafe sources.",
+                    {"policy": "public_web_nsfw_blocked"},
+                    "Public-web sources are eligible; explicit NSFW material is blocked.",
                 ),
                 (
                     "grounding",
@@ -256,6 +256,12 @@ class ChannelPolicyService:
     ) -> PolicyDecision:
         policy = self.ensure_defaults(channel_id)
         normalized = rights_status.strip().lower()
+        if policy.rights_policy == "provenance_only":
+            return PolicyDecision(
+                outcome="allowed",
+                reason=f"{normalized or 'unknown'} retained as provenance only",
+                policy_version=policy.version,
+            )
         if normalized == "blocked":
             return PolicyDecision(
                 outcome="blocked",
@@ -291,3 +297,26 @@ class ChannelPolicyService:
             reason="unknown rights are blocked by channel policy",
             policy_version=policy.version,
         )
+
+    def configure_public_image_policy(self, channel_id: int) -> PolicySnapshot:
+        self.ensure_defaults(channel_id)
+        self.add_rule(
+            channel_id=channel_id,
+            rule_type="rights",
+            priority=1000,
+            value={"policy": "provenance_only"},
+            rule_text="Copyright and licensing status do not veto image discovery or ranking.",
+            source="creator",
+        )
+        self.add_rule(
+            channel_id=channel_id,
+            rule_type="source",
+            priority=1000,
+            value={"policy": "public_web_nsfw_blocked"},
+            rule_text=(
+                "Any public-web image source is eligible; explicit sexual or NSFW material "
+                "remains prohibited."
+            ),
+            source="creator",
+        )
+        return self.current(channel_id)

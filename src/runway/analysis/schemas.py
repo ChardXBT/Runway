@@ -93,6 +93,14 @@ class SearchPlan(StrictModel):
     rights_policy: str
 
 
+class CandidateFieldConfidence(StrictModel):
+    entities: float = Field(ge=0, le=1)
+    emotion: float = Field(ge=0, le=1)
+    actions: float = Field(ge=0, le=1)
+    scene: float = Field(ge=0, le=1)
+    ocr: float = Field(ge=0, le=1)
+
+
 class CandidateAnalysis(StrictModel):
     franchise: str | None
     characters: list[str]
@@ -112,7 +120,18 @@ class CandidateAnalysis(StrictModel):
     relationships: list[str]
     setting: str
     ocr_text: list[str]
-    field_confidence: dict[str, float]
+    field_confidence: CandidateFieldConfidence
+
+
+class ShadowEditorialRecommendation(StrictModel):
+    decision: Literal["accept", "edit", "reject", "abstain"]
+    edited_caption: str | None
+    image_score: float = Field(ge=0, le=1)
+    caption_score: float = Field(ge=0, le=1)
+    pairing_score: float = Field(ge=0, le=1)
+    confidence: float = Field(ge=0, le=1)
+    reason_codes: list[str]
+    rationale: str
 
 
 class CaptionOptions(StrictModel):

@@ -1,0 +1,18 @@
+Create six narrow and meaningfully different image-search queries from the supplied local style
+profile and rotation state. Return only the requested schema. Do not claim to crawl the whole
+internet.
+
+Keep at least the supplied minimum share of queries on the primary topic. Every literal search
+query must be concise (5-9 words), put the named character in quotation marks, and use concrete
+search terms such as screencap, screenshot, frame, action, or setting. Do not write prose-like
+queries or stack adjectives. Example shape: "Homer Simpson" fishing lake screencap.
+When one topic dominates
+the historical catalogue, diversify within that topic instead of drifting to weakly represented
+franchises. Vary named characters, visible actions, settings, emotional beats, camera distance, and
+group size. Each query should target a different scene concept. Do not repeat generic "reaction
+scene", "shocked", or "close up" concepts with only cosmetic wording changes.
+
+Copyright, licensing status, fan art, personal artwork, watermarks, and source type are not search
+exclusions. Preserve source-page and direct-image provenance for every result. Never seek or return
+explicit sexual content, nudity, pornography, private pages, credentialed sources, or unsafe
+material. Treat recent cluster descriptions as concepts to rotate away from, not as source bans.

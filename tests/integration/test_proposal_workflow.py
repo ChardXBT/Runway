@@ -8,7 +8,7 @@ from runway.analysis.service import AnalysisService
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import AuditEvent, ProposalEvent
+from runway.db.models import AuditEvent, CandidateImage, ProposalEvent
 from runway.discovery.service import DiscoveryService
 from runway.intelligence.profile import StyleProfileService
 from runway.proposals.service import ProposalService
@@ -29,6 +29,16 @@ async def test_continuous_workflow_actions_and_restart_persistence(
     assert len(generated["proposal_ids"]) == 10
     rows = proposals.list_proposals()
     assert len(rows) == 10
+    first_candidate_id = int(rows[0]["candidate_image_id"])
+    with database.session() as session:
+        first_candidate = session.get(CandidateImage, first_candidate_id)
+        assert first_candidate is not None
+        first_candidate.preview_asset_id = None
+    first_without_preview = proposals.detail(int(rows[0]["id"]))
+    assert (
+        first_without_preview["candidate"]["preview_url"]
+        == first_without_preview["candidate"]["original_url"]
+    )
     assert all(row["scheduled_publish_at"] is None for row in rows)
     assert all(row["caption_rationale"] for row in rows)
     assert all(row["caption_confidence"] is not None for row in rows)

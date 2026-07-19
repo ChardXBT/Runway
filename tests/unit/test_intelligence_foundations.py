@@ -163,7 +163,7 @@ def test_fusion_is_deterministic_and_mmr_suppresses_duplicate_evidence() -> None
     assert duplicate.diversity_penalty > 0
 
 
-def test_explicit_policy_outranks_defaults_and_unknown_rights_are_blocked(
+def test_explicit_policy_outranks_defaults_and_rights_are_provenance_only(
     database: Database,
     settings: Settings,
 ) -> None:
@@ -194,7 +194,7 @@ def test_explicit_policy_outranks_defaults_and_unknown_rights_are_blocked(
             rights_status="unknown",
             for_generation=False,
         ).outcome
-        == "requires_review"
+        == "allowed"
     )
     assert (
         service.rights_decision(
@@ -202,7 +202,7 @@ def test_explicit_policy_outranks_defaults_and_unknown_rights_are_blocked(
             rights_status="unknown",
             for_generation=True,
         ).outcome
-        == "blocked"
+        == "allowed"
     )
     assert (
         service.rights_decision(
@@ -211,7 +211,7 @@ def test_explicit_policy_outranks_defaults_and_unknown_rights_are_blocked(
             explicitly_approved=True,
             for_generation=True,
         ).outcome
-        == "blocked"
+        == "allowed"
     )
 
 

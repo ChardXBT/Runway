@@ -39,9 +39,9 @@ class Settings(BaseSettings):
     web_port: int = 3000
     agent_runtime: Literal["mock", "codex", "openai"] = "mock"
     enable_browser_search: bool = False
-    browser_search_url: str = "https://www.bing.com/images/search?q={query}"
-    browser_search_max_queries: int = Field(default=3, ge=1, le=10)
-    browser_search_results_per_query: int = Field(default=6, ge=1, le=20)
+    browser_search_url: str = "https://www.bing.com/images/search?q={query}&safeSearch=Strict"
+    browser_search_max_queries: int = Field(default=6, ge=1, le=10)
+    browser_search_results_per_query: int = Field(default=3, ge=1, le=20)
     browser_search_max_results: int = Field(default=18, ge=1, le=100)
 
     codex_cli_path: Path | None = None

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from datetime import UTC, datetime
 from typing import cast
@@ -8,7 +9,7 @@ from sqlalchemy import func, select
 
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import CandidateImage, Proposal, SearchRun
+from runway.db.models import CandidateImage, Proposal, SearchRun, StyleProfile
 from runway.db.repositories import get_channel
 from runway.discovery.service import DiscoveryService
 from runway.proposals.service import ProposalService
@@ -102,6 +103,19 @@ class EditorialService:
                     available = self._unused_candidate_count()
                     if available:
                         generated_ids.extend(await self._generate(min(missing, available)))
+                    elif self._supports_frinkiac_fallback():
+                        fallback = await DiscoveryService(
+                            self.database,
+                            self.settings,
+                        ).discover(
+                            days=missing,
+                            provider_name="frinkiac",
+                        )
+                        fallback["fallback_from"] = "browser"
+                        discovery_result = fallback
+                        available = self._unused_candidate_count()
+                        if available:
+                            generated_ids.extend(await self._generate(min(missing, available)))
 
             if detail is None:
                 detail = (
@@ -169,6 +183,34 @@ class EditorialService:
                 )
                 or 0
             )
+
+    def _supports_frinkiac_fallback(self) -> bool:
+        with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            profile = session.scalar(
+                select(StyleProfile)
+                .where(
+                    StyleProfile.channel_id == channel_id,
+                    StyleProfile.is_active.is_(True),
+                )
+                .order_by(StyleProfile.version.desc())
+                .limit(1)
+            )
+        if profile is None:
+            return False
+        payload = json.loads(profile.profile_json)
+        distribution = payload.get(
+            "topic_distribution",
+            payload.get("franchise_distribution", []),
+        )
+        if not isinstance(distribution, list) or not distribution:
+            return False
+        first = distribution[0]
+        return (
+            isinstance(first, (list, tuple))
+            and bool(first)
+            and "simpson" in str(first[0]).casefold()
+        )
 
     def _result(
         self,

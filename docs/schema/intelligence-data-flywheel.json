@@ -1369,6 +1369,20 @@
           },
           {
             "default": null,
+            "name": "diversity_cluster_key",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
+          },
+          {
+            "default": null,
+            "name": "diversity_fingerprint_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "download_error",
             "nullable": true,
             "primary_key": 0,
@@ -1574,6 +1588,13 @@
               "direct_image_url"
             ],
             "name": "ix_candidate_images_direct_image_url",
+            "unique": false
+          },
+          {
+            "columns": [
+              "diversity_cluster_key"
+            ],
+            "name": "ix_candidate_images_diversity_cluster_key",
             "unique": false
           },
           {
@@ -8196,6 +8217,269 @@
         ],
         "unique_constraints": []
       },
+      "shadow_editorial_decisions": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "agent_run_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "candidate_image_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "caption_score",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "channel_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "confidence",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "decision",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "diversity_cluster_key",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
+          },
+          {
+            "default": null,
+            "name": "edited_caption",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "evaluator_version",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "image_score",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "input_snapshot_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "label_source",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "pairing_score",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "proposal_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "rationale",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "reason_codes_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "training_eligible",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BOOLEAN"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "agent_run_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "intelligence_agent_runs"
+          },
+          {
+            "columns": [
+              "candidate_image_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "candidate_images"
+          },
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "channels"
+          },
+          {
+            "columns": [
+              "proposal_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "proposals"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "agent_run_id"
+            ],
+            "name": "ix_shadow_editorial_decisions_agent_run_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "candidate_image_id"
+            ],
+            "name": "ix_shadow_editorial_decisions_candidate_image_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "name": "ix_shadow_editorial_decisions_channel_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "decision"
+            ],
+            "name": "ix_shadow_editorial_decisions_decision",
+            "unique": false
+          },
+          {
+            "columns": [
+              "diversity_cluster_key"
+            ],
+            "name": "ix_shadow_editorial_decisions_diversity_cluster_key",
+            "unique": false
+          },
+          {
+            "columns": [
+              "evaluator_version"
+            ],
+            "name": "ix_shadow_editorial_decisions_evaluator_version",
+            "unique": false
+          },
+          {
+            "columns": [
+              "label_source"
+            ],
+            "name": "ix_shadow_editorial_decisions_label_source",
+            "unique": false
+          },
+          {
+            "columns": [
+              "proposal_id"
+            ],
+            "name": "ix_shadow_editorial_decisions_proposal_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "training_eligible"
+            ],
+            "name": "ix_shadow_editorial_decisions_training_eligible",
+            "unique": false
+          },
+          {
+            "columns": [
+              "channel_id",
+              "decision",
+              "created_at"
+            ],
+            "name": "ix_shadow_editorial_lookup",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "proposal_id",
+              "evaluator_version"
+            ],
+            "name": "uq_shadow_editorial_proposal_evaluator"
+          }
+        ]
+      },
       "similarity_edges": {
         "check_constraints": [],
         "columns": [
@@ -8375,7 +8659,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "503e7471206e1465c01ad2bbea9f7a6ee3aa9b0446c7aee6f0e8b4ca4fa4a06d",
-  "migration": "0008_intelligence_data_flywheel",
-  "table_count": 48
+  "fingerprint": "d1472d9ff17a995db56b8d2065dbee17629bca6af9eff902fccaa8c514597d2d",
+  "migration": "0009_editorial_diversity",
+  "table_count": 49
 }

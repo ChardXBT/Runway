@@ -37,9 +37,11 @@ from runway.evaluation.runner import (
 from runway.generation.providers import ImageGenerationProviderRegistry
 from runway.generation.schemas import CreativeBrief
 from runway.generation.service import ImageGenerationService
+from runway.intelligence.candidate_diversity import CandidateDiversityService
 from runway.intelligence.embeddings import RepresentationProviderRegistry
 from runway.intelligence.profile import StyleProfileService
 from runway.intelligence.retrieval import RetrievalService
+from runway.intelligence.shadow_editorial import ShadowEditorialService
 from runway.logging import configure_logging
 from runway.proposals.service import ProposalService
 from runway.publishing.youtube import PlaywrightYouTubeAdapter, YouTubeBrowserPublisher
@@ -1356,7 +1358,7 @@ def _runway_api_healthy(host: str, port: int) -> bool:
     if not isinstance(payload, dict):
         return False
     product = payload.get("product")
-    return response.status == 200 and isinstance(product, str) and product == "RunWay"
+    return response.status == 200 and isinstance(product, str) and product == "Runway"
 
 
 @app.command()
@@ -1437,7 +1439,7 @@ def doctor() -> None:
             "API port",
             port_available or api_running,
             (
-                f"{settings.host}:{settings.api_port} already serving RunWay"
+                f"{settings.host}:{settings.api_port} already serving Runway"
                 if api_running
                 else f"{settings.host}:{settings.api_port}"
             ),
@@ -1615,7 +1617,7 @@ def serve(
     settings = get_settings()
     bind_host = host or settings.host
     if bind_host not in {"127.0.0.1", "localhost", "::1"}:
-        raise typer.BadParameter("RunWay may only bind to a loopback host")
+        raise typer.BadParameter("Runway may only bind to a loopback host")
     uvicorn.run("runway.api.app:app", host=bind_host, port=port or settings.api_port, reload=False)
 
 
@@ -1670,7 +1672,7 @@ def capture_youtube_posts(
     if not headed and not cdp_url:
         raise typer.BadParameter("live capture requires --headed or an explicit --cdp-url")
     typer.echo(f"Dedicated browser profile: {settings.browser_profile_dir}")
-    typer.echo("RunWay never requests or stores your Google password.")
+    typer.echo("Runway never requests or stores your Google password.")
     typer.echo("This operation is read-only and will not create, edit, delete, or publish.")
     typer.echo(f"Requested channel: @{settings.channel_handle} — {requested_channel_url}")
     typer.echo("Press Ctrl+C once to pause safely; rerun with --resume to continue.")
@@ -1819,10 +1821,65 @@ def profile_evaluate() -> None:
     typer.echo(json.dumps(result, indent=2, default=str))
 
 
+@intelligence_app.command("diversity-backfill")
+def diversity_backfill(
+    reconsider_legacy_policy: bool = typer.Option(
+        True,
+        "--reconsider-legacy-policy/--keep-legacy-policy-rejections",
+    ),
+) -> None:
+    """Persist candidate clusters and reconsider copyright-only legacy rejections."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = CandidateDiversityService(database, settings).backfill(
+        reconsider_legacy_policy=reconsider_legacy_policy
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("diversity-report")
+def diversity_report() -> None:
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = CandidateDiversityService(database, settings).report()
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("configure-image-policy")
+def configure_image_policy() -> None:
+    """Apply the creator's public-web, provenance-retaining, NSFW-only policy."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = CandidateDiversityService(database, settings).configure_creator_policy()
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("shadow-review")
+def shadow_review(
+    limit: int = typer.Option(50, min=1, max=500),
+) -> None:
+    """Create isolated advisory decisions without mutating proposals or creator labels."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = asyncio.run(ShadowEditorialService(database, settings).review_pending(limit=limit))
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("shadow-report")
+def shadow_report() -> None:
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = ShadowEditorialService(database, settings).report()
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
 @discover_app.command("images")
 def discover_images(
     days: int = typer.Option(10, min=1, max=30),
-    provider: str = typer.Option("fixture", help="fixture, manual, browser, or api"),
+    provider: str = typer.Option(
+        "fixture",
+        help="fixture, manual, browser, frinkiac, or api",
+    ),
     manual_url: list[str] | None = typer.Option(None, "--manual-url"),
     dry_run: bool = typer.Option(False),
     live: bool = typer.Option(False, help="Explicitly allow a configured headed provider."),

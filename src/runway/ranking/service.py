@@ -20,7 +20,6 @@ from runway.db.models import (
     StyleProfile,
 )
 from runway.db.repositories import get_channel
-from runway.intelligence.policies import ChannelPolicyService
 from runway.media.service import ImageFeatures, cosine_similarity
 from runway.ranking.duplicates import DuplicateResult
 
@@ -41,20 +40,13 @@ class RankingResult(BaseModel):
 
 
 class CandidateRanker:
-    personal_art_domains = {
-        "artstation.com",
-        "behance.net",
-        "deviantart.com",
-        "pixiv.net",
-    }
     weights = {
         "style": 0.22,
         "topic": 0.1,
-        "novelty": 0.18,
+        "novelty": 0.22,
         "caption_potential": 0.2,
         "quality": 0.15,
-        "rotation": 0.05,
-        "source_safety": 0.05,
+        "rotation": 0.06,
         "creator_image_preference": 0.05,
     }
 
@@ -71,22 +63,12 @@ class CandidateRanker:
         source_domain: str,
         rights_status: str,
     ) -> RankingResult:
-        with self.database.session() as session:
-            channel_id = get_channel(session, self.settings.channel_handle).id
-        policy_service = ChannelPolicyService(self.database, self.settings)
-        policy_service.ensure_defaults(channel_id)
-        rights = policy_service.rights_decision(
-            channel_id=channel_id,
-            rights_status=rights_status,
-        )
         hard_reason = self._hard_filter(
             features,
             analysis,
             duplicate,
             source_domain=source_domain,
         )
-        if rights.outcome == "blocked":
-            hard_reason = hard_reason or "rights_blocked"
         quality = self._quality(features)
         style = self._style_match(features)
         novelty = max(
@@ -96,9 +78,9 @@ class CandidateRanker:
         caption_potential = analysis.caption_potential
         rotation = self._rotation(analysis)
         creator_image_preference = self._creator_image_preference(features)
-        source_risk = {"creator_owned": 0.05, "licensed": 0.1, "public_domain": 0.1}.get(
-            rights_status, 0.45
-        )
+        # Rights remain provenance metadata. They are not a content-safety signal and
+        # therefore never reduce discovery rank.
+        source_risk = 0.0
         topic = 0.8 if analysis.franchise else 0.55
         text_penalty = 0.25 if analysis.text_overlay else 0.0
         weighted = (
@@ -108,20 +90,11 @@ class CandidateRanker:
             + self.weights["caption_potential"] * caption_potential
             + self.weights["quality"] * quality
             + self.weights["rotation"] * rotation
-            + self.weights["source_safety"] * (1 - source_risk)
             + self.weights["creator_image_preference"] * creator_image_preference
             - text_penalty
         )
         final = 0.0 if hard_reason else max(0.0, min(1.0, weighted))
         warnings = list(duplicate.warnings)
-        if rights.outcome == "requires_review":
-            warnings.append(rights.reason)
-        if analysis.watermark_probability > 0.25:
-            warnings.append("possible watermark")
-        if analysis.personal_artwork_probability > 0.25:
-            warnings.append("possible independently created artwork")
-        if analysis.fan_art_probability > 0.25:
-            warnings.append("possible fan art")
         reason = (
             f"Selected from {source_domain}: style {style:.2f}, novelty {novelty:.2f}, "
             f"quality {quality:.2f}, caption potential {caption_potential:.2f}."
@@ -161,6 +134,8 @@ class CandidateRanker:
             return "severe_blur"
         if max(features.width / features.height, features.height / features.width) > 2.2:
             return "unusable_aspect_ratio"
+        if analysis.unsafe_probability >= 0.5:
+            return "nsfw_content"
         if duplicate.hard_block:
             return "duplicate"
         with self.database.session() as session:
@@ -171,20 +146,6 @@ class CandidateRanker:
             )
         if blocked:
             return "blocked_domain"
-        normalized_domain = source_domain.lower().removeprefix("www.")
-        if any(
-            normalized_domain == domain or normalized_domain.endswith(f".{domain}")
-            for domain in self.personal_art_domains
-        ):
-            return "personal_artwork_source"
-        if analysis.unsafe_probability >= 0.5:
-            return "unsafe_content"
-        if analysis.watermark_probability >= 0.65:
-            return "prominent_watermark"
-        if analysis.personal_artwork_probability >= 0.5:
-            return "personal_artwork"
-        if analysis.fan_art_probability >= 0.5:
-            return "fan_art"
         supported_topics = self._supported_topics()
         candidate_topics = self._candidate_topics(analysis)
         if supported_topics and not candidate_topics.intersection(supported_topics):

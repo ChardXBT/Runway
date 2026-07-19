@@ -19,6 +19,7 @@ from runway.db.models import (
     CandidateImage,
     MediaAsset,
     ModelRun,
+    Proposal,
     SearchRun,
     StyleProfile,
     utcnow,
@@ -28,9 +29,11 @@ from runway.discovery.providers import (
     ApiSearchProvider,
     BrowserSearchProvider,
     FixtureSearchProvider,
+    FrinkiacSearchProvider,
     ManualUrlProvider,
     SearchProvider,
 )
+from runway.discovery.safety import is_known_adult_result
 from runway.discovery.schemas import ImageSearchResult
 from runway.domain.enums import MediaKind, RunStatus
 from runway.media.service import (
@@ -39,6 +42,7 @@ from runway.media.service import (
     ensure_fixture_images,
     inspect_image,
 )
+from runway.ranking.diversity import assign_diversity_fields
 from runway.ranking.duplicates import DuplicateDetector
 from runway.ranking.service import CandidateRanker, ranking_weights_json
 
@@ -66,12 +70,16 @@ class DiscoveryService:
         live: bool = False,
     ) -> dict[str, object]:
         profile_record, profile = self._active_profile()
-        plan_payload = self._plan_payload(profile, days)
+        plan_payload = self._plan_payload(
+            profile,
+            days,
+            recent_clusters=self._recent_cluster_exclusions(),
+        )
         plan_started = utcnow()
         plan = await self.runtime.create_search_plan(plan_payload)
         self._record_model_run(
             "create_search_plan",
-            "search-plan-v1",
+            "search-plan-v2",
             [profile_record.id],
             plan_payload,
             plan.model_dump(),
@@ -143,8 +151,23 @@ class DiscoveryService:
         created = 0
         accepted = 0
         rejected = 0
+        nsfw_source_blocked = 0
         errors: list[str] = []
         for result in page.results:
+            if is_known_adult_result(result):
+                nsfw_source_blocked += 1
+                with self.database.session() as session:
+                    audit(
+                        session,
+                        "candidate_nsfw_source_blocked",
+                        "search_run",
+                        run_id,
+                        {
+                            "source_domain": result.source_domain,
+                            "source_page_url": result.source_page_url,
+                        },
+                    )
+                continue
             try:
                 hard_rejected = await self._process_result(run_id, result)
             except Exception as exc:
@@ -184,7 +207,12 @@ class DiscoveryService:
                     "search_completed",
                     "search_run",
                     loaded_run.id,
-                    {"accepted": accepted, "rejected": rejected, "errors": len(errors)},
+                    {
+                        "accepted": accepted,
+                        "rejected": rejected,
+                        "nsfw_source_blocked": nsfw_source_blocked,
+                        "errors": len(errors),
+                    },
                 )
         return {
             "run_id": run_id,
@@ -194,6 +222,7 @@ class DiscoveryService:
             "candidates": created,
             "accepted": accepted,
             "hard_rejected": rejected,
+            "nsfw_source_blocked": nsfw_source_blocked,
             "errors": errors,
         }
 
@@ -319,7 +348,7 @@ class DiscoveryService:
         )
         self._record_model_run(
             "analyze_candidate_image",
-            "candidate-analysis-v2",
+            "candidate-analysis-v3",
             [run_id, result.result_rank],
             result.model_dump(),
             analysis.model_dump(),
@@ -437,6 +466,7 @@ class DiscoveryService:
                 score_components_json=ranking.model_dump_json(),
                 selection_reason=ranking.selection_reason,
             )
+            assign_diversity_fields(candidate, analysis)
             session.add(candidate)
             session.flush()
             audit(
@@ -493,7 +523,12 @@ class DiscoveryService:
             return record, cast(dict[str, object], json.loads(record.profile_json))
 
     @staticmethod
-    def _plan_payload(profile: dict[str, object], days: int) -> dict[str, object]:
+    def _plan_payload(
+        profile: dict[str, object],
+        days: int,
+        *,
+        recent_clusters: list[str] | None = None,
+    ) -> dict[str, object]:
         using_compatibility_franchise_distribution = (
             "topic_distribution" not in profile and "entity_distribution" not in profile
         )
@@ -515,13 +550,15 @@ class DiscoveryService:
             if len(item) >= 2
             and str(item[0]).strip().lower() not in {"", "unknown", "none", "null"}
         ]
+        known_topics.sort(key=lambda item: (-item[1], item[0]))
         primary_topic = known_topics[0][0] if known_topics else None
+        known_total = sum(count for _name, count in known_topics)
+        primary_count = known_topics[0][1] if known_topics else 0
+        primary_share = primary_count / known_total if known_total else 0.0
         supported = [item for item in known_topics if item[1] >= minimum_support]
-        focus_topics = [
-            name for name, _count in sorted(supported, key=lambda item: (item[1], item[0]))
-        ]
-        if primary_topic and primary_topic not in focus_topics:
-            focus_topics.append(primary_topic)
+        focus_topics = [name for name, _count in supported]
+        if primary_topic and primary_share >= 0.7:
+            focus_topics = [primary_topic]
         policy = cast(
             dict[str, object],
             profile.get("explicit_channel_policy", {}),
@@ -530,25 +567,64 @@ class DiscoveryService:
             "profile_version": profile.get("version"),
             "days": days,
             "primary_topic": primary_topic,
+            "primary_topic_share": round(primary_share, 6),
+            "minimum_primary_topic_query_share": 0.8 if primary_share >= 0.7 else 0.6,
+            "topic_distribution": [
+                {"topic": name, "count": count} for name, count in known_topics[:10]
+            ],
             "underused_topics": focus_topics[:5],
             "preferred_compositions": profile.get("visual_compositions", []),
             "preferred_visual_formats": profile.get("visual_formats", []),
             "caption_structures": profile.get("dominant_caption_structures", []),
-            "source_policy": policy.get("source_policy", "preserve_and_review"),
-            "rights_policy": policy.get("rights_policy", "unknown_requires_review"),
-            "recent_exclusions": [
-                "fan art",
-                "personal artwork",
-                "artist portfolios",
-                "commissions",
-                "independent illustrations",
-            ],
+            "source_policy": policy.get(
+                "source_policy",
+                "public_web_with_provenance_nsfw_blocked",
+            ),
+            "rights_policy": policy.get(
+                "rights_policy",
+                "copyright_not_a_ranking_constraint",
+            ),
+            "recent_exclusions": recent_clusters or [],
             "current_queue_distribution": [],
         }
         if using_compatibility_franchise_distribution:
             result["primary_franchise"] = primary_topic
             result["underused_franchises"] = focus_topics[:5]
         return result
+
+    def _recent_cluster_exclusions(self, limit: int = 12) -> list[str]:
+        with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            rows = session.scalars(
+                select(CandidateImage.diversity_fingerprint_json)
+                .join(Proposal, Proposal.candidate_image_id == CandidateImage.id)
+                .where(
+                    Proposal.channel_id == channel_id,
+                    CandidateImage.diversity_cluster_key.is_not(None),
+                )
+                .order_by(Proposal.created_at.desc(), Proposal.id.desc())
+                .limit(limit)
+            ).all()
+        exclusions: list[str] = []
+        for raw in rows:
+            try:
+                value = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(value, dict):
+                continue
+            label = " / ".join(
+                str(value.get(key) or "unknown")
+                for key in (
+                    "scene_family",
+                    "setting_family",
+                    "emotion_family",
+                    "composition_family",
+                )
+            )
+            if label not in exclusions:
+                exclusions.append(label)
+        return exclusions
 
     def _candidate(self, session: Session, candidate_id: int) -> CandidateImage:
         channel_id = get_channel(session, self.settings.channel_handle).id
@@ -571,6 +647,8 @@ class DiscoveryService:
         }
         if name == "browser":
             return BrowserSearchProvider(self.settings, live=live)
+        if name == "frinkiac":
+            return FrinkiacSearchProvider(self.settings)
         if name == "api":
             return ApiSearchProvider(self.settings)
         if name not in providers:
@@ -610,6 +688,7 @@ class DiscoveryService:
             if candidate.preview_asset_id
             else None
         )
+        display_media = preview or media
         return {
             "id": candidate.id,
             "search_run_id": candidate.search_run_id,
@@ -625,8 +704,8 @@ class DiscoveryService:
                 else None
             ),
             "preview_url": (
-                f"/media/{Path(preview.local_path).relative_to('media').as_posix()}"
-                if preview
+                f"/media/{Path(display_media.local_path).relative_to('media').as_posix()}"
+                if display_media
                 else None
             ),
             "detected_topic": json.loads(candidate.detected_topic_json),
@@ -635,4 +714,6 @@ class DiscoveryService:
             "hard_rejection_reason": candidate.hard_rejection_reason,
             "warnings": json.loads(candidate.soft_warnings_json),
             "selection_reason": candidate.selection_reason,
+            "diversity_cluster_key": candidate.diversity_cluster_key,
+            "diversity_fingerprint": json.loads(candidate.diversity_fingerprint_json or "{}"),
         }

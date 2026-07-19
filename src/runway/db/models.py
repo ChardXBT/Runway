@@ -244,6 +244,8 @@ class CandidateImage(Base):
     soft_warnings_json: Mapped[str] = mapped_column(Text, default="[]")
     score_components_json: Mapped[str] = mapped_column(Text, default="{}")
     selection_reason: Mapped[str] = mapped_column(Text, default="")
+    diversity_cluster_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    diversity_fingerprint_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -834,6 +836,45 @@ class FeedbackSignal(Base):
     source_event_key: Mapped[str | None] = mapped_column(String(128), index=True)
     derivation_version: Mapped[str] = mapped_column(String(80), default="feedback-normalization-v1")
     idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ShadowEditorialDecision(Base):
+    __tablename__ = "shadow_editorial_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "proposal_id",
+            "evaluator_version",
+            name="uq_shadow_editorial_proposal_evaluator",
+        ),
+        Index(
+            "ix_shadow_editorial_lookup",
+            "channel_id",
+            "decision",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id"), index=True)
+    candidate_image_id: Mapped[int] = mapped_column(ForeignKey("candidate_images.id"), index=True)
+    agent_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("intelligence_agent_runs.id"), index=True
+    )
+    evaluator_version: Mapped[str] = mapped_column(String(80), index=True)
+    label_source: Mapped[str] = mapped_column(String(40), default="synthetic", index=True)
+    training_eligible: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    decision: Mapped[str] = mapped_column(String(40), index=True)
+    edited_caption: Mapped[str | None] = mapped_column(Text)
+    image_score: Mapped[float] = mapped_column(Float)
+    caption_score: Mapped[float] = mapped_column(Float)
+    pairing_score: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float)
+    reason_codes_json: Mapped[str] = mapped_column(Text, default="[]")
+    rationale: Mapped[str] = mapped_column(Text)
+    diversity_cluster_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    input_snapshot_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

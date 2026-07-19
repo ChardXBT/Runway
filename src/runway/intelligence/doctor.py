@@ -152,7 +152,7 @@ class DoctorReport:
 class IntelligenceDoctor:
     """Read-only integrity audit for the canonical intelligence flywheel."""
 
-    expected_migration = "0008_intelligence_data_flywheel"
+    expected_migration = "0009_editorial_diversity"
     forbidden_capability_tokens = IntelligenceCapabilityRegistry.FORBIDDEN_TOKENS
 
     def __init__(

@@ -25,6 +25,7 @@ from runway.analysis.schemas import (
     HistoricalAnnotationResult,
     SearchPlan,
     SearchQueryFamily,
+    ShadowEditorialRecommendation,
     StyleSummary,
 )
 from runway.config import Settings
@@ -98,7 +99,7 @@ class AgentUsageLimitReached(AgentTerminalError):
 
 
 class PaidApiAuthenticationBlocked(AgentTerminalError):
-    """RunWay refuses to run Codex with usage-billed API authentication."""
+    """Runway refuses to run Codex with usage-billed API authentication."""
 
 
 class AgentRuntime(Protocol):
@@ -121,6 +122,10 @@ class AgentRuntime(Protocol):
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis: ...
 
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet: ...
+
+    async def simulate_editorial_decision(
+        self, payload: Mapping[str, Any]
+    ) -> ShadowEditorialRecommendation: ...
 
 
 class MockAgentRuntime:
@@ -218,14 +223,9 @@ class MockAgentRuntime:
         )
 
     async def create_search_plan(self, payload: Mapping[str, Any]) -> SearchPlan:
-        underused = [
-            str(value)
-            for value in payload.get(
-                "underused_topics",
-                payload.get("underused_franchises", []),
-            )
-        ]
-        topic = underused[0] if underused else "channel subject"
+        topic = str(
+            payload.get("primary_topic") or payload.get("primary_franchise") or "channel subject"
+        )
         return SearchPlan(
             query_families=[
                 SearchQueryFamily(
@@ -255,15 +255,22 @@ class MockAgentRuntime:
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
         candidate_id = int(payload.get("candidate_id", 0))
         subject = f"Fixture subject {(candidate_id % 7) + 1}"
-        action = "reacting" if candidate_id % 2 else "choosing together"
+        concepts = [
+            ("reaction", "centered close up", "surprise", "living room", "reacting"),
+            ("group decision", "balanced two-subject", "determination", "office", "choosing"),
+            ("shared meal", "wide group shot", "happiness", "kitchen", "eating"),
+            ("outdoor activity", "dynamic full shot", "excitement", "park", "running"),
+            ("performance", "stage medium shot", "confidence", "theatre", "performing"),
+        ]
+        scene, composition, emotion, setting, action = concepts[candidate_id % len(concepts)]
         return CandidateAnalysis(
             franchise=["Synthetic Ensemble", "Synthetic Adventure", "Synthetic Comedy"][
                 candidate_id % 3
             ],
             characters=[subject],
-            scene_archetype="reaction" if candidate_id % 2 else "group decision",
-            composition="centered" if candidate_id % 2 else "balanced two-subject",
-            emotion="surprise" if candidate_id % 3 else "determination",
+            scene_archetype=scene,
+            composition=composition,
+            emotion=emotion,
             text_overlay=False,
             watermark_probability=0.02,
             unsafe_probability=0.0,
@@ -282,7 +289,7 @@ class MockAgentRuntime:
             objects=["fixture prop"],
             actions=[action],
             relationships=["subjects share the visible scene"] if candidate_id % 2 == 0 else [],
-            setting="synthetic fixture",
+            setting=setting,
             ocr_text=[],
             field_confidence={
                 "entities": 0.9,
@@ -399,6 +406,58 @@ class MockAgentRuntime:
             factual_uncertainty_warning=None,
         )
 
+    async def simulate_editorial_decision(
+        self, payload: Mapping[str, Any]
+    ) -> ShadowEditorialRecommendation:
+        caption = str(payload.get("final_caption") or "").strip()
+        candidate = payload.get("candidate", {})
+        candidate_row = candidate if isinstance(candidate, Mapping) else {}
+        analysis = candidate_row.get("analysis", {})
+        analysis_row = analysis if isinstance(analysis, Mapping) else {}
+        image_score = float(candidate_row.get("final_rank_score") or 0.5)
+        question_first = caption.endswith("?") and caption.casefold().startswith(
+            ("how ", "what ", "why ", "which ", "who ")
+        )
+        caption_score = 0.82 if question_first else 0.56
+        pairing_score = min(1.0, 0.55 * image_score + 0.45 * caption_score)
+        unsafe = float(analysis_row.get("unsafe_probability") or 0.0)
+        characters = analysis_row.get("characters", [])
+        subject = (
+            _mock_subject_label(str(characters[0]))
+            if isinstance(characters, list) and characters
+            else "the subject"
+        )
+        if unsafe >= 0.5:
+            decision = "reject"
+            edited_caption = None
+            reasons = ["nsfw"]
+            rationale = "The image is not eligible under the NSFW safeguard."
+        elif image_score < 0.5:
+            decision = "reject"
+            edited_caption = None
+            reasons = ["weak_image"]
+            rationale = "The image is below the learned editorial quality threshold."
+        elif not question_first:
+            decision = "edit"
+            edited_caption = f"What has {subject} reacting like this?"
+            reasons = ["prefer_open_question"]
+            rationale = "The image is usable, but an open-ended question better matches feedback."
+        else:
+            decision = "accept"
+            edited_caption = None
+            reasons = ["open_question", "strong_pairing"]
+            rationale = "The image and grounded open-ended question form a strong pairing."
+        return ShadowEditorialRecommendation(
+            decision=decision,
+            edited_caption=edited_caption,
+            image_score=max(0.0, min(1.0, image_score)),
+            caption_score=caption_score,
+            pairing_score=pairing_score,
+            confidence=0.72,
+            reason_codes=reasons,
+            rationale=rationale,
+        )
+
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
@@ -484,13 +543,22 @@ class OpenAIAgentRuntime:
         return await self._parse(StyleSummary, "style-summary-v1.txt", payload)
 
     async def create_search_plan(self, payload: Mapping[str, Any]) -> SearchPlan:
-        return await self._parse(SearchPlan, "search-plan-v1.txt", payload)
+        return await self._parse(SearchPlan, "search-plan-v2.txt", payload)
 
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
-        return await self._parse(CandidateAnalysis, "candidate-analysis-v2.txt", payload)
+        return await self._parse(CandidateAnalysis, "candidate-analysis-v3.txt", payload)
 
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         return await self._parse(CaptionCandidateSet, "captions-v4.txt", payload)
+
+    async def simulate_editorial_decision(
+        self, payload: Mapping[str, Any]
+    ) -> ShadowEditorialRecommendation:
+        return await self._parse(
+            ShadowEditorialRecommendation,
+            "shadow-editorial-v1.txt",
+            payload,
+        )
 
 
 class CodexAgentRuntime:
@@ -661,7 +729,7 @@ class CodexAgentRuntime:
                 "inspect repository files, edit files, or call external tools. Return only the "
                 "JSON object required by the supplied schema.\n\n"
                 f"Task instructions:\n{instructions.strip()}\n\n"
-                f"Bounded RunWay input:\n{json.dumps(public_payload, default=str, sort_keys=True)}"
+                f"Bounded Runway input:\n{json.dumps(public_payload, default=str, sort_keys=True)}"
             )
             work_dir = self.settings.resolved_data_dir / "raw" / "codex-runtime"
             work_dir.mkdir(parents=True, exist_ok=True)
@@ -746,7 +814,7 @@ class CodexAgentRuntime:
         lowered = detail.lower()
         if any(marker in lowered for marker in self._usage_limit_markers):
             raise AgentUsageLimitReached(
-                "ChatGPT/Codex included usage limit reached; RunWay stopped without API fallback"
+                "ChatGPT/Codex included usage limit reached; Runway stopped without API fallback"
             )
         if any(marker in lowered for marker in self._authentication_markers):
             raise AgentAuthenticationRequired(
@@ -754,7 +822,7 @@ class CodexAgentRuntime:
             )
         if "api key" in lowered or "billing" in lowered:
             raise PaidApiAuthenticationBlocked(
-                "Codex requested paid API authentication; RunWay stopped"
+                "Codex requested paid API authentication; Runway stopped"
             )
         summary = detail[-2000:] if detail else "unknown Codex CLI failure"
         raise AgentTerminalError(f"Codex failed and the batch was stopped: {summary}")
@@ -781,12 +849,12 @@ class CodexAgentRuntime:
         return await self._parse(StyleSummary, "style-summary-v1.txt", payload)
 
     async def create_search_plan(self, payload: Mapping[str, Any]) -> SearchPlan:
-        return await self._parse(SearchPlan, "search-plan-v1.txt", payload)
+        return await self._parse(SearchPlan, "search-plan-v2.txt", payload)
 
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
         return await self._parse(
             CandidateAnalysis,
-            "candidate-analysis-v2.txt",
+            "candidate-analysis-v3.txt",
             payload,
             require_image=True,
         )
@@ -795,6 +863,16 @@ class CodexAgentRuntime:
         return await self._parse(
             CaptionCandidateSet,
             "captions-v4.txt",
+            payload,
+            require_image=True,
+        )
+
+    async def simulate_editorial_decision(
+        self, payload: Mapping[str, Any]
+    ) -> ShadowEditorialRecommendation:
+        return await self._parse(
+            ShadowEditorialRecommendation,
+            "shadow-editorial-v1.txt",
             payload,
             require_image=True,
         )
