@@ -11,6 +11,7 @@ from runway.db.models import (
     CandidateImage,
     GeneratedAssetLineage,
     ImageGenerationRun,
+    IntelligenceAgentRun,
     MediaAsset,
     Post,
     PostMedia,
@@ -59,15 +60,21 @@ async def test_mock_image_generation_preserves_lineage_and_reenters_candidates(
                 GeneratedAssetLineage.generation_run_id == generation.id
             )
         )
+        agent_run = session.get(IntelligenceAgentRun, generation.agent_run_id)
     assert result["paid_usage"] is False
     assert generation.status == "completed"
     assert generation.provider == "mock"
+    assert agent_run is not None
+    assert agent_run.status == "completed"
+    assert agent_run.capability == "image_generation_mock"
     assert search_run is not None
     assert search_run.provider == "generated:mock"
     assert candidate.download_status == "generated"
     assert candidate.rights_status == "creator_owned"
     assert lineage is not None
     assert lineage.media_asset_id == candidate.media_asset_id
+    assert lineage.candidate_image_id == candidate.id
+    assert lineage.review_status == "pending"
     assert len(lineage.content_hash) == 64
 
 

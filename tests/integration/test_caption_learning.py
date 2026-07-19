@@ -14,6 +14,7 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
     CandidateImage,
+    CaptionCandidateRecord,
     CaptionExposure,
     CaptionFeedback,
     FeedbackSignal,
@@ -57,16 +58,28 @@ async def test_grounded_question_first_caption_and_feedback_memory(
 
     captions = await CaptionService(database, settings).generate(candidate_id)
     assert captions.recommended == "Why is Homer so excited?"
-    assert all(
-        caption.endswith((".", "?", "!"))
-        for caption in captions.alternatives
-    )
+    assert all(caption.endswith((".", "?", "!")) for caption in captions.alternatives)
 
     proposals = ProposalService(database, settings)
     generated = await proposals.generate_batch(days=1, start_date=date(2030, 3, 5))
     proposal_id = int(generated["proposal_ids"][0])
     selected = proposals.select_alternative(proposal_id, 0)
     assert selected["status"] == "needs_review"
+    with database.session() as session:
+        selected_pair_count = len(
+            session.scalars(
+                select(PairwisePreference).where(PairwisePreference.proposal_id == proposal_id)
+            ).all()
+        )
+    approved = proposals.approve(proposal_id)
+    assert approved["status"] == "approved"
+    with database.session() as session:
+        accepted_pair_count = len(
+            session.scalars(
+                select(PairwisePreference).where(PairwisePreference.proposal_id == proposal_id)
+            ).all()
+        )
+    assert accepted_pair_count == selected_pair_count
     edited = proposals.edit_caption(
         proposal_id,
         "What has Homer so excited?",
@@ -125,27 +138,49 @@ async def test_grounded_question_first_caption_and_feedback_memory(
             select(CaptionExposure).where(CaptionExposure.proposal_id == proposal_id)
         )
         pairwise = session.scalars(
-            select(PairwisePreference).where(
-                PairwisePreference.proposal_id == proposal_id
-            )
+            select(PairwisePreference).where(PairwisePreference.proposal_id == proposal_id)
         ).all()
         feedback_targets = set(
             session.scalars(
-                select(FeedbackSignal.target).where(
-                    FeedbackSignal.proposal_id == proposal_id
-                )
+                select(FeedbackSignal.target).where(FeedbackSignal.proposal_id == proposal_id)
             )
         )
-    assert len(rows) == 4
+        human_edits = session.scalars(
+            select(CaptionCandidateRecord).where(
+                CaptionCandidateRecord.caption_slate_id == exposure.caption_slate_id,
+                CaptionCandidateRecord.origin == "human_edit",
+            )
+        ).all()
+    assert len(rows) == 5
     assert {row.verdict for row in rows} == {
         "selected",
+        "accepted",
         "edited",
         "preferred",
         "rejected",
     }
     assert exposure is not None
     assert exposure.decision_type == "edited"
-    assert {"selected", "human_edit"} <= {
-        row.preference_source for row in pairwise
-    }
+    assert {"selected", "human_edit"} <= {row.preference_source for row in pairwise}
+    assert len(human_edits) == 1
+    assert human_edits[0].text == "What has Homer so excited?"
+    assert human_edits[0].parent_candidate_id is not None
+    assert human_edits[0].source_proposal_event_id is not None
+    assert human_edits[0].feature_snapshot_hash
+    assert human_edits[0].representation_record_id is not None
+    verifier_result = json.loads(human_edits[0].verifier_result_json)
+    assert verifier_result["passed"] is True
+    assert human_edits[0].verifier_version == "caption-verifier-v1"
+    assert all(row.idempotency_key for row in pairwise)
+    assert all(row.source_proposal_event_id for row in pairwise)
+    assert all(row.feature_snapshot_hash for row in pairwise)
     assert feedback_targets == {"caption", "image", "pairing"}
+    first_reconciliation = service.reconcile_legacy()
+    second_reconciliation = service.reconcile_legacy()
+    assert first_reconciliation["created"] == 0
+    assert second_reconciliation["created"] == 0
+    assert first_reconciliation["canonical_signals"] > 0
+    assert (
+        second_reconciliation["canonical_signals"]
+        == first_reconciliation["canonical_signals"]
+    )

@@ -62,6 +62,18 @@ intelligence_app = typer.Typer(help="Evaluate and inspect the canonical intellig
 embeddings_app = typer.Typer(help="Inspect or backfill versioned local representations.")
 retrieval_app = typer.Typer(help="Inspect persisted hybrid-retrieval evidence.")
 image_app = typer.Typer(help="Operate the safe image-generation provider boundary.")
+database_app = typer.Typer(help="Inspect and verify the canonical database contract.")
+representations_app = typer.Typer(
+    help="Plan, backfill, validate, activate, and roll back representation sets."
+)
+annotations_app = typer.Typer(help="Plan and checkpoint immutable annotation refreshes.")
+preference_app = typer.Typer(
+    help="Build, train, inspect, activate, and roll back preference models."
+)
+feedback_app = typer.Typer(help="Reconcile and verify canonical feedback signals.")
+runs_app = typer.Typer(help="Inspect persisted intelligence-agent runs.")
+study_app = typer.Typer(help="Operate preregistered blind creator studies.")
+active_learning_app = typer.Typer(help="Select and export high-information creator-label queues.")
 
 app.add_typer(capture_app, name="capture")
 app.add_typer(catalog_app, name="catalog")
@@ -76,6 +88,14 @@ app.add_typer(intelligence_app, name="intelligence")
 app.add_typer(embeddings_app, name="embeddings")
 app.add_typer(retrieval_app, name="retrieval")
 app.add_typer(image_app, name="images")
+app.add_typer(database_app, name="database")
+intelligence_app.add_typer(representations_app, name="representations")
+intelligence_app.add_typer(annotations_app, name="annotations")
+intelligence_app.add_typer(preference_app, name="preference")
+intelligence_app.add_typer(feedback_app, name="feedback")
+intelligence_app.add_typer(runs_app, name="runs")
+intelligence_app.add_typer(study_app, name="study")
+intelligence_app.add_typer(active_learning_app, name="active-learning")
 
 
 @app.callback()
@@ -95,11 +115,14 @@ def initialize() -> None:
 
 
 def _intelligence_root() -> Path:
-    return (
-        get_settings().project_root
-        / "benchmarks"
-        / "intelligence"
-    )
+    return get_settings().project_root / "benchmarks" / "intelligence"
+
+
+def _result_integer(result: dict[str, object], key: str) -> int:
+    value = result.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeError(f"intelligence operation returned invalid {key!r}")
+    return value
 
 
 def _load_json(path: Path) -> dict[str, object]:
@@ -107,6 +130,793 @@ def _load_json(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise typer.BadParameter(f"{path} does not contain a JSON object")
     return value
+
+
+def _load_json_list_or_field(
+    path: Path,
+    *,
+    field: str,
+) -> list[object]:
+    value: object = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(value, dict):
+        value = value.get(field)
+    if not isinstance(value, list):
+        raise typer.BadParameter(f"{path} must contain a JSON list or an object with {field!r}")
+    return value
+
+
+@database_app.command("schema-status")
+def database_schema_status() -> None:
+    """Report the current migration and deterministic schema fingerprint."""
+    from runway.db.schema_contract import schema_snapshot
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    observed = schema_snapshot(database.engine)
+    typer.echo(
+        json.dumps(
+            {
+                "database": str(settings.database_path),
+                "migration": observed["migration"],
+                "fingerprint": observed["fingerprint"],
+                "table_count": len(observed["contract"]["tables"]),  # type: ignore[index]
+            },
+            indent=2,
+            default=str,
+        )
+    )
+
+
+@database_app.command("schema-verify")
+def database_schema_verify() -> None:
+    """Compare the live schema to the committed immutable contract."""
+    from runway.db.schema_contract import (
+        compare_schema_snapshots,
+        load_schema_snapshot,
+        schema_snapshot,
+    )
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    expected = load_schema_snapshot(
+        settings.project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
+    )
+    observed = schema_snapshot(database.engine)
+    result = compare_schema_snapshots(expected, observed)
+    typer.echo(json.dumps(result, indent=2, default=str))
+    if not result["matches"]:
+        raise typer.Exit(code=1)
+
+
+@database_app.command("intelligence-doctor")
+def database_intelligence_doctor(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON.",
+    ),
+    verify_media_files: bool = typer.Option(
+        True,
+        "--verify-media-files/--skip-media-files",
+        help="Hash active representation source files.",
+    ),
+) -> None:
+    """Audit schema, provenance, representations, learning, and safety state."""
+    from runway.intelligence.doctor import IntelligenceDoctor
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    report = IntelligenceDoctor(
+        database,
+        settings,
+        verify_media_files=verify_media_files,
+    ).run()
+    typer.echo(
+        json.dumps(report.as_dict(), indent=2, default=str) if json_output else report.human_text()
+    )
+    if report.critical_count:
+        raise typer.Exit(code=1)
+
+
+@representations_app.command("status")
+def representation_status(
+    set_id: int | None = typer.Option(None, min=1),
+) -> None:
+    """Show exact set coverage and active resolution state."""
+    from runway.intelligence.neural_providers import configured_provider_registry
+    from runway.intelligence.representation_sets import RepresentationSetService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    service = RepresentationSetService(
+        database,
+        settings,
+        configured_provider_registry(settings),
+    )
+    result: object = service.status(set_id) if set_id is not None else service.list_sets()
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@representations_app.command("plan")
+def representation_plan(
+    modality: str = typer.Option(
+        ...,
+        help="text, image, or multimodal",
+    ),
+    provider: str = typer.Option("runway-local"),
+) -> None:
+    """Create an immutable, deterministic historical representation plan."""
+    from runway.intelligence.neural_providers import configured_provider_registry
+    from runway.intelligence.representation_sets import RepresentationSetService
+
+    if modality not in {"text", "image", "multimodal"}:
+        raise typer.BadParameter("modality must be text, image, or multimodal")
+    settings = get_settings()
+    database = initialize_database(settings)
+    try:
+        result = RepresentationSetService(
+            database,
+            settings,
+            configured_provider_registry(settings),
+        ).plan_history(
+            modality,  # type: ignore[arg-type]
+            provider_name=provider,
+        )
+    except (LookupError, ValueError, RuntimeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@representations_app.command("backfill")
+def representation_backfill(
+    set_id: int = typer.Option(..., min=1),
+    batch_size: int = typer.Option(100, min=1, max=10000),
+    until_complete: bool = typer.Option(
+        False,
+        "--until-complete",
+        help="Run bounded batches until no pending item remains.",
+    ),
+) -> None:
+    """Backfill one resumable representation set without activating it."""
+    from runway.intelligence.neural_providers import configured_provider_registry
+    from runway.intelligence.representation_sets import RepresentationSetService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    service = RepresentationSetService(
+        database,
+        settings,
+        configured_provider_registry(settings),
+    )
+    result = service.backfill(set_id, batch_size=batch_size)
+    while (
+        until_complete
+        and _result_integer(result, "complete")
+        < _result_integer(result, "expected")
+        and _result_integer(result, "batch_attempted") > 0
+    ):
+        result = service.backfill(set_id, batch_size=batch_size)
+    typer.echo(json.dumps(result, indent=2, default=str))
+    if _result_integer(result, "failed"):
+        raise typer.Exit(code=1)
+
+
+@representations_app.command("verify")
+def representation_verify(
+    set_id: int = typer.Option(..., min=1),
+) -> None:
+    """Validate exact coverage, hashes, dimensions, and provider identity."""
+    from runway.intelligence.neural_providers import configured_provider_registry
+    from runway.intelligence.representation_sets import RepresentationSetService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = RepresentationSetService(
+        database,
+        settings,
+        configured_provider_registry(settings),
+    ).validate(set_id)
+    typer.echo(json.dumps(result, indent=2, default=str))
+    if not result["valid"]:
+        raise typer.Exit(code=1)
+
+
+@representations_app.command("activate")
+def representation_activate(
+    set_id: int = typer.Option(..., min=1),
+    reason: str = typer.Option(..., min=3),
+    gate_results: Path = typer.Option(
+        ...,
+        exists=True,
+        dir_okay=False,
+        help="JSON object of explicit evaluation gates; every value must be true.",
+    ),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Atomically activate a validated set after explicit evaluation gates."""
+    from runway.intelligence.neural_providers import configured_provider_registry
+    from runway.intelligence.representation_sets import RepresentationSetService
+
+    gates = _load_json(gate_results)
+    if not gates or not all(value is True for value in gates.values()):
+        raise typer.BadParameter("every supplied activation gate must be true")
+    if not yes and not typer.confirm(
+        f"Activate representation set {set_id} and supersede its current set?"
+    ):
+        raise typer.Abort()
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = RepresentationSetService(
+        database,
+        settings,
+        configured_provider_registry(settings),
+    ).activate(set_id, reason=reason, gate_results=gates)
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@representations_app.command("rollback")
+def representation_rollback(
+    set_id: int = typer.Option(..., min=1),
+    to_set_id: int | None = typer.Option(None, min=1),
+    reason: str = typer.Option(..., min=3),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Restore a prior complete representation set without deleting evidence."""
+    from runway.intelligence.neural_providers import configured_provider_registry
+    from runway.intelligence.representation_sets import RepresentationSetService
+
+    if not yes and not typer.confirm(f"Roll back active representation set {set_id}?"):
+        raise typer.Abort()
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = RepresentationSetService(
+        database,
+        settings,
+        configured_provider_registry(settings),
+    ).rollback(set_id, to_set_id=to_set_id, reason=reason)
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@annotations_app.command("status")
+def annotation_refresh_status(
+    run_id: int | None = typer.Option(None, min=1),
+) -> None:
+    """Show annotation-refresh checkpoint and coverage state."""
+    from runway.db.models import AnnotationRefreshRun
+    from runway.db.repositories import get_channel
+    from runway.intelligence.annotation_refresh import AnnotationRefreshService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    service = AnnotationRefreshService(database, settings)
+    if run_id is not None:
+        result: object = service.status(run_id)
+    else:
+        with database.session() as session:
+            channel = get_channel(session, settings.channel_handle)
+            ids = list(
+                session.scalars(
+                    select(AnnotationRefreshRun.id)
+                    .where(AnnotationRefreshRun.channel_id == channel.id)
+                    .order_by(AnnotationRefreshRun.id.desc())
+                )
+            )
+        result = [service.status(value) for value in ids]
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@annotations_app.command("plan")
+def annotation_refresh_plan(
+    annotation_version: str = typer.Option(..., min=3),
+    prompt_version: str = typer.Option(..., min=3),
+) -> None:
+    """Plan an immutable annotation refresh without making model calls."""
+    from runway.intelligence.annotation_refresh import AnnotationRefreshService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = AnnotationRefreshService(database, settings).plan(
+        annotation_version=annotation_version,
+        prompt_version=prompt_version,
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@annotations_app.command("backfill")
+def annotation_refresh_backfill(
+    run_id: int = typer.Option(..., min=1),
+    batch_size: int = typer.Option(5, min=1, max=100),
+    allow_model_calls: bool = typer.Option(
+        False,
+        "--allow-model-calls",
+        help="Explicitly authorize configured non-mock allowance use.",
+    ),
+) -> None:
+    """Run one bounded annotation-refresh batch; real model use is gated."""
+    from runway.intelligence.annotation_refresh import AnnotationRefreshService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = asyncio.run(
+        AnnotationRefreshService(database, settings).run_batch(
+            run_id,
+            batch_size=batch_size,
+            allow_model_calls=allow_model_calls,
+        )
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@annotations_app.command("verify")
+def annotation_refresh_verify(
+    run_id: int = typer.Option(..., min=1),
+) -> None:
+    """Verify annotation-refresh coverage without replacing older versions."""
+    from runway.intelligence.annotation_refresh import AnnotationRefreshService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = AnnotationRefreshService(database, settings).validate(run_id)
+    typer.echo(json.dumps(result, indent=2, default=str))
+    if not result["valid"]:
+        raise typer.Exit(code=1)
+
+
+@preference_app.command("status")
+def preference_status() -> None:
+    """List persisted target-separated datasets and model versions."""
+    from runway.db.models import PreferenceDataset, PreferenceModelVersion
+    from runway.db.repositories import get_channel
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    with database.session() as session:
+        channel = get_channel(session, settings.channel_handle)
+        datasets = session.scalars(
+            select(PreferenceDataset)
+            .where(PreferenceDataset.channel_id == channel.id)
+            .order_by(PreferenceDataset.created_at.desc())
+        ).all()
+        models = session.scalars(
+            select(PreferenceModelVersion)
+            .where(PreferenceModelVersion.channel_id == channel.id)
+            .order_by(PreferenceModelVersion.id.desc())
+        ).all()
+    typer.echo(
+        json.dumps(
+            {
+                "datasets": [
+                    {
+                        "dataset_id": row.dataset_id,
+                        "target": row.target,
+                        "status": row.status,
+                        "row_count": row.row_count,
+                        "content_hash": row.content_hash,
+                    }
+                    for row in datasets
+                ],
+                "models": [
+                    {
+                        "model_version_id": row.id,
+                        "target": row.target,
+                        "status": row.status,
+                        "active": row.active,
+                        "dataset_id": row.dataset_id,
+                        "label_count": row.label_count,
+                        "artifact_hash": row.artifact_hash,
+                    }
+                    for row in models
+                ],
+            },
+            indent=2,
+        )
+    )
+
+
+@preference_app.command("dataset")
+def preference_dataset(
+    target: str = typer.Option(..., help="caption, image, or pairing"),
+    seed: int = typer.Option(20260718),
+) -> None:
+    """Freeze a reproducible, group-protected preference dataset."""
+    from runway.captions.preference_models import PreferenceDatasetService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    try:
+        result = PreferenceDatasetService(database, settings).build(
+            target,
+            seed=seed,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@preference_app.command("train")
+def preference_train(
+    target: str = typer.Option(..., help="caption, image, or pairing"),
+    dataset_id: str | None = typer.Option(None),
+    seed: int = typer.Option(20260718),
+    minimum_labels: int | None = typer.Option(None, min=1),
+) -> None:
+    """Train and persist a deterministic pairwise model; never activate it."""
+    from runway.captions.preference_models import (
+        InsufficientPreferenceData,
+        PreferenceModelService,
+    )
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    try:
+        result = PreferenceModelService(database, settings).train(
+            target,
+            dataset_id=dataset_id,
+            seed=seed,
+            minimum_label_count=minimum_labels,
+        )
+    except InsufficientPreferenceData as exc:
+        typer.echo(json.dumps({"status": "insufficient_data", "error": str(exc)}, indent=2))
+        raise typer.Exit(code=2) from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@preference_app.command("evaluate")
+def preference_evaluate(
+    model_id: int = typer.Option(..., min=1),
+) -> None:
+    """Inspect persisted train/validation/test and calibration metrics."""
+    from runway.captions.preference_models import PreferenceModelService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = PreferenceModelService(database, settings).inspect(model_id)
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@preference_app.command("activate")
+def preference_activate(
+    model_id: int = typer.Option(..., min=1),
+    reason: str = typer.Option(..., min=3),
+    gate_results: Path = typer.Option(..., exists=True, dir_okay=False),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Atomically activate a qualified model after explicit hard gates."""
+    from runway.captions.preference_models import PreferenceModelService
+
+    gates = _load_json(gate_results)
+    if not gates or not all(value is True for value in gates.values()):
+        raise typer.BadParameter("every supplied activation gate must be true")
+    if not yes and not typer.confirm(f"Activate preference model {model_id}?"):
+        raise typer.Abort()
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = PreferenceModelService(database, settings).activate(
+        model_id,
+        reason=reason,
+        gate_results={key: bool(value) for key, value in gates.items()},
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@preference_app.command("rollback")
+def preference_rollback(
+    model_id: int = typer.Option(..., min=1),
+    reason: str = typer.Option(..., min=3),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Restore the prior validated model without deleting the challenger."""
+    from runway.captions.preference_models import PreferenceModelService
+
+    if not yes and not typer.confirm(f"Roll back preference model {model_id}?"):
+        raise typer.Abort()
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = PreferenceModelService(database, settings).rollback(
+        model_id,
+        reason=reason,
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@feedback_app.command("status")
+def intelligence_feedback_status() -> None:
+    """Report legacy and normalized target-separated feedback counts."""
+    from runway.db.models import CaptionFeedback, FeedbackSignal, Proposal
+    from runway.db.repositories import get_channel
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    with database.session() as session:
+        channel = get_channel(session, settings.channel_handle)
+        legacy = int(
+            session.scalar(
+                select(func.count(CaptionFeedback.id))
+                .join(Proposal, Proposal.id == CaptionFeedback.proposal_id)
+                .where(Proposal.channel_id == channel.id)
+            )
+            or 0
+        )
+        targets = {
+            str(target): int(count)
+            for target, count in session.execute(
+                select(FeedbackSignal.target, func.count(FeedbackSignal.id))
+                .where(FeedbackSignal.channel_id == channel.id)
+                .group_by(FeedbackSignal.target)
+            )
+        }
+    typer.echo(json.dumps({"legacy": legacy, "normalized_by_target": targets}, indent=2))
+
+
+@feedback_app.command("reconcile")
+def intelligence_feedback_reconcile() -> None:
+    """Idempotently derive canonical signals from preserved legacy feedback."""
+    from runway.captions.feedback import CaptionFeedbackService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = CaptionFeedbackService(database, settings).reconcile_legacy()
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@feedback_app.command("verify")
+def intelligence_feedback_verify() -> None:
+    """Run the doctor and return only canonical-feedback findings."""
+    from runway.intelligence.doctor import IntelligenceDoctor
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    report = IntelligenceDoctor(
+        database,
+        settings,
+        verify_media_files=False,
+    ).run()
+    findings = [item.as_dict() for item in report.findings if item.code.startswith("feedback.")]
+    result = {
+        "status": (
+            "failed" if any(item["severity"] == "critical" for item in findings) else "passed"
+        ),
+        "findings": findings,
+    }
+    typer.echo(json.dumps(result, indent=2, default=str))
+    if result["status"] == "failed":
+        raise typer.Exit(code=1)
+
+
+@runs_app.command("list")
+def intelligence_runs_list(
+    limit: int = typer.Option(50, min=1, max=1000),
+) -> None:
+    """List recent typed agent runs without exposing secret inputs."""
+    from runway.db.models import IntelligenceAgentRun
+    from runway.db.repositories import get_channel
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    with database.session() as session:
+        channel = get_channel(session, settings.channel_handle)
+        rows = session.scalars(
+            select(IntelligenceAgentRun)
+            .where(IntelligenceAgentRun.channel_id == channel.id)
+            .order_by(IntelligenceAgentRun.id.desc())
+            .limit(limit)
+        ).all()
+    typer.echo(
+        json.dumps(
+            [
+                {
+                    "id": row.id,
+                    "run_key": row.run_key,
+                    "capability": row.capability,
+                    "provider": row.provider,
+                    "model": row.model,
+                    "status": row.status,
+                    "attempt_count": row.attempt_count,
+                    "started_at": row.started_at,
+                    "completed_at": row.completed_at,
+                }
+                for row in rows
+            ],
+            indent=2,
+            default=str,
+        )
+    )
+
+
+@runs_app.command("show")
+def intelligence_runs_show(
+    run_id: int = typer.Option(..., min=1),
+) -> None:
+    """Inspect typed steps, budgets, usage, errors, and artifact links."""
+    from runway.intelligence.agent_harness import IntelligenceAgentHarness
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(
+        json.dumps(
+            IntelligenceAgentHarness(database).inspect(run_id),
+            indent=2,
+            default=str,
+        )
+    )
+
+
+@study_app.command("plan")
+def intelligence_study_plan(
+    cases: Path = typer.Option(..., exists=True, dir_okay=False),
+    baseline_identity: str = typer.Option(..., min=1),
+    challenger_identity: str = typer.Option(..., min=1),
+    target: str = typer.Option("caption"),
+    seed: int = typer.Option(20260718),
+) -> None:
+    """Preregister and persist blinded cases from an explicit JSON plan."""
+    from runway.intelligence.studies import BlindStudyCasePlan, BlindStudyService
+
+    if target not in {"caption", "image", "pairing"}:
+        raise typer.BadParameter("target must be caption, image, or pairing")
+    parsed = [
+        BlindStudyCasePlan.model_validate(value)
+        for value in _load_json_list_or_field(cases, field="cases")
+    ]
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = BlindStudyService(database, settings).plan(
+        parsed,
+        baseline_identity=baseline_identity,
+        challenger_identity=challenger_identity,
+        target=target,  # type: ignore[arg-type]
+        seed=seed,
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@study_app.command("export")
+def intelligence_study_export(
+    study_id: int = typer.Option(..., min=1),
+    output: Path = typer.Option(...),
+    minimum_cases: int = typer.Option(50, min=1),
+) -> None:
+    """Export a model-origin-blind creator review artifact."""
+    from runway.intelligence.studies import BlindStudyService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    destination = BlindStudyService(database, settings).export(
+        study_id,
+        output,
+        minimum_cases=minimum_cases,
+    )
+    typer.echo(str(destination))
+
+
+@study_app.command("import")
+def intelligence_study_import(
+    study_id: int = typer.Option(..., min=1),
+    review: Path = typer.Option(..., exists=True, dir_okay=False),
+    review_session: str = typer.Option(..., min=1),
+    reviewer_label: str = typer.Option("local-creator", min=1),
+) -> None:
+    """Import genuine creator responses; duplicate labels are rejected."""
+    from runway.intelligence.studies import (
+        BlindStudyImportResponse,
+        BlindStudyService,
+    )
+
+    parsed = [
+        BlindStudyImportResponse.model_validate(value)
+        for value in _load_json_list_or_field(review, field="responses")
+    ]
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = BlindStudyService(database, settings).import_responses(
+        study_id,
+        parsed,
+        review_session=review_session,
+        reviewer_label=reviewer_label,
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@study_app.command("status")
+def intelligence_study_status(
+    study_id: int = typer.Option(..., min=1),
+) -> None:
+    """Show case, response, split, and export readiness."""
+    from runway.intelligence.studies import BlindStudyService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(
+        json.dumps(
+            BlindStudyService(database, settings).status(study_id),
+            indent=2,
+            default=str,
+        )
+    )
+
+
+@study_app.command("report")
+def intelligence_study_report(
+    study_id: int = typer.Option(..., min=1),
+) -> None:
+    """Report descriptive human outcomes without fabricating significance."""
+    from runway.intelligence.studies import BlindStudyService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(
+        json.dumps(
+            BlindStudyService(database, settings).report(study_id),
+            indent=2,
+            default=str,
+        )
+    )
+
+
+@active_learning_app.command("select")
+def intelligence_active_learning_select(
+    cases: Path | None = typer.Option(None, exists=True, dir_okay=False),
+    target: str = typer.Option("caption"),
+    limit: int = typer.Option(20, min=1, max=1000),
+    seed: int = typer.Option(20260718),
+) -> None:
+    """Select uncertain, disagreeing, diverse cases and persist the queue."""
+    from runway.intelligence.studies import (
+        ActiveLearningCase,
+        ActiveLearningService,
+    )
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    service = ActiveLearningService(database, settings)
+    if cases is None:
+        if target != "caption":
+            raise typer.BadParameter(
+                "automatic selection currently supports caption slates; "
+                "provide --cases for another target"
+            )
+        result = service.select_caption_slates(limit=limit, seed=seed)
+    else:
+        parsed = [
+            ActiveLearningCase.model_validate(value)
+            for value in _load_json_list_or_field(cases, field="cases")
+        ]
+        result = service.select(
+            parsed,
+            target=target,  # type: ignore[arg-type]
+            limit=limit,
+            seed=seed,
+        )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@active_learning_app.command("export")
+def intelligence_active_learning_export(
+    batch_id: int = typer.Option(..., min=1),
+    output: Path = typer.Option(...),
+) -> None:
+    """Export a persisted active-learning queue for human labeling."""
+    from runway.intelligence.studies import ActiveLearningService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(str(ActiveLearningService(database, settings).export(batch_id, output)))
+
+
+@intelligence_app.command("providers")
+def intelligence_providers() -> None:
+    """Report deterministic and optional provider readiness without loading weights."""
+    from runway.intelligence.neural_providers import provider_diagnostics
+
+    typer.echo(json.dumps(provider_diagnostics(get_settings()), indent=2, default=str))
+
+
+@intelligence_app.command("provider-status")
+def intelligence_provider_status() -> None:
+    """Alias for the explicit, no-download provider diagnostic."""
+    intelligence_providers()
 
 
 @intelligence_app.command("baseline")
@@ -159,9 +969,7 @@ def intelligence_evaluate(
         if split == "locked_holdout"
         else ("tuning" if split == "tuning" else "development")
     )
-    destination = output or (
-        _intelligence_root() / "evaluations" / f"canonical-{split}"
-    )
+    destination = output or (_intelligence_root() / "evaluations" / f"canonical-{split}")
     result = asyncio.run(
         run_candidate_evaluation(
             splits={split},  # type: ignore[arg-type]
@@ -208,15 +1016,12 @@ def intelligence_ablate(
         raise typer.BadParameter("tuning winner has no configuration")
     weights = configuration.get("weights")
     if not isinstance(weights, dict) or not all(
-        isinstance(key, str) and isinstance(value, (int, float))
-        for key, value in weights.items()
+        isinstance(key, str) and isinstance(value, (int, float)) for key, value in weights.items()
     ):
         raise typer.BadParameter("tuning winner weights are malformed")
     result = ExperimentRunner().ablate(
         _load_json(candidate),
-        winning_weights={
-            str(key): float(value) for key, value in weights.items()
-        },
+        winning_weights={str(key): float(value) for key, value in weights.items()},
     )
     typer.echo(json.dumps(result, indent=2, default=str))
 
@@ -236,9 +1041,7 @@ def intelligence_holdout(
     if not isinstance(weights, dict):
         raise typer.BadParameter("tuning winner weights are malformed")
     numeric_weights = {
-        str(key): float(value)
-        for key, value in weights.items()
-        if isinstance(value, (int, float))
+        str(key): float(value) for key, value in weights.items() if isinstance(value, (int, float))
     }
     if len(numeric_weights) != len(weights):
         raise typer.BadParameter("tuning winner weights are malformed")
@@ -290,11 +1093,7 @@ def intelligence_inspect_case(
     if not isinstance(cases, list):
         raise typer.BadParameter("artifact has no cases")
     match = next(
-        (
-            row
-            for row in cases
-            if isinstance(row, dict) and row.get("case_id") == case_id
-        ),
+        (row for row in cases if isinstance(row, dict) and row.get("case_id") == case_id),
         None,
     )
     if match is None:
@@ -322,10 +1121,7 @@ def intelligence_import_blind_review(
     responses = payload.get("responses")
     if not isinstance(responses, list):
         raise typer.BadParameter("review must contain a responses list")
-    labels = {
-        row.case_id: row
-        for row in DatasetRepository().canonical().blind_preferences
-    }
+    labels = {row.case_id: row for row in DatasetRepository().canonical().blind_preferences}
     scored = []
     for response in responses:
         if not isinstance(response, dict):
@@ -340,13 +1136,10 @@ def intelligence_import_blind_review(
         "response_count": len(scored),
         "responses": scored,
         "note": (
-            "Creator choices are stored as primary labels; "
-            "automated labels were not substituted."
+            "Creator choices are stored as primary labels; automated labels were not substituted."
         ),
     }
-    destination = output or (
-        _intelligence_root() / "experiments" / "blind-review-import.json"
-    )
+    destination = output or (_intelligence_root() / "experiments" / "blind-review-import.json")
     write_json(destination, result)
     typer.echo(json.dumps(result, indent=2))
 
@@ -371,18 +1164,13 @@ def intelligence_active_learning(
             [
                 float(row.get("final_score", 0.0))
                 for row in candidates
-                if isinstance(row, dict)
-                and isinstance(row.get("final_score"), (int, float))
+                if isinstance(row, dict) and isinstance(row.get("final_score"), (int, float))
             ],
             reverse=True,
         )
         gap = scores[0] - scores[1] if len(scores) > 1 else 1.0
         grounding = case.get("grounding")
-        unsupported = (
-            grounding.get("unsupported_claims", [])
-            if isinstance(grounding, dict)
-            else []
-        )
+        unsupported = grounding.get("unsupported_claims", []) if isinstance(grounding, dict) else []
         priority = (
             (1.0 - min(1.0, gap))
             + (1.0 if case.get("abstained") else 0.0)
@@ -399,9 +1187,7 @@ def intelligence_active_learning(
         )
     rows.sort(
         key=lambda row: (
-            -row["priority"]
-            if isinstance(row["priority"], (int, float))
-            else 0.0,
+            -row["priority"] if isinstance(row["priority"], (int, float)) else 0.0,
             str(row["case_id"]),
         )
     )
@@ -508,9 +1294,7 @@ def retrieval_inspect(run_id: int = typer.Option(..., min=1)) -> None:
 @image_app.command("providers")
 def image_providers() -> None:
     """List explicit image providers and paid/local capability flags."""
-    typer.echo(
-        json.dumps(ImageGenerationProviderRegistry().status(), indent=2)
-    )
+    typer.echo(json.dumps(ImageGenerationProviderRegistry().status(), indent=2))
 
 
 @image_app.command("mock")
@@ -868,8 +1652,7 @@ def capture_youtube_posts(
     """Capture Community posts through fixtures or an explicit visible browser."""
     settings = get_settings()
     requested_channel_url = (
-        channel_url
-        or f"https://www.youtube.com/@{settings.channel_handle}/posts"
+        channel_url or f"https://www.youtube.com/@{settings.channel_handle}/posts"
     )
     database = initialize_database(settings)
     service = CaptureService(database, settings)
@@ -890,9 +1673,7 @@ def capture_youtube_posts(
     typer.echo(f"Dedicated browser profile: {settings.browser_profile_dir}")
     typer.echo("RunWay never requests or stores your Google password.")
     typer.echo("This operation is read-only and will not create, edit, delete, or publish.")
-    typer.echo(
-        f"Requested channel: @{settings.channel_handle} — {requested_channel_url}"
-    )
+    typer.echo(f"Requested channel: @{settings.channel_handle} — {requested_channel_url}")
     typer.echo("Press Ctrl+C once to pause safely; rerun with --resume to continue.")
     if not yes and not typer.confirm("Open the visible browser and begin read-only capture?"):
         raise typer.Abort()

@@ -6,7 +6,8 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
+from sqlalchemy.orm import Session
 
 from runway.captions.taxonomy import analyze_caption
 from runway.config import Settings
@@ -16,6 +17,7 @@ from runway.db.models import (
     CaptionFeedback,
     FeedbackSignal,
     Proposal,
+    ProposalEvent,
     SearchRun,
 )
 from runway.db.repositories import audit, get_channel
@@ -59,9 +61,12 @@ ALLOWED_REASON_CODES = {
     "source_concern",
     "image_not_a_fit",
     "human_edit",
+    "human_lineup_edit",
     "selected_alternative",
     "approved",
 }
+
+
 def caption_structure(caption: str) -> str:
     return analyze_caption(caption).structure
 
@@ -84,6 +89,7 @@ class CaptionFeedbackService:
         image_verdict: str | None = None,
         pairing_verdict: str | None = None,
         note: str | None = None,
+        source_event_id: int | None = None,
     ) -> dict[str, object]:
         normalized_verdict = verdict.strip().lower()
         if normalized_verdict not in ALLOWED_VERDICTS:
@@ -181,65 +187,177 @@ class CaptionFeedbackService:
                         "pairing_verdict": pairing_verdict,
                     },
                 )
-                session.add(
-                    FeedbackSignal(
-                        channel_id=proposal.channel_id,
-                        proposal_id=proposal.id,
-                        candidate_image_id=proposal.candidate_image_id,
-                        target="caption",
-                        verdict=normalized_verdict,
-                        value_text=preferred or source,
-                        reason_codes_json=reasons_json,
-                        note=clean_note,
-                        source="creator",
-                        policy_version=policy.version,
-                    )
-                )
-                if image_verdict is not None:
-                    session.add(
-                        FeedbackSignal(
-                            channel_id=proposal.channel_id,
-                            proposal_id=proposal.id,
-                            candidate_image_id=proposal.candidate_image_id,
-                            target="image",
-                            verdict=self._normalized_target_verdict(image_verdict),
-                            value_text=None,
-                            reason_codes_json=reasons_json,
-                            note=clean_note,
-                            source="creator",
-                            policy_version=policy.version,
-                        )
-                    )
-                inferred_pairing = pairing_verdict
-                if inferred_pairing is None and image_verdict is not None:
-                    inferred_pairing = (
-                        "good"
-                        if image_verdict == "good"
-                        and normalized_verdict in POSITIVE_VERDICTS
-                        else (
-                            "bad"
-                            if image_verdict == "bad"
-                            or normalized_verdict in NEGATIVE_VERDICTS
-                            else "unsure"
-                        )
-                    )
-                if inferred_pairing is not None:
-                    session.add(
-                        FeedbackSignal(
-                            channel_id=proposal.channel_id,
-                            proposal_id=proposal.id,
-                            candidate_image_id=proposal.candidate_image_id,
-                            target="pairing",
-                            verdict=self._normalized_target_verdict(inferred_pairing),
-                            value_text=preferred or source,
-                            reason_codes_json=reasons_json,
-                            note=clean_note,
-                            source="creator",
-                            policy_version=policy.version,
-                        )
-                    )
+            self._ensure_normalized_signals(
+                session=session,
+                feedback=existing,
+                proposal=proposal,
+                policy_version=policy.version,
+                pairing_verdict=pairing_verdict,
+                source_event_id=source_event_id,
+            )
             feedback_id = existing.id
         return self.detail(feedback_id)
+
+    def reconcile_legacy(self) -> dict[str, int]:
+        """Idempotently enrich or derive canonical signals from legacy rows."""
+        with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
+            channel_id = channel.id
+        policy = ChannelPolicyService(
+            self.database,
+            self.settings,
+        ).ensure_defaults(channel_id)
+        created = 0
+        enriched = 0
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(CaptionFeedback)
+                .join(Proposal, Proposal.id == CaptionFeedback.proposal_id)
+                .where(Proposal.channel_id == channel_id)
+                .order_by(CaptionFeedback.id)
+            ).all()
+            for feedback in rows:
+                proposal = session.get(Proposal, feedback.proposal_id)
+                if proposal is None:
+                    continue
+                result = self._ensure_normalized_signals(
+                    session=session,
+                    feedback=feedback,
+                    proposal=proposal,
+                    policy_version=policy.version,
+                    pairing_verdict=None,
+                    source_event_id=None,
+                )
+                created += result["created"]
+                enriched += result["enriched"]
+            session.flush()
+            canonical_signals = int(
+                session.scalar(
+                    select(func.count(FeedbackSignal.id)).where(
+                        FeedbackSignal.channel_id == channel_id
+                    )
+                )
+                or 0
+            )
+        return {
+            "legacy_rows": len(rows),
+            "created": created,
+            "enriched": enriched,
+            "canonical_signals": canonical_signals,
+        }
+
+    def _ensure_normalized_signals(
+        self,
+        *,
+        session: Session,
+        feedback: CaptionFeedback,
+        proposal: Proposal,
+        policy_version: str,
+        pairing_verdict: str | None,
+        source_event_id: int | None,
+    ) -> dict[str, int]:
+        if source_event_id is not None:
+            source_event = session.get(ProposalEvent, source_event_id)
+            if source_event is None or source_event.proposal_id != proposal.id:
+                raise ValueError("feedback source event does not belong to the proposal")
+        source_event_key = (
+            f"proposal-event:{source_event_id}"
+            if source_event_id is not None
+            else f"caption-feedback:{feedback.id}"
+        )
+        inferred_pairing = pairing_verdict
+        if inferred_pairing is None and feedback.image_verdict is not None:
+            inferred_pairing = (
+                "good"
+                if feedback.image_verdict == "good" and feedback.verdict in POSITIVE_VERDICTS
+                else (
+                    "bad"
+                    if feedback.image_verdict == "bad" or feedback.verdict in NEGATIVE_VERDICTS
+                    else "unsure"
+                )
+            )
+        specifications: list[tuple[str, str, str | None]] = [
+            (
+                "caption",
+                feedback.verdict,
+                feedback.preferred_caption or feedback.generated_caption,
+            )
+        ]
+        if feedback.image_verdict is not None:
+            specifications.append(
+                (
+                    "image",
+                    self._normalized_target_verdict(feedback.image_verdict),
+                    None,
+                )
+            )
+        if inferred_pairing is not None:
+            specifications.append(
+                (
+                    "pairing",
+                    self._normalized_target_verdict(inferred_pairing),
+                    feedback.preferred_caption or feedback.generated_caption,
+                )
+            )
+
+        created = 0
+        enriched = 0
+        for target, verdict, value_text in specifications:
+            idempotency_key = f"feedback-normalization-v1:{feedback.id}:{target}"
+            signal = session.scalar(
+                select(FeedbackSignal)
+                .where(FeedbackSignal.idempotency_key == idempotency_key)
+                .limit(1)
+            )
+            if signal is None:
+                signal = session.scalar(
+                    select(FeedbackSignal)
+                    .where(
+                        FeedbackSignal.channel_id == proposal.channel_id,
+                        FeedbackSignal.proposal_id == proposal.id,
+                        FeedbackSignal.candidate_image_id == proposal.candidate_image_id,
+                        FeedbackSignal.target == target,
+                        FeedbackSignal.verdict == verdict,
+                        FeedbackSignal.value_text == value_text,
+                        FeedbackSignal.reason_codes_json == feedback.reason_codes_json,
+                        FeedbackSignal.note == feedback.note,
+                        FeedbackSignal.source_caption_feedback_id.is_(None),
+                    )
+                    .order_by(FeedbackSignal.id)
+                    .limit(1)
+                )
+                if signal is not None:
+                    signal.source_caption_feedback_id = feedback.id
+                    signal.source_proposal_event_id = source_event_id
+                    signal.source_event_key = source_event_key
+                    signal.derivation_version = "feedback-normalization-v1"
+                    signal.idempotency_key = idempotency_key
+                    enriched += 1
+                    continue
+            if signal is not None:
+                continue
+            session.add(
+                FeedbackSignal(
+                    channel_id=proposal.channel_id,
+                    proposal_id=proposal.id,
+                    candidate_image_id=proposal.candidate_image_id,
+                    target=target,
+                    verdict=verdict,
+                    value_text=value_text,
+                    reason_codes_json=feedback.reason_codes_json,
+                    note=feedback.note,
+                    source="creator",
+                    policy_version=policy_version,
+                    source_proposal_event_id=source_event_id,
+                    source_caption_feedback_id=feedback.id,
+                    source_event_key=source_event_key,
+                    derivation_version="feedback-normalization-v1",
+                    idempotency_key=idempotency_key,
+                    created_at=feedback.created_at,
+                )
+            )
+            created += 1
+        return {"created": created, "enriched": enriched}
 
     def detail(self, feedback_id: int) -> dict[str, object]:
         with self.database.session() as session:
@@ -282,10 +400,12 @@ class CaptionFeedbackService:
             channel_id = search_run.channel_id
             current_topic = self._topic(candidate)
             rows = session.scalars(
-                select(CaptionFeedback)
-                .join(Proposal, Proposal.id == CaptionFeedback.proposal_id)
-                .where(Proposal.channel_id == channel_id)
-                .order_by(desc(CaptionFeedback.created_at), desc(CaptionFeedback.id))
+                select(FeedbackSignal)
+                .where(
+                    FeedbackSignal.channel_id == channel_id,
+                    FeedbackSignal.target == "caption",
+                )
+                .order_by(desc(FeedbackSignal.created_at), desc(FeedbackSignal.id))
                 .limit(200)
             ).all()
             image_signals = session.scalars(
@@ -301,16 +421,27 @@ class CaptionFeedbackService:
                 item.id: item
                 for item in session.scalars(
                     select(CandidateImage).where(
-                        CandidateImage.id.in_({row.candidate_image_id for row in rows})
+                        CandidateImage.id.in_(
+                            {
+                                row.candidate_image_id
+                                for row in rows
+                                if row.candidate_image_id is not None
+                            }
+                        )
                     )
                 ).all()
             }
 
-            scored: list[tuple[float, int, CaptionFeedback]] = []
+            scored: list[tuple[float, int, FeedbackSignal]] = []
             for row in rows:
-                other = feedback_candidates.get(row.candidate_image_id)
+                other = (
+                    feedback_candidates.get(row.candidate_image_id)
+                    if row.candidate_image_id is not None
+                    else None
+                )
                 score = self._topic_relevance(current_topic, self._topic(other) if other else {})
-                score += 0.2 if row.preferred_structure == "open_question" else 0.0
+                structure = caption_structure(row.value_text) if row.value_text else None
+                score += 0.2 if structure == "open_question" else 0.0
                 created = row.created_at
                 if created.tzinfo is None:
                     created = created.replace(tzinfo=UTC)
@@ -324,7 +455,7 @@ class CaptionFeedbackService:
             positive_rows = [
                 row
                 for _score, _row_id, row in sorted(scored, reverse=True)
-                if row.verdict in POSITIVE_VERDICTS and row.preferred_caption
+                if row.verdict in POSITIVE_VERDICTS and row.value_text
             ][:8]
             negative_rows = [
                 row
@@ -333,7 +464,7 @@ class CaptionFeedbackService:
             ][:6]
             all_positive = [row for row in rows if row.verdict in POSITIVE_VERDICTS]
             structure_counts = Counter(
-                row.preferred_structure for row in all_positive if row.preferred_structure
+                caption_structure(row.value_text) for row in all_positive if row.value_text
             )
             reason_counts: Counter[str] = Counter()
             for row in rows:
@@ -355,20 +486,24 @@ class CaptionFeedbackService:
                 },
                 "positive_examples": [
                     {
-                        "feedback_id": row.id,
-                        "generated_caption": row.generated_caption,
-                        "preferred_caption": row.preferred_caption,
-                        "preferred_structure": row.preferred_structure,
+                        "feedback_signal_id": row.id,
+                        "generated_caption": row.value_text,
+                        "preferred_caption": row.value_text,
+                        "preferred_structure": (
+                            caption_structure(row.value_text) if row.value_text else None
+                        ),
                         "reason_codes": json.loads(row.reason_codes_json),
+                        "source_event_key": row.source_event_key,
                     }
                     for row in positive_rows
                 ],
                 "negative_examples": [
                     {
-                        "feedback_id": row.id,
-                        "caption": row.generated_caption,
+                        "feedback_signal_id": row.id,
+                        "caption": row.value_text,
                         "reason_codes": json.loads(row.reason_codes_json),
                         "note": row.note,
+                        "source_event_key": row.source_event_key,
                     }
                     for row in negative_rows
                 ],
@@ -378,12 +513,8 @@ class CaptionFeedbackService:
                     "common_feedback_reasons": reason_counts.most_common(10),
                 },
                 "image_preferences": {
-                    "accepted": sum(
-                        signal.verdict == "accepted" for signal in image_signals
-                    ),
-                    "rejected": sum(
-                        signal.verdict == "rejected" for signal in image_signals
-                    ),
+                    "accepted": sum(signal.verdict == "accepted" for signal in image_signals),
+                    "rejected": sum(signal.verdict == "rejected" for signal in image_signals),
                     "unsure": sum(signal.verdict == "unsure" for signal in image_signals),
                 },
             }

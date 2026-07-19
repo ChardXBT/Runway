@@ -45,7 +45,10 @@ def test_representations_are_idempotent_and_model_versions_coexist(
 
     first = store.persist(result=result, **identity)
     repeated = store.persist(result=result, **identity)
-    upgraded = store.persist(result=replace(result, version="2"), **identity)
+    upgraded = store.persist(
+        result=replace(result, version="fixture-next"),
+        **identity,
+    )
 
     assert repeated.id == first.id
     assert upgraded.id != first.id
@@ -55,6 +58,18 @@ def test_representations_are_idempotent_and_model_versions_coexist(
             session.scalar(select(func.count(RepresentationRecord.id)))
             == 2
         )
+
+
+def test_tokenless_text_still_produces_a_valid_normalized_representation() -> None:
+    provider = DeterministicTextEmbeddingProvider()
+    first = provider.embed_text("🔥🔥", purpose="caption_semantics")
+    second = provider.embed_text("🔥🔥", purpose="caption_semantics")
+    vectors = first.as_array()
+
+    assert first.version == "2"
+    assert first == second
+    assert vectors.shape == (1, provider.dimensions)
+    assert float((vectors[0] ** 2).sum()) == pytest.approx(1.0)
 
 
 def test_provider_registries_never_fall_back_to_unrequested_paid_services() -> None:

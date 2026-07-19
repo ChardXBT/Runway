@@ -17,10 +17,23 @@ from runway.db.models import (
     Post,
     PostMedia,
     RepresentationRecord,
+    RepresentationSet,
     RetrievalEvidenceRecord,
 )
 from runway.intelligence.profile import StyleProfileService
+from runway.intelligence.representation_sets import RepresentationSetService
 from runway.intelligence.retrieval import ReferenceRetrievalQuery, RetrievalService
+
+
+def _complete_representation_set(
+    service: RepresentationSetService,
+    set_id: int,
+) -> None:
+    for _ in range(20):
+        result = service.backfill(set_id, batch_size=20)
+        if result["complete"] == result["expected"]:
+            return
+    raise AssertionError(f"representation set {set_id} did not complete")
 
 
 @pytest.mark.asyncio
@@ -33,9 +46,7 @@ async def test_retrieval_persists_considered_selected_and_multi_image_evidence(
     await StyleProfileService(database, settings).build()
 
     with database.session() as session:
-        multi_image_post = session.scalar(
-            select(Post).where(Post.external_post_id == "qlob-002")
-        )
+        multi_image_post = session.scalar(select(Post).where(Post.external_post_id == "qlob-002"))
         assert multi_image_post is not None
         media_ids = list(
             session.scalars(
@@ -56,9 +67,7 @@ async def test_retrieval_persists_considered_selected_and_multi_image_evidence(
                 RetrievalEvidenceRecord.retrieval_run_id == run_id
             )
         ).all()
-        representation_count = session.scalar(
-            select(func.count(RepresentationRecord.id))
-        )
+        representation_count = session.scalar(select(func.count(RepresentationRecord.id)))
     selected = [row for row in evidence if row.selected]
     considered = [row for row in evidence if row.retrieval_channel != "fusion"]
     assert considered
@@ -66,13 +75,10 @@ async def test_retrieval_persists_considered_selected_and_multi_image_evidence(
     assert len(considered) > len(selected)
     assert {row.channel_id for row in evidence} == {1}
     assert all(row.evidence_role for row in selected)
-    assert sorted(row.selected_rank for row in selected) == list(
-        range(1, len(selected) + 1)
-    )
+    assert sorted(row.selected_rank for row in selected) == list(range(1, len(selected) + 1))
     assert representation_count is not None and representation_count > 0
     assert any(
-        item["post_id"] == multi_image_post.id
-        and item["media_asset_ids"] == media_ids
+        item["post_id"] == multi_image_post.id and item["media_asset_ids"] == media_ids
         for item in context["visual_examples"]  # type: ignore[union-attr]
     )
 
@@ -191,3 +197,45 @@ async def test_channel_data_isolation_blocks_catalog_and_reference_leakage(
                 modification_text="preserve the reaction",
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_retrieval_uses_active_sets_without_historical_recomputation(
+    database: Database,
+    settings: Settings,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    await AnalysisService(database, settings).analyze_history()
+    await StyleProfileService(database, settings).build()
+    lifecycle = RepresentationSetService(database, settings)
+    active_ids: list[int] = []
+    for modality in ("text", "image", "multimodal"):
+        planned = lifecycle.plan_history(modality)  # type: ignore[arg-type]
+        set_id = int(planned["representation_set_id"])
+        _complete_representation_set(lifecycle, set_id)
+        assert lifecycle.validate(set_id)["valid"] is True
+        lifecycle.activate(set_id, reason=f"fixture {modality} baseline")
+        active_ids.append(set_id)
+
+    with database.session() as session:
+        media_id = session.scalar(
+            select(PostMedia.media_asset_id)
+            .join(Post, Post.id == PostMedia.post_id)
+            .where(Post.channel_id == 1)
+            .order_by(PostMedia.post_id, PostMedia.position)
+            .limit(1)
+        )
+        assert media_id is not None
+    service = RetrievalService(database, settings)
+    service.context_for_candidate(media_id)
+    second = service.context_for_candidate(media_id)
+    inspected = service.inspect_run(int(second["retrieval_run_id"]))
+
+    assert inspected["cache_diagnostics"]["recomputations"] == 0
+    assert inspected["cache_diagnostics"]["active_hits"] > 0
+    assert {value["id"] for value in inspected["representation_sets"].values()} == set(active_ids)
+    with database.session() as session:
+        active = session.scalars(
+            select(RepresentationSet).where(RepresentationSet.active.is_(True))
+        ).all()
+    assert {row.id for row in active} == set(active_ids)

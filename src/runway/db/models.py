@@ -435,6 +435,113 @@ class RepresentationRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class RepresentationSet(Base):
+    __tablename__ = "representation_sets"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_id",
+            "scope",
+            "purpose",
+            "plan_hash",
+            name="uq_representation_set_plan",
+        ),
+        Index(
+            "ix_representation_set_resolution",
+            "channel_id",
+            "scope",
+            "purpose",
+            "active",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    scope: Mapped[str] = mapped_column(String(100), index=True)
+    purpose: Mapped[str] = mapped_column(String(80), index=True)
+    modality: Mapped[str] = mapped_column(String(40))
+    provider: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    model_version: Mapped[str] = mapped_column(String(100))
+    configuration_json: Mapped[str] = mapped_column(Text, default="{}")
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    plan_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="planned", index=True)
+    expected_count: Mapped[int] = mapped_column(Integer, default=0)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    stale_count: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    supersedes_set_id: Mapped[int | None] = mapped_column(ForeignKey("representation_sets.id"))
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RepresentationSetItem(Base):
+    __tablename__ = "representation_set_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "representation_set_id",
+            "entity_type",
+            "entity_id",
+            "field",
+            name="uq_representation_set_item",
+        ),
+        Index(
+            "ix_representation_set_item_checkpoint",
+            "representation_set_id",
+            "status",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    representation_set_id: Mapped[int] = mapped_column(
+        ForeignKey("representation_sets.id"), index=True
+    )
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    field: Mapped[str] = mapped_column(String(80))
+    source_content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    source_locator_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    representation_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("representation_records.id"), index=True
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IntelligenceActivation(Base):
+    __tablename__ = "intelligence_activations"
+    __table_args__ = (
+        Index(
+            "ix_intelligence_activation_lookup",
+            "channel_id",
+            "resource_type",
+            "target",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    resource_type: Mapped[str] = mapped_column(String(80), index=True)
+    target: Mapped[str] = mapped_column(String(100), index=True)
+    action: Mapped[str] = mapped_column(String(40), index=True)
+    resource_id: Mapped[str] = mapped_column(String(100))
+    previous_resource_id: Mapped[str | None] = mapped_column(String(100))
+    reason: Mapped[str] = mapped_column(Text)
+    gate_results_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ChannelPolicyRule(Base):
     __tablename__ = "channel_policy_rules"
     __table_args__ = (
@@ -482,6 +589,8 @@ class IntelligenceRetrievalRun(Base):
     retrieval_configuration_json: Mapped[str] = mapped_column(Text)
     configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
     embedding_versions_json: Mapped[str] = mapped_column(Text, default="{}")
+    representation_sets_json: Mapped[str] = mapped_column(Text, default="{}")
+    cache_diagnostics_json: Mapped[str] = mapped_column(Text, default="{}")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(40), index=True)
@@ -548,6 +657,7 @@ class CaptionCandidateRecord(Base):
     __tablename__ = "caption_candidate_records"
     __table_args__ = (
         UniqueConstraint("caption_slate_id", "rank", name="uq_caption_slate_rank"),
+        UniqueConstraint("derivation_key", name="uq_caption_candidate_derivation"),
         Index("ix_caption_candidate_display", "caption_slate_id", "displayed", "display_order"),
     )
 
@@ -586,6 +696,26 @@ class CaptionCandidateRecord(Base):
     edited: Mapped[bool] = mapped_column(Boolean, default=False)
     replacement_text: Mapped[str | None] = mapped_column(Text)
     decision_latency_ms: Mapped[float | None] = mapped_column(Float)
+    origin: Mapped[str] = mapped_column(String(40), default="generated", index=True)
+    parent_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_candidate_records.id"), index=True
+    )
+    created_by: Mapped[str] = mapped_column(String(80), default="generator")
+    source_proposal_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("proposal_events.id"), index=True
+    )
+    derivation_key: Mapped[str | None] = mapped_column(String(128))
+    feature_schema_version: Mapped[str | None] = mapped_column(String(80), index=True)
+    feature_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    feature_snapshot_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    representation_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("representation_records.id")
+    )
+    taxonomy_version: Mapped[str | None] = mapped_column(String(80))
+    verifier_version: Mapped[str | None] = mapped_column(String(80))
+    ranker_model_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("preference_model_versions.id")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -613,6 +743,17 @@ class CaptionExposure(Base):
 
 class PairwisePreference(Base):
     __tablename__ = "pairwise_preferences"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_pairwise_preference_idempotency"),
+        Index(
+            "ix_pairwise_preference_training",
+            "channel_id",
+            "target",
+            "learning_split",
+            "feature_schema_version",
+            "created_at",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
@@ -635,12 +776,39 @@ class PairwisePreference(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     policy_version: Mapped[str | None] = mapped_column(String(64))
     experiment_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    target: Mapped[str] = mapped_column(String(40), default="caption", index=True)
+    source_proposal_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("proposal_events.id"), index=True
+    )
+    source_exposure_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_exposures.id"), index=True
+    )
+    source_event_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    derivation_version: Mapped[str] = mapped_column(String(80), default="decision-derivation-v1")
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    preferred_features_json: Mapped[str] = mapped_column(Text, default="{}")
+    dispreferred_features_json: Mapped[str] = mapped_column(Text, default="{}")
+    context_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    feature_schema_version: Mapped[str | None] = mapped_column(String(80), index=True)
+    feature_snapshot_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    group_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    taxonomy_version: Mapped[str | None] = mapped_column(String(80))
+    verifier_version: Mapped[str | None] = mapped_column(String(80))
+    style_profile_version: Mapped[int | None] = mapped_column(Integer)
+    representation_sets_json: Mapped[str] = mapped_column(Text, default="{}")
+    retrieval_configuration_hash: Mapped[str | None] = mapped_column(String(64))
+    ranker_configuration_hash: Mapped[str | None] = mapped_column(String(64))
+    learning_split: Mapped[str] = mapped_column(String(40), default="development", index=True)
+    source_study_response_id: Mapped[int | None] = mapped_column(
+        ForeignKey("blind_study_responses.id"), index=True
+    )
 
 
 class FeedbackSignal(Base):
     __tablename__ = "feedback_signals"
     __table_args__ = (
         Index("ix_feedback_signal_context", "channel_id", "target", "created_at"),
+        UniqueConstraint("idempotency_key", name="uq_feedback_signal_idempotency"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -657,7 +825,364 @@ class FeedbackSignal(Base):
     source: Mapped[str] = mapped_column(String(80), default="creator")
     policy_version: Mapped[str | None] = mapped_column(String(64))
     experiment_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    source_proposal_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("proposal_events.id"), index=True
+    )
+    source_caption_feedback_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_feedback.id"), index=True
+    )
+    source_event_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    derivation_version: Mapped[str] = mapped_column(String(80), default="feedback-normalization-v1")
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class IntelligenceAgentRun(Base):
+    __tablename__ = "intelligence_agent_runs"
+    __table_args__ = (
+        UniqueConstraint("run_key", name="uq_intelligence_agent_run_key"),
+        Index(
+            "ix_intelligence_agent_run_lookup",
+            "channel_id",
+            "capability",
+            "status",
+            "started_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    run_key: Mapped[str] = mapped_column(String(128))
+    capability: Mapped[str] = mapped_column(String(100), index=True)
+    provider: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    prompt_version: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(40), default="running", index=True)
+    input_json: Mapped[str] = mapped_column(Text)
+    output_json: Mapped[str] = mapped_column(Text, default="{}")
+    budget_json: Mapped[str] = mapped_column(Text, default="{}")
+    usage_json: Mapped[str] = mapped_column(Text, default="{}")
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IntelligenceAgentStep(Base):
+    __tablename__ = "intelligence_agent_steps"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_run_id",
+            "sequence",
+            "attempt",
+            name="uq_intelligence_agent_step_attempt",
+        ),
+        Index(
+            "ix_intelligence_agent_step_lookup",
+            "agent_run_id",
+            "sequence",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_run_id: Mapped[int] = mapped_column(ForeignKey("intelligence_agent_runs.id"), index=True)
+    parent_step_id: Mapped[int | None] = mapped_column(ForeignKey("intelligence_agent_steps.id"))
+    sequence: Mapped[int] = mapped_column(Integer)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    capability: Mapped[str] = mapped_column(String(100), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="running", index=True)
+    input_json: Mapped[str] = mapped_column(Text)
+    output_json: Mapped[str] = mapped_column(Text, default="{}")
+    budget_json: Mapped[str] = mapped_column(Text, default="{}")
+    usage_json: Mapped[str] = mapped_column(Text, default="{}")
+    timeout_seconds: Mapped[int] = mapped_column(Integer)
+    artifact_type: Mapped[str | None] = mapped_column(String(80))
+    artifact_id: Mapped[str | None] = mapped_column(String(100))
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PreferenceDataset(Base):
+    __tablename__ = "preference_datasets"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_preference_dataset_content"),
+        Index(
+            "ix_preference_dataset_lookup",
+            "channel_id",
+            "target",
+            "status",
+            "created_at",
+        ),
+    )
+
+    dataset_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    target: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="frozen", index=True)
+    feature_schema_version: Mapped[str] = mapped_column(String(80), index=True)
+    taxonomy_version: Mapped[str] = mapped_column(String(80))
+    split_seed: Mapped[int] = mapped_column(Integer)
+    configuration_json: Mapped[str] = mapped_column(Text)
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    row_count: Mapped[int] = mapped_column(Integer)
+    split_counts_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PreferenceDatasetItem(Base):
+    __tablename__ = "preference_dataset_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id",
+            "pairwise_preference_id",
+            name="uq_preference_dataset_pair",
+        ),
+        Index("ix_preference_dataset_split", "dataset_id", "split", "position"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("preference_datasets.dataset_id"), index=True
+    )
+    pairwise_preference_id: Mapped[int] = mapped_column(
+        ForeignKey("pairwise_preferences.id"), index=True
+    )
+    split: Mapped[str] = mapped_column(String(40), index=True)
+    group_key: Mapped[str] = mapped_column(String(128), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    preferred_features_json: Mapped[str] = mapped_column(Text)
+    dispreferred_features_json: Mapped[str] = mapped_column(Text)
+    strength: Mapped[float] = mapped_column(Float)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), index=True)
+
+
+class PreferenceModelVersion(Base):
+    __tablename__ = "preference_model_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_id",
+            "target",
+            "artifact_hash",
+            name="uq_preference_model_artifact",
+        ),
+        Index(
+            "ix_preference_model_resolution",
+            "channel_id",
+            "target",
+            "active",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    target: Mapped[str] = mapped_column(String(40), index=True)
+    algorithm: Mapped[str] = mapped_column(String(80), default="pairwise_logistic")
+    status: Mapped[str] = mapped_column(String(40), default="trained", index=True)
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("preference_datasets.dataset_id"), index=True
+    )
+    parent_model_id: Mapped[int | None] = mapped_column(ForeignKey("preference_model_versions.id"))
+    feature_schema_version: Mapped[str] = mapped_column(String(80), index=True)
+    feature_names_json: Mapped[str] = mapped_column(Text)
+    parameters_json: Mapped[str] = mapped_column(Text)
+    training_configuration_json: Mapped[str] = mapped_column(Text)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    calibration_json: Mapped[str] = mapped_column(Text, default="{}")
+    label_count: Mapped[int] = mapped_column(Integer)
+    minimum_label_count: Mapped[int] = mapped_column(Integer)
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    artifact_hash: Mapped[str] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnnotationRefreshRun(Base):
+    __tablename__ = "annotation_refresh_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_id",
+            "annotation_version",
+            "plan_hash",
+            name="uq_annotation_refresh_plan",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    annotation_version: Mapped[str] = mapped_column(String(80), index=True)
+    prompt_version: Mapped[str] = mapped_column(String(80))
+    provider: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    configuration_json: Mapped[str] = mapped_column(Text, default="{}")
+    plan_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="planned", index=True)
+    expected_count: Mapped[int] = mapped_column(Integer)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnnotationRefreshItem(Base):
+    __tablename__ = "annotation_refresh_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "annotation_refresh_run_id",
+            "post_id",
+            name="uq_annotation_refresh_item",
+        ),
+        Index(
+            "ix_annotation_refresh_checkpoint",
+            "annotation_refresh_run_id",
+            "status",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    annotation_refresh_run_id: Mapped[int] = mapped_column(
+        ForeignKey("annotation_refresh_runs.id"), index=True
+    )
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), index=True)
+    source_content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    post_annotation_id: Mapped[int | None] = mapped_column(ForeignKey("post_annotations.id"))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BlindStudy(Base):
+    __tablename__ = "blind_studies"
+    __table_args__ = (UniqueConstraint("study_key", name="uq_blind_study_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    study_key: Mapped[str] = mapped_column(String(128))
+    target: Mapped[str] = mapped_column(String(40), default="caption", index=True)
+    baseline_identity: Mapped[str] = mapped_column(String(200))
+    challenger_identity: Mapped[str] = mapped_column(String(200))
+    seed: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(40), default="planned", index=True)
+    split_policy_json: Mapped[str] = mapped_column(Text, default="{}")
+    preregistration_json: Mapped[str] = mapped_column(Text, default="{}")
+    case_count: Mapped[int] = mapped_column(Integer, default=0)
+    response_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BlindStudyCase(Base):
+    __tablename__ = "blind_study_cases"
+    __table_args__ = (
+        UniqueConstraint("blind_study_id", "case_key", name="uq_blind_study_case"),
+        Index("ix_blind_study_case_order", "blind_study_id", "display_order"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    blind_study_id: Mapped[int] = mapped_column(ForeignKey("blind_studies.id"), index=True)
+    case_key: Mapped[str] = mapped_column(String(128))
+    candidate_image_id: Mapped[int | None] = mapped_column(
+        ForeignKey("candidate_images.id"), index=True
+    )
+    media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    split: Mapped[str] = mapped_column(String(40), index=True)
+    group_key: Mapped[str] = mapped_column(String(128), index=True)
+    first_caption: Mapped[str] = mapped_column(Text)
+    second_caption: Mapped[str] = mapped_column(Text)
+    first_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_candidate_records.id"), index=True
+    )
+    second_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_candidate_records.id"), index=True
+    )
+    order_token: Mapped[str] = mapped_column(String(40))
+    hidden_label_json: Mapped[str] = mapped_column(Text)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    selection_rationale_json: Mapped[str] = mapped_column(Text, default="{}")
+    display_order: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BlindStudyResponse(Base):
+    __tablename__ = "blind_study_responses"
+    __table_args__ = (UniqueConstraint("blind_study_case_id", name="uq_blind_study_response"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    blind_study_case_id: Mapped[int] = mapped_column(ForeignKey("blind_study_cases.id"), index=True)
+    choice: Mapped[str] = mapped_column(String(40))
+    reviewer_kind: Mapped[str] = mapped_column(String(40), default="creator")
+    reviewer_label: Mapped[str] = mapped_column(String(80), default="local-creator")
+    review_session: Mapped[str] = mapped_column(String(128), index=True)
+    acceptable_choices_json: Mapped[str] = mapped_column(Text, default="[]")
+    edited_final_caption: Mapped[str | None] = mapped_column(Text)
+    image_verdict: Mapped[str | None] = mapped_column(String(40))
+    caption_verdict: Mapped[str | None] = mapped_column(String(40))
+    pairing_verdict: Mapped[str | None] = mapped_column(String(40))
+    reason_codes_json: Mapped[str] = mapped_column(Text, default="[]")
+    note: Mapped[str | None] = mapped_column(Text)
+    decision_time_ms: Mapped[float | None] = mapped_column(Float)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ActiveLearningBatch(Base):
+    __tablename__ = "active_learning_batches"
+    __table_args__ = (UniqueConstraint("batch_key", name="uq_active_learning_batch_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    batch_key: Mapped[str] = mapped_column(String(128))
+    target: Mapped[str] = mapped_column(String(40), index=True)
+    strategy_version: Mapped[str] = mapped_column(String(80))
+    seed: Mapped[int] = mapped_column(Integer)
+    configuration_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(40), default="selected", index=True)
+    selection_count: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ActiveLearningSelection(Base):
+    __tablename__ = "active_learning_selections"
+    __table_args__ = (
+        UniqueConstraint(
+            "active_learning_batch_id",
+            "entity_type",
+            "entity_id",
+            name="uq_active_learning_selection",
+        ),
+        Index(
+            "ix_active_learning_priority",
+            "active_learning_batch_id",
+            "priority_rank",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    active_learning_batch_id: Mapped[int] = mapped_column(
+        ForeignKey("active_learning_batches.id"), index=True
+    )
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    group_key: Mapped[str] = mapped_column(String(128), index=True)
+    split: Mapped[str] = mapped_column(String(40), index=True)
+    priority_rank: Mapped[int] = mapped_column(Integer)
+    uncertainty_score: Mapped[float] = mapped_column(Float)
+    diversity_score: Mapped[float] = mapped_column(Float)
+    rationale_json: Mapped[str] = mapped_column(Text)
+    label_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
 
 
 class ImageGenerationRun(Base):
@@ -665,6 +1190,9 @@ class ImageGenerationRun(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    agent_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("intelligence_agent_runs.id"), index=True
+    )
     provider: Mapped[str] = mapped_column(String(100))
     model: Mapped[str] = mapped_column(String(200))
     model_version: Mapped[str] = mapped_column(String(100))
@@ -696,6 +1224,9 @@ class GeneratedAssetLineage(Base):
         ForeignKey("image_generation_runs.id"), index=True
     )
     media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    candidate_image_id: Mapped[int | None] = mapped_column(
+        ForeignKey("candidate_images.id"), index=True
+    )
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
     safety_result_json: Mapped[str] = mapped_column(Text, default="{}")
     rights_result_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -704,6 +1235,7 @@ class GeneratedAssetLineage(Base):
     duplicate_result_json: Mapped[str] = mapped_column(Text, default="{}")
     annotation_json: Mapped[str] = mapped_column(Text, default="{}")
     ranking_json: Mapped[str] = mapped_column(Text, default="{}")
+    review_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     creator_decision: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

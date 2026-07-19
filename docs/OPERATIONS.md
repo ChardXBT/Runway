@@ -88,3 +88,29 @@ media, browser sessions, and `.env` are ignored by Git.
 
 SQLite uses WAL. Stop RunWay before copying the database and its `-wal`/`-shm` companions, or use
 SQLite's backup API.
+
+## Intelligence lifecycle
+
+Schema migration, online backup, exact representation planning/backfill,
+activation and rollback, feedback reconciliation, annotation refresh, persisted
+preference models, provider gates, blind studies, active learning, and the
+intelligence database doctor are documented in
+[`INTELLIGENCE_OPERATIONS.md`](INTELLIGENCE_OPERATIONS.md).
+
+Before any production-data intelligence maintenance, explicitly set:
+
+```powershell
+$env:RUNWAY_DATA_DIR = "data/qlob-production"
+$env:RUNWAY_PUBLISHING_ENABLED = "false"
+$env:RUNWAY_AGENT_RUNTIME = "mock"
+```
+
+The final health commands are:
+
+```powershell
+.\.venv\Scripts\runway.exe database schema-verify
+.\.venv\Scripts\runway.exe database intelligence-doctor
+```
+
+The doctor exits nonzero for a critical integrity, provenance, isolation,
+activation, model, or safety violation.

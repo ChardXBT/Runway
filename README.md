@@ -36,7 +36,15 @@ restart persistence were validated on 2026-07-17 without posting. See
 - Every considered retrieval item, complete generated caption slate, displayed exposure, edit,
   pairwise choice, and separate image/caption/pairing signal is persisted with provenance.
 - Versioned deterministic image, text, multimodal, and multi-image representations work fully
-  offline. Provider registries require explicit selection and never fall back to a paid service.
+  offline. Exact immutable set plans provide resumable backfill, validation, transactional
+  activation/supersession/rollback, and unambiguous active-set resolution.
+- Typed intelligence-agent runs persist bounded attempts, budgets, usage, artifacts, failures, and
+  abstention. Publishing capabilities are structurally absent from the harness.
+- Creator decisions derive replay-safe target-separated feedback and immutable feature snapshots.
+  Persisted preference models train only in explicit jobs and never refit during request scoring.
+- Optional Sentence Transformers and SigLIP 2 adapters require explicit trusted local weights,
+  never download or auto-activate, and remain inactive until RunWay-specific evaluation passes.
+- Provider registries require explicit selection and never fall back to a paid service.
 - Reference-image-plus-text retrieval combines visual evidence, instructions, structured
   constraints, source policy, and rights policy without downloading model weights.
 - A safe image-generation boundary records eligibility and complete lineage. Only the
@@ -95,6 +103,12 @@ saved evidence without invoking a model or publisher:
 ```powershell
 .\.venv\Scripts\runway.exe intelligence baseline
 .\.venv\Scripts\runway.exe intelligence experiments
+.\.venv\Scripts\runway.exe database schema-status
+.\.venv\Scripts\runway.exe database schema-verify
+.\.venv\Scripts\runway.exe database intelligence-doctor
+.\.venv\Scripts\runway.exe intelligence representations status
+.\.venv\Scripts\runway.exe intelligence feedback verify
+.\.venv\Scripts\runway.exe intelligence providers
 .\.venv\Scripts\runway.exe retrieval inspect --run-id 1
 .\.venv\Scripts\runway.exe embeddings status
 .\.venv\Scripts\runway.exe images providers
@@ -104,6 +118,11 @@ The bounded tuning ledger, one-time sealed holdout, five-channel generalization 
 critical-gate JUnit output, and replacement decision are under
 `benchmarks/intelligence/`. See `docs/INTELLIGENCE_REPLACEMENT_REPORT.md` for the exact
 architecture, migration, metrics, uncertainty, tests, rollback, and remaining limitations.
+The next canonical lifecycle is documented in
+`docs/INTELLIGENCE_DATA_FLYWHEEL_REPORT.md`, with the operational runbook in
+`docs/INTELLIGENCE_OPERATIONS.md`, table relationships in
+`docs/INTELLIGENCE_DATA_MODEL.md`, and the genuine creator-review procedure in
+`docs/BLIND_CREATOR_STUDY.md`.
 
 ## First real Qlob capture
 
@@ -218,6 +237,10 @@ pauses the outbox. Once a Schedule click may have happened, an inconclusive resu
   decision.
 - Deterministic local representations are reproducible baselines, not evaluated neural
   vision-language embeddings.
+- Production has complete active deterministic text/image/multimodal sets, but no creator-trained
+  preference model is active because genuine target-specific pairwise labels remain insufficient.
+- Optional trained representation adapters are implemented as safe local-files-only boundaries;
+  their dependencies and weights are not installed, and no Qlob evaluation has authorized them.
 - The replacement holdout contains only two deterministic policy-proxy cases. It improved from
   0/2 to 2/2, but the uncertainty intervals overlap and blind creator preference remains
   unmeasured.

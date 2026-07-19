@@ -4,19 +4,26 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Iterable, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 import numpy as np
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
+from sqlalchemy.orm import Session
 
 from runway.db.base import Database
-from runway.db.models import RepresentationRecord
+from runway.db.models import (
+    RepresentationRecord,
+    RepresentationSet,
+    RepresentationSetItem,
+)
 from runway.media.service import inspect_image
 
 TOKEN_RE = re.compile(r"[\w']+", re.UNICODE)
+ProviderT = TypeVar("ProviderT")
 CONCEPT_GROUPS = (
     frozenset({"excited", "eager", "thrilled", "delighted", "enthusiastic"}),
     frozenset({"surprised", "shocked", "astonished", "startled"}),
@@ -76,6 +83,7 @@ class ImageEmbeddingProvider(Protocol):
     name: str
     model: str
     version: str
+    configuration_fingerprint: str
 
     def embed_image(self, path: Path, *, purpose: str) -> RepresentationResult: ...
 
@@ -84,6 +92,7 @@ class TextEmbeddingProvider(Protocol):
     name: str
     model: str
     version: str
+    configuration_fingerprint: str
 
     def embed_text(self, text: str, *, purpose: str) -> RepresentationResult: ...
 
@@ -92,6 +101,7 @@ class MultimodalEmbeddingProvider(Protocol):
     name: str
     model: str
     version: str
+    configuration_fingerprint: str
 
     def embed_image_text(
         self,
@@ -106,6 +116,7 @@ class MultiVectorEmbeddingProvider(Protocol):
     name: str
     model: str
     version: str
+    configuration_fingerprint: str
 
     def embed_text_parts(
         self,
@@ -120,7 +131,7 @@ class DeterministicTextEmbeddingProvider:
 
     name = "runway-local"
     model = "signed-subword-concepts"
-    version = "1"
+    version = "2"
 
     def __init__(self, dimensions: int = 256):
         if dimensions < 64:
@@ -130,7 +141,9 @@ class DeterministicTextEmbeddingProvider:
             "dimensions": dimensions,
             "features": ["words", "bigrams", "character_trigrams", "concept_groups"],
             "unicode": "NFKC-casefold",
+            "tokenless_fallback": "normalized-raw-blake2b-v1",
         }
+        self.configuration_fingerprint = configuration_hash(self._configuration)
 
     @staticmethod
     def _tokens(text: str) -> list[str]:
@@ -141,12 +154,11 @@ class DeterministicTextEmbeddingProvider:
         tokens = self._tokens(text)
         features: list[tuple[str, float]] = [(f"w:{token}", 1.0) for token in tokens]
         features.extend(
-            (f"b:{tokens[index]}_{tokens[index + 1]}", 0.8)
-            for index in range(len(tokens) - 1)
+            (f"b:{tokens[index]}_{tokens[index + 1]}", 0.8) for index in range(len(tokens) - 1)
         )
         compact = " ".join(tokens)
         features.extend(
-            (f"c:{compact[index:index + 3]}", 0.22)
+            (f"c:{compact[index : index + 3]}", 0.22)
             for index in range(max(0, len(compact) - 2))
             if " " not in compact[index : index + 3]
         )
@@ -154,6 +166,9 @@ class DeterministicTextEmbeddingProvider:
         for index, group in enumerate(CONCEPT_GROUPS):
             if token_set & group:
                 features.append((f"concept:{index}", 1.35))
+        if not features:
+            normalized_raw = unicodedata.normalize("NFKC", text).casefold().strip()
+            features.append((f"raw:{normalized_raw or '<empty>'}", 1.0))
 
         vector = np.zeros(self.dimensions, dtype=np.float32)
         for feature, weight in features:
@@ -169,7 +184,7 @@ class DeterministicTextEmbeddingProvider:
             purpose=purpose,
             vectors=(tuple(float(value) for value in vector),),
             normalized=True,
-            configuration_hash=configuration_hash(self._configuration),
+            configuration_hash=self.configuration_fingerprint,
         )
 
 
@@ -184,6 +199,7 @@ class DeterministicImageEmbeddingProvider:
         "trained_semantics": False,
         "normalization": "l2",
     }
+    configuration_fingerprint = configuration_hash(_configuration)
 
     def embed_image(self, path: Path, *, purpose: str) -> RepresentationResult:
         values = _normalize(np.asarray(inspect_image(path).embedding, dtype=np.float32))
@@ -194,7 +210,7 @@ class DeterministicImageEmbeddingProvider:
             purpose=purpose,
             vectors=(tuple(float(value) for value in values),),
             normalized=True,
-            configuration_hash=configuration_hash(self._configuration),
+            configuration_hash=self.configuration_fingerprint,
         )
 
 
@@ -203,7 +219,7 @@ class DeterministicMultimodalEmbeddingProvider:
 
     name = "runway-local"
     model = "image-text-concatenation"
-    version = "1"
+    version = "2"
 
     def __init__(
         self,
@@ -219,6 +235,22 @@ class DeterministicMultimodalEmbeddingProvider:
         self.text_provider = text_provider
         self.image_weight = image_weight
         self.text_weight = text_weight
+        self.configuration_fingerprint = configuration_hash(
+            {
+                "image": {
+                    "provider": image_provider.name,
+                    "model": image_provider.model,
+                    "version": image_provider.version,
+                },
+                "text": {
+                    "provider": text_provider.name,
+                    "model": text_provider.model,
+                    "version": text_provider.version,
+                },
+                "image_weight": image_weight,
+                "text_weight": text_weight,
+            }
+        )
 
     def embed_image_text(
         self,
@@ -230,24 +262,10 @@ class DeterministicMultimodalEmbeddingProvider:
         image = self.image_provider.embed_image(path, purpose=purpose).as_array()[0]
         text_vector = self.text_provider.embed_text(text, purpose=purpose).as_array()[0]
         vector = _normalize(
-            np.concatenate(
-                [self.image_weight * image, self.text_weight * text_vector]
-            ).astype(np.float32)
+            np.concatenate([self.image_weight * image, self.text_weight * text_vector]).astype(
+                np.float32
+            )
         )
-        config = {
-            "image": {
-                "provider": self.image_provider.name,
-                "model": self.image_provider.model,
-                "version": self.image_provider.version,
-            },
-            "text": {
-                "provider": self.text_provider.name,
-                "model": self.text_provider.model,
-                "version": self.text_provider.version,
-            },
-            "image_weight": self.image_weight,
-            "text_weight": self.text_weight,
-        }
         return RepresentationResult(
             provider=self.name,
             model=self.model,
@@ -255,7 +273,7 @@ class DeterministicMultimodalEmbeddingProvider:
             purpose=purpose,
             vectors=(tuple(float(value) for value in vector),),
             normalized=True,
-            configuration_hash=configuration_hash(config),
+            configuration_hash=self.configuration_fingerprint,
         )
 
 
@@ -266,6 +284,14 @@ class DeterministicMultiVectorProvider:
 
     def __init__(self, text_provider: TextEmbeddingProvider):
         self.text_provider = text_provider
+        self.configuration_fingerprint = configuration_hash(
+            {
+                "text_provider": text_provider.name,
+                "text_model": text_provider.model,
+                "text_version": text_provider.version,
+                "pooling": "none",
+            }
+        )
 
     def embed_text_parts(
         self,
@@ -290,14 +316,7 @@ class DeterministicMultiVectorProvider:
             purpose=purpose,
             vectors=rows,
             normalized=True,
-            configuration_hash=configuration_hash(
-                {
-                    "text_provider": self.text_provider.name,
-                    "text_model": self.text_provider.model,
-                    "text_version": self.text_provider.version,
-                    "pooling": "none",
-                }
-            ),
+            configuration_hash=self.configuration_fingerprint,
         )
 
 
@@ -313,6 +332,56 @@ class RepresentationProviderRegistry:
         self._multi_vector: dict[str, MultiVectorEmbeddingProvider] = {
             "runway-local": DeterministicMultiVectorProvider(text)
         }
+
+    @staticmethod
+    def _register(
+        providers: dict[str, ProviderT],
+        name: str,
+        provider: ProviderT,
+        *,
+        replace: bool,
+    ) -> None:
+        if not name.strip():
+            raise ValueError("provider name cannot be empty")
+        if name in providers and not replace:
+            raise ValueError(f"representation provider {name!r} is already registered")
+        providers[name] = provider
+
+    def register_text(
+        self,
+        name: str,
+        provider: TextEmbeddingProvider,
+        *,
+        replace: bool = False,
+    ) -> None:
+        self._register(self._text, name, provider, replace=replace)
+
+    def register_image(
+        self,
+        name: str,
+        provider: ImageEmbeddingProvider,
+        *,
+        replace: bool = False,
+    ) -> None:
+        self._register(self._image, name, provider, replace=replace)
+
+    def register_multimodal(
+        self,
+        name: str,
+        provider: MultimodalEmbeddingProvider,
+        *,
+        replace: bool = False,
+    ) -> None:
+        self._register(self._multimodal, name, provider, replace=replace)
+
+    def register_multi_vector(
+        self,
+        name: str,
+        provider: MultiVectorEmbeddingProvider,
+        *,
+        replace: bool = False,
+    ) -> None:
+        self._register(self._multi_vector, name, provider, replace=replace)
 
     def text(self, name: str = "runway-local") -> TextEmbeddingProvider:
         try:
@@ -362,6 +431,23 @@ class RepresentationProviderRegistry:
 class RepresentationStore:
     def __init__(self, database: Database):
         self.database = database
+        self._cache_diagnostics: Counter[str] = Counter()
+
+    def reset_diagnostics(self) -> None:
+        self._cache_diagnostics.clear()
+
+    def diagnostics(self) -> dict[str, int]:
+        return {
+            key: int(self._cache_diagnostics.get(key, 0))
+            for key in (
+                "exact_hits",
+                "active_hits",
+                "misses",
+                "stale_misses",
+                "recomputations",
+                "active_set_fail_closed",
+            )
+        }
 
     def persist(
         self,
@@ -376,44 +462,358 @@ class RepresentationStore:
         metadata: dict[str, object] | None = None,
     ) -> RepresentationRecord:
         with self.database.session() as session:
-            identity = (
-                RepresentationRecord.channel_id == channel_id,
-                RepresentationRecord.entity_type == entity_type,
-                RepresentationRecord.entity_id == entity_id,
-                RepresentationRecord.field == field,
-                RepresentationRecord.purpose == result.purpose,
-                RepresentationRecord.provider == result.provider,
-                RepresentationRecord.model == result.model,
-                RepresentationRecord.model_version == result.version,
-                RepresentationRecord.source_content_hash == source_content_hash,
-                RepresentationRecord.configuration_hash == result.configuration_hash,
-            )
-            existing = session.scalar(select(RepresentationRecord).where(*identity).limit(1))
-            if existing is not None:
-                return existing
-            record = RepresentationRecord(
+            return self.persist_in_session(
+                session,
                 channel_id=channel_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
                 field=field,
                 modality=modality,
-                purpose=result.purpose,
-                provider=result.provider,
-                model=result.model,
-                model_version=result.version,
-                dimensions=result.dimensions,
-                vector_count=result.vector_count,
-                dtype="float32",
-                serialized_data=result.as_bytes(),
-                normalized=result.normalized,
+                result=result,
                 source_content_hash=source_content_hash,
-                configuration_hash=result.configuration_hash,
-                metadata_json=json.dumps(metadata or {}, sort_keys=True),
-                active=True,
+                metadata=metadata,
             )
-            session.add(record)
-            session.flush()
-            return record
+
+    @staticmethod
+    def persist_in_session(
+        session: Session,
+        *,
+        channel_id: int,
+        entity_type: str,
+        entity_id: int,
+        field: str,
+        modality: str,
+        result: RepresentationResult,
+        source_content_hash: str,
+        metadata: dict[str, object] | None = None,
+    ) -> RepresentationRecord:
+        """Persist an exact representation inside an existing atomic decision."""
+        identity = (
+            RepresentationRecord.channel_id == channel_id,
+            RepresentationRecord.entity_type == entity_type,
+            RepresentationRecord.entity_id == entity_id,
+            RepresentationRecord.field == field,
+            RepresentationRecord.purpose == result.purpose,
+            RepresentationRecord.provider == result.provider,
+            RepresentationRecord.model == result.model,
+            RepresentationRecord.model_version == result.version,
+            RepresentationRecord.source_content_hash == source_content_hash,
+            RepresentationRecord.configuration_hash == result.configuration_hash,
+        )
+        existing = session.scalar(
+            select(RepresentationRecord).where(*identity).limit(1)
+        )
+        if existing is not None:
+            return existing
+        record = RepresentationRecord(
+            channel_id=channel_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            field=field,
+            modality=modality,
+            purpose=result.purpose,
+            provider=result.provider,
+            model=result.model,
+            model_version=result.version,
+            dimensions=result.dimensions,
+            vector_count=result.vector_count,
+            dtype="float32",
+            serialized_data=result.as_bytes(),
+            normalized=result.normalized,
+            source_content_hash=source_content_hash,
+            configuration_hash=result.configuration_hash,
+            metadata_json=json.dumps(metadata or {}, sort_keys=True),
+            active=True,
+        )
+        session.add(record)
+        session.flush()
+        return record
+
+    def get_exact(
+        self,
+        *,
+        channel_id: int,
+        entity_type: str,
+        entity_id: int,
+        field: str,
+        purpose: str,
+        provider: str,
+        model: str,
+        model_version: str,
+        source_content_hash: str,
+        configuration_hash: str,
+    ) -> RepresentationRecord | None:
+        with self.database.session() as session:
+            record = session.scalar(
+                select(RepresentationRecord)
+                .where(
+                    RepresentationRecord.channel_id == channel_id,
+                    RepresentationRecord.entity_type == entity_type,
+                    RepresentationRecord.entity_id == entity_id,
+                    RepresentationRecord.field == field,
+                    RepresentationRecord.purpose == purpose,
+                    RepresentationRecord.provider == provider,
+                    RepresentationRecord.model == model,
+                    RepresentationRecord.model_version == model_version,
+                    RepresentationRecord.source_content_hash == source_content_hash,
+                    RepresentationRecord.configuration_hash == configuration_hash,
+                )
+                .limit(1)
+            )
+        if record is not None:
+            self._cache_diagnostics["exact_hits"] += 1
+        return record
+
+    def active_set(
+        self,
+        *,
+        channel_id: int,
+        scope: str,
+        purpose: str,
+    ) -> RepresentationSet | None:
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(RepresentationSet)
+                .where(
+                    RepresentationSet.channel_id == channel_id,
+                    RepresentationSet.scope == scope,
+                    RepresentationSet.purpose == purpose,
+                    RepresentationSet.active.is_(True),
+                    RepresentationSet.status == "active",
+                )
+                .order_by(RepresentationSet.id)
+            ).all()
+        if len(rows) > 1:
+            raise RuntimeError(
+                "multiple active representation sets violate the canonical resolver "
+                f"for channel={channel_id}, scope={scope!r}, purpose={purpose!r}"
+            )
+        return rows[0] if rows else None
+
+    def get_active(
+        self,
+        *,
+        channel_id: int,
+        scope: str,
+        purpose: str,
+        entity_type: str,
+        entity_id: int,
+        field: str,
+        source_content_hash: str | None = None,
+    ) -> RepresentationRecord | None:
+        active_set = self.active_set(
+            channel_id=channel_id,
+            scope=scope,
+            purpose=purpose,
+        )
+        if active_set is None:
+            return None
+        with self.database.session() as session:
+            item = session.scalar(
+                select(RepresentationSetItem)
+                .where(
+                    RepresentationSetItem.representation_set_id == active_set.id,
+                    RepresentationSetItem.channel_id == channel_id,
+                    RepresentationSetItem.entity_type == entity_type,
+                    RepresentationSetItem.entity_id == entity_id,
+                    RepresentationSetItem.field == field,
+                )
+                .limit(1)
+            )
+            if item is None or item.status != "complete" or item.representation_record_id is None:
+                self._cache_diagnostics["active_set_fail_closed"] += 1
+                return None
+            if source_content_hash is not None and item.source_content_hash != source_content_hash:
+                self._cache_diagnostics["stale_misses"] += 1
+                return None
+            record = session.get(
+                RepresentationRecord,
+                item.representation_record_id,
+            )
+            if record is None:
+                self._cache_diagnostics["active_set_fail_closed"] += 1
+                return None
+            if (
+                record.channel_id != channel_id
+                or record.purpose != purpose
+                or record.provider != active_set.provider
+                or record.model != active_set.model
+                or record.model_version != active_set.model_version
+                or record.configuration_hash != active_set.configuration_hash
+                or record.source_content_hash != item.source_content_hash
+            ):
+                self._cache_diagnostics["active_set_fail_closed"] += 1
+                return None
+        self._cache_diagnostics["active_hits"] += 1
+        return record
+
+    def get_or_create(
+        self,
+        *,
+        channel_id: int,
+        entity_type: str,
+        entity_id: int,
+        field: str,
+        modality: str,
+        purpose: str,
+        provider: str,
+        model: str,
+        model_version: str,
+        source_content_hash: str,
+        configuration_hash: str,
+        producer: Callable[[], RepresentationResult],
+        metadata: dict[str, object] | None = None,
+        active_scope: str | None = None,
+    ) -> RepresentationRecord:
+        if active_scope is not None:
+            active_set = self.active_set(
+                channel_id=channel_id,
+                scope=active_scope,
+                purpose=purpose,
+            )
+            if active_set is not None:
+                record = self.get_active(
+                    channel_id=channel_id,
+                    scope=active_scope,
+                    purpose=purpose,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    field=field,
+                    source_content_hash=source_content_hash,
+                )
+                if record is None:
+                    raise LookupError(
+                        "the active representation set does not contain a valid exact "
+                        f"record for {entity_type}:{entity_id}:{field}"
+                    )
+                return record
+
+        exact = self.get_exact(
+            channel_id=channel_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            field=field,
+            purpose=purpose,
+            provider=provider,
+            model=model,
+            model_version=model_version,
+            source_content_hash=source_content_hash,
+            configuration_hash=configuration_hash,
+        )
+        if exact is not None:
+            return exact
+
+        self._cache_diagnostics["misses"] += 1
+        result = producer()
+        if (
+            result.provider != provider
+            or result.model != model
+            or result.version != model_version
+            or result.purpose != purpose
+            or result.configuration_hash != configuration_hash
+        ):
+            raise ValueError("representation producer returned an unexpected identity")
+        self._cache_diagnostics["recomputations"] += 1
+        return self.persist(
+            channel_id=channel_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            field=field,
+            modality=modality,
+            result=result,
+            source_content_hash=source_content_hash,
+            metadata=metadata,
+        )
+
+    def records_for_set(self, representation_set_id: int) -> list[RepresentationRecord]:
+        with self.database.session() as session:
+            return list(
+                session.scalars(
+                    select(RepresentationRecord)
+                    .join(
+                        RepresentationSetItem,
+                        RepresentationSetItem.representation_record_id == RepresentationRecord.id,
+                    )
+                    .where(
+                        RepresentationSetItem.representation_set_id == representation_set_id,
+                        RepresentationSetItem.status == "complete",
+                    )
+                    .order_by(RepresentationSetItem.id)
+                ).all()
+            )
+
+    def coverage(self, representation_set_id: int) -> dict[str, object]:
+        with self.database.session() as session:
+            representation_set = session.get(RepresentationSet, representation_set_id)
+            if representation_set is None:
+                raise LookupError(f"representation set {representation_set_id} was not found")
+            rows = session.execute(
+                select(
+                    RepresentationSetItem.status,
+                    func.count(RepresentationSetItem.id),
+                )
+                .where(RepresentationSetItem.representation_set_id == representation_set_id)
+                .group_by(RepresentationSetItem.status)
+            ).all()
+        counts = {str(status): int(count) for status, count in rows}
+        completed = counts.get("complete", 0)
+        expected = representation_set.expected_count
+        return {
+            "representation_set_id": representation_set_id,
+            "status": representation_set.status,
+            "active": representation_set.active,
+            "expected": expected,
+            "complete": completed,
+            "failed": counts.get("failed", 0),
+            "stale": counts.get("stale", 0),
+            "pending": counts.get("pending", 0),
+            "coverage": completed / expected if expected else 1.0,
+            "counts": counts,
+        }
+
+    def mark_stale(
+        self,
+        *,
+        channel_id: int,
+        entity_type: str,
+        entity_id: int,
+        field: str,
+        current_source_content_hash: str,
+    ) -> int:
+        with self.database.session() as session:
+            items = session.scalars(
+                select(RepresentationSetItem)
+                .where(
+                    RepresentationSetItem.channel_id == channel_id,
+                    RepresentationSetItem.entity_type == entity_type,
+                    RepresentationSetItem.entity_id == entity_id,
+                    RepresentationSetItem.field == field,
+                    RepresentationSetItem.source_content_hash != current_source_content_hash,
+                    RepresentationSetItem.status == "complete",
+                )
+                .order_by(RepresentationSetItem.id)
+            ).all()
+            touched_sets: set[int] = set()
+            for item in items:
+                item.status = "stale"
+                item.error_summary = "source content hash changed"
+                touched_sets.add(item.representation_set_id)
+            for set_id in touched_sets:
+                representation_set = session.get(RepresentationSet, set_id)
+                if representation_set is None:
+                    continue
+                representation_set.stale_count = int(
+                    session.scalar(
+                        select(func.count(RepresentationSetItem.id)).where(
+                            RepresentationSetItem.representation_set_id == set_id,
+                            RepresentationSetItem.status == "stale",
+                        )
+                    )
+                    or 0
+                )
+                representation_set.status = "stale"
+                representation_set.active = False
+        return len(items)
 
     def latest(
         self,

@@ -14,11 +14,18 @@ from runway.analysis.features import (
 )
 from runway.analysis.runtime import AgentRuntime, runtime_for
 from runway.analysis.schemas import CaptionCandidate, CaptionCandidateSet, CaptionOptions
+from runway.captions.feature_snapshots import (
+    FEATURE_SCHEMA_VERSION,
+    TAXONOMY_VERSION,
+    VERIFIER_VERSION,
+    snapshot_json_and_hash,
+)
 from runway.captions.feedback import CaptionFeedbackService
 from runway.captions.planning import EditorialBrief, EditorialPlanner
 from runway.captions.preferences import (
     DeterministicImageCaptionPairRanker,
     PairwiseCaptionPreferenceRanker,
+    PreferenceScore,
 )
 from runway.captions.taxonomy import analyze_caption, normalize_caption
 from runway.captions.verification import CaptionVerifier, VerificationResult
@@ -36,6 +43,13 @@ from runway.db.models import (
     utcnow,
 )
 from runway.db.repositories import audit, get_channel
+from runway.intelligence.agent_harness import (
+    AgentBudget,
+    AgentInputEnvelope,
+    AgentOutputEnvelope,
+    AgentStepResult,
+    IntelligenceAgentHarness,
+)
 from runway.intelligence.embeddings import (
     DeterministicTextEmbeddingProvider,
     configuration_hash,
@@ -102,6 +116,7 @@ class CaptionService:
         self.preference_ranker = PairwiseCaptionPreferenceRanker(database)
         self.pair_ranker = DeterministicImageCaptionPairRanker()
         self.text_provider = DeterministicTextEmbeddingProvider()
+        self.agent_harness = IntelligenceAgentHarness(database)
 
     async def generate(self, candidate_id: int) -> CaptionOptions:
         with self.database.session() as session:
@@ -156,7 +171,13 @@ class CaptionService:
         started_at = utcnow()
         started_perf = time.perf_counter()
         attempts: list[CaptionCandidateSet] = []
-        generated = await self.runtime.generate_caption_options(payload)
+        agent_run_ids: list[int] = []
+        generated, agent_run_id = await self._generate_with_agent(
+            channel_id=channel_id,
+            candidate_id=candidate_id,
+            payload=payload,
+        )
+        agent_run_ids.append(agent_run_id)
         attempts.append(generated)
         ranked = self._ranked_candidates(
             channel_id=channel_id,
@@ -187,7 +208,12 @@ class CaptionService:
                     ),
                 },
             }
-            generated_retry = await self.runtime.generate_caption_options(retry_payload)
+            generated_retry, retry_agent_run_id = await self._generate_with_agent(
+                channel_id=channel_id,
+                candidate_id=candidate_id,
+                payload=retry_payload,
+            )
+            agent_run_ids.append(retry_agent_run_id)
             attempts.append(generated_retry)
             retry_ranked = self._ranked_candidates(
                 channel_id=channel_id,
@@ -220,16 +246,21 @@ class CaptionService:
                 started_at=started_at,
                 latency_ms=latency_ms,
                 reason="no three grounded, policy-compliant, distinct captions survived",
+                agent_run_ids=agent_run_ids,
             )
+            for run_id in agent_run_ids:
+                self.agent_harness.link_artifact(
+                    run_id,
+                    artifact_type="caption_slate",
+                    artifact_id=slate_id,
+                )
             return CaptionOptions(
                 recommended="",
                 alternatives=[],
                 rationale="RunWay abstained instead of displaying generic filler.",
                 confidence=0.0,
                 referenced_historical_post_ids=[],
-                factual_uncertainty_warning=(
-                    "No grounded caption slate survived verification."
-                ),
+                factual_uncertainty_warning=("No grounded caption slate survived verification."),
                 slate_id=slate_id,
                 retrieval_run_id=_required_int(
                     context["retrieval_run_id"],
@@ -260,9 +291,54 @@ class CaptionService:
             started_at=started_at,
             latency_ms=latency_ms,
             references=references,
+            agent_run_ids=agent_run_ids,
         )
+        for run_id in agent_run_ids:
+            self.agent_harness.link_artifact(
+                run_id,
+                artifact_type="caption_slate",
+                artifact_id=slate_id,
+            )
         result.slate_id = slate_id
         return result
+
+    async def _generate_with_agent(
+        self,
+        *,
+        channel_id: int,
+        candidate_id: int,
+        payload: dict[str, object],
+    ) -> tuple[CaptionCandidateSet, int]:
+        async def handler(
+            envelope: AgentInputEnvelope,
+            _attempt: int,
+        ) -> AgentStepResult:
+            generated = await self.runtime.generate_caption_options(envelope.payload)
+            return AgentStepResult(
+                output=AgentOutputEnvelope(payload=generated.model_dump()),
+                usage=dict(self.runtime.last_token_usage),
+            )
+
+        run_id, output = await self.agent_harness.execute(
+            channel_id=channel_id,
+            capability="caption_generation",
+            provider=self.runtime.provider,
+            model=self.runtime.model_name,
+            prompt_version=self.prompt_version,
+            input_value=AgentInputEnvelope(
+                entity_ids=[candidate_id],
+                payload=payload,
+            ),
+            handler=handler,
+            budget=AgentBudget(
+                max_steps=1,
+                max_attempts_per_step=1,
+                max_total_tokens=100_000,
+                max_seconds=float(self.settings.codex_timeout_seconds),
+                timeout_seconds=float(self.settings.codex_timeout_seconds),
+            ),
+        )
+        return CaptionCandidateSet.model_validate(output.payload), run_id
 
     def _ranked_candidates(
         self,
@@ -300,9 +376,7 @@ class CaptionService:
                 if value
             )
         pool = list(generated.candidates)
-        normalized_prior = {
-            normalize_caption(value) for value in prior_candidate_texts or []
-        }
+        normalized_prior = {normalize_caption(value) for value in prior_candidate_texts or []}
         seen: set[str] = set(normalized_prior)
         prepared: list[tuple[int, CaptionCandidate, list[str]]] = []
         for generation_index, raw in enumerate(
@@ -407,11 +481,7 @@ class CaptionService:
                     "preference": preference,
                     "pairing": pairing,
                     "generic_penalty": generic_penalty,
-                    "final_score": (
-                        max(0.0, min(1.0, final))
-                        if eligible
-                        else 0.0
-                    ),
+                    "final_score": (max(0.0, min(1.0, final)) if eligible else 0.0),
                     "eligible": eligible,
                     "exclusion_reasons": exclusion_reasons,
                     "attempt_number": attempt_number,
@@ -450,11 +520,7 @@ class CaptionService:
     ) -> list[dict[str, Any]]:
         policy_lead = (
             next(
-                (
-                    row
-                    for row in ranked
-                    if row["candidate"].structure == "open_question"
-                ),
+                (row for row in ranked if row["candidate"].structure == "open_question"),
                 ranked[0],
             )
             if policy.question_first
@@ -464,9 +530,7 @@ class CaptionService:
         for target_structure in policy.preferred_structures:
             if len(selected) >= 3:
                 break
-            if any(
-                row["candidate"].structure == target_structure for row in selected
-            ):
+            if any(row["candidate"].structure == target_structure for row in selected):
                 continue
             match = next(
                 (
@@ -507,14 +571,12 @@ class CaptionService:
         started_at: datetime,
         latency_ms: float,
         references: list[int],
+        agent_run_ids: list[int],
     ) -> tuple[CaptionOptions, int]:
         display_texts = [row["candidate"].text for row in displayed]
         confidence = min(
             attempts[-1].confidence,
-            sum(
-                float(row["verification"].grounding_score) for row in displayed
-            )
-            / len(displayed),
+            sum(float(row["verification"].grounding_score) for row in displayed) / len(displayed),
         )
         rationale = (
             "RunWay planned channel-specific angles, verified visible claims, applied explicit "
@@ -534,6 +596,7 @@ class CaptionService:
                         "attempts": [attempt.model_dump() for attempt in attempts],
                         "ranking": [self._public_rank(row) for row in ranked],
                         "displayed": display_texts,
+                        "agent_run_ids": agent_run_ids,
                     },
                     sort_keys=True,
                 ),
@@ -562,9 +625,7 @@ class CaptionService:
                     self.generation_configuration,
                     sort_keys=True,
                 ),
-                configuration_hash=configuration_hash(
-                    self.generation_configuration
-                ),
+                configuration_hash=configuration_hash(self.generation_configuration),
                 status="completed",
                 latency_ms=latency_ms,
                 token_usage_json=json.dumps(
@@ -601,6 +662,7 @@ class CaptionService:
                     "displayed_count": len(displayed),
                     "policy_version": brief.policy_version,
                     "configuration_hash": slate.configuration_hash,
+                    "agent_run_ids": agent_run_ids,
                 },
             )
             slate_id = slate.id
@@ -634,6 +696,7 @@ class CaptionService:
         started_at: datetime,
         latency_ms: float,
         reason: str,
+        agent_run_ids: list[int],
     ) -> int:
         with self.database.session() as session:
             model_run = ModelRun(
@@ -647,6 +710,7 @@ class CaptionService:
                     {
                         "attempts": [attempt.model_dump() for attempt in attempts],
                         "abstention": reason,
+                        "agent_run_ids": agent_run_ids,
                     },
                     sort_keys=True,
                 ),
@@ -674,9 +738,7 @@ class CaptionService:
                     self.generation_configuration,
                     sort_keys=True,
                 ),
-                configuration_hash=configuration_hash(
-                    self.generation_configuration
-                ),
+                configuration_hash=configuration_hash(self.generation_configuration),
                 status="abstained",
                 latency_ms=latency_ms,
                 token_usage_json=json.dumps(
@@ -703,6 +765,7 @@ class CaptionService:
                     "caption_slate_id": slate.id,
                     "reason": reason,
                     "retrieval_run_id": context["retrieval_run_id"],
+                    "agent_run_ids": agent_run_ids,
                 },
             )
             return slate.id
@@ -720,10 +783,21 @@ class CaptionService:
             candidate = cast(CaptionCandidate, row["candidate"])
             verification = cast(VerificationResult, row["verification"])
             components = cast(dict[str, float], row["components"])
+            preference = cast(PreferenceScore, row["preference"])
             exclusion_reasons = cast(list[str], row["exclusion_reasons"])
             candidate_key = (
                 int(row["attempt_number"]),
                 int(row["generation_index"]),
+            )
+            snapshot_json, snapshot_hash = snapshot_json_and_hash(
+                candidate.text,
+                components,
+                context={
+                    "origin": "generated",
+                    "attempt_number": candidate_key[0],
+                    "generation_index": candidate_key[1],
+                    "eligible": bool(row["eligible"]),
+                },
             )
             session.add(
                 CaptionCandidateRecord(
@@ -743,12 +817,8 @@ class CaptionService:
                         },
                         sort_keys=True,
                     ),
-                    historical_evidence_json=json.dumps(
-                        row["allowed_reference_ids"]
-                    ),
-                    feedback_evidence_json=json.dumps(
-                        candidate.feedback_evidence
-                    ),
+                    historical_evidence_json=json.dumps(row["allowed_reference_ids"]),
+                    feedback_evidence_json=json.dumps(candidate.feedback_evidence),
                     generator_confidence=candidate.confidence,
                     verifier_result_json=verification.model_dump_json(),
                     eligible=bool(row["eligible"]),
@@ -768,6 +838,14 @@ class CaptionService:
                     rank=rank,
                     displayed=candidate_key in display_order,
                     display_order=display_order.get(candidate_key),
+                    origin="generated",
+                    created_by="intelligence_agent",
+                    feature_schema_version=FEATURE_SCHEMA_VERSION,
+                    feature_snapshot_json=snapshot_json,
+                    feature_snapshot_hash=snapshot_hash,
+                    taxonomy_version=TAXONOMY_VERSION,
+                    verifier_version=VERIFIER_VERSION,
+                    ranker_model_version_id=preference.model_version_id,
                 )
             )
 
@@ -792,6 +870,7 @@ class CaptionService:
                 "calibrated": preference.calibrated,
                 "reason": preference.reason,
                 "sample_count": preference.sample_count,
+                "model_version_id": preference.model_version_id,
             },
             "pairing": {
                 "score": pairing.score,
@@ -810,9 +889,7 @@ class CaptionService:
         text: str,
         selected: list[dict[str, Any]],
     ) -> bool:
-        threshold = float(
-            self.generation_configuration["diversity_similarity_threshold"]
-        )
+        threshold = float(self.generation_configuration["diversity_similarity_threshold"])
         return all(
             self._semantic_similarity(
                 text,

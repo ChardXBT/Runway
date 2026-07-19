@@ -4,9 +4,10 @@ import json
 import math
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast, overload
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,15 +29,18 @@ from runway.db.models import (
     PostAnnotation,
     PostMedia,
     Proposal,
+    RepresentationSet,
     RetrievalEvidenceRecord,
     SearchRun,
     StyleProfile,
 )
 from runway.db.repositories import get_channel
 from runway.intelligence.embeddings import (
+    ImageEmbeddingProvider,
+    MultimodalEmbeddingProvider,
     RepresentationProviderRegistry,
-    RepresentationResult,
     RepresentationStore,
+    TextEmbeddingProvider,
     configuration_hash,
     content_hash,
     cosine,
@@ -80,7 +84,7 @@ class ReferenceRetrievalQuery(BaseModel):
 
 
 class RetrievalConfiguration(BaseModel):
-    version: str = "hybrid-retrieval-1"
+    version: str = "hybrid-retrieval-2"
     candidate_limit_per_pool: int = Field(default=50, ge=5, le=500)
     selected_limit: int = Field(default=18, ge=4, le=50)
     rank_constant: float = Field(default=40.0, gt=0)
@@ -89,6 +93,7 @@ class RetrievalConfiguration(BaseModel):
     pool_weights: dict[str, float] = Field(
         default_factory=lambda: {
             "visual": 1.4,
+            "multimodal": 1.15,
             "semantic": 1.2,
             "lexical": 0.8,
             "entity": 1.2,
@@ -128,7 +133,11 @@ class RetrievalService:
     ):
         self.database = database
         self.settings = settings
-        self.registry = registry or RepresentationProviderRegistry()
+        if registry is None:
+            from runway.intelligence.neural_providers import configured_provider_registry
+
+            registry = configured_provider_registry(settings)
+        self.registry = registry
         self.store = RepresentationStore(database)
         self.configuration = configuration or RetrievalConfiguration()
         self.policy_service = ChannelPolicyService(database, settings)
@@ -163,7 +172,7 @@ class RetrievalService:
             selected = mmr_select(
                 fused,
                 limit=self.configuration.selected_limit,
-                similarity=self._evidence_similarity,
+                similarity=self._similarity_function(channel_id),
                 lambda_relevance=self.configuration.mmr_lambda,
                 role_quotas=self.configuration.role_quotas,
             )
@@ -193,9 +202,7 @@ class RetrievalService:
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
             channel_media_ids = self._channel_media_ids(session, channel.id)
-            missing_references = sorted(
-                set(query.reference_media_ids) - channel_media_ids
-            )
+            missing_references = sorted(set(query.reference_media_ids) - channel_media_ids)
             if missing_references:
                 raise LookupError(
                     "reference media are missing or outside the configured channel: "
@@ -216,9 +223,7 @@ class RetrievalService:
                 for media in session.scalars(
                     select(MediaAsset).where(
                         MediaAsset.id.in_(
-                            {
-                                candidate.media_asset_id for candidate in candidates
-                            }
+                            {candidate.media_asset_id for candidate in candidates}
                             | set(query.reference_media_ids)
                         )
                     )
@@ -246,15 +251,17 @@ class RetrievalService:
                 for media_id in query.reference_media_ids
                 if media_id in media_by_id
             ]
-            reference_vector = (
-                self._mean_vector(reference_vectors) if reference_vectors else None
-            )
+            reference_vector = self._mean_vector(reference_vectors) if reference_vectors else None
             text_query = self._query_text(query.model_dump())
             text_vector = (
-                self.registry.text().embed_text(
-                    text_query,
+                self._query_text_vector(
+                    channel.id,
+                    entity_type="retrieval_run",
+                    entity_id=run_id,
+                    field="instruction",
+                    text=text_query,
                     purpose="reference_instruction",
-                ).as_array()[0]
+                )
                 if text_query
                 else None
             )
@@ -313,22 +320,30 @@ class RetrievalService:
                     )
                 if text_vector is not None:
                     candidate_text = self._query_text(analysis)
-                    candidate_vector = self.registry.text().embed_text(
-                        candidate_text,
-                        purpose="candidate_semantics",
-                    ).as_array()[0]
-                    pools["instruction_text"].append(
-                        EvidenceCandidate(
+                    if candidate_text:
+                        candidate_vector = self._query_text_vector(
+                            channel.id,
                             entity_type="candidate_image",
                             entity_id=candidate.id,
-                            retrieval_channel="instruction_text",
-                            raw_score=max(0.0, cosine(text_vector, candidate_vector)),
-                            policy_score=1.0 if rights.outcome == "allowed" else 0.5,
-                            duplicate_cluster=candidate_media.perceptual_hash,
-                            evidence_role="semantic_analogue",
-                            metadata=metadata,
+                            field="analysis",
+                            text=candidate_text,
+                            purpose="candidate_semantics",
                         )
-                    )
+                        pools["instruction_text"].append(
+                            EvidenceCandidate(
+                                entity_type="candidate_image",
+                                entity_id=candidate.id,
+                                retrieval_channel="instruction_text",
+                                raw_score=max(
+                                    0.0,
+                                    cosine(text_vector, candidate_vector),
+                                ),
+                                policy_score=(1.0 if rights.outcome == "allowed" else 0.5),
+                                duplicate_cluster=candidate_media.perceptual_hash,
+                                evidence_role="semantic_analogue",
+                                metadata=metadata,
+                            )
+                        )
                 constraint_score = self._constraint_score(
                     query,
                     analysis,
@@ -360,7 +375,7 @@ class RetrievalService:
             selected = mmr_select(
                 fused,
                 limit=min(limit, self.configuration.selected_limit),
-                similarity=self._evidence_similarity,
+                similarity=self._similarity_function(channel.id),
                 lambda_relevance=self.configuration.mmr_lambda,
             )
             self._persist_evidence(run_id, channel.id, pools, fused)
@@ -422,6 +437,8 @@ class RetrievalService:
                 "configuration": json.loads(run.retrieval_configuration_json),
                 "configuration_hash": run.configuration_hash,
                 "embedding_versions": json.loads(run.embedding_versions_json),
+                "representation_sets": json.loads(run.representation_sets_json),
+                "cache_diagnostics": json.loads(run.cache_diagnostics_json),
                 "status": run.status,
                 "latency_ms": run.latency_ms,
                 "error_summary": run.error_summary,
@@ -458,9 +475,7 @@ class RetrievalService:
             if media is None or media.embedding_vector is None:
                 raise LookupError(f"candidate media {media_asset_id} has no local embedding")
             if media_asset_id not in self._channel_media_ids(session, channel.id):
-                raise LookupError(
-                    f"candidate media {media_asset_id} is outside @{channel.handle}"
-                )
+                raise LookupError(f"candidate media {media_asset_id} is outside @{channel.handle}")
             candidate: CandidateImage | None = None
             if candidate_id is not None:
                 candidate = session.get(CandidateImage, candidate_id)
@@ -560,24 +575,35 @@ class RetrievalService:
 
         query_visual = self._media_vector(channel_id, candidate_media)
         query_text = self._query_text(query_analysis)
-        query_semantic = self.registry.text().embed_text(
-            query_text,
-            purpose="candidate_semantics",
-        ).as_array()[0]
         candidate = cast(CandidateImage | None, context["candidate"])
+        query_entity_type = "candidate_image" if candidate is not None else "media_asset"
+        query_entity_id = candidate.id if candidate is not None else candidate_media.id
+        query_semantic = (
+            self._query_text_vector(
+                channel_id,
+                entity_type=query_entity_type,
+                entity_id=query_entity_id,
+                field="analysis",
+                text=query_text,
+            )
+            if query_text
+            else None
+        )
+        query_multimodal = self._query_multimodal_vector(
+            channel_id,
+            media=candidate_media,
+            text=query_text,
+            entity_type=query_entity_type,
+            entity_id=query_entity_id,
+        )
         if candidate is not None:
-            self.store.persist(
-                channel_id=channel_id,
+            self._query_text_vector(
+                channel_id,
                 entity_type="candidate_image",
                 entity_id=candidate.id,
-                field="analysis",
-                modality="text",
-                result=self.registry.text().embed_text(
-                    query_text,
-                    purpose="editorial_angle_semantics",
-                ),
-                source_content_hash=content_hash(query_text),
-                metadata={"candidate_media_id": candidate_media.id},
+                field="editorial_angle",
+                text=query_text,
+                purpose="editorial_angle_semantics",
             )
 
         query_tokens = self._tokens(query_text)
@@ -603,25 +629,16 @@ class RetrievalService:
         post_rows: dict[int, dict[str, object]] = {}
         for post in posts:
             annotation = annotations.get(post.id)
-            effective = (
-                effective_annotation_fields(annotation) if annotation is not None else {}
-            )
+            effective = effective_annotation_fields(annotation) if annotation is not None else {}
             post_text = self._post_text(post, effective)
-            text_result = self.registry.text().embed_text(
-                post_text,
-                purpose="caption_semantics",
+            text_vector = self._historical_text_vector(
+                channel_id,
+                post_id=post.id,
+                caption=post.caption or "",
             )
-            self.store.persist(
-                channel_id=channel_id,
-                entity_type="post",
-                entity_id=post.id,
-                field="caption_and_annotation",
-                modality="text",
-                result=text_result,
-                source_content_hash=content_hash(post_text),
-                metadata={"caption": post.caption or ""},
+            semantic = (
+                max(0.0, cosine(query_semantic, text_vector)) if query_semantic is not None else 0.0
             )
-            semantic = max(0.0, cosine(query_semantic, text_result.as_array()[0]))
             post_tokens = self._tokens(post_text)
             lexical = self._jaccard(query_tokens, post_tokens)
             post_entities = self._entity_keys(effective)
@@ -646,25 +663,37 @@ class RetrievalService:
                 query_composition,
                 str(effective.get("composition") or ""),
             )
-            query_structure = str(
-                query_analysis.get("preferred_caption_structure") or ""
-            )
+            query_structure = str(query_analysis.get("preferred_caption_structure") or "")
             historical_structure = self._caption_structure(post.caption or "")
             structure_score = float(
                 bool(query_structure and query_structure == historical_structure)
             )
             historical_vectors = [
-                self._media_vector(channel_id, media)
+                self._media_vector(channel_id, media, historical=True)
                 for media in media_by_post.get(post.id, [])
-                if media.embedding_vector
             ]
             visual_scores = [
-                max(0.0, cosine(query_visual, vector))
-                for vector in historical_vectors
+                max(0.0, cosine(query_visual, vector)) for vector in historical_vectors
             ]
             visual = (
                 0.7 * max(visual_scores) + 0.3 * sum(visual_scores) / len(visual_scores)
                 if visual_scores
+                else 0.0
+            )
+            primary_media = media_by_post[post.id][0] if media_by_post.get(post.id) else None
+            multimodal = (
+                max(
+                    0.0,
+                    cosine(
+                        query_multimodal,
+                        self._historical_multimodal_vector(
+                            channel_id,
+                            post=post,
+                            media=primary_media,
+                        ),
+                    ),
+                )
+                if primary_media is not None
                 else 0.0
             )
             recency = self._recency_score(post, now)
@@ -690,6 +719,7 @@ class RetrievalService:
             post_rows[post.id] = base_metadata
             scores = {
                 "visual": visual,
+                "multimodal": multimodal,
                 "semantic": semantic,
                 "lexical": lexical,
                 "entity": entity_score,
@@ -702,6 +732,7 @@ class RetrievalService:
             }
             role_map = {
                 "visual": "visual_analogue",
+                "multimodal": "semantic_analogue",
                 "semantic": "semantic_analogue",
                 "lexical": "caption_structure_example",
                 "entity": "semantic_analogue",
@@ -713,7 +744,7 @@ class RetrievalService:
                 "caption_structure": "caption_structure_example",
             }
             for pool_name, score in scores.items():
-                if score <= 0 and pool_name not in {"visual", "semantic"}:
+                if score <= 0 and pool_name not in {"visual", "multimodal", "semantic"}:
                     continue
                 pools[pool_name].append(
                     EvidenceCandidate(
@@ -837,9 +868,7 @@ class RetrievalService:
         ]
         negative_examples = self._negative_examples(channel_id)
         feedback_context = (
-            CaptionFeedbackService(self.database, self.settings).context_for_candidate(
-                candidate.id
-            )
+            CaptionFeedbackService(self.database, self.settings).context_for_candidate(candidate.id)
             if candidate is not None
             else {
                 "editorial_policy": {
@@ -882,12 +911,10 @@ class RetrievalService:
                 _required_int(row["post_id"], "post_id") for row in recent_posts[:3]
             ],
             "last_10_post_ids": [
-                _required_int(row["post_id"], "post_id")
-                for row in recent_posts[:10]
+                _required_int(row["post_id"], "post_id") for row in recent_posts[:10]
             ],
             "last_30_post_ids": [
-                _required_int(row["post_id"], "post_id")
-                for row in recent_posts[:30]
+                _required_int(row["post_id"], "post_id") for row in recent_posts[:30]
             ],
             "scheduled_proposal_ids": [proposal.id for proposal in scheduled],
             "recent_rejection_ids": [
@@ -1049,17 +1076,19 @@ class RetrievalService:
                 retrieval_configuration_json=self.configuration.model_dump_json(),
                 configuration_hash=self.configuration.hash,
                 embedding_versions_json=json.dumps(
-                    {
-                        "text": "runway-local/signed-subword-concepts/1",
-                        "image": "runway-local/image-descriptor/3",
-                        "multimodal": "runway-local/image-text-concatenation/1",
-                    },
+                    self._embedding_versions(channel_id),
                     sort_keys=True,
                 ),
+                representation_sets_json=json.dumps(
+                    self._active_set_snapshot(channel_id),
+                    sort_keys=True,
+                ),
+                cache_diagnostics_json=json.dumps(self.store.diagnostics(), sort_keys=True),
                 status="running",
             )
             session.add(run)
             session.flush()
+            self.store.reset_diagnostics()
             return run.id
 
     def _complete_run(self, run_id: int, started: float) -> None:
@@ -1067,9 +1096,20 @@ class RetrievalService:
             run = session.get(IntelligenceRetrievalRun, run_id)
             if run is None:
                 raise LookupError(f"retrieval run {run_id} disappeared")
+            starting_sets = self._json_dict(run.representation_sets_json)
+            finishing_sets = self._active_set_snapshot(run.channel_id)
+            if starting_sets != finishing_sets:
+                raise RuntimeError(
+                    "active representation sets changed during retrieval; "
+                    "the run cannot be treated as canonical"
+                )
             run.status = "completed"
             run.completed_at = datetime.now(UTC)
             run.latency_ms = round((time.perf_counter() - started) * 1000, 3)
+            run.cache_diagnostics_json = json.dumps(
+                self.store.diagnostics(),
+                sort_keys=True,
+            )
 
     def _fail_run(self, run_id: int, started: float, exc: Exception) -> None:
         with self.database.session() as session:
@@ -1080,6 +1120,10 @@ class RetrievalService:
             run.completed_at = datetime.now(UTC)
             run.latency_ms = round((time.perf_counter() - started) * 1000, 3)
             run.error_summary = f"{type(exc).__name__}: {exc}"
+            run.cache_diagnostics_json = json.dumps(
+                self.store.diagnostics(),
+                sort_keys=True,
+            )
 
     def _persist_evidence(
         self,
@@ -1155,53 +1199,316 @@ class RetrievalService:
         with self.database.session() as session:
             session.add_all(records)
 
-    def _media_vector(self, channel_id: int, media: MediaAsset) -> np.ndarray:
-        existing = self.store.latest(
-            channel_id=channel_id,
-            entity_type="media_asset",
-            entity_id=media.id,
-            purpose="global_visual_semantics",
+    def _media_vector(
+        self,
+        channel_id: int,
+        media: MediaAsset,
+        *,
+        historical: bool = False,
+    ) -> np.ndarray:
+        purpose = "historical_visual_semantics" if historical else "query_visual_semantics"
+        provider, active_set = self._resolve_provider(
+            channel_id,
+            modality="image",
+            scope="historical_image",
+            purpose="historical_visual_semantics",
         )
-        if existing is not None:
-            return cast(np.ndarray, self.store.vectors(existing)[0])
-        if media.embedding_vector is None:
-            path = self.settings.resolved_data_dir / media.local_path
-            result = self.registry.image().embed_image(
-                path,
-                purpose="global_visual_semantics",
-            )
-        else:
-            vector = np.frombuffer(media.embedding_vector, dtype=np.float32)
-            norm = float(np.linalg.norm(vector))
-            normalized = vector / norm if norm else vector
-            result = RepresentationResult(
-                provider="runway-local",
-                model=media.embedding_model or "image-descriptor",
-                version="3",
-                purpose="global_visual_semantics",
-                vectors=(tuple(float(value) for value in normalized),),
-                normalized=True,
-                configuration_hash=configuration_hash(
-                    {
-                        "source": media.embedding_model or "runway-local-image-v3",
-                        "compatibility_field": True,
-                    }
-                ),
-            )
-        record = self.store.persist(
+        record = self.store.get_or_create(
             channel_id=channel_id,
             entity_type="media_asset",
             entity_id=media.id,
             field="image",
             modality="image",
-            result=result,
+            purpose=purpose,
+            provider=provider.name,
+            model=provider.model,
+            model_version=provider.version,
             source_content_hash=media.sha256,
-            metadata={
-                "compatibility_media_embedding": media.embedding_vector is not None,
-                "mime_type": media.mime_type,
-            },
+            configuration_hash=provider.configuration_fingerprint,
+            producer=lambda: provider.embed_image(
+                self._media_path(media),
+                purpose=purpose,
+            ),
+            metadata={"mime_type": media.mime_type},
+            active_scope=("historical_image" if historical and active_set is not None else None),
         )
         return cast(np.ndarray, self.store.vectors(record)[0])
+
+    def _historical_text_vector(
+        self,
+        channel_id: int,
+        *,
+        post_id: int,
+        caption: str,
+    ) -> np.ndarray:
+        purpose = "historical_caption_semantics"
+        provider, active_set = self._resolve_provider(
+            channel_id,
+            modality="text",
+            scope="historical_text",
+            purpose=purpose,
+        )
+        record = self.store.get_or_create(
+            channel_id=channel_id,
+            entity_type="post",
+            entity_id=post_id,
+            field="caption",
+            modality="text",
+            purpose=purpose,
+            provider=provider.name,
+            model=provider.model,
+            model_version=provider.version,
+            source_content_hash=content_hash(caption),
+            configuration_hash=provider.configuration_fingerprint,
+            producer=lambda: provider.embed_text(caption, purpose=purpose),
+            metadata={"caption": caption},
+            active_scope="historical_text" if active_set is not None else None,
+        )
+        return cast(np.ndarray, self.store.vectors(record)[0])
+
+    def _query_text_vector(
+        self,
+        channel_id: int,
+        *,
+        entity_type: str,
+        entity_id: int,
+        field: str,
+        text: str,
+        purpose: str = "query_text_semantics",
+    ) -> np.ndarray:
+        provider, _active_set = self._resolve_provider(
+            channel_id,
+            modality="text",
+            scope="historical_text",
+            purpose="historical_caption_semantics",
+        )
+        record = self.store.get_or_create(
+            channel_id=channel_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            field=field,
+            modality="text",
+            purpose=purpose,
+            provider=provider.name,
+            model=provider.model,
+            model_version=provider.version,
+            source_content_hash=content_hash(text),
+            configuration_hash=provider.configuration_fingerprint,
+            producer=lambda: provider.embed_text(text, purpose=purpose),
+            metadata={"text": text},
+        )
+        return cast(np.ndarray, self.store.vectors(record)[0])
+
+    def _historical_multimodal_vector(
+        self,
+        channel_id: int,
+        *,
+        post: Post,
+        media: MediaAsset,
+    ) -> np.ndarray:
+        purpose = "historical_pair_semantics"
+        provider, active_set = self._resolve_provider(
+            channel_id,
+            modality="multimodal",
+            scope="historical_multimodal",
+            purpose=purpose,
+        )
+        caption = post.caption or ""
+        source_hash = configuration_hash({"media_sha256": media.sha256, "text": caption})
+        record = self.store.get_or_create(
+            channel_id=channel_id,
+            entity_type="post",
+            entity_id=post.id,
+            field="image_caption",
+            modality="multimodal",
+            purpose=purpose,
+            provider=provider.name,
+            model=provider.model,
+            model_version=provider.version,
+            source_content_hash=source_hash,
+            configuration_hash=provider.configuration_fingerprint,
+            producer=lambda: provider.embed_image_text(
+                self._media_path(media),
+                caption,
+                purpose=purpose,
+            ),
+            metadata={"media_asset_id": media.id, "caption": caption},
+            active_scope=("historical_multimodal" if active_set is not None else None),
+        )
+        return cast(np.ndarray, self.store.vectors(record)[0])
+
+    def _query_multimodal_vector(
+        self,
+        channel_id: int,
+        *,
+        media: MediaAsset,
+        text: str,
+        entity_type: str,
+        entity_id: int,
+    ) -> np.ndarray:
+        purpose = "query_pair_semantics"
+        provider, _active_set = self._resolve_provider(
+            channel_id,
+            modality="multimodal",
+            scope="historical_multimodal",
+            purpose="historical_pair_semantics",
+        )
+        source_hash = configuration_hash({"media_sha256": media.sha256, "text": text})
+        record = self.store.get_or_create(
+            channel_id=channel_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            field="image_analysis",
+            modality="multimodal",
+            purpose=purpose,
+            provider=provider.name,
+            model=provider.model,
+            model_version=provider.version,
+            source_content_hash=source_hash,
+            configuration_hash=provider.configuration_fingerprint,
+            producer=lambda: provider.embed_image_text(
+                self._media_path(media),
+                text,
+                purpose=purpose,
+            ),
+            metadata={"media_asset_id": media.id, "text": text},
+        )
+        return cast(np.ndarray, self.store.vectors(record)[0])
+
+    @overload
+    def _resolve_provider(
+        self,
+        channel_id: int,
+        *,
+        modality: Literal["text"],
+        scope: str,
+        purpose: str,
+    ) -> tuple[TextEmbeddingProvider, RepresentationSet | None]: ...
+
+    @overload
+    def _resolve_provider(
+        self,
+        channel_id: int,
+        *,
+        modality: Literal["image"],
+        scope: str,
+        purpose: str,
+    ) -> tuple[ImageEmbeddingProvider, RepresentationSet | None]: ...
+
+    @overload
+    def _resolve_provider(
+        self,
+        channel_id: int,
+        *,
+        modality: Literal["multimodal"],
+        scope: str,
+        purpose: str,
+    ) -> tuple[MultimodalEmbeddingProvider, RepresentationSet | None]: ...
+
+    def _resolve_provider(
+        self,
+        channel_id: int,
+        *,
+        modality: Literal["text", "image", "multimodal"],
+        scope: str,
+        purpose: str,
+    ) -> tuple[
+        TextEmbeddingProvider | ImageEmbeddingProvider | MultimodalEmbeddingProvider,
+        RepresentationSet | None,
+    ]:
+        active_set = self.store.active_set(
+            channel_id=channel_id,
+            scope=scope,
+            purpose=purpose,
+        )
+        provider: TextEmbeddingProvider | ImageEmbeddingProvider | MultimodalEmbeddingProvider
+        if modality == "text":
+            provider = self.registry.text(
+                active_set.provider if active_set is not None else "runway-local"
+            )
+        elif modality == "image":
+            provider = self.registry.image(
+                active_set.provider if active_set is not None else "runway-local"
+            )
+        else:
+            provider = self.registry.multimodal(
+                active_set.provider if active_set is not None else "runway-local"
+            )
+        if active_set is not None and (
+            provider.model != active_set.model
+            or provider.version != active_set.model_version
+            or provider.configuration_fingerprint != active_set.configuration_hash
+        ):
+            raise RuntimeError(
+                "configured provider identity does not match the active "
+                f"representation set {active_set.id}; no fallback was attempted"
+            )
+        return provider, active_set
+
+    def _active_set_snapshot(self, channel_id: int) -> dict[str, object]:
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(RepresentationSet)
+                .where(
+                    RepresentationSet.channel_id == channel_id,
+                    RepresentationSet.active.is_(True),
+                    RepresentationSet.status == "active",
+                )
+                .order_by(
+                    RepresentationSet.scope,
+                    RepresentationSet.purpose,
+                    RepresentationSet.id,
+                )
+            ).all()
+        result: dict[str, object] = {}
+        for row in rows:
+            key = f"{row.scope}:{row.purpose}"
+            if key in result:
+                raise RuntimeError(
+                    f"multiple active representation sets violate canonical resolution for {key}"
+                )
+            result[key] = {
+                "id": row.id,
+                "provider": row.provider,
+                "model": row.model,
+                "version": row.model_version,
+                "configuration_hash": row.configuration_hash,
+                "plan_hash": row.plan_hash,
+            }
+        return result
+
+    def _embedding_versions(self, channel_id: int) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for modality, scope, purpose in (
+            ("text", "historical_text", "historical_caption_semantics"),
+            ("image", "historical_image", "historical_visual_semantics"),
+            ("multimodal", "historical_multimodal", "historical_pair_semantics"),
+        ):
+            provider, active_set = self._resolve_provider(
+                channel_id,
+                modality=cast(Literal["text", "image", "multimodal"], modality),
+                scope=scope,
+                purpose=purpose,
+            )
+            result[modality] = {
+                "provider": provider.name,
+                "model": provider.model,
+                "version": provider.version,
+                "configuration_hash": provider.configuration_fingerprint,
+                "representation_set_id": (active_set.id if active_set is not None else None),
+                "resolution": "active_set" if active_set is not None else "baseline",
+            }
+        return result
+
+    def _media_path(self, media: MediaAsset) -> Path:
+        raw = Path(media.local_path)
+        resolved = (raw if raw.is_absolute() else self.settings.resolved_data_dir / raw).resolve()
+        root = self.settings.resolved_data_dir.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(f"media asset {media.id} escapes the configured data root")
+        if not resolved.is_file():
+            raise FileNotFoundError(resolved)
+        return resolved
 
     def _active_profile(self, session: Any, channel_id: int) -> StyleProfile:
         record = session.scalar(
@@ -1336,9 +1643,7 @@ class RetrievalService:
         ):
             items = value.get(key, [])
             if isinstance(items, list):
-                result.update(
-                    cls._normalized(str(item)) for item in items if str(item).strip()
-                )
+                result.update(cls._normalized(str(item)) for item in items if str(item).strip())
         entities = value.get("entities", [])
         if isinstance(entities, list):
             for item in entities:
@@ -1395,9 +1700,7 @@ class RetrievalService:
         if published.tzinfo is None:
             published = published.replace(tzinfo=UTC)
         age_days = max(0.0, (now - published).total_seconds() / 86400)
-        return math.exp(
-            -math.log(2) * age_days / self.configuration.recency_half_life_days
-        )
+        return math.exp(-math.log(2) * age_days / self.configuration.recency_half_life_days)
 
     def _is_recent(self, post: Post, now: datetime) -> bool:
         published = post.published_at
@@ -1419,31 +1722,55 @@ class RetrievalService:
             published = published.replace(tzinfo=UTC)
         return published >= now - timedelta(days=self.settings.duplicate_window_days)
 
-    def _evidence_similarity(
+    def _similarity_function(
         self,
-        first: EvidenceCandidate,
-        second: EvidenceCandidate,
-    ) -> float:
-        if (
-            first.duplicate_cluster
-            and second.duplicate_cluster
-            and first.duplicate_cluster == second.duplicate_cluster
-        ):
-            return 1.0
-        first_caption = str(first.metadata.get("caption") or "")
-        second_caption = str(second.metadata.get("caption") or "")
-        if not first_caption or not second_caption:
-            return 0.0
-        provider = self.registry.text()
-        first_vector = provider.embed_text(
-            first_caption,
-            purpose="diversity",
-        ).as_array()[0]
-        second_vector = provider.embed_text(
-            second_caption,
-            purpose="diversity",
-        ).as_array()[0]
-        return max(0.0, cosine(first_vector, second_vector))
+        channel_id: int,
+    ) -> Callable[[EvidenceCandidate, EvidenceCandidate], float]:
+        vectors: dict[tuple[str, int, str], np.ndarray] = {}
+
+        def vector(row: EvidenceCandidate) -> np.ndarray | None:
+            caption = str(row.metadata.get("caption") or "")
+            if not caption:
+                return None
+            key = (row.entity_type, row.entity_id, content_hash(caption))
+            cached = vectors.get(key)
+            if cached is not None:
+                return cached
+            if row.entity_type == "post":
+                value = self._historical_text_vector(
+                    channel_id,
+                    post_id=row.entity_id,
+                    caption=caption,
+                )
+            else:
+                value = self._query_text_vector(
+                    channel_id,
+                    entity_type=row.entity_type,
+                    entity_id=row.entity_id,
+                    field="diversity_caption",
+                    text=caption,
+                    purpose="diversity",
+                )
+            vectors[key] = value
+            return value
+
+        def similarity(
+            first: EvidenceCandidate,
+            second: EvidenceCandidate,
+        ) -> float:
+            if (
+                first.duplicate_cluster
+                and second.duplicate_cluster
+                and first.duplicate_cluster == second.duplicate_cluster
+            ):
+                return 1.0
+            first_vector = vector(first)
+            second_vector = vector(second)
+            if first_vector is None or second_vector is None:
+                return 0.0
+            return max(0.0, cosine(first_vector, second_vector))
+
+        return similarity
 
     @staticmethod
     def _mean_vector(vectors: list[np.ndarray]) -> np.ndarray:
@@ -1489,10 +1816,14 @@ class RetrievalService:
             if expected is None:
                 continue
             actual = analysis.get(key, "")
-            actual_text = " ".join(str(value) for value in actual) if isinstance(
-                actual,
-                list,
-            ) else str(actual)
+            actual_text = (
+                " ".join(str(value) for value in actual)
+                if isinstance(
+                    actual,
+                    list,
+                )
+                else str(actual)
+            )
             checks.append(cls._text_field_score(expected, actual_text))
         if query.text_overlay_preference:
             desired_overlay = query.text_overlay_preference in {"required", "prefer"}

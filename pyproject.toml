@@ -36,6 +36,11 @@ dev = [
   "pytest-cov>=6,<8",
   "ruff>=0.9,<1",
 ]
+intelligence-ml = [
+  "sentence-transformers>=5,<6",
+  "torch>=2.6,<3",
+  "transformers>=4.53,<6",
+]
 
 [project.scripts]
 runway = "runway.cli.main:app"

@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     search_api_url: str | None = None
     search_api_key: str | None = None
 
+    text_embedding_provider: Literal["runway-local", "sentence-transformers"] = "runway-local"
+    text_embedding_model_path: Path | None = None
+    text_embedding_model_id: str = "Qwen/Qwen3-Embedding-0.6B"
+    text_embedding_model_revision: str = "unvalidated-local"
+    multimodal_embedding_provider: Literal["runway-local", "siglip2"] = "runway-local"
+    multimodal_embedding_model_path: Path | None = None
+    multimodal_embedding_model_id: str = "google/siglip2-base-patch16-224"
+    multimodal_embedding_model_revision: str = "unvalidated-local"
+    embedding_device: Literal["cpu", "cuda"] = "cpu"
+    embedding_batch_size: int = Field(default=8, ge=1, le=128)
+
     minimum_image_dimension: int = 480
     maximum_image_bytes: int = 20 * 1024 * 1024
     duplicate_perceptual_threshold: float = 0.94
@@ -71,7 +82,13 @@ class Settings(BaseSettings):
             raise ValueError("RunWay may only bind to a loopback host")
         return value
 
-    @field_validator("codex_cli_path", "publisher_chrome_path", mode="before")
+    @field_validator(
+        "codex_cli_path",
+        "publisher_chrome_path",
+        "text_embedding_model_path",
+        "multimodal_embedding_model_path",
+        mode="before",
+    )
     @classmethod
     def blank_optional_path(cls, value: object) -> object | None:
         if value is None or (isinstance(value, str) and not value.strip()):
@@ -175,6 +192,13 @@ class Settings(BaseSettings):
                 "max_results": self.browser_search_max_results,
             },
             "search_api_configured": bool(self.search_api_url and self.search_api_key),
+            "representation_providers": {
+                "text": self.text_embedding_provider,
+                "multimodal": self.multimodal_embedding_provider,
+                "device": self.embedding_device,
+                "automatic_downloads": False,
+                "implicit_activation": False,
+            },
             "data_dir": str(self.resolved_data_dir),
         }
 

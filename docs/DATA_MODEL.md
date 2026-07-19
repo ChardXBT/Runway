@@ -21,3 +21,14 @@ publisher/state, a hash of the exact image/caption/time/channel payload, expiry/
 times, verification evidence, screenshot paths, and external ID/URL when known. The legacy
 diagnostic CLI also uses a hashed one-time confirmation token. Plain tokens and Google credentials
 are never persisted.
+
+The canonical intelligence flywheel adds explicit representation-set,
+agent-run, preference-dataset/model, annotation-refresh, blind-study,
+active-learning, activation, and decision-provenance lifecycles. Normalized
+feedback is now the canonical learning read path; legacy `caption_feedback`
+remains preserved and is reconciled idempotently.
+
+See [`INTELLIGENCE_DATA_MODEL.md`](INTELLIGENCE_DATA_MODEL.md) for table
+relationships, active-set rules, immutable feature snapshots, label provenance,
+training rules, schema fingerprinting, and the current production lifecycle
+state.

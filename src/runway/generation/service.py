@@ -24,6 +24,13 @@ from runway.db.repositories import audit, get_channel
 from runway.domain.enums import RunStatus
 from runway.generation.providers import ImageGenerationProviderRegistry
 from runway.generation.schemas import CreativeBrief, ProviderRequest
+from runway.intelligence.agent_harness import (
+    AgentBudget,
+    AgentInputEnvelope,
+    AgentOutputEnvelope,
+    AgentStepResult,
+    IntelligenceAgentHarness,
+)
 from runway.intelligence.policies import ChannelPolicyService
 from runway.media.service import (
     content_addressed_copy,
@@ -51,6 +58,7 @@ class ImageGenerationService:
         self.policy = ChannelPolicyService(database, settings)
         self.detector = DuplicateDetector(database, settings)
         self.ranker = CandidateRanker(database, settings)
+        self.harness = IntelligenceAgentHarness(database)
 
     async def generate(
         self,
@@ -63,9 +71,7 @@ class ImageGenerationService:
         if provider.capabilities.paid_usage:
             raise ValueError("paid image-generation providers are disabled")
         if brief.capability not in provider.capabilities.capabilities:
-            raise ValueError(
-                f"provider {provider.name} does not support {brief.capability}"
-            )
+            raise ValueError(f"provider {provider.name} does not support {brief.capability}")
         if len(brief.reference_media_ids) > provider.capabilities.maximum_references:
             raise ValueError("the provider reference limit would be exceeded")
 
@@ -104,8 +110,7 @@ class ImageGenerationService:
                 )
                 if decision.outcome != "allowed":
                     raise ValueError(
-                        f"reference media {reference.id} is not eligible: "
-                        f"{decision.reason}"
+                        f"reference media {reference.id} is not eligible: {decision.reason}"
                     )
             if (
                 brief.capability in {"reference_edit", "variation"}
@@ -149,8 +154,7 @@ class ImageGenerationService:
             session.flush()
             search_run_id = search_run.id
             reference_paths = [
-                self.settings.resolved_data_dir / reference.local_path
-                for reference in references
+                self.settings.resolved_data_dir / reference.local_path for reference in references
             ]
 
         request = ProviderRequest(
@@ -158,15 +162,63 @@ class ImageGenerationService:
             brief=brief,
             reference_paths=reference_paths,
             output_directory=(
-                self.settings.resolved_data_dir
-                / "raw"
-                / "generated"
-                / f"run-{run_id}"
+                self.settings.resolved_data_dir / "raw" / "generated" / f"run-{run_id}"
             ),
             output_count=output_count,
         )
         try:
-            outputs = await provider.generate(request)
+
+            async def invoke_provider(
+                _input: AgentInputEnvelope,
+                _attempt: int,
+            ) -> AgentStepResult:
+                generated = await provider.generate(request)
+                return AgentStepResult(
+                    output=AgentOutputEnvelope(
+                        payload={
+                            "outputs": [output.model_dump(mode="json") for output in generated]
+                        }
+                    ),
+                    usage={"total_tokens": 0, "paid_provider_calls": 0},
+                    artifact_type="image_generation_run",
+                    artifact_id=str(run_id),
+                )
+
+            agent_run_id, agent_output = await self.harness.execute(
+                channel_id=channel_id,
+                capability="image_generation_mock",
+                provider=provider.name,
+                model=f"{provider.model}:{provider.model_version}",
+                prompt_version="image-generation-provider-v1",
+                input_value=AgentInputEnvelope(
+                    entity_ids=brief.reference_media_ids,
+                    payload={
+                        "generation_run_id": run_id,
+                        "creative_brief": brief.model_dump(mode="json"),
+                        "output_count": output_count,
+                        "paid_usage": False,
+                    },
+                ),
+                handler=invoke_provider,
+                budget=AgentBudget(
+                    max_steps=1,
+                    max_attempts_per_step=1,
+                    max_total_tokens=0,
+                    max_seconds=300,
+                    timeout_seconds=300,
+                ),
+                run_key=f"image-generation:{run_id}",
+            )
+            raw_outputs = agent_output.payload.get("outputs")
+            if not isinstance(raw_outputs, list):
+                raise ValueError("image-generation agent returned malformed outputs")
+            from runway.generation.schemas import ProviderImage
+
+            outputs = [ProviderImage.model_validate(output) for output in raw_outputs]
+            with self.database.session() as session:
+                loaded_generation = session.get(ImageGenerationRun, run_id)
+                if loaded_generation is not None:
+                    loaded_generation.agent_run_id = agent_run_id
             candidate_ids = [
                 await self._ingest_output(
                     generation_run_id=run_id,
@@ -314,9 +366,7 @@ class ImageGenerationService:
                 )
                 preview_features = inspect_image(preview_path)
                 preview = session.scalar(
-                    select(MediaAsset)
-                    .where(MediaAsset.sha256 == preview_features.sha256)
-                    .limit(1)
+                    select(MediaAsset).where(MediaAsset.sha256 == preview_features.sha256).limit(1)
                 )
                 if preview is None:
                     preview = MediaAsset(
@@ -389,6 +439,7 @@ class ImageGenerationService:
                 channel_id=channel_id,
                 generation_run_id=generation_run_id,
                 media_asset_id=asset.id,
+                candidate_image_id=candidate.id,
                 content_hash=features.sha256,
                 safety_result_json=json.dumps(
                     {
@@ -410,6 +461,7 @@ class ImageGenerationService:
                 duplicate_result_json=duplicate.model_dump_json(),
                 annotation_json=analysis.model_dump_json(),
                 ranking_json=ranking.model_dump_json(),
+                review_status="pending",
             )
             session.add(lineage)
             audit(

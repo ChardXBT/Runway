@@ -74,9 +74,7 @@ class ProposalService:
             ).all()
             used_ids = set(
                 session.scalars(
-                    select(Proposal.candidate_image_id).where(
-                        Proposal.channel_id == channel.id
-                    )
+                    select(Proposal.candidate_image_id).where(Proposal.channel_id == channel.id)
                 ).all()
             )
             candidates = [candidate for candidate in accepted if candidate.id not in used_ids]
@@ -142,9 +140,7 @@ class ProposalService:
                 while candidate_index < len(candidates):
                     current_candidate = candidates[candidate_index]
                     candidate_index += 1
-                    current_captions = await self.caption_service.generate(
-                        current_candidate.id
-                    )
+                    current_captions = await self.caption_service.generate(current_candidate.id)
                     if current_captions.abstained:
                         continue
                     candidate = current_candidate
@@ -162,9 +158,7 @@ class ProposalService:
                 backup_ids: list[int] = []
                 remaining_candidates = candidates[candidate_index:]
                 if remaining_candidates:
-                    backup_ids = [
-                        value.id for value in remaining_candidates[:2]
-                    ]
+                    backup_ids = [value.id for value in remaining_candidates[:2]]
                 with self.database.session() as session:
                     current = session.get(CandidateImage, candidate.id)
                     if current is None or current.hard_rejection_reason:
@@ -292,9 +286,7 @@ class ProposalService:
         with self.database.session() as session:
             channel_id = self._channel_id(session)
             values = session.scalars(
-                select(Proposal.planned_publish_at).where(
-                    Proposal.channel_id == channel_id
-                )
+                select(Proposal.planned_publish_at).where(Proposal.channel_id == channel_id)
             ).all()
         dates = [
             datetime.fromisoformat(value).astimezone(timezone).date() for value in values if value
@@ -413,9 +405,7 @@ class ProposalService:
     def workflow_summary(self) -> dict[str, object]:
         with self.database.session() as session:
             channel_id = self._channel_id(session)
-            rows = session.scalars(
-                select(Proposal).where(Proposal.channel_id == channel_id)
-            ).all()
+            rows = session.scalars(select(Proposal).where(Proposal.channel_id == channel_id)).all()
         counts: dict[str, int] = {}
         for proposal in rows:
             counts[proposal.status] = counts.get(proposal.status, 0) + 1
@@ -488,6 +478,7 @@ class ProposalService:
         if not cleaned:
             raise ValueError("final caption cannot be empty")
         unchanged = False
+        decision_event_id: int | None = None
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
             self._require_status(
@@ -511,13 +502,14 @@ class ProposalService:
                     )
                     proposal.approved_at = None
                 proposal.final_caption = cleaned
-                self._event(
+                event = self._event(
                     session,
                     proposal.id,
                     "caption_edited",
                     {"final_caption": old},
                     {"final_caption": cleaned},
                 )
+                decision_event_id = event.id
                 audit(session, "caption_edited", "proposal", proposal.id, {})
         if unchanged:
             return self.detail(proposal_id)
@@ -527,6 +519,7 @@ class ProposalService:
             final_caption=cleaned,
             original_caption=old,
             reason_codes=reason_codes or ["human_edit"],
+            source_event_id=decision_event_id,
         )
         self.feedback.record(
             proposal_id,
@@ -536,10 +529,12 @@ class ProposalService:
             reason_codes=reason_codes or ["human_edit"],
             image_verdict=image_verdict,
             note=note,
+            source_event_id=decision_event_id,
         )
         return self.detail(proposal_id)
 
     def select_alternative(self, proposal_id: int, index: int) -> dict[str, object]:
+        decision_event_id: int | None = None
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
             self._require_status(
@@ -565,13 +560,14 @@ class ProposalService:
                 proposal.approved_at = None
             old = proposal.final_caption
             proposal.final_caption = alternatives[index]
-            self._event(
+            event = self._event(
                 session,
                 proposal.id,
                 "alternative_selected",
                 {"final_caption": old},
                 {"index": index, "final_caption": proposal.final_caption},
             )
+            decision_event_id = event.id
             selected = proposal.final_caption
         self.exposures.record_decision(
             proposal_id,
@@ -579,6 +575,7 @@ class ProposalService:
             final_caption=selected,
             original_caption=old,
             reason_codes=["selected_alternative"],
+            source_event_id=decision_event_id,
         )
         self.feedback.record(
             proposal_id,
@@ -586,10 +583,12 @@ class ProposalService:
             generated_caption=old,
             preferred_caption=selected,
             reason_codes=["selected_alternative"],
+            source_event_id=decision_event_id,
         )
         return self.detail(proposal_id)
 
     def approve(self, proposal_id: int) -> dict[str, object]:
+        decision_event_id: int | None = None
         with self._schedule_lock:
             scheduled_for = self.next_available_slot(exclude_proposal_id=proposal_id)
             with self.database.session() as session:
@@ -611,7 +610,13 @@ class ProposalService:
                     {"scheduled_publish_at": old_slot},
                     {"scheduled_publish_at": proposal.scheduled_publish_at},
                 )
-                self._transition(session, proposal, ProposalStatus.APPROVED, "approved")
+                event = self._transition(
+                    session,
+                    proposal,
+                    ProposalStatus.APPROVED,
+                    "approved",
+                )
+                decision_event_id = event.id
                 proposal.approved_at = datetime.now(UTC)
                 proposal.rejected_at = None
                 source = self.settings.resolved_data_dir / media.local_path
@@ -642,6 +647,7 @@ class ProposalService:
             final_caption=final_caption,
             original_caption=generated_caption,
             reason_codes=["approved"],
+            source_event_id=decision_event_id,
         )
         self.feedback.record(
             proposal_id,
@@ -650,6 +656,7 @@ class ProposalService:
             preferred_caption=final_caption,
             reason_codes=["approved"],
             image_verdict="good",
+            source_event_id=decision_event_id,
         )
         return self.detail(proposal_id)
 
@@ -661,12 +668,13 @@ class ProposalService:
         reason_codes: list[str] | None = None,
         image_verdict: str | None = None,
     ) -> dict[str, object]:
+        decision_event_id: int | None = None
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
             self._release_schedule_slot(session, proposal, "schedule_slot_released_for_rejection")
             self._transition(session, proposal, ProposalStatus.REJECTED, "rejected")
             proposal.rejected_at = datetime.now(UTC)
-            self._event(
+            event = self._event(
                 session,
                 proposal.id,
                 "rejection_feedback",
@@ -677,6 +685,7 @@ class ProposalService:
                     "caption": proposal.final_caption,
                 },
             )
+            decision_event_id = event.id
             audit(session, "proposal_rejected", "proposal", proposal.id, {"reason": reason})
             rejected_caption = proposal.final_caption
         inferred_reasons = reason_codes or self._reason_codes(reason)
@@ -686,6 +695,7 @@ class ProposalService:
             final_caption=None,
             original_caption=rejected_caption,
             reason_codes=inferred_reasons,
+            source_event_id=decision_event_id,
         )
         self.feedback.record(
             proposal_id,
@@ -694,6 +704,7 @@ class ProposalService:
             reason_codes=inferred_reasons,
             image_verdict=image_verdict,
             note=reason,
+            source_event_id=decision_event_id,
         )
         return self.detail(proposal_id)
 
@@ -708,6 +719,20 @@ class ProposalService:
         image_verdict: str | None = None,
         note: str | None = None,
     ) -> dict[str, object]:
+        with self.database.session() as session:
+            proposal = self._get(session, proposal_id)
+            event = self._event(
+                session,
+                proposal.id,
+                "creator_feedback_recorded",
+                {},
+                {
+                    "verdict": verdict,
+                    "reason_codes": sorted(reason_codes or []),
+                    "image_verdict": image_verdict,
+                },
+            )
+            source_event_id = event.id
         self.feedback.record(
             proposal_id,
             verdict=verdict,
@@ -716,6 +741,7 @@ class ProposalService:
             reason_codes=reason_codes,
             image_verdict=image_verdict,
             note=note,
+            source_event_id=source_event_id,
         )
         return self.detail(proposal_id)
 
@@ -885,8 +911,7 @@ class ProposalService:
         captions = await self.caption_service.generate(selected_id)
         if captions.abstained:
             raise ValueError(
-                "replacement image produced no grounded caption slate; "
-                "the proposal was preserved"
+                "replacement image produced no grounded caption slate; the proposal was preserved"
             )
         context = self.retrieval.context_for_candidate(
             replacement.media_asset_id,
@@ -1086,15 +1111,16 @@ class ProposalService:
         event_type: str,
         old: dict[str, object],
         new: dict[str, object],
-    ) -> None:
-        session.add(
-            ProposalEvent(
-                proposal_id=proposal_id,
-                event_type=event_type,
-                old_value_json=json.dumps(old, sort_keys=True, default=str),
-                new_value_json=json.dumps(new, sort_keys=True, default=str),
-            )
+    ) -> ProposalEvent:
+        event = ProposalEvent(
+            proposal_id=proposal_id,
+            event_type=event_type,
+            old_value_json=json.dumps(old, sort_keys=True, default=str),
+            new_value_json=json.dumps(new, sort_keys=True, default=str),
         )
+        session.add(event)
+        session.flush()
+        return event
 
     def _transition(
         self,
@@ -1102,11 +1128,11 @@ class ProposalService:
         proposal: Proposal,
         new_status: ProposalStatus,
         event_type: str,
-    ) -> None:
+    ) -> ProposalEvent:
         old_status = ProposalStatus(proposal.status)
         require_transition(old_status, new_status)
         proposal.status = new_status.value
-        self._event(
+        return self._event(
             session,
             proposal.id,
             event_type,

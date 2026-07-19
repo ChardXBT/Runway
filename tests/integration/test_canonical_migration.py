@@ -63,15 +63,27 @@ def test_existing_schema_upgrade_and_rollback_preserve_catalogue(
         "image_generation_runs",
         "generated_asset_lineage",
         "intelligence_experiments",
+        "representation_sets",
+        "representation_set_items",
+        "intelligence_agent_runs",
+        "intelligence_agent_steps",
+        "preference_datasets",
+        "preference_dataset_items",
+        "preference_model_versions",
+        "annotation_refresh_runs",
+        "annotation_refresh_items",
+        "blind_studies",
+        "blind_study_cases",
+        "blind_study_responses",
+        "active_learning_batches",
+        "active_learning_selections",
     }
     assert required_tables <= set(upgraded.get_table_names())
-    assert "caption_slate_id" in {
-        column["name"] for column in upgraded.get_columns("proposals")
-    }
+    assert "caption_slate_id" in {column["name"] for column in upgraded.get_columns("proposals")}
     with upgraded_engine.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM posts")).scalar_one() == post_count
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == "0007_canonical_intelligence"
+            == "0008_intelligence_data_flywheel"
         )
     upgraded_engine.dispose()
