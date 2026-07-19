@@ -114,9 +114,7 @@ class EditorialPlanner:
         append_fact("setting", candidate_analysis.get("setting"), "scene")
         append_fact("composition", candidate_analysis.get("composition"), "composition")
 
-        supported_entities = sorted(
-            {fact.value for fact in facts if fact.field == "entity"}
-        )
+        supported_entities = sorted({fact.value for fact in facts if fact.field == "entity"})
         profile = cast(
             dict[str, object],
             retrieval_context.get("style_profile", {}),
@@ -133,16 +131,12 @@ class EditorialPlanner:
             dict[str, object],
             retrieval_context.get("feedback_context", {}),
         )
-        positive.extend(
-            cast(list[dict[str, object]], feedback.get("positive_examples", []))[:6]
-        )
+        positive.extend(cast(list[dict[str, object]], feedback.get("positive_examples", []))[:6])
         negative = cast(
             list[dict[str, object]],
             retrieval_context.get("negative_examples", []),
         )[:8]
-        negative.extend(
-            cast(list[dict[str, object]], feedback.get("negative_examples", []))[:6]
-        )
+        negative.extend(cast(list[dict[str, object]], feedback.get("negative_examples", []))[:6])
         visible_fields = {fact.field for fact in facts}
         angles = ["visual_observation"]
         if "emotion" in visible_fields:

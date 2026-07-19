@@ -36,8 +36,10 @@ def minmax_normalize(rows: Sequence[EvidenceCandidate]) -> None:
     maximum = max(values)
     span = maximum - minimum
     for row in rows:
-        row.normalized_score = 1.0 if span == 0 and maximum > 0 else (
-            (row.raw_score - minimum) / span if span else 0.0
+        row.normalized_score = (
+            1.0
+            if span == 0 and maximum > 0
+            else ((row.raw_score - minimum) / span if span else 0.0)
         )
 
 
@@ -110,9 +112,7 @@ def mmr_select(
             duplicate_redundancy = (
                 1.0
                 if row.duplicate_cluster
-                and any(
-                    other.duplicate_cluster == row.duplicate_cluster for other in selected
-                )
+                and any(other.duplicate_cluster == row.duplicate_cluster for other in selected)
                 else 0.0
             )
             redundancy = max(redundancy, duplicate_redundancy)

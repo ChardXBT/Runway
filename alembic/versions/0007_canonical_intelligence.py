@@ -46,13 +46,8 @@ def _has_sqlite_foreign_key(
     column: str,
     referred_table: str,
 ) -> bool:
-    rows = op.get_bind().exec_driver_sql(
-        f'PRAGMA foreign_key_list("{table}")'
-    ).mappings()
-    return any(
-        row["from"] == column and row["table"] == referred_table
-        for row in rows
-    )
+    rows = op.get_bind().exec_driver_sql(f'PRAGMA foreign_key_list("{table}")').mappings()
+    return any(row["from"] == column and row["table"] == referred_table for row in rows)
 
 
 def upgrade() -> None:
@@ -97,9 +92,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     if "caption_slate_id" in _column_names("proposals"):
-        indexes = {
-            item["name"] for item in sa.inspect(op.get_bind()).get_indexes("proposals")
-        }
+        indexes = {item["name"] for item in sa.inspect(op.get_bind()).get_indexes("proposals")}
         if "ix_proposals_caption_slate_id" in indexes:
             op.drop_index("ix_proposals_caption_slate_id", table_name="proposals")
         with op.batch_alter_table("proposals", recreate="always") as batch:

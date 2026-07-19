@@ -142,9 +142,7 @@ def test_schema_comparison_identifies_changed_column_attributes(
     columns = proposals["columns"]
     assert isinstance(columns, list)
     status = next(
-        column
-        for column in columns
-        if isinstance(column, dict) and column.get("name") == "status"
+        column for column in columns if isinstance(column, dict) and column.get("name") == "status"
     )
     assert isinstance(status, dict)
     status["nullable"] = not bool(status["nullable"])

@@ -180,7 +180,4 @@ async def test_grounded_question_first_caption_and_feedback_memory(
     assert first_reconciliation["created"] == 0
     assert second_reconciliation["created"] == 0
     assert first_reconciliation["canonical_signals"] > 0
-    assert (
-        second_reconciliation["canonical_signals"]
-        == first_reconciliation["canonical_signals"]
-    )
+    assert second_reconciliation["canonical_signals"] == first_reconciliation["canonical_signals"]

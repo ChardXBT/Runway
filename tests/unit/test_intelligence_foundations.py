@@ -54,10 +54,7 @@ def test_representations_are_idempotent_and_model_versions_coexist(
     assert upgraded.id != first.id
     assert store.vectors(first).shape == (1, result.dimensions)
     with database.session() as session:
-        assert (
-            session.scalar(select(func.count(RepresentationRecord.id)))
-            == 2
-        )
+        assert session.scalar(select(func.count(RepresentationRecord.id))) == 2
 
 
 def test_tokenless_text_still_produces_a_valid_normalized_representation() -> None:
@@ -149,9 +146,7 @@ def _evidence_pools() -> dict[str, list[EvidenceCandidate]]:
 def test_fusion_is_deterministic_and_mmr_suppresses_duplicate_evidence() -> None:
     first = reciprocal_rank_fusion(_evidence_pools(), rank_constant=40)
     second = reciprocal_rank_fusion(_evidence_pools(), rank_constant=40)
-    assert [
-        (row.key, round(row.fusion_score, 12)) for row in first
-    ] == [
+    assert [(row.key, round(row.fusion_score, 12)) for row in first] == [
         (row.key, round(row.fusion_score, 12)) for row in second
     ]
 
@@ -193,22 +188,31 @@ def test_explicit_policy_outranks_defaults_and_unknown_rights_are_blocked(
     assert current.question_first is False
     assert current.preferred_structures[0] == "observation"
 
-    assert service.rights_decision(
-        channel_id=channel_id,
-        rights_status="unknown",
-        for_generation=False,
-    ).outcome == "requires_review"
-    assert service.rights_decision(
-        channel_id=channel_id,
-        rights_status="unknown",
-        for_generation=True,
-    ).outcome == "blocked"
-    assert service.rights_decision(
-        channel_id=channel_id,
-        rights_status="blocked",
-        explicitly_approved=True,
-        for_generation=True,
-    ).outcome == "blocked"
+    assert (
+        service.rights_decision(
+            channel_id=channel_id,
+            rights_status="unknown",
+            for_generation=False,
+        ).outcome
+        == "requires_review"
+    )
+    assert (
+        service.rights_decision(
+            channel_id=channel_id,
+            rights_status="unknown",
+            for_generation=True,
+        ).outcome
+        == "blocked"
+    )
+    assert (
+        service.rights_decision(
+            channel_id=channel_id,
+            rights_status="blocked",
+            explicitly_approved=True,
+            for_generation=True,
+        ).outcome
+        == "blocked"
+    )
 
 
 def test_question_template_has_no_hardcoded_fallback_rank_bonus() -> None:

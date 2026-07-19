@@ -99,9 +99,7 @@ async def test_complete_caption_slate_and_abstention_provenance_are_persisted(
             .order_by(CaptionCandidateRecord.rank)
         ).all()
         raw_attempts = json.loads(completed_slate.raw_output_json)
-    assert len(completed_records) == sum(
-        len(attempt["candidates"]) for attempt in raw_attempts
-    )
+    assert len(completed_records) == sum(len(attempt["candidates"]) for attempt in raw_attempts)
     displayed = [row for row in completed_records if row.displayed]
     assert len(displayed) == 3
     assert all(row.eligible for row in displayed)

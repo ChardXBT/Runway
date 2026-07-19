@@ -128,9 +128,7 @@ async def _freeze(root: Path, output_dir: Path) -> None:
                     raise LookupError(f"candidate {candidate_id} has no caption model run")
                 model_output = cast(dict[str, Any], json.loads(model_run.structured_output_json))
                 request = cast(dict[str, Any], json.loads(model_run.request_summary_json))
-                analysis_payload = cast(
-                    dict[str, Any], json.loads(candidate.detected_topic_json)
-                )
+                analysis_payload = cast(dict[str, Any], json.loads(candidate.detected_topic_json))
                 direct_url = candidate.direct_image_url or f"candidate:{candidate_id}"
                 case_id = direct_url.removeprefix("fixture://")
                 case_id = f"qlob-fixture-{case_id}"
@@ -168,9 +166,7 @@ async def _freeze(root: Path, output_dir: Path) -> None:
                                 }
                                 for row in selected_rows
                             ],
-                            "factual_uncertainty_warning": (
-                                options.factual_uncertainty_warning
-                            ),
+                            "factual_uncertainty_warning": (options.factual_uncertainty_warning),
                         },
                         "duplicate": {
                             "hard_rejection_reason": candidate.hard_rejection_reason,
@@ -307,10 +303,7 @@ async def _freeze(root: Path, output_dir: Path) -> None:
                 json.dumps(payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-        checksums = [
-            f"{_file_hash(output_dir / name)}  {name}"
-            for name in sorted(payloads)
-        ]
+        checksums = [f"{_file_hash(output_dir / name)}  {name}" for name in sorted(payloads)]
         (output_dir / "checksums.sha256").write_text(
             "\n".join(checksums) + "\n",
             encoding="utf-8",

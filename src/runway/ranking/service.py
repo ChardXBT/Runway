@@ -207,11 +207,7 @@ class CandidateRanker:
                 return set()
             payload = json.loads(profile.profile_json)
         statistics = payload.get("caption_statistics", {})
-        sample_size = (
-            int(statistics.get("sample_size", 0))
-            if isinstance(statistics, dict)
-            else 0
-        )
+        sample_size = int(statistics.get("sample_size", 0)) if isinstance(statistics, dict) else 0
         minimum_support = max(2, round(sample_size * 0.01))
         distribution = payload.get(
             "topic_distribution",
@@ -235,9 +231,7 @@ class CandidateRanker:
     @classmethod
     def _candidate_topics(cls, analysis: CandidateAnalysis) -> set[str]:
         topics = {
-            cls._normalized_topic(
-                str(entity.canonical_name or entity.name)
-            )
+            cls._normalized_topic(str(entity.canonical_name or entity.name))
             for entity in analysis.entities
             if entity.canonical_name or entity.name
         }
@@ -286,7 +280,9 @@ class CandidateRanker:
                 .join(Proposal, Proposal.candidate_image_id == CandidateImage.id)
                 .where(
                     Proposal.channel_id == channel_id,
-                    Proposal.status.not_in(["rejected", "cancelled", "published", "publish_failed"])
+                    Proposal.status.not_in(
+                        ["rejected", "cancelled", "published", "publish_failed"]
+                    ),
                 )
             ).all()
             counts = Counter(
@@ -324,9 +320,7 @@ class CandidateRanker:
             media_ids = {candidate.media_asset_id for candidate in candidates.values()}
             media = {
                 asset.id: asset
-                for asset in session.scalars(
-                    select(MediaAsset).where(MediaAsset.id.in_(media_ids))
-                )
+                for asset in session.scalars(select(MediaAsset).where(MediaAsset.id.in_(media_ids)))
             }
         positive = 0.0
         negative = 0.0

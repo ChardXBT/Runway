@@ -495,8 +495,7 @@ class DiscoveryService:
     @staticmethod
     def _plan_payload(profile: dict[str, object], days: int) -> dict[str, object]:
         using_compatibility_franchise_distribution = (
-            "topic_distribution" not in profile
-            and "entity_distribution" not in profile
+            "topic_distribution" not in profile and "entity_distribution" not in profile
         )
         distribution = profile.get(
             "topic_distribution",

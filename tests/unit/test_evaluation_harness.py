@@ -35,10 +35,7 @@ def _candidate_artifact(
                 "case_id": label.case_id,
                 "generated_pool": [
                     {
-                        "text": (
-                            f"{label.expected_terms[0]} "
-                            f"{label.expected_terms[-1]}?"
-                        ),
+                        "text": (f"{label.expected_terms[0]} {label.expected_terms[-1]}?"),
                         "structure": label.preferred_structures[0],
                         "eligible": True,
                         "verification": {
@@ -83,10 +80,7 @@ def test_dataset_boundaries_cluster_integrity_and_blind_order_are_deterministic(
 
 
 def test_frozen_baseline_checksums_are_immutable() -> None:
-    root = (
-        DatasetRepository().root.parent
-        / "baseline-876fe5f"
-    )
+    root = DatasetRepository().root.parent / "baseline-876fe5f"
     for line in (root / "checksums.sha256").read_text(encoding="utf-8").splitlines():
         expected, filename = line.split(maxsplit=1)
         actual = hashlib.sha256((root / filename).read_bytes()).hexdigest()
@@ -122,12 +116,8 @@ def test_tuning_is_reproducible_and_holdout_can_run_only_once(
     changed = deepcopy(tuning)
     changed["cases"][0]["generated_pool"][0]["components"]["style"] = 0.1
     changed_run = runner.tune(changed)
-    original_ids = {
-        experiment["experiment_id"] for experiment in first["experiments"]
-    }
-    changed_ids = {
-        experiment["experiment_id"] for experiment in changed_run["experiments"]
-    }
+    original_ids = {experiment["experiment_id"] for experiment in first["experiments"]}
+    changed_ids = {experiment["experiment_id"] for experiment in changed_run["experiments"]}
     assert original_ids.isdisjoint(changed_ids)
     assert all(
         (tmp_path / "experiments" / experiment_id / "experiment.json").is_file()

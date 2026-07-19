@@ -298,15 +298,10 @@ class AnnotationRefreshService:
                     AnnotationRefreshItem.status,
                     func.count(AnnotationRefreshItem.id),
                 )
-                .where(
-                    AnnotationRefreshItem.annotation_refresh_run_id
-                    == refresh_run_id
-                )
+                .where(AnnotationRefreshItem.annotation_refresh_run_id == refresh_run_id)
                 .group_by(AnnotationRefreshItem.status)
             ).all()
-            counts: dict[str, int] = {
-                str(status): int(count) for status, count in count_rows
-            }
+            counts: dict[str, int] = {str(status): int(count) for status, count in count_rows}
             return {
                 "annotation_refresh_run_id": run.id,
                 "annotation_version": run.annotation_version,

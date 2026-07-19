@@ -50,11 +50,7 @@ def _brief() -> object:
         },
         retrieval_context={
             "retrieval_run_id": 1,
-            "style_profile": {
-                "caption_statistics": {
-                    "word_percentiles": {"p25": 2, "p75": 16}
-                }
-            },
+            "style_profile": {"caption_statistics": {"word_percentiles": {"p25": 2, "p75": 16}}},
             "caption_style_examples": [],
             "feedback_context": {},
             "negative_examples": [],

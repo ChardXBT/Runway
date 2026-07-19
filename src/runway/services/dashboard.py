@@ -31,7 +31,7 @@ class DashboardService:
                 session.scalar(
                     select(func.count(Proposal.id)).where(
                         Proposal.channel_id == channel.id,
-                        Proposal.scheduled_publish_at.is_not(None)
+                        Proposal.scheduled_publish_at.is_not(None),
                     )
                 )
                 or 0
@@ -55,11 +55,7 @@ class DashboardService:
                 .limit(1)
             )
             catalogue_count = (
-                session.scalar(
-                    select(func.count(Post.id)).where(
-                        Post.channel_id == channel.id
-                    )
-                )
+                session.scalar(select(func.count(Post.id)).where(Post.channel_id == channel.id))
                 or 0
             )
             return {

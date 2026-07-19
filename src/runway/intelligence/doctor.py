@@ -488,10 +488,7 @@ class IntelligenceDoctor:
                         raise ValueError("normalized vector has invalid norm")
             except ValueError as exc:
                 finding = {"record_id": record.id, "error": str(exc)}
-                if (
-                    record.id in active_set_record_ids
-                    or record.id not in all_set_record_ids
-                ):
+                if record.id in active_set_record_ids or record.id not in all_set_record_ids:
                     invalid_active_vectors.append(finding)
                 else:
                     invalid_inactive_vectors.append(finding)

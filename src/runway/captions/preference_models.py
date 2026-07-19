@@ -213,9 +213,7 @@ class PreferenceDatasetService:
                             split=str(planned_row["split"]),
                             group_key=str(planned_row["group_key"]),
                             position=index,
-                            preferred_features_json=str(
-                                planned_row["preferred_features_json"]
-                            ),
+                            preferred_features_json=str(planned_row["preferred_features_json"]),
                             dispreferred_features_json=str(
                                 planned_row["dispreferred_features_json"]
                             ),
@@ -462,9 +460,7 @@ class PreferenceModelService:
             ):
                 raise ValueError("only a trained, threshold-qualified model can activate")
             if target.feature_schema_version != FEATURE_SCHEMA_VERSION:
-                raise ValueError(
-                    "preference-model feature schema is incompatible with production"
-                )
+                raise ValueError("preference-model feature schema is incompatible with production")
             dataset = session.get(PreferenceDataset, target.dataset_id)
             if (
                 dataset is None
@@ -473,9 +469,7 @@ class PreferenceModelService:
                 or dataset.status != "frozen"
                 or dataset.feature_schema_version != target.feature_schema_version
             ):
-                raise ValueError(
-                    "preference-model dataset is missing, mutable, or incompatible"
-                )
+                raise ValueError("preference-model dataset is missing, mutable, or incompatible")
             parameters = _json_object(
                 target.parameters_json,
                 label="preference model parameters",

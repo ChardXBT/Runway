@@ -165,9 +165,7 @@ def test_doctor_detects_channel_leakage_and_missing_artifacts(
                 configuration_hash="a" * 64,
                 completed_at=datetime.now(UTC),
                 metrics_json=json.dumps({"fixture": True}),
-                artifacts_json=json.dumps(
-                    [str(tmp_path / "missing-model-artifact.json")]
-                ),
+                artifacts_json=json.dumps([str(tmp_path / "missing-model-artifact.json")]),
             )
         )
 

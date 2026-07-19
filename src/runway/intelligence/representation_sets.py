@@ -283,9 +283,7 @@ class RepresentationSetService:
                     if record.normalized:
                         norms = np.linalg.norm(vectors, axis=1)
                         if np.any(np.abs(norms - 1.0) > 0.01):
-                            raise ValueError(
-                                "normalized representation has an invalid norm"
-                            )
+                            raise ValueError("normalized representation has an invalid norm")
                     vector_contracts.add(
                         (
                             record.dimensions,
@@ -297,9 +295,7 @@ class RepresentationSetService:
                 except ValueError as exc:
                     errors.append(str(exc))
             if len(vector_contracts) > 1:
-                errors.append(
-                    "representation set contains inconsistent vector contracts"
-                )
+                errors.append("representation set contains inconsistent vector contracts")
             valid = not errors
             representation_set.completed_count = sum(item.status == "complete" for item in items)
             representation_set.failed_count = sum(item.status == "failed" for item in items)

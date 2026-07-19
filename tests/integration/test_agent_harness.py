@@ -262,7 +262,5 @@ async def test_agent_harness_persists_typed_abstention_without_retry(
     assert calls == 1
     detail = harness.inspect(run_id)
     assert detail["status"] == "abstained"
-    assert detail["error_summary"] == (
-        "Visible evidence is insufficient for a grounded caption."
-    )
+    assert detail["error_summary"] == ("Visible evidence is insufficient for a grounded caption.")
     assert detail["steps"][0]["status"] == "abstained"  # type: ignore[index]

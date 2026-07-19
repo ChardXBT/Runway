@@ -36,9 +36,7 @@ def _complete_set(
         )
         if result["complete"] == result["expected"]:
             return
-    raise AssertionError(
-        f"representation set {representation_set_id} did not complete"
-    )
+    raise AssertionError(f"representation set {representation_set_id} did not complete")
 
 
 @pytest.mark.asyncio
@@ -95,13 +93,11 @@ async def test_deterministic_intelligence_flywheel_end_to_end(
     inspected = retrieval.inspect_run(int(second_context["retrieval_run_id"]))
     assert inspected["cache_diagnostics"]["recomputations"] == 0
     assert inspected["cache_diagnostics"]["active_hits"] > 0
-    assert {
-        value["id"] for value in inspected["representation_sets"].values()
-    } == set(active_set_ids)
-
-    caption_options = await CaptionService(database, settings).generate(
-        candidate_id
+    assert {value["id"] for value in inspected["representation_sets"].values()} == set(
+        active_set_ids
     )
+
+    caption_options = await CaptionService(database, settings).generate(candidate_id)
     assert caption_options.recommended.endswith(("?", "!", "."))
     assert caption_options.slate_id is not None
     reconciliation = CaptionFeedbackService(
@@ -113,26 +109,14 @@ async def test_deterministic_intelligence_flywheel_end_to_end(
 
     report = IntelligenceDoctor(database, settings).run()
     assert report.critical_count == 0, report.human_text()
-    assert not any(
-        finding.code.endswith(".internal_error")
-        for finding in report.findings
-    )
+    assert not any(finding.code.endswith(".internal_error") for finding in report.findings)
     with database.session() as session:
         assert (
             session.scalar(
-                select(func.count(RepresentationSet.id)).where(
-                    RepresentationSet.active.is_(True)
-                )
+                select(func.count(RepresentationSet.id)).where(RepresentationSet.active.is_(True))
             )
             == 3
         )
-        assert (
-            session.scalar(select(func.count(IntelligenceRetrievalRun.id)))
-            or 0
-        ) >= 3
-        assert (
-            session.scalar(select(func.count(CaptionCandidateRecord.id))) or 0
-        ) >= 3
-        assert (
-            session.scalar(select(func.count(IntelligenceAgentRun.id))) or 0
-        ) >= 1
+        assert (session.scalar(select(func.count(IntelligenceRetrievalRun.id))) or 0) >= 3
+        assert (session.scalar(select(func.count(CaptionCandidateRecord.id))) or 0) >= 3
+        assert (session.scalar(select(func.count(IntelligenceAgentRun.id))) or 0) >= 1

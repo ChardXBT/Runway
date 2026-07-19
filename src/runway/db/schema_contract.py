@@ -34,9 +34,7 @@ def normalized_schema(engine: Engine) -> dict[str, object]:
                     "type": str(column["type"]).upper(),
                     "nullable": bool(column.get("nullable", True)),
                     "default": _normalized_default(column.get("default")),
-                    "primary_key": int(
-                        str(column.get("primary_key", 0) or 0)
-                    ),
+                    "primary_key": int(str(column.get("primary_key", 0) or 0)),
                 }
                 for column in inspector.get_columns(table)
             ),
@@ -221,9 +219,7 @@ def _schema_differences(
                     "expected": expected_by_identity[key],
                     "observed": observed_by_identity[key],
                 }
-                for key in sorted(
-                    expected_by_identity.keys() & observed_by_identity.keys()
-                )
+                for key in sorted(expected_by_identity.keys() & observed_by_identity.keys())
                 if expected_by_identity[key] != observed_by_identity[key]
             ]
             if missing:

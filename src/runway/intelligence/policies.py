@@ -171,10 +171,7 @@ class ChannelPolicyService:
                         (ChannelPolicyRule.starts_at.is_(None))
                         | (ChannelPolicyRule.starts_at <= now)
                     ),
-                    (
-                        (ChannelPolicyRule.ends_at.is_(None))
-                        | (ChannelPolicyRule.ends_at > now)
-                    ),
+                    ((ChannelPolicyRule.ends_at.is_(None)) | (ChannelPolicyRule.ends_at > now)),
                 )
                 .order_by(
                     desc(ChannelPolicyRule.priority),

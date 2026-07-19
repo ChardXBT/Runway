@@ -294,9 +294,7 @@ class IntelligenceAgentHarness:
                 continue
 
             completed_at = utcnow()
-            terminal_status = (
-                "abstained" if result.abstention_reason is not None else "completed"
-            )
+            terminal_status = "abstained" if result.abstention_reason is not None else "completed"
             with self.database.session() as session:
                 persisted_step = session.get(IntelligenceAgentStep, step_id)
                 if persisted_step is None:

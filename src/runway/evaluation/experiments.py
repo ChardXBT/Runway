@@ -30,9 +30,7 @@ class ExperimentRunner:
         seed: int = 20260718,
     ):
         self.datasets = datasets or DatasetRepository()
-        self.artifact_root = artifact_root or (
-            self.datasets.root.parent / "experiments"
-        )
+        self.artifact_root = artifact_root or (self.datasets.root.parent / "experiments")
         self.seed = seed
 
     def tune(self, candidate_artifact: dict[str, Any]) -> dict[str, Any]:
@@ -62,9 +60,7 @@ class ExperimentRunner:
                 str(row["configuration_hash"]),
             ),
         )
-        winning_objective = float(
-            cast(dict[str, Any], winner["metrics"])["objective"]
-        )
+        winning_objective = float(cast(dict[str, Any], winner["metrics"])["objective"])
         winning_grounding = float(
             cast(
                 dict[str, float],
@@ -78,9 +74,7 @@ class ExperimentRunner:
                 else "rejected"
             )
             if result["selection_decision"] == "rejected":
-                objective = float(
-                    cast(dict[str, Any], result["metrics"])["objective"]
-                )
+                objective = float(cast(dict[str, Any], result["metrics"])["objective"])
                 grounding = float(
                     cast(
                         dict[str, float],
@@ -88,10 +82,7 @@ class ExperimentRunner:
                     ).get("grounding", 0.0)
                 )
                 if objective < winning_objective:
-                    reason = (
-                        "lower deterministic tuning objective than the selected "
-                        "configuration"
-                    )
+                    reason = "lower deterministic tuning objective than the selected configuration"
                 elif grounding < winning_grounding:
                     reason = (
                         "objective tied; the selected configuration assigns more "
@@ -238,8 +229,7 @@ class ExperimentRunner:
             for row in cast(list[dict[str, Any]], baseline["outputs"]["cases"])
         }
         candidate_cases = {
-            str(row["case_id"]): row
-            for row in cast(list[dict[str, Any]], candidate["cases"])
+            str(row["case_id"]): row for row in cast(list[dict[str, Any]], candidate["cases"])
         }
         if set(candidate_cases) - set(baseline_cases):
             raise ValueError("candidate evaluation includes case IDs absent from baseline")
@@ -275,9 +265,7 @@ class ExperimentRunner:
                     "old_displayed": old.get("displayed_captions", []),
                     "new_displayed": new.get("displayed_captions", []),
                     "evidence_overlap_jaccard": (
-                        round(len(old_evidence & new_evidence) / len(union), 6)
-                        if union
-                        else 1.0
+                        round(len(old_evidence & new_evidence) / len(union), 6) if union else 1.0
                     ),
                     "new_role_coverage": cast(
                         dict[str, Any],
@@ -375,8 +363,7 @@ class ExperimentRunner:
         disabled_components: set[str] | None = None,
     ) -> dict[str, object]:
         by_case = {
-            str(row["case_id"]): row
-            for row in cast(list[dict[str, Any]], artifact["cases"])
+            str(row["case_id"]): row for row in cast(list[dict[str, Any]], artifact["cases"])
         }
         rows = []
         for label in labels:
@@ -423,8 +410,7 @@ class ExperimentRunner:
         observed = set(cast(list[str], artifact.get("splits", [])))
         if observed != expected:
             raise PermissionError(
-                f"artifact split mismatch: expected {sorted(expected)}, "
-                f"observed {sorted(observed)}"
+                f"artifact split mismatch: expected {sorted(expected)}, observed {sorted(observed)}"
             )
 
     @staticmethod

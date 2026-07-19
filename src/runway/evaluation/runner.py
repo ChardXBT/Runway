@@ -33,12 +33,7 @@ EvaluationPurpose = Literal[
 
 
 def frozen_baseline_directory() -> Path:
-    return (
-        Settings().project_root
-        / "benchmarks"
-        / "intelligence"
-        / "baseline-876fe5f"
-    )
+    return Settings().project_root / "benchmarks" / "intelligence" / "baseline-876fe5f"
 
 
 def load_frozen_baseline() -> dict[str, Any]:
@@ -100,14 +95,10 @@ async def run_candidate_evaluation(
                 fixture_uri = str(baseline_case["fixture_uri"])
                 with database.session() as session:
                     candidate = session.scalar(
-                        select(CandidateImage).where(
-                            CandidateImage.direct_image_url == fixture_uri
-                        )
+                        select(CandidateImage).where(CandidateImage.direct_image_url == fixture_uri)
                     )
                     if candidate is None:
-                        raise LookupError(
-                            f"evaluation candidate {fixture_uri} was not discovered"
-                        )
+                        raise LookupError(f"evaluation candidate {fixture_uri} was not discovered")
                     if candidate.hard_rejection_reason:
                         raise ValueError(
                             f"evaluation candidate {fixture_uri} was rejected: "
@@ -153,10 +144,7 @@ async def run_candidate_evaluation(
                     )
                     evidence = session.scalars(
                         select(RetrievalEvidenceRecord)
-                        .where(
-                            RetrievalEvidenceRecord.retrieval_run_id
-                            == slate.retrieval_run_id
-                        )
+                        .where(RetrievalEvidenceRecord.retrieval_run_id == slate.retrieval_run_id)
                         .order_by(
                             RetrievalEvidenceRecord.selected.desc(),
                             RetrievalEvidenceRecord.selected_rank,
@@ -176,18 +164,12 @@ async def run_candidate_evaluation(
                         if row.selected
                     ]
                     considered_count = len(evidence)
-                    retrieval_channels = sorted(
-                        {row.retrieval_channel for row in evidence}
-                    )
+                    retrieval_channels = sorted({row.retrieval_channel for row in evidence})
                 displayed = (
-                    [options.recommended, *options.alternatives]
-                    if not options.abstained
-                    else []
+                    [options.recommended, *options.alternatives] if not options.abstained else []
                 )
                 selected_rows = [
-                    row
-                    for row in ranking
-                    if str(row.get("text", "")) in set(displayed)
+                    row for row in ranking if str(row.get("text", "")) in set(displayed)
                 ]
                 cases.append(
                     {
@@ -241,9 +223,7 @@ async def run_candidate_evaluation(
                         "abstention_reason": options.abstention_reason,
                         "latency_ms": slate.latency_ms,
                         "model_usage": json.loads(slate.token_usage_json),
-                        "prompt_version": (
-                            model_run.prompt_version if model_run else None
-                        ),
+                        "prompt_version": (model_run.prompt_version if model_run else None),
                         "profile_version": profile["version"],
                         "configuration_hash": slate.configuration_hash,
                     }
@@ -293,23 +273,15 @@ def _evaluation_artifact(
     profile: dict[str, object],
     integrity: dict[str, object],
 ) -> dict[str, Any]:
-    recommendations = [
-        str(case["recommendation"])
-        for case in cases
-        if case["recommendation"]
-    ]
+    recommendations = [str(case["recommendation"]) for case in cases if case["recommendation"]]
     displayed = [
-        str(caption)
-        for case in cases
-        for caption in cast(list[str], case["displayed_captions"])
+        str(caption) for case in cases for caption in cast(list[str], case["displayed_captions"])
     ]
     unsupported = sum(
         len(
             cast(
                 list[object],
-                cast(dict[str, object], case["grounding"])[
-                    "unsupported_claims"
-                ],
+                cast(dict[str, object], case["grounding"])["unsupported_claims"],
             )
         )
         for case in cases
@@ -317,32 +289,23 @@ def _evaluation_artifact(
     metrics = {
         "case_count": len(cases),
         "unique_recommendation_rate": (
-            round(len(set(recommendations)) / len(recommendations), 6)
-            if recommendations
-            else 0.0
+            round(len(set(recommendations)) / len(recommendations), 6) if recommendations else 0.0
         ),
         "unique_displayed_caption_rate": (
             round(len(set(displayed)) / len(displayed), 6) if displayed else 0.0
         ),
         "grounding_pass_rate": (
             round(
-                sum(
-                    bool(cast(dict[str, object], case["grounding"])["passed"])
-                    for case in cases
-                )
+                sum(bool(cast(dict[str, object], case["grounding"])["passed"]) for case in cases)
                 / len(cases),
                 6,
             )
             if cases
             else 0.0
         ),
-        "unsupported_claim_rate": (
-            round(unsupported / len(cases), 6) if cases else 0.0
-        ),
+        "unsupported_claim_rate": (round(unsupported / len(cases), 6) if cases else 0.0),
         "abstention_rate": (
-            round(sum(bool(case["abstained"]) for case in cases) / len(cases), 6)
-            if cases
-            else 0.0
+            round(sum(bool(case["abstained"]) for case in cases) / len(cases), 6) if cases else 0.0
         ),
         "mean_retrieval_role_coverage": (
             round(
@@ -350,9 +313,7 @@ def _evaluation_artifact(
                     len(
                         cast(
                             list[object],
-                            cast(dict[str, object], case["retrieval"])[
-                                "role_coverage"
-                            ],
+                            cast(dict[str, object], case["retrieval"])["role_coverage"],
                         )
                     )
                     for case in cases

@@ -133,8 +133,7 @@ async def evaluate_generalization_fixtures(
                 "language": preferred.language,
                 "grounded": verification.passed,
                 "unsupported_claims": verification.unsupported_claims,
-                "policy_isolated": policy.preferred_structures
-                == channel.preferred_structures,
+                "policy_isolated": policy.preferred_structures == channel.preferred_structures,
             }
         )
     captions = [str(row["caption"]) for row in outputs]
@@ -151,12 +150,9 @@ async def evaluate_generalization_fixtures(
         "channel_count": len(outputs),
         "unique_caption_count": len(set(captions)),
         "same_image_different_captions": len(set(captions)) == len(captions),
-        "channel_policy_isolation": all(
-            bool(row["policy_isolated"]) for row in outputs
-        ),
+        "channel_policy_isolation": all(bool(row["policy_isolated"]) for row in outputs),
         "all_expected_structures": all(
-            row["selected_structure"] == row["expected_structure"]
-            for row in outputs
+            row["selected_structure"] == row["expected_structure"] for row in outputs
         ),
         "all_grounded": all(bool(row["grounded"]) for row in outputs),
         "passed": passed and len(set(captions)) == len(captions),

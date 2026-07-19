@@ -34,14 +34,10 @@ def candidate_score(
         return float(raw) if isinstance(raw, (int, float)) else 0.0
 
     score = sum(
-        weight * value(name)
-        for name, weight in weights.items()
-        if name != "generic_penalty"
+        weight * value(name) for name, weight in weights.items() if name != "generic_penalty"
     )
     if "generic_penalty" not in disabled:
-        score += weights.get("generic_penalty", 0.0) * float(
-            candidate.get("generic_penalty", 0.0)
-        )
+        score += weights.get("generic_penalty", 0.0) * float(candidate.get("generic_penalty", 0.0))
     score += 0.08 * value("structure_fit")
     score += 0.04 * value("length_fit")
     return max(0.0, min(1.0, score))
@@ -103,12 +99,8 @@ def evaluate_selection(
     structure = str(candidate.get("structure", ""))
     verifier = cast(dict[str, Any], candidate.get("verification", {}))
     unsupported = cast(list[object], verifier.get("unsupported_claims", []))
-    expected_term_hit = any(
-        term.casefold() in normalized for term in label.expected_terms
-    )
-    forbidden_hit = any(
-        term.casefold() in normalized for term in label.forbidden_terms
-    )
+    expected_term_hit = any(term.casefold() in normalized for term in label.expected_terms)
+    forbidden_hit = any(term.casefold() in normalized for term in label.forbidden_terms)
     structure_hit = structure in label.preferred_structures
     grounded = bool(verifier.get("passed", False)) and not unsupported
     accepted = grounded and structure_hit and expected_term_hit and not forbidden_hit
@@ -141,20 +133,12 @@ def aggregate_case_metrics(rows: list[dict[str, object]]) -> dict[str, object]:
     return {
         "case_count": count,
         "no_edit_acceptance_proxy": round(accepted / count, 6) if count else 0.0,
-        "pairwise_preference_accuracy_proxy": (
-            round(pairwise / count, 6) if count else 0.0
-        ),
+        "pairwise_preference_accuracy_proxy": (round(pairwise / count, 6) if count else 0.0),
         "grounding_pass_rate": round(grounded / count, 6) if count else 0.0,
         "unsupported_claim_rate": round(unsupported / count, 6) if count else 0.0,
         "abstention_rate": round(abstained / count, 6) if count else 0.0,
         "objective": round(
-            (
-                0.45 * accepted
-                + 0.35 * pairwise
-                + 0.20 * grounded
-                - 0.35 * unsupported
-            )
-            / count,
+            (0.45 * accepted + 0.35 * pairwise + 0.20 * grounded - 0.35 * unsupported) / count,
             6,
         )
         if count

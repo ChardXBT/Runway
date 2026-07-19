@@ -49,9 +49,7 @@ async def test_editorial_generation_is_deduplicated_and_reports_progress(
     monkeypatch.setattr(service, "_generate", generate)
     monkeypatch.setattr(service, "_result", result)
 
-    first = asyncio.create_task(
-        service.ensure_options(target=1, live_discovery=False)
-    )
+    first = asyncio.create_task(service.ensure_options(target=1, live_discovery=False))
     await started.wait()
 
     duplicate = await service.ensure_options(target=1, live_discovery=False)

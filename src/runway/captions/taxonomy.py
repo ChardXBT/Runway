@@ -56,11 +56,7 @@ def analyze_caption(text: str, *, language: str = "und") -> CaptionTaxonomyResul
     if open_question:
         structure: CaptionStructure = "open_question"
     elif is_question:
-        structure = (
-            "yes_no_question"
-            if YES_NO_QUESTION_RE.match(stripped)
-            else "open_question"
-        )
+        structure = "yes_no_question" if YES_NO_QUESTION_RE.match(stripped) else "open_question"
     elif "___" in stripped or "____" in stripped:
         structure = "fill_in_blank"
     elif any(marker in lowered for marker in ("vote ", "poll:", "pick one")):
@@ -76,11 +72,10 @@ def analyze_caption(text: str, *, language: str = "und") -> CaptionTaxonomyResul
         structure = "comparison"
     elif any(marker in lowered for marker in ("will ", "going to ", "next up", "prediction")):
         structure = "prediction"
-    elif stripped.startswith(("\"", "“", "'")) and stripped.endswith(("\"", "”", "'")):
+    elif stripped.startswith(('"', "“", "'")) and stripped.endswith(('"', "”", "'")):
         structure = "quote_or_reference"
     elif any(
-        marker in lowered
-        for marker in ("now available", "introducing", "shop ", "launching")
+        marker in lowered for marker in ("now available", "introducing", "shop ", "launching")
     ):
         structure = "promotional_statement"
     elif any(

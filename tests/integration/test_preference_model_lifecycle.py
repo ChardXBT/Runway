@@ -28,9 +28,7 @@ from runway.db.repositories import get_channel
 
 
 def _passing_gates() -> dict[str, bool]:
-    return {
-        gate: True for gate in REQUIRED_PREFERENCE_ACTIVATION_GATES
-    }
+    return {gate: True for gate in REQUIRED_PREFERENCE_ACTIVATION_GATES}
 
 
 def _seed_pairs(

@@ -129,9 +129,7 @@ class BrowserSearchProvider:
             )
             page = context.pages[0] if context.pages else await context.new_page()
             try:
-                for query in _diverse_queries(plan)[
-                    : self.settings.browser_search_max_queries
-                ]:
+                for query in _diverse_queries(plan)[: self.settings.browser_search_max_queries]:
                     url = self.settings.browser_search_url.format(query=quote_plus(query))
                     await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
                     sample = (page.url + " " + (await page.title())).lower()
@@ -150,7 +148,7 @@ class BrowserSearchProvider:
                         raise RuntimeError(
                             "search challenge or consent page detected; resolve it manually "
                             "in the persistent discovery browser profile, then rerun"
-                    )
+                        )
                     result_links = page.locator("a.iusc[m]")
                     with suppress(PlaywrightTimeoutError):
                         await result_links.first.wait_for(state="attached", timeout=15_000)

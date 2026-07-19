@@ -500,9 +500,7 @@ class RepresentationStore:
             RepresentationRecord.source_content_hash == source_content_hash,
             RepresentationRecord.configuration_hash == result.configuration_hash,
         )
-        existing = session.scalar(
-            select(RepresentationRecord).where(*identity).limit(1)
-        )
+        existing = session.scalar(select(RepresentationRecord).where(*identity).limit(1))
         if existing is not None:
             return existing
         record = RepresentationRecord(

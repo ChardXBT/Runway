@@ -91,14 +91,9 @@ class CaptionVerifier:
     ) -> VerificationResult:
         text = candidate.text.strip()
         lowered = text.casefold()
-        visible_values = {
-            self._normalized(fact.value): fact
-            for fact in brief.visible_facts
-        }
+        visible_values = {self._normalized(fact.value): fact for fact in brief.visible_facts}
         visible_text = " ".join(visible_values)
-        uncertain_text = " ".join(
-            self._normalized(fact.value) for fact in brief.uncertain_facts
-        )
+        uncertain_text = " ".join(self._normalized(fact.value) for fact in brief.uncertain_facts)
         unsupported: list[str] = []
         warnings: list[str] = []
         supported: list[str] = []
@@ -123,17 +118,14 @@ class CaptionVerifier:
             if marker in lowered and not any(marker in value for value in relationship_facts):
                 unsupported.append(f"unsupported_relationship:{marker}")
 
-        supported_entities = {
-            self._normalized(value) for value in brief.supported_entity_names
-        }
+        supported_entities = {self._normalized(value) for value in brief.supported_entity_names}
         for phrase in PROPER_NOUN_RE.findall(text):
             normalized = self._normalized(phrase)
             first = normalized.split()[0] if normalized else ""
             if first in COMMON_SENTENCE_STARTS:
                 continue
             if normalized not in supported_entities and not any(
-                normalized in entity or entity in normalized
-                for entity in supported_entities
+                normalized in entity or entity in normalized for entity in supported_entities
             ):
                 unsupported.append(f"unsupported_entity:{phrase}")
             else:
@@ -168,13 +160,9 @@ class CaptionVerifier:
         minimum = brief.target_length["minimum_words"]
         maximum = brief.target_length["maximum_words"]
         if word_count < minimum or word_count > maximum:
-            warnings.append(
-                f"length_outside_channel_range:{word_count}/{minimum}-{maximum}"
-            )
+            warnings.append(f"length_outside_channel_range:{word_count}/{minimum}-{maximum}")
         if candidate.language not in {"und", brief.target_language}:
-            unsupported.append(
-                f"language_mismatch:{candidate.language}!={brief.target_language}"
-            )
+            unsupported.append(f"language_mismatch:{candidate.language}!={brief.target_language}")
         if not candidate.visible_evidence:
             warnings.append("generator_supplied_no_candidate_evidence")
         else:
@@ -185,9 +173,7 @@ class CaptionVerifier:
                 and self._normalized(value) not in uncertain_text
             ]
             if invalid_evidence:
-                warnings.append(
-                    "unverified_candidate_evidence:" + ",".join(invalid_evidence)
-                )
+                warnings.append("unverified_candidate_evidence:" + ",".join(invalid_evidence))
         unsupported = list(dict.fromkeys(unsupported))
         supported = list(dict.fromkeys(supported))
         grounding_score = max(0.0, 1.0 - 0.28 * len(unsupported))
@@ -222,15 +208,10 @@ class CaptionVerifier:
                 "entities": not any(
                     value.startswith("unsupported_entity:") for value in unsupported
                 ),
-                "events": not any(
-                    value.startswith("invented_event:") for value in unsupported
-                ),
-                "quotes": not any(
-                    value.startswith("invented_quote:") for value in unsupported
-                ),
+                "events": not any(value.startswith("invented_event:") for value in unsupported),
+                "quotes": not any(value.startswith("invented_quote:") for value in unsupported),
                 "relationships": not any(
-                    value.startswith("unsupported_relationship:")
-                    for value in unsupported
+                    value.startswith("unsupported_relationship:") for value in unsupported
                 ),
                 "policy": not policy_failures,
                 "language": not any(

@@ -52,9 +52,7 @@ class DeterministicMockImageProvider:
                 seed = int(hashlib.sha256(identity.encode()).hexdigest()[:8], 16)
             else:
                 seed += index
-            digest = hashlib.sha256(
-                f"{seed}|{request.brief.instruction}".encode()
-            ).digest()
+            digest = hashlib.sha256(f"{seed}|{request.brief.instruction}".encode()).digest()
             if request.reference_paths:
                 with Image.open(request.reference_paths[0]) as opened:
                     image = opened.convert("RGB").resize(

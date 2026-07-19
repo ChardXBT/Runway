@@ -88,9 +88,7 @@ class DatasetRepository:
 
     def __init__(self, root: Path | None = None):
         project_root = Settings().project_root
-        self.root = root or (
-            project_root / "benchmarks" / "intelligence" / "datasets"
-        )
+        self.root = root or (project_root / "benchmarks" / "intelligence" / "datasets")
 
     def canonical(self) -> CanonicalDataset:
         return CanonicalDataset.model_validate_json(
@@ -121,9 +119,7 @@ class DatasetRepository:
             raise PermissionError("tuning may read only tuning labels")
         if purpose == "development" and split != "development":
             raise PermissionError("development diagnostics may read only development labels")
-        return [
-            label for label in self.canonical().case_labels if label.split == split
-        ]
+        return [label for label in self.canonical().case_labels if label.split == split]
 
     def validate_split_integrity(self) -> dict[str, object]:
         canonical = self.canonical()
@@ -133,13 +129,9 @@ class DatasetRepository:
         for preference in canonical.blind_preferences:
             clusters.setdefault(preference.cluster_id, set()).add(preference.split)
         contaminated = {
-            cluster: sorted(splits)
-            for cluster, splits in clusters.items()
-            if len(splits) > 1
+            cluster: sorted(splits) for cluster, splits in clusters.items() if len(splits) > 1
         }
-        case_ids = [
-            label.case_id for label in canonical.case_labels
-        ] + [
+        case_ids = [label.case_id for label in canonical.case_labels] + [
             preference.case_id for preference in canonical.blind_preferences
         ]
         duplicate_case_ids = sorted(
@@ -167,9 +159,7 @@ class DatasetRepository:
         values: list[dict[str, object]] = []
         for preference in self.canonical().blind_preferences:
             case_seed = int(
-                hashlib.sha256(
-                    f"{seed}|{preference.case_id}".encode()
-                ).hexdigest()[:16],
+                hashlib.sha256(f"{seed}|{preference.case_id}".encode()).hexdigest()[:16],
                 16,
             )
             swap = bool(random.Random(case_seed).getrandbits(1))

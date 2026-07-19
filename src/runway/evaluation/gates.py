@@ -72,12 +72,6 @@ def replacement_gate_report(
         "primary_quality": primary_quality,
         "checks": checks,
         "replacement_approved": approved,
-        "decision": (
-            "canonical_replacement_approved"
-            if approved
-            else "replacement_blocked"
-        ),
-        "blocking_reasons": [
-            name for name, passed in checks.items() if not passed
-        ],
+        "decision": ("canonical_replacement_approved" if approved else "replacement_blocked"),
+        "blocking_reasons": [name for name, passed in checks.items() if not passed],
     }

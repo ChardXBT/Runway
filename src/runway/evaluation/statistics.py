@@ -18,12 +18,7 @@ def wilson_interval(
     denominator = 1 + z**2 / total
     center = (proportion + z**2 / (2 * total)) / denominator
     margin = (
-        z
-        * math.sqrt(
-            proportion * (1 - proportion) / total
-            + z**2 / (4 * total**2)
-        )
-        / denominator
+        z * math.sqrt(proportion * (1 - proportion) / total + z**2 / (4 * total**2)) / denominator
     )
     return (
         round(max(0.0, center - margin), 6),

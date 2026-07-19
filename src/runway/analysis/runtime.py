@@ -305,9 +305,7 @@ class MockAgentRuntime:
             else f"this scene {candidate_id}"
         )
         subject = _mock_subject_label(raw_subject)
-        emotion = _mock_emotion_label(
-            str(analysis_row.get("emotion") or "curious").strip()
-        )
+        emotion = _mock_emotion_label(str(analysis_row.get("emotion") or "curious").strip())
         action_values = analysis_row.get("actions", [])
         action = (
             str(action_values[0])
@@ -347,9 +345,7 @@ class MockAgentRuntime:
             "poll": [f"Pick {possessive} next move: stay or go?"],
             "quiz": [f"Can you name what {subject} noticed?"],
             "call_to_action": [f"Choose the best explanation for {subject}'s reaction."],
-            "explanation": [
-                f"This scene centers on {subject} and the visible action of {action}."
-            ],
+            "explanation": [f"This scene centers on {subject} and the visible action of {action}."],
             "promotional_statement": [f"Introducing {possessive} most {emotion} moment."],
             "quote_or_reference": [f"“{subject_start} looks {emotion}.”"],
         }
@@ -362,9 +358,7 @@ class MockAgentRuntime:
                         structure=structure,
                         language=str(brief_row.get("target_language", "en")),
                         editorial_angle=(
-                            "audience_inquiry"
-                            if structure.endswith("question")
-                            else structure
+                            "audience_inquiry" if structure.endswith("question") else structure
                         ),
                         visible_evidence=[subject, emotion, action],
                         uncertainty=[],

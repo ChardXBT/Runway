@@ -48,9 +48,7 @@ def effective_annotation_fields(annotation: PostAnnotation) -> dict[str, object]
         generic_entities = []
     confidence_payload = original.get("confidence", {})
     character_confidence = (
-        confidence_payload.get("characters", 0.0)
-        if isinstance(confidence_payload, dict)
-        else 0.0
+        confidence_payload.get("characters", 0.0) if isinstance(confidence_payload, dict) else 0.0
     )
     if not isinstance(character_confidence, (int, float)):
         character_confidence = 0.0

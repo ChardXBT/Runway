@@ -33,11 +33,7 @@ class CatalogService:
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
             total = (
-                session.scalar(
-                    select(func.count(Post.id)).where(
-                        Post.channel_id == channel.id
-                    )
-                )
+                session.scalar(select(func.count(Post.id)).where(Post.channel_id == channel.id))
                 or 0
             )
             eligible = (
@@ -169,9 +165,7 @@ class CatalogService:
         with self.database.session() as session:
             channel_id = get_channel(session, self.settings.channel_handle).id
             posts = session.scalars(
-                select(Post)
-                .where(Post.channel_id == channel_id)
-                .order_by(Post.id)
+                select(Post).where(Post.channel_id == channel_id).order_by(Post.id)
             ).all()
             media = session.scalars(
                 select(MediaAsset)
@@ -227,7 +221,7 @@ class CatalogService:
             capture_runs = session.scalars(
                 select(CaptureRun).where(
                     CaptureRun.channel_id == channel_id,
-                    or_(CaptureRun.status == "failed", CaptureRun.error_summary.is_not(None))
+                    or_(CaptureRun.status == "failed", CaptureRun.error_summary.is_not(None)),
                 )
             ).all()
             channel_capture_ids = session.scalars(

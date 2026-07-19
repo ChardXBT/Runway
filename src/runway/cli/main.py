@@ -291,8 +291,7 @@ def representation_backfill(
     result = service.backfill(set_id, batch_size=batch_size)
     while (
         until_complete
-        and _result_integer(result, "complete")
-        < _result_integer(result, "expected")
+        and _result_integer(result, "complete") < _result_integer(result, "expected")
         and _result_integer(result, "batch_attempted") > 0
     ):
         result = service.backfill(set_id, batch_size=batch_size)

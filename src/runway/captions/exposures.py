@@ -297,30 +297,16 @@ class CaptionExposureService:
                 "language": parent.language if parent is not None else "und",
                 "editorial_angle": "human_edit",
                 "visible_evidence": (
-                    json.loads(parent.visible_evidence_json)
-                    if parent is not None
-                    else []
+                    json.loads(parent.visible_evidence_json) if parent is not None else []
                 ),
-                "uncertainty": (
-                    json.loads(parent.uncertainty_json)
-                    if parent is not None
-                    else []
-                ),
+                "uncertainty": (json.loads(parent.uncertainty_json) if parent is not None else []),
                 "historical_evidence": (
-                    json.loads(parent.historical_evidence_json)
-                    if parent is not None
-                    else []
+                    json.loads(parent.historical_evidence_json) if parent is not None else []
                 ),
                 "feedback_evidence": (
-                    json.loads(parent.feedback_evidence_json)
-                    if parent is not None
-                    else []
+                    json.loads(parent.feedback_evidence_json) if parent is not None else []
                 ),
-                "confidence": (
-                    parent.generator_confidence
-                    if parent is not None
-                    else 1.0
-                ),
+                "confidence": (parent.generator_confidence if parent is not None else 1.0),
             }
         )
         verification = CaptionVerifier().verify(edited_candidate, brief)

@@ -89,9 +89,7 @@ class EditorialService:
             missing = max(0, target - self._review_count())
             if missing and live_discovery:
                 if not self.settings.enable_browser_search:
-                    detail = (
-                        "No unused candidates remain and browser discovery is disabled."
-                    )
+                    detail = "No unused candidates remain and browser discovery is disabled."
                 else:
                     discovery_result = await DiscoveryService(
                         self.database,
@@ -110,8 +108,7 @@ class EditorialService:
                     "Editorial options are ready."
                     if self._review_count()
                     else (
-                        "No usable image candidates were found. "
-                        "Try Generate more for a new search."
+                        "No usable image candidates were found. Try Generate more for a new search."
                     )
                 )
             completed_at = datetime.now(UTC).isoformat()

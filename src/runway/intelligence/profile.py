@@ -250,9 +250,7 @@ class StyleProfileService:
             cutoff = max(post.updated_at for post in posts)
 
         preferred_structures = Counter(
-            value.preferred_structure
-            for value in legacy_feedback
-            if value.preferred_structure
+            value.preferred_structure for value in legacy_feedback if value.preferred_structure
         )
         image_verdicts = Counter(
             signal.verdict for signal in feedback_signals if signal.target == "image"
@@ -412,9 +410,7 @@ class StyleProfileService:
                 "history_samples": len(training),
                 "minimum_reliable_samples": 20,
                 "reliable": len(training) >= 20,
-                "missing_evidence": (
-                    ["more creator history"] if len(training) < 20 else []
-                ),
+                "missing_evidence": (["more creator history"] if len(training) < 20 else []),
             },
             "long_term_channel_dna": {
                 "language": policy.language,
@@ -438,8 +434,7 @@ class StyleProfileService:
             },
             "recent_editorial_mode": {
                 "recent_post_ids": [
-                    cast(int, example["post_id"])
-                    for example in chronological_examples[:10]
+                    cast(int, example["post_id"]) for example in chronological_examples[:10]
                 ],
                 "scheduled_or_approved_proposal_ids": [
                     proposal.id
@@ -643,9 +638,10 @@ class StyleProfileService:
                 if event.entity_id is None:
                     continue
                 details = json.loads(event.details_json)
-                if details.get(
-                    "annotation_version"
-                ) not in AnalysisService.compatible_annotation_versions:
+                if (
+                    details.get("annotation_version")
+                    not in AnalysisService.compatible_annotation_versions
+                ):
                     continue
                 expected_fields = details.get("expected_fields", {})
                 if not isinstance(expected_fields, dict):
@@ -676,8 +672,7 @@ class StyleProfileService:
             expected_topics = self._topic_keys(expected) if expected else set()
             if expected and any(
                 effective_annotations.get(train_matched[index])
-                and self._topic_keys(effective_annotations[train_matched[index]])
-                & expected_topics
+                and self._topic_keys(effective_annotations[train_matched[index]]) & expected_topics
                 for index in top_indices
             ):
                 retrieval_hits += 1
@@ -991,10 +986,8 @@ class StyleProfileService:
             "",
             f"- Train / holdout: {report['training_samples']} / {report['holdout_samples']}",
             f"- Image-caption matching: {report['image_caption_matching']['accuracy']:.1%}",
-            "- Channel-caption ranking: "
-            f"{report['channel_caption_ranking_accuracy']:.1%}",
-            "- Retrieval top-3 topic relevance: "
-            f"{report['retrieval_top3_topic_relevance']:.1%}",
+            f"- Channel-caption ranking: {report['channel_caption_ranking_accuracy']:.1%}",
+            f"- Retrieval top-3 topic relevance: {report['retrieval_top3_topic_relevance']:.1%}",
             "- Transformed duplicate recall: "
             f"{report['duplicate_detection']['transformed_true_positive_rate']:.1%}",
             "",

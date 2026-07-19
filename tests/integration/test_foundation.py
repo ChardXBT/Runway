@@ -41,8 +41,7 @@ def test_migrations_seed_channel_and_enable_wal(database: Database) -> None:
         ).scalar_one()
         caption_slate_column = session.execute(
             text(
-                "SELECT count(*) FROM pragma_table_info('proposals') "
-                "WHERE name='caption_slate_id'"
+                "SELECT count(*) FROM pragma_table_info('proposals') WHERE name='caption_slate_id'"
             )
         ).scalar_one()
     assert channel_count == 1

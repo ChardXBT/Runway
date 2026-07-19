@@ -640,9 +640,7 @@ class PlaywrightYouTubeAdapter:
                 f"in {self.settings.channel_name}'s Scheduled tab."
                 if verified
                 else f"{self.settings.channel_name} Scheduled-tab verification was "
-                "incomplete; missing "
-                + ", ".join(missing)
-                + ". Do not submit again."
+                "incomplete; missing " + ", ".join(missing) + ". Do not submit again."
             ),
         )
 
