@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-import re
+import time
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -10,34 +10,81 @@ from sqlalchemy import select
 
 from runway.analysis.features import (
     caption_features,
-    qlob_style_score,
-    text_similarity,
+    channel_style_score,
 )
 from runway.analysis.runtime import AgentRuntime, runtime_for
 from runway.analysis.schemas import CaptionCandidate, CaptionCandidateSet, CaptionOptions
 from runway.captions.feedback import CaptionFeedbackService
+from runway.captions.planning import EditorialBrief, EditorialPlanner
+from runway.captions.preferences import (
+    DeterministicImageCaptionPairRanker,
+    PairwiseCaptionPreferenceRanker,
+)
+from runway.captions.taxonomy import analyze_caption, normalize_caption
+from runway.captions.verification import CaptionVerifier, VerificationResult
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import CandidateImage, MediaAsset, ModelRun, Post, Proposal, utcnow
-from runway.db.repositories import audit
+from runway.db.models import (
+    CandidateImage,
+    CaptionCandidateRecord,
+    CaptionSlate,
+    MediaAsset,
+    ModelRun,
+    Post,
+    Proposal,
+    SearchRun,
+    utcnow,
+)
+from runway.db.repositories import audit, get_channel
+from runway.intelligence.embeddings import (
+    DeterministicTextEmbeddingProvider,
+    configuration_hash,
+    cosine,
+)
+from runway.intelligence.policies import PolicySnapshot
 from runway.intelligence.retrieval import RetrievalService
 
-OPEN_QUESTION_RE = re.compile(r"^\s*(why|how|what|who|where|when)\b", re.IGNORECASE)
-YES_NO_QUESTION_RE = re.compile(
-    r"^\s*(is|are|was|were|do|does|did|can|could|would|will|has|have)\b",
-    re.IGNORECASE,
-)
 GENERIC_PATTERNS = (
     "what do you think",
     "comment below",
+    "like and subscribe",
     "is very ",
     "looks very ",
     "seems very ",
 )
 
 
+def _required_int(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(f"{field} must be an integer")
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an integer") from exc
+
+
 class CaptionService:
-    prompt_version = "captions-v3"
+    prompt_version = "captions-v4"
+    generation_configuration: dict[str, Any] = {
+        "version": "canonical-caption-pipeline-1",
+        "candidate_limit": 12,
+        "display_limit": 3,
+        "retry_limit": 1,
+        "grounding_threshold": 0.72,
+        "diversity_similarity_threshold": 0.82,
+        "weights": {
+            "preference": 0.20,
+            "grounding": 0.28,
+            "policy": 0.12,
+            "style": 0.07,
+            "novelty": 0.09,
+            "rotation": 0.06,
+            "positive_feedback": 0.06,
+            "pairing": 0.09,
+            "negative_feedback_risk": -0.08,
+            "generic_penalty": -0.12,
+        },
+    }
 
     def __init__(
         self,
@@ -49,65 +96,497 @@ class CaptionService:
         self.settings = settings
         self.runtime = runtime or runtime_for(settings)
         self.retrieval = RetrievalService(database, settings)
-        self.feedback = CaptionFeedbackService(database)
+        self.feedback = CaptionFeedbackService(database, settings)
+        self.planner = EditorialPlanner()
+        self.verifier = CaptionVerifier()
+        self.preference_ranker = PairwiseCaptionPreferenceRanker(database)
+        self.pair_ranker = DeterministicImageCaptionPairRanker()
+        self.text_provider = DeterministicTextEmbeddingProvider()
 
     async def generate(self, candidate_id: int) -> CaptionOptions:
         with self.database.session() as session:
+            configured_channel = get_channel(session, self.settings.channel_handle)
             candidate = session.get(CandidateImage, candidate_id)
             if candidate is None:
                 raise LookupError(f"candidate {candidate_id} not found")
             if candidate.hard_rejection_reason:
                 raise ValueError("captions cannot be generated for a hard-rejected candidate")
-            media_asset_id = candidate.media_asset_id
-            media = session.get(MediaAsset, media_asset_id)
-            if media is None:
-                raise LookupError(f"candidate {candidate_id} has no media asset")
+            media = session.get(MediaAsset, candidate.media_asset_id)
+            search_run = session.get(SearchRun, candidate.search_run_id)
+            if media is None or search_run is None:
+                raise LookupError(f"candidate {candidate_id} has incomplete source data")
+            if search_run.channel_id != configured_channel.id:
+                raise LookupError(f"candidate {candidate_id} not found")
+            channel_id = search_run.channel_id
             image_path = self.settings.resolved_data_dir / media.local_path
-            analysis = json.loads(candidate.detected_topic_json)
+            analysis = self._json_dict(candidate.detected_topic_json)
+            source_context: dict[str, object] = {
+                "candidate_id": candidate.id,
+                "media_asset_id": media.id,
+                "source_page_url": candidate.source_page_url,
+                "source_domain": candidate.source_domain,
+                "rights_status": candidate.rights_status,
+            }
+            image_score = candidate.final_rank_score
+
         context = self.retrieval.context_for_candidate(
-            media_asset_id,
+            media.id,
             candidate_id=candidate_id,
         )
-        caption_examples = cast(list[dict[str, Any]], context["caption_style_examples"])
+        policy = PolicySnapshot.model_validate(context["policy"])
+        brief = self.planner.build(
+            candidate_analysis=analysis,
+            retrieval_context=context,
+            policy=policy,
+            source_context=source_context,
+        )
+        caption_examples = cast(
+            list[dict[str, Any]],
+            context["caption_style_examples"],
+        )
         historical_ids = [int(item["post_id"]) for item in caption_examples]
         payload: dict[str, object] = {
             "candidate_id": candidate_id,
             "candidate_analysis": analysis,
             "historical_post_ids": historical_ids,
             "retrieval_context": context,
+            "editorial_brief": brief.model_dump(),
             "_image_path": str(image_path),
         }
-        started = utcnow()
+        started_at = utcnow()
+        started_perf = time.perf_counter()
+        attempts: list[CaptionCandidateSet] = []
         generated = await self.runtime.generate_caption_options(payload)
-        validated, ranking = self._validated_options(
-            candidate_id,
-            generated,
-            context,
-            analysis,
+        attempts.append(generated)
+        ranked = self._ranked_candidates(
+            channel_id=channel_id,
+            candidate_id=candidate_id,
+            generated=generated,
+            brief=brief,
+            context=context,
+            analysis=analysis,
             allowed_reference_ids=historical_ids,
+            image_score=image_score,
+            attempt_number=1,
+        )
+        if len(self._eligible_rows(ranked)) < 3:
+            retry_payload = {
+                **payload,
+                "retry": {
+                    "reason": "fewer than three grounded, policy-compliant candidates survived",
+                    "failed_candidates": [
+                        {
+                            "text": row["candidate"].text,
+                            "verifier": row["verification"].model_dump(),
+                        }
+                        for row in ranked
+                        if not row["eligible"]
+                    ],
+                    "instruction": (
+                        "Use only the brief's highest-confidence visible facts and vary structure."
+                    ),
+                },
+            }
+            generated_retry = await self.runtime.generate_caption_options(retry_payload)
+            attempts.append(generated_retry)
+            retry_ranked = self._ranked_candidates(
+                channel_id=channel_id,
+                candidate_id=candidate_id,
+                generated=generated_retry,
+                brief=brief,
+                context=context,
+                analysis=analysis,
+                allowed_reference_ids=historical_ids,
+                image_score=image_score,
+                attempt_number=2,
+                prior_candidate_texts=[
+                    cast(CaptionCandidate, row["candidate"]).text for row in ranked
+                ],
+            )
+            ranked.extend(retry_ranked)
+            ranked = self._sort_ranked(ranked)
+
+        latency_ms = round((time.perf_counter() - started_perf) * 1000, 3)
+        eligible = self._eligible_rows(ranked)
+        if len(eligible) < 3:
+            slate_id = self._persist_abstention(
+                channel_id=channel_id,
+                candidate_id=candidate_id,
+                brief=brief,
+                attempts=attempts,
+                ranked=ranked,
+                context=context,
+                payload=payload,
+                started_at=started_at,
+                latency_ms=latency_ms,
+                reason="no three grounded, policy-compliant, distinct captions survived",
+            )
+            return CaptionOptions(
+                recommended="",
+                alternatives=[],
+                rationale="RunWay abstained instead of displaying generic filler.",
+                confidence=0.0,
+                referenced_historical_post_ids=[],
+                factual_uncertainty_warning=(
+                    "No grounded caption slate survived verification."
+                ),
+                slate_id=slate_id,
+                retrieval_run_id=_required_int(
+                    context["retrieval_run_id"],
+                    "retrieval_run_id",
+                ),
+                abstained=True,
+                abstention_reason=(
+                    "no three grounded, policy-compliant, distinct captions survived"
+                ),
+            )
+
+        displayed = self._select_display_slate(eligible, policy)
+        supplied_references = [
+            value
+            for value in attempts[-1].referenced_historical_post_ids
+            if value in set(historical_ids)
+        ]
+        references = supplied_references or historical_ids[:4]
+        result, slate_id = self._persist_success(
+            channel_id=channel_id,
+            candidate_id=candidate_id,
+            brief=brief,
+            attempts=attempts,
+            ranked=ranked,
+            displayed=displayed,
+            context=context,
+            payload=payload,
+            started_at=started_at,
+            latency_ms=latency_ms,
+            references=references,
+        )
+        result.slate_id = slate_id
+        return result
+
+    def _ranked_candidates(
+        self,
+        *,
+        channel_id: int,
+        candidate_id: int,
+        generated: CaptionCandidateSet,
+        brief: EditorialBrief,
+        context: dict[str, object],
+        analysis: dict[str, Any],
+        allowed_reference_ids: list[int],
+        image_score: float,
+        attempt_number: int,
+        prior_candidate_texts: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            existing = [
+                value
+                for value in session.scalars(
+                    select(Post.caption).where(
+                        Post.channel_id == channel_id,
+                        Post.caption.is_not(None),
+                    )
+                )
+                if value
+            ]
+            existing.extend(
+                value
+                for value in session.scalars(
+                    select(Proposal.final_caption).where(
+                        Proposal.channel_id == channel_id,
+                        Proposal.final_caption != "",
+                    )
+                )
+                if value
+            )
+        pool = list(generated.candidates)
+        normalized_prior = {
+            normalize_caption(value) for value in prior_candidate_texts or []
+        }
+        seen: set[str] = set(normalized_prior)
+        prepared: list[tuple[int, CaptionCandidate, list[str]]] = []
+        for generation_index, raw in enumerate(
+            pool[: self.generation_configuration["candidate_limit"]],
+            start=1,
+        ):
+            text = raw.text.strip()
+            normalized = normalize_caption(text)
+            if not normalized:
+                continue
+            exclusion_reasons: list[str] = []
+            if normalized in seen:
+                exclusion_reasons.append("duplicate_within_generation")
+            seen.add(normalized)
+            taxonomy = analyze_caption(text, language=raw.language)
+            candidate = raw.model_copy(update={"structure": taxonomy.structure, "text": text})
+            if any(self._semantic_similarity(text, other) >= 0.94 for other in existing):
+                exclusion_reasons.append("too_similar_to_existing_caption")
+            prepared.append((generation_index, candidate, exclusion_reasons))
+
+        stats = cast(
+            dict[str, Any],
+            cast(dict[str, object], context["style_profile"]).get(
+                "caption_statistics",
+                {},
+            ),
+        )
+        feedback = cast(dict[str, object], context["feedback_context"])
+        recent_captions = [
+            str(item.get("caption") or "")
+            for item in cast(
+                list[dict[str, Any]],
+                context.get("caption_style_examples", []),
+            )[:10]
+        ]
+        rows: list[dict[str, Any]] = []
+        for generation_index, candidate, exclusion_reasons in prepared:
+            verification = self.verifier.verify(candidate, brief)
+            style = channel_style_score(candidate.text, stats)
+            novelty = self._novelty(candidate.text, [*existing, *recent_captions])
+            rotation = self._novelty(candidate.text, recent_captions)
+            positive = max(
+                0.0,
+                self.feedback.positive_similarity(candidate.text, feedback),
+            )
+            negative = max(
+                0.0,
+                self.feedback.negative_similarity(candidate.text, feedback),
+            )
+            structure_fit = self._structure_fit(candidate.structure, brief.target_structures)
+            length_fit = self._length_fit(candidate.text, brief.target_length)
+            pairing = self.pair_ranker.score_pair(
+                image_score=image_score,
+                caption_score=(style + structure_fit + length_fit) / 3,
+                grounding_score=verification.grounding_score,
+            )
+            components = {
+                "grounding": verification.grounding_score,
+                "policy": verification.policy_score,
+                "style": style,
+                "novelty": novelty,
+                "rotation": rotation,
+                "positive_feedback": positive,
+                "negative_feedback_risk": negative,
+                "pairing": pairing.score,
+                "structure_fit": structure_fit,
+                "length_fit": length_fit,
+            }
+            preference = self.preference_ranker.score(
+                channel_id=channel_id,
+                text=candidate.text,
+                components=components,
+            )
+            components["preference"] = preference.score
+            generic_penalty = float(
+                any(marker in candidate.text.casefold() for marker in GENERIC_PATTERNS)
+            )
+            weights = cast(
+                dict[str, float],
+                self.generation_configuration["weights"],
+            )
+            final = (
+                weights["preference"] * preference.score
+                + weights["grounding"] * verification.grounding_score
+                + weights["policy"] * verification.policy_score
+                + weights["style"] * style
+                + weights["novelty"] * novelty
+                + weights["rotation"] * rotation
+                + weights["positive_feedback"] * positive
+                + weights["pairing"] * pairing.score
+                + weights["negative_feedback_risk"] * negative
+                + weights["generic_penalty"] * generic_penalty
+                + 0.08 * structure_fit
+                + 0.04 * length_fit
+            )
+            eligible = verification.passed and not exclusion_reasons
+            rows.append(
+                {
+                    "candidate": candidate,
+                    "verification": verification,
+                    "components": components,
+                    "preference": preference,
+                    "pairing": pairing,
+                    "generic_penalty": generic_penalty,
+                    "final_score": (
+                        max(0.0, min(1.0, final))
+                        if eligible
+                        else 0.0
+                    ),
+                    "eligible": eligible,
+                    "exclusion_reasons": exclusion_reasons,
+                    "attempt_number": attempt_number,
+                    "generation_index": generation_index,
+                    "allowed_reference_ids": [
+                        value
+                        for value in candidate.historical_evidence
+                        if value in set(allowed_reference_ids)
+                    ],
+                }
+            )
+        return self._sort_ranked(rows)
+
+    @staticmethod
+    def _sort_ranked(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows.sort(
+            key=lambda row: (
+                not bool(row["eligible"]),
+                -float(row["final_score"]),
+                -float(row["components"]["grounding"]),
+                int(row["attempt_number"]),
+                int(row["generation_index"]),
+                str(row["candidate"].text),
+            )
+        )
+        return rows
+
+    @staticmethod
+    def _eligible_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [row for row in rows if bool(row["eligible"])]
+
+    def _select_display_slate(
+        self,
+        ranked: list[dict[str, Any]],
+        policy: PolicySnapshot,
+    ) -> list[dict[str, Any]]:
+        policy_lead = (
+            next(
+                (
+                    row
+                    for row in ranked
+                    if row["candidate"].structure == "open_question"
+                ),
+                ranked[0],
+            )
+            if policy.question_first
+            else ranked[0]
+        )
+        selected = [policy_lead]
+        for target_structure in policy.preferred_structures:
+            if len(selected) >= 3:
+                break
+            if any(
+                row["candidate"].structure == target_structure for row in selected
+            ):
+                continue
+            match = next(
+                (
+                    row
+                    for row in ranked
+                    if row not in selected
+                    and row["candidate"].structure == target_structure
+                    and self._is_diverse(row["candidate"].text, selected)
+                ),
+                None,
+            )
+            if match is not None:
+                selected.append(match)
+        for row in ranked:
+            if len(selected) >= 3:
+                break
+            if row not in selected and self._is_diverse(row["candidate"].text, selected):
+                selected.append(row)
+        if len(selected) < 3:
+            for row in ranked:
+                if len(selected) >= 3:
+                    break
+                if row not in selected:
+                    selected.append(row)
+        return selected[:3]
+
+    def _persist_success(
+        self,
+        *,
+        channel_id: int,
+        candidate_id: int,
+        brief: EditorialBrief,
+        attempts: list[CaptionCandidateSet],
+        ranked: list[dict[str, Any]],
+        displayed: list[dict[str, Any]],
+        context: dict[str, object],
+        payload: dict[str, object],
+        started_at: datetime,
+        latency_ms: float,
+        references: list[int],
+    ) -> tuple[CaptionOptions, int]:
+        display_texts = [row["candidate"].text for row in displayed]
+        confidence = min(
+            attempts[-1].confidence,
+            sum(
+                float(row["verification"].grounding_score) for row in displayed
+            )
+            / len(displayed),
+        )
+        rationale = (
+            "RunWay planned channel-specific angles, verified visible claims, applied explicit "
+            "policy, ranked creator preference evidence, and selected a diverse slate. "
+            + attempts[-1].rationale.strip()
         )
         with self.database.session() as session:
-            session.add(
-                ModelRun(
-                    task_type="generate_caption_options",
-                    provider=self.runtime.provider,
-                    model=self.runtime.model_name,
-                    prompt_version=self.prompt_version,
-                    input_record_ids_json=json.dumps([candidate_id, *historical_ids]),
-                    request_summary_json=json.dumps(payload, sort_keys=True, default=str),
-                    structured_output_json=json.dumps(
-                        {
-                            "raw_candidates": generated.model_dump(),
-                            "selected": validated.model_dump(),
-                            "ranking": ranking,
-                        },
-                        sort_keys=True,
-                    ),
-                    token_usage_json=json.dumps(self.runtime.last_token_usage, sort_keys=True),
-                    started_at=started,
-                    completed_at=datetime.now(UTC),
-                    status="completed",
-                )
+            model_run = ModelRun(
+                task_type="generate_caption_options",
+                provider=self.runtime.provider,
+                model=self.runtime.model_name,
+                prompt_version=self.prompt_version,
+                input_record_ids_json=json.dumps([candidate_id, *references]),
+                request_summary_json=json.dumps(payload, sort_keys=True, default=str),
+                structured_output_json=json.dumps(
+                    {
+                        "attempts": [attempt.model_dump() for attempt in attempts],
+                        "ranking": [self._public_rank(row) for row in ranked],
+                        "displayed": display_texts,
+                    },
+                    sort_keys=True,
+                ),
+                token_usage_json=json.dumps(self.runtime.last_token_usage, sort_keys=True),
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                status="completed",
+            )
+            session.add(model_run)
+            session.flush()
+            slate = CaptionSlate(
+                channel_id=channel_id,
+                candidate_image_id=candidate_id,
+                proposal_id=None,
+                retrieval_run_id=_required_int(
+                    context["retrieval_run_id"],
+                    "retrieval_run_id",
+                ),
+                model_run_id=model_run.id,
+                editorial_brief_json=brief.model_dump_json(),
+                raw_output_json=json.dumps(
+                    [attempt.model_dump() for attempt in attempts],
+                    sort_keys=True,
+                ),
+                generation_configuration_json=json.dumps(
+                    self.generation_configuration,
+                    sort_keys=True,
+                ),
+                configuration_hash=configuration_hash(
+                    self.generation_configuration
+                ),
+                status="completed",
+                latency_ms=latency_ms,
+                token_usage_json=json.dumps(
+                    self.runtime.last_token_usage,
+                    sort_keys=True,
+                ),
+            )
+            session.add(slate)
+            session.flush()
+            display_order = {
+                (
+                    int(row["attempt_number"]),
+                    int(row["generation_index"]),
+                ): index
+                for index, row in enumerate(displayed, start=1)
+            }
+            self._persist_candidate_records(
+                session=session,
+                slate_id=slate.id,
+                channel_id=channel_id,
+                ranked=ranked,
+                display_order=display_order,
             )
             audit(
                 session,
@@ -116,345 +595,277 @@ class CaptionService:
                 candidate_id,
                 {
                     "prompt_version": self.prompt_version,
-                    "historical_post_ids": historical_ids,
-                    "recommended_structure": "open_question",
-                    "candidate_count": len(generated.candidates),
+                    "retrieval_run_id": context["retrieval_run_id"],
+                    "caption_slate_id": slate.id,
+                    "candidate_count": len(ranked),
+                    "displayed_count": len(displayed),
+                    "policy_version": brief.policy_version,
+                    "configuration_hash": slate.configuration_hash,
                 },
             )
-        return validated
+            slate_id = slate.id
+        return (
+            CaptionOptions(
+                recommended=display_texts[0],
+                alternatives=display_texts[1:3],
+                rationale=rationale,
+                confidence=max(0.0, min(1.0, confidence)),
+                referenced_historical_post_ids=references,
+                factual_uncertainty_warning=attempts[-1].factual_uncertainty_warning,
+                slate_id=slate_id,
+                retrieval_run_id=_required_int(
+                    context["retrieval_run_id"],
+                    "retrieval_run_id",
+                ),
+            ),
+            slate_id,
+        )
 
-    def _validated_options(
+    def _persist_abstention(
         self,
-        candidate_id: int,
-        generated: CaptionCandidateSet,
-        context: dict[str, object],
-        analysis: dict[str, Any],
         *,
-        allowed_reference_ids: list[int],
-    ) -> tuple[CaptionOptions, list[dict[str, object]]]:
+        channel_id: int,
+        candidate_id: int,
+        brief: EditorialBrief,
+        attempts: list[CaptionCandidateSet],
+        ranked: list[dict[str, Any]],
+        context: dict[str, object],
+        payload: dict[str, object],
+        started_at: datetime,
+        latency_ms: float,
+        reason: str,
+    ) -> int:
         with self.database.session() as session:
-            existing = [
-                caption for caption in session.scalars(select(Post.caption)).all() if caption
-            ]
-            existing.extend(
-                caption
-                for caption in session.scalars(select(Proposal.final_caption)).all()
-                if caption
+            model_run = ModelRun(
+                task_type="generate_caption_options",
+                provider=self.runtime.provider,
+                model=self.runtime.model_name,
+                prompt_version=self.prompt_version,
+                input_record_ids_json=json.dumps([candidate_id]),
+                request_summary_json=json.dumps(payload, sort_keys=True, default=str),
+                structured_output_json=json.dumps(
+                    {
+                        "attempts": [attempt.model_dump() for attempt in attempts],
+                        "abstention": reason,
+                    },
+                    sort_keys=True,
+                ),
+                token_usage_json=json.dumps(self.runtime.last_token_usage, sort_keys=True),
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                status="completed",
             )
+            session.add(model_run)
+            session.flush()
+            slate = CaptionSlate(
+                channel_id=channel_id,
+                candidate_image_id=candidate_id,
+                retrieval_run_id=_required_int(
+                    context["retrieval_run_id"],
+                    "retrieval_run_id",
+                ),
+                model_run_id=model_run.id,
+                editorial_brief_json=brief.model_dump_json(),
+                raw_output_json=json.dumps(
+                    [attempt.model_dump() for attempt in attempts],
+                    sort_keys=True,
+                ),
+                generation_configuration_json=json.dumps(
+                    self.generation_configuration,
+                    sort_keys=True,
+                ),
+                configuration_hash=configuration_hash(
+                    self.generation_configuration
+                ),
+                status="abstained",
+                latency_ms=latency_ms,
+                token_usage_json=json.dumps(
+                    self.runtime.last_token_usage,
+                    sort_keys=True,
+                ),
+                failure_summary=reason,
+            )
+            session.add(slate)
+            session.flush()
+            self._persist_candidate_records(
+                session=session,
+                slate_id=slate.id,
+                channel_id=channel_id,
+                ranked=ranked,
+                display_order={},
+            )
+            audit(
+                session,
+                "caption_generation_abstained",
+                "candidate_image",
+                candidate_id,
+                {
+                    "caption_slate_id": slate.id,
+                    "reason": reason,
+                    "retrieval_run_id": context["retrieval_run_id"],
+                },
+            )
+            return slate.id
 
-        grounded_candidates = self._grounded_question_candidates(analysis)
-        grounded_text = {item.text for item in grounded_candidates}
-        pool = [*grounded_candidates, *generated.candidates]
-        accepted: list[CaptionCandidate] = []
-        seen: list[str] = []
-        for candidate in pool:
-            text = candidate.text.strip()
-            if not text or self._is_duplicate(text, seen):
-                continue
-            seen.append(text)
-            if self._is_duplicate(text, existing):
-                continue
-            accepted.append(
-                CaptionCandidate(
-                    text=text,
-                    structure=self._normalized_structure(candidate),
+    @staticmethod
+    def _persist_candidate_records(
+        *,
+        session: Any,
+        slate_id: int,
+        channel_id: int,
+        ranked: list[dict[str, Any]],
+        display_order: dict[tuple[int, int], int],
+    ) -> None:
+        for rank, row in enumerate(ranked, start=1):
+            candidate = cast(CaptionCandidate, row["candidate"])
+            verification = cast(VerificationResult, row["verification"])
+            components = cast(dict[str, float], row["components"])
+            exclusion_reasons = cast(list[str], row["exclusion_reasons"])
+            candidate_key = (
+                int(row["attempt_number"]),
+                int(row["generation_index"]),
+            )
+            session.add(
+                CaptionCandidateRecord(
+                    channel_id=channel_id,
+                    caption_slate_id=slate_id,
+                    text=candidate.text,
+                    language=candidate.language,
+                    structure=candidate.structure,
+                    editorial_angle=candidate.editorial_angle,
+                    visible_evidence_json=json.dumps(candidate.visible_evidence),
+                    uncertainty_json=json.dumps(candidate.uncertainty),
+                    prohibited_claim_checks_json=json.dumps(
+                        {
+                            "checks": verification.checks,
+                            "eligible": bool(row["eligible"]),
+                            "exclusion_reasons": exclusion_reasons,
+                        },
+                        sort_keys=True,
+                    ),
+                    historical_evidence_json=json.dumps(
+                        row["allowed_reference_ids"]
+                    ),
+                    feedback_evidence_json=json.dumps(
+                        candidate.feedback_evidence
+                    ),
+                    generator_confidence=candidate.confidence,
+                    verifier_result_json=verification.model_dump_json(),
+                    eligible=bool(row["eligible"]),
+                    exclusion_reasons_json=json.dumps(exclusion_reasons),
+                    attempt_number=int(row["attempt_number"]),
+                    generation_index=int(row["generation_index"]),
+                    grounding_score=verification.grounding_score,
+                    policy_score=verification.policy_score,
+                    style_score=components["style"],
+                    novelty_score=components["novelty"],
+                    rotation_score=components["rotation"],
+                    positive_feedback_score=components["positive_feedback"],
+                    negative_feedback_risk=components["negative_feedback_risk"],
+                    pairing_score=components["pairing"],
+                    preference_score=components["preference"],
+                    final_score=float(row["final_score"]),
+                    rank=rank,
+                    displayed=candidate_key in display_order,
+                    display_order=display_order.get(candidate_key),
                 )
             )
 
-        accepted.extend(self._fallback_candidates(candidate_id, accepted, existing))
-        stats = cast(
-            dict[str, Any],
-            cast(dict[str, object], context.get("style_profile", {})).get("caption_statistics", {}),
-        )
-        feedback_context = cast(
-            dict[str, object],
-            context.get("feedback_context", {}),
-        )
-        historical_captions = [
-            str(item.get("caption") or "")
-            for item in cast(list[dict[str, Any]], context.get("caption_style_examples", []))
-        ]
-        ranking = [
-            self._score_candidate(
-                candidate,
-                stats,
-                feedback_context,
-                existing,
-                historical_captions,
-                grounded_text,
-            )
-            for candidate in accepted
-        ]
-        ranking.sort(
-            key=lambda item: (cast(float, item["score"]), str(item["text"])),
-            reverse=True,
-        )
+    @staticmethod
+    def _public_rank(row: dict[str, Any]) -> dict[str, object]:
+        candidate = cast(CaptionCandidate, row["candidate"])
+        verification = cast(VerificationResult, row["verification"])
+        preference = row["preference"]
+        pairing = row["pairing"]
+        return {
+            "text": candidate.text,
+            "structure": candidate.structure,
+            "editorial_angle": candidate.editorial_angle,
+            "visible_evidence": candidate.visible_evidence,
+            "uncertainty": candidate.uncertainty,
+            "generator_confidence": candidate.confidence,
+            "verification": verification.model_dump(),
+            "components": row["components"],
+            "preference": {
+                "score": preference.score,
+                "trained": preference.trained,
+                "calibrated": preference.calibrated,
+                "reason": preference.reason,
+                "sample_count": preference.sample_count,
+            },
+            "pairing": {
+                "score": pairing.score,
+                "reason": pairing.reason,
+            },
+            "generic_penalty": row["generic_penalty"],
+            "eligible": bool(row["eligible"]),
+            "exclusion_reasons": row["exclusion_reasons"],
+            "attempt_number": row["attempt_number"],
+            "generation_index": row["generation_index"],
+            "final_score": round(float(row["final_score"]), 6),
+        }
 
-        selected: list[dict[str, object]] = []
-        for structure in ("open_question", "observation", "reaction"):
-            match = next(
-                (
-                    row
-                    for row in ranking
-                    if row["structure"] == structure
-                    and (
-                        structure != "open_question"
-                        or row["grounded"]
-                        or not any(
-                            item["structure"] == "open_question" and item["grounded"]
-                            for item in ranking
-                        )
-                    )
-                    and row["text"] not in {item["text"] for item in selected}
-                ),
-                None,
-            )
-            if match is not None:
-                selected.append(match)
-        for row in ranking:
-            if len(selected) >= 3:
-                break
-            if row["text"] not in {item["text"] for item in selected}:
-                selected.append(row)
-        if len(selected) < 3 or selected[0]["structure"] != "open_question":
-            raise ValueError("could not produce a question-first set of three unique captions")
-
-        supplied_references = [
-            value
-            for value in generated.referenced_historical_post_ids
-            if value in set(allowed_reference_ids)
-        ]
-        references = supplied_references or allowed_reference_ids[:4]
-        recommended = str(selected[0]["text"])
-        alternatives = [str(item["text"]) for item in selected[1:3]]
-        rationale = (
-            "Question-first ranking selected an open-ended prompt, then preserved one "
-            "observational and one reaction alternative. " + generated.rationale.strip()
-        )
-        result = CaptionOptions(
-            recommended=recommended,
-            alternatives=alternatives,
-            rationale=rationale,
-            confidence=generated.confidence,
-            referenced_historical_post_ids=references,
-            factual_uncertainty_warning=generated.factual_uncertainty_warning,
-        )
-        return result, ranking
-
-    def _score_candidate(
+    def _is_diverse(
         self,
-        candidate: CaptionCandidate,
-        stats: dict[str, Any],
-        feedback_context: dict[str, object],
-        existing: list[str],
-        historical_captions: list[str],
-        grounded_text: set[str],
-    ) -> dict[str, object]:
-        text = candidate.text.strip()
-        features = caption_features(text)
-        word_count = int(features["word_count"])
-        percentiles = cast(dict[str, float], stats.get("word_percentiles", {}))
-        p25 = float(percentiles.get("p25", 3))
-        p75 = float(percentiles.get("p75", 8))
-        if p25 <= word_count <= p75:
-            length_score = 1.0
-        else:
-            distance = min(abs(word_count - p25), abs(word_count - p75))
-            median_raw = stats.get("median_words", 5)
-            median_words = float(median_raw) if isinstance(median_raw, (int, float)) else 5.0
-            length_score = math.exp(-distance / max(median_words, 1))
-
-        is_open = bool(text.endswith("?") and OPEN_QUESTION_RE.match(text))
-        is_yes_no = bool(text.endswith("?") and YES_NO_QUESTION_RE.match(text))
-        structure_score = (
-            1.0 if is_open else (0.35 if candidate.structure == "open_question" else 0)
+        text: str,
+        selected: list[dict[str, Any]],
+    ) -> bool:
+        threshold = float(
+            self.generation_configuration["diversity_similarity_threshold"]
         )
-        positive_similarity = self.feedback.positive_similarity(text, feedback_context)
-        negative_similarity = self.feedback.negative_similarity(text, feedback_context)
-        comparison = [*existing, *historical_captions]
-        highest_similarity = max(
-            (max(text_similarity(text, other), 0.0) for other in comparison if other),
+        return all(
+            self._semantic_similarity(
+                text,
+                cast(CaptionCandidate, row["candidate"]).text,
+            )
+            < threshold
+            for row in selected
+        )
+
+    def _semantic_similarity(self, first: str, second: str) -> float:
+        first_vector = self.text_provider.embed_text(
+            first,
+            purpose="caption_semantics",
+        ).as_array()[0]
+        second_vector = self.text_provider.embed_text(
+            second,
+            purpose="caption_semantics",
+        ).as_array()[0]
+        return cosine(first_vector, second_vector)
+
+    def _novelty(self, text: str, comparison: list[str]) -> float:
+        highest = max(
+            (
+                max(0.0, self._semantic_similarity(text, other))
+                for other in comparison
+                if other.strip()
+            ),
             default=0.0,
         )
-        novelty_score = max(0.0, 1.0 - highest_similarity)
-        generic_penalty = 0.2 if any(marker in text.lower() for marker in GENERIC_PATTERNS) else 0.0
-        yes_no_penalty = 0.15 if is_yes_no else 0.0
-        negative_penalty = 0.12 * max(negative_similarity, 0.0)
-        grounding_bonus = 0.12 if text in grounded_text else 0.0
-        score = (
-            0.36 * structure_score
-            + 0.26 * qlob_style_score(text, stats)
-            + 0.14 * length_score
-            + 0.14 * novelty_score
-            + 0.10 * max(positive_similarity, 0.0)
-            + grounding_bonus
-            - generic_penalty
-            - yes_no_penalty
-            - negative_penalty
-        )
-        return {
-            "text": text,
-            "structure": candidate.structure,
-            "score": round(max(0.0, min(1.0, score)), 6),
-            "open_question": is_open,
-            "grounded": text in grounded_text,
-            "style_score": qlob_style_score(text, stats),
-            "length_score": round(length_score, 6),
-            "novelty_score": round(novelty_score, 6),
-            "positive_feedback_similarity": round(max(positive_similarity, 0.0), 6),
-            "negative_feedback_similarity": round(max(negative_similarity, 0.0), 6),
-            "penalties": {
-                "generic": generic_penalty,
-                "yes_no_question": yes_no_penalty,
-                "negative_feedback": round(negative_penalty, 6),
-            },
-        }
+        return max(0.0, min(1.0, 1.0 - highest))
 
     @staticmethod
-    def _normalized_structure(candidate: CaptionCandidate) -> str:
-        text = candidate.text.strip()
-        if text.endswith("?") and OPEN_QUESTION_RE.match(text):
-            return "open_question"
-        if candidate.structure == "open_question":
-            return "observation"
-        return candidate.structure
+    def _structure_fit(structure: str, targets: list[str]) -> float:
+        try:
+            index = targets.index(structure)
+        except ValueError:
+            return 0.35
+        return max(0.4, 1.0 - 0.18 * index)
 
     @staticmethod
-    def _grounded_question_candidates(
-        analysis: dict[str, Any],
-    ) -> list[CaptionCandidate]:
-        confidence = float(analysis.get("confidence") or 0)
-        characters = analysis.get("characters") or []
-        emotion = str(analysis.get("emotion") or "").strip()
-        if confidence < 0.8 or not characters or not emotion:
-            return []
-        character = CaptionService._character_for_question(str(characters[0]))
-        emotion_word = CaptionService._emotion_for_question(emotion)
-        if not character or not emotion_word or emotion_word in {"unknown", "uncertain"}:
-            return []
-        return [
-            CaptionCandidate(
-                text=f"Why is {character} so {emotion_word}?",
-                structure="open_question",
-            ),
-        ]
+    def _length_fit(text: str, target: dict[str, int]) -> float:
+        count = len(caption_features(text)["tokens"])
+        minimum = target["minimum_words"]
+        maximum = target["maximum_words"]
+        if minimum <= count <= maximum:
+            return 1.0
+        distance = min(abs(count - minimum), abs(count - maximum))
+        return math.exp(-distance / max((minimum + maximum) / 2, 1))
 
     @staticmethod
-    def _character_for_question(value: str) -> str:
-        cleaned = re.sub(r"[^A-Za-z0-9 .'-]", "", value).strip()
-        parts = cleaned.split()
-        if not parts:
-            return ""
-        lowered = cleaned.lower()
-        generic_markers = {
-            "animated",
-            "attendee",
-            "attendees",
-            "boy",
-            "character",
-            "characters",
-            "child",
-            "figure",
-            "girl",
-            "group",
-            "male",
-            "female",
-            "man",
-            "other",
-            "people",
-            "person",
-            "teen",
-            "unidentified",
-            "unknown",
-            "woman",
-            "yellow-skinned",
-        }
-        words = set(lowered.replace("-", " ").split())
-        starts_as_description = parts[0][:1].islower() or parts[0].lower() in {"a", "an", "the"}
-        if starts_as_description or words & generic_markers:
-            if words & {"female", "girl", "woman"}:
-                return "she"
-            if words & {"boy", "male", "man"}:
-                return "he"
-            return "they"
-        if parts[0].rstrip(".").lower() in {"mr", "mrs", "ms", "dr", "professor"}:
-            return " ".join(parts[:2])[:40]
-        return parts[0][:40]
-
-    @staticmethod
-    def _emotion_for_question(value: str) -> str:
-        lowered = re.sub(r"[^a-z ]", " ", value.lower())
-        words = set(lowered.split())
-        mappings = (
-            ({"excited", "excitement", "thrilled", "eager"}, "excited"),
-            ({"surprise", "surprised", "shocked", "astonished"}, "surprised"),
-            ({"angry", "anger", "furious", "annoyed"}, "angry"),
-            ({"sad", "sadness", "upset", "dejected"}, "upset"),
-            ({"worried", "anxious", "nervous", "afraid", "fear"}, "worried"),
-            ({"happy", "happiness", "joy", "joyful", "delighted"}, "happy"),
-            ({"confused", "confusion", "puzzled", "bewildered"}, "confused"),
-            ({"determined", "determination", "confident", "confidence"}, "confident"),
-            ({"suspicious", "skeptical", "doubtful"}, "suspicious"),
-            ({"embarrassed", "awkward", "ashamed"}, "embarrassed"),
-            ({"tired", "exhausted", "sleepy"}, "tired"),
-            ({"bored", "unimpressed"}, "unimpressed"),
-        )
-        for markers, adjective in mappings:
-            if words & markers:
-                return adjective
-        compact = " ".join(lowered.split())
-        return compact if 0 < len(compact.split()) <= 2 else ""
-
-    def _fallback_candidates(
-        self,
-        candidate_id: int,
-        accepted: list[CaptionCandidate],
-        existing: list[str],
-    ) -> list[CaptionCandidate]:
-        questions = [
-            "What happened right before this?",
-            "How did things get to this point?",
-            "Why does this feel like trouble?",
-            "What has everyone so interested?",
-            "How would you explain this scene?",
-        ]
-        observations = [
-            "That confidence lasted exactly three seconds.",
-            "Everyone saw that coming except him.",
-            "A completely normal amount of dramatic tension.",
-            "That suspicious silence says everything.",
-        ]
-        reactions = [
-            "This should end well.",
-            "The face of someone who learned nothing.",
-            "Moments before the plan changed.",
-            "That escalated with impressive speed.",
-        ]
-        rows = [
-            *[CaptionCandidate(text=value, structure="open_question") for value in questions],
-            *[CaptionCandidate(text=value, structure="observation") for value in observations],
-            *[CaptionCandidate(text=value, structure="reaction") for value in reactions],
-        ]
-        start = candidate_id % len(rows)
-        result: list[CaptionCandidate] = []
-        current = [item.text for item in accepted]
-        for offset in range(len(rows)):
-            candidate = rows[(start + offset) % len(rows)]
-            if self._is_duplicate(candidate.text, existing + current):
-                continue
-            result.append(candidate)
-            current.append(candidate.text)
-        return result
-
-    def _is_duplicate(self, caption: str, existing: list[str]) -> bool:
-        normalized = self._normalize(caption)
-        for other in existing:
-            if normalized == self._normalize(other):
-                return True
-            if text_similarity(caption, other) >= self.settings.caption_duplicate_threshold:
-                return True
-        return False
-
-    @staticmethod
-    def _normalize(caption: str) -> str:
-        return re.sub(r"[^a-z0-9]+", " ", caption.lower()).strip()
+    def _json_dict(value: str) -> dict[str, Any]:
+        try:
+            result = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return result if isinstance(result, dict) else {}

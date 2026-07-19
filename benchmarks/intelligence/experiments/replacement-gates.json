@@ -1,0 +1,229 @@
+{
+  "artifact_version": "canonical-replacement-gates-v1",
+  "blocking_reasons": [],
+  "checks": {
+    "all_critical_regressions": true,
+    "all_hard_gates": true,
+    "cross_channel_generalization": true,
+    "holdout_evaluated_exactly_once": true,
+    "one_canonical_engine": true,
+    "primary_quality_improved": true,
+    "secondary_metrics_safe": true
+  },
+  "critical_regressions": [
+    {
+      "case": "wrong_character_prevention",
+      "evidence": [
+        "tests.unit.test_caption_verification::test_unsupported_critical_claims_fail[Why is Bart smiling?-unsupported_entity:Bart]",
+        "tests.unit.test_caption_verification::test_low_confidence_entity_cannot_become_verified_fact"
+      ],
+      "passed": true
+    },
+    {
+      "case": "invented_plot_prevention",
+      "evidence": [
+        "tests.unit.test_caption_verification::test_unsupported_critical_claims_fail[Why is Homer smiling after the episode?-invented_event:episode]"
+      ],
+      "passed": true
+    },
+    {
+      "case": "invented_quote_prevention",
+      "evidence": [
+        "tests.unit.test_caption_verification::test_unsupported_critical_claims_fail[Why did Homer say \"I won\"?-invented_quote:I won]"
+      ],
+      "passed": true
+    },
+    {
+      "case": "duplicate_rejection",
+      "evidence": [
+        "tests.unit.test_duplicate_detector::test_exact_transformed_and_novel_images_are_distinguished",
+        "tests.unit.test_duplicate_detector::test_same_source_url_is_a_hard_block"
+      ],
+      "passed": true
+    },
+    {
+      "case": "rights_blocking",
+      "evidence": [
+        "tests.unit.test_candidate_safeguards::test_fan_art_is_hard_rejected",
+        "tests.integration.test_generation_lineage::test_unknown_rights_reference_is_ineligible_for_generation"
+      ],
+      "passed": true
+    },
+    {
+      "case": "channel_isolation",
+      "evidence": [
+        "tests.integration.test_intelligence_evidence::test_channel_data_isolation_blocks_catalog_and_reference_leakage",
+        "tests.integration.test_multichannel_generalization::test_same_image_adapts_to_five_channel_histories_without_leakage"
+      ],
+      "passed": true
+    },
+    {
+      "case": "explicit_rule_enforcement",
+      "evidence": [
+        "tests.unit.test_intelligence_foundations::test_explicit_policy_outranks_defaults_and_unknown_rights_are_blocked"
+      ],
+      "passed": true
+    },
+    {
+      "case": "abstention_without_grounded_caption",
+      "evidence": [
+        "tests.unit.test_caption_verification::test_abstention_contract_cannot_contain_filler_captions",
+        "tests.integration.test_caption_provenance::test_complete_caption_slate_and_abstention_provenance_are_persisted"
+      ],
+      "passed": true
+    }
+  ],
+  "decision": "canonical_replacement_approved",
+  "evaluated_at": "2026-07-19T00:20:45.942438+00:00",
+  "evidence_artifacts": {
+    "critical_test_junit": "benchmarks/intelligence/experiments/critical-gates.xml",
+    "development_comparison": "benchmarks/intelligence/experiments/paired-comparison.json",
+    "generalization": "benchmarks/intelligence/experiments/generalization.json",
+    "holdout": "benchmarks/intelligence/experiments/HOLDOUT_EVALUATED.json",
+    "holdout_comparison": "benchmarks/intelligence/experiments/holdout-comparison.json",
+    "production_migration": "benchmarks/intelligence/experiments/production-migration-verification.json",
+    "tuning": "benchmarks/intelligence/experiments/tuning-summary.json"
+  },
+  "hard_gates": [
+    {
+      "evidence": [
+        "tests.integration.test_intelligence_evidence::test_channel_data_isolation_blocks_catalog_and_reference_leakage",
+        "tests.integration.test_multichannel_generalization::test_same_image_adapts_to_five_channel_histories_without_leakage"
+      ],
+      "gate": "zero_channel_data_leakage",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "tests.integration.test_canonical_migration::test_existing_schema_upgrade_and_rollback_preserve_catalogue",
+        "benchmarks/intelligence/experiments/production-migration-verification.json"
+      ],
+      "gate": "zero_migration_corruption",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "tests.integration.test_foundation::test_health_app_is_local_and_publishing_is_disabled",
+        "tests.integration.test_youtube_publisher::test_publisher_requires_feature_gate_and_exact_one_time_confirmation",
+        "tests.integration.test_youtube_publisher::test_blocked_session_attempt_can_resume_without_duplicate_submission"
+      ],
+      "gate": "zero_publishing_safety_regression",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "tests.unit.test_intelligence_foundations::test_provider_registries_never_fall_back_to_unrequested_paid_services",
+        "tests.unit.test_codex_runtime::test_codex_runtime_blocks_api_key_authentication",
+        "tests.unit.test_codex_runtime::test_runtime_factory_selects_codex_without_fallback"
+      ],
+      "gate": "zero_hidden_paid_provider_fallback",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "tests.unit.test_intelligence_foundations::test_explicit_policy_outranks_defaults_and_unknown_rights_are_blocked",
+        "tests.integration.test_generation_lineage::test_unknown_rights_reference_is_ineligible_for_generation"
+      ],
+      "gate": "zero_rights_policy_regression",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "tests.unit.test_duplicate_detector::test_exact_transformed_and_novel_images_are_distinguished",
+        "tests.unit.test_duplicate_detector::test_same_source_url_is_a_hard_block"
+      ],
+      "gate": "zero_duplicate_safety_regression",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "tests.unit.test_caption_verification::test_unsupported_critical_claims_fail",
+        "tests.unit.test_caption_verification::test_low_confidence_entity_cannot_become_verified_fact"
+      ],
+      "gate": "zero_unsupported_critical_entity_claims",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "tests.unit.test_intelligence_foundations::test_fusion_is_deterministic_and_mmr_suppresses_duplicate_evidence",
+        "tests.unit.test_evaluation_harness::test_dataset_boundaries_cluster_integrity_and_blind_order_are_deterministic",
+        "tests.e2e.test_fixture_workflow::test_complete_fixture_workflow"
+      ],
+      "gate": "required_deterministic_workflows",
+      "passed": true
+    },
+    {
+      "evidence": [
+        "tests.integration.test_canonical_migration::test_existing_schema_upgrade_and_rollback_preserve_catalogue",
+        "data/qlob-production/backups/runway-pre-0007-repair-20260718.db"
+      ],
+      "gate": "required_rollback_procedures",
+      "passed": true
+    }
+  ],
+  "junit_summary": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 51
+  },
+  "primary_quality": {
+    "baseline_no_edit_acceptance_proxy": 0.0,
+    "candidate_no_edit_acceptance_proxy": 1.0,
+    "human_creator_preference_measured": false,
+    "label_scope": "deterministic_fixture_policy_proxy_not_human_preference",
+    "meaningful_improvement": true,
+    "observed_delta": 1.0,
+    "sample_size": 2,
+    "statistically_conclusive": false,
+    "wilson_95_baseline": [
+      0.0,
+      0.65762
+    ],
+    "wilson_95_candidate": [
+      0.34238,
+      1.0
+    ]
+  },
+  "replacement_approved": true,
+  "secondary_metrics": {
+    "cost": {
+      "candidate_paid_calls": 0,
+      "passed": true
+    },
+    "duplicate_control": {
+      "critical_suite_passed": true,
+      "passed": true
+    },
+    "grounding": {
+      "baseline_selected_grounding_flag_rate": 0.333333,
+      "candidate_grounding_pass_rate": 1.0,
+      "passed": true
+    },
+    "latency": {
+      "absolute_increase_ms": 74.686,
+      "baseline_mean_ms": 69.385,
+      "candidate_mean_ms": 144.071,
+      "candidate_to_baseline_ratio": 2.0764,
+      "passed": true,
+      "reason": "No latency threshold was preregistered. The 74.686 ms absolute increase was judged operationally immaterial beside model latency, while the 2.08x relative regression remains explicitly reported; real model latency is unmeasured."
+    },
+    "operational_reliability": {
+      "critical_tests_passed": 51,
+      "passed": true
+    },
+    "retrieval_diversity": {
+      "baseline_unique_recommendation_rate": 0.25,
+      "candidate_unique_recommendation_rate": 0.666667,
+      "passed": true
+    },
+    "rights_compliance": {
+      "critical_suite_passed": true,
+      "passed": true
+    },
+    "unsupported_claims": {
+      "candidate_rate": 0.0,
+      "passed": true
+    }
+  }
+}

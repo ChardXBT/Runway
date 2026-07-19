@@ -1,0 +1,2382 @@
+# RunWay Canonical Intelligence Evaluation
+
+- **Artifact Version:** canonical-candidate-evaluation-v1
+
+- **Dataset Version:** canonical-v1
+
+- **Purpose:** development
+
+## Splits
+
+```json
+[
+  "development"
+]
+```
+
+- **Configuration Hash:** 94a1f2c578b3ca14104f7142de71706559d78b3b196306da667c82bf5ab0be36
+
+- **Started At:** 2026-07-18T23:57:38.166157+00:00
+
+- **Completed At:** 2026-07-18T23:57:48.415771+00:00
+
+- **Offline:** True
+
+- **Paid Provider Calls:** 0
+
+- **Publishing Mutations:** 0
+
+## Dataset Integrity
+
+```json
+{
+  "case_count": 10,
+  "cluster_count": 10,
+  "cross_split_clusters": 0,
+  "dataset_version": "canonical-v1",
+  "duplicate_case_ids": 0,
+  "passed": true
+}
+```
+
+## Pipeline
+
+```json
+{
+  "analysis": {
+    "batches": 2,
+    "completed": 9,
+    "deferred": 0,
+    "edges": 36,
+    "failed": 0,
+    "skipped": 0
+  },
+  "capture": {
+    "cursor": 13,
+    "diagnostics": 1,
+    "media_downloaded": 10,
+    "posts_created": 12,
+    "posts_seen": 12,
+    "posts_updated": 1,
+    "run_id": 1,
+    "status": "completed"
+  },
+  "discovery": {
+    "accepted": 23,
+    "candidates": 30,
+    "errors": [],
+    "hard_rejected": 7,
+    "provider": "fixture",
+    "query_plan": {
+      "desired_actions": [
+        "clear visible action",
+        "expressive reaction"
+      ],
+      "desired_compositions": [
+        "close-up",
+        "group scene",
+        "wide composition"
+      ],
+      "desired_entities": [],
+      "desired_scenes": [],
+      "desired_topics": [
+        "Synthetic Adventure"
+      ],
+      "desired_visual_traits": [
+        "clear subject",
+        "strong expression",
+        "minimal overlay text"
+      ],
+      "excluded_concepts": [
+        "fan art",
+        "personal artwork",
+        "artist portfolios",
+        "commissions",
+        "independent illustrations"
+      ],
+      "query_families": [
+        {
+          "purpose": "reaction frames",
+          "queries": [
+            "Synthetic Adventure expressive reaction scene",
+            "Synthetic Adventure dramatic close up"
+          ]
+        },
+        {
+          "purpose": "discussion prompts",
+          "queries": [
+            "Synthetic Adventure character comparison",
+            "Synthetic Adventure team decision scene"
+          ]
+        },
+        {
+          "purpose": "visual variety",
+          "queries": [
+            "Synthetic Adventure wide composition",
+            "Synthetic Adventure colorful cinematic still"
+          ]
+        }
+      ],
+      "rights_policy": "unknown_requires_review",
+      "source_policy": "preserve_and_review"
+    },
+    "run_id": 1,
+    "status": "completed"
+  },
+  "profile_version": 1
+}
+```
+
+## Metrics
+
+```json
+{
+  "abstention_rate": 0.0,
+  "case_count": 3,
+  "grounding_pass_rate": 1.0,
+  "mean_retrieval_role_coverage": 1.666667,
+  "unique_displayed_caption_rate": 0.555556,
+  "unique_recommendation_rate": 0.666667,
+  "unsupported_claim_rate": 0.0
+}
+```
+
+## Cases
+
+```json
+[
+  {
+    "abstained": false,
+    "abstention_reason": null,
+    "candidate_analysis": {
+      "caption_potential": 0.87,
+      "characters": [
+        "Fixture candidate 5"
+      ],
+      "composition": "balanced two-subject",
+      "confidence": 0.9,
+      "emotion": "determination",
+      "fan_art_probability": 0.0,
+      "franchise": "Synthetic Ensemble",
+      "personal_artwork_probability": 0.0,
+      "scene_archetype": "group decision",
+      "text_overlay": false,
+      "unsafe_probability": 0.0,
+      "watermark_probability": 0.02
+    },
+    "case_id": "qlob-fixture-candidate-18",
+    "configuration_hash": "f18661fde46da145d7038eb44616dde287d22970aa814dee842ee8beda85d576",
+    "displayed_captions": [
+      "Why is Fixture so determined?",
+      "Fixture's determined reaction says plenty.",
+      "What has Fixture reacting like this?"
+    ],
+    "duplicate": {
+      "hard_rejection_reason": null,
+      "novelty_score": 0.297725,
+      "warnings": []
+    },
+    "fixture_uri": "fixture://candidate-18",
+    "generated_pool": [
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9277890622615814,
+          "pairing": 0.8904415999999999,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.9049366527166214,
+          "rotation": 0.9277890622615814,
+          "structure_fit": 1.0,
+          "style": 0.828571
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.978295,
+        "generation_index": 1,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8904415999999999
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.9049366527166214,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "Why is Fixture so determined?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:confident"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9797187764197588,
+          "pairing": 0.8794416833333334,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8788526160320996,
+          "rotation": 0.9797187764197588,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.971478,
+        "generation_index": 4,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8794416833333334
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8788526160320996,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture's determined reaction says plenty.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:confident"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8592357039451599,
+          "pairing": 0.8777528166666666,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.881780311218989,
+          "rotation": 0.8592357039451599,
+          "structure_fit": 1.0,
+          "style": 0.71981
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.954626,
+        "generation_index": 2,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8777528166666666
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.881780311218989,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "What has Fixture reacting like this?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8610267639160156,
+          "pairing": 0.8667527833333333,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8537508820638334,
+          "rotation": 0.9625096395611763,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.805524
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.945988,
+        "generation_index": 5,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8667527833333333
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8537508820638334,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Every detail points back to Fixture.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8248448967933655,
+          "pairing": 0.8794416833333334,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8571702728844046,
+          "rotation": 0.8248448967933655,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "reaction",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.943911,
+        "generation_index": 7,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8794416833333334
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8571702728844046,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture has entered the chat.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 0.8337529180751806,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8593602329492569,
+          "pairing": 0.847968507108771,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8699207328972468,
+          "rotation": 0.8593602329492569,
+          "structure_fit": 1.0,
+          "style": 0.630763
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.936709,
+        "generation_index": 3,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.847968507108771
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8699207328972468,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "How would you explain Fixture's determined reaction?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:confident"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "length_outside_channel_range:7/5-6",
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.794673353433609,
+          "pairing": 0.8667527833333333,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8434844915464795,
+          "rotation": 0.876617968082428,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.805524
+        },
+        "editorial_angle": "reaction",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.932809,
+        "generation_index": 6,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8667527833333333
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8434844915464795,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "That determined look needs no explanation.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_emotion:confident"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      }
+    ],
+    "grounding": {
+      "passed": true,
+      "unsupported_claims": []
+    },
+    "latency_ms": 141.972,
+    "model_usage": {},
+    "profile_version": 1,
+    "prompt_version": "captions-v4",
+    "recommendation": "Why is Fixture so determined?",
+    "retrieval": {
+      "channels": [
+        "composition",
+        "fusion",
+        "lexical",
+        "recent",
+        "semantic",
+        "topic",
+        "visual"
+      ],
+      "considered_count": 35,
+      "retrieval_run_id": 1,
+      "role_coverage": [
+        "caption_structure_example",
+        "visual_analogue"
+      ],
+      "selected_evidence": [
+        {
+          "entity_id": 2,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.11480431083380602,
+          "retrieval_channel": "fusion",
+          "selected_rank": 1
+        },
+        {
+          "entity_id": 12,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.11844877344877344,
+          "retrieval_channel": "fusion",
+          "selected_rank": 2
+        },
+        {
+          "entity_id": 7,
+          "entity_type": "post",
+          "evidence_role": "caption_structure_example",
+          "fusion_score": 0.0773913043478261,
+          "retrieval_channel": "fusion",
+          "selected_rank": 3
+        },
+        {
+          "entity_id": 6,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.12027218098267939,
+          "retrieval_channel": "fusion",
+          "selected_rank": 4
+        },
+        {
+          "entity_id": 10,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.09033507851355237,
+          "retrieval_channel": "fusion",
+          "selected_rank": 5
+        },
+        {
+          "entity_id": 11,
+          "entity_type": "post",
+          "evidence_role": "caption_structure_example",
+          "fusion_score": 0.07586783220627852,
+          "retrieval_channel": "fusion",
+          "selected_rank": 6
+        },
+        {
+          "entity_id": 5,
+          "entity_type": "post",
+          "evidence_role": "caption_structure_example",
+          "fusion_score": 0.07611218568665376,
+          "retrieval_channel": "fusion",
+          "selected_rank": 7
+        }
+      ]
+    },
+    "selected_candidates": [
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9277890622615814,
+          "pairing": 0.8904415999999999,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.9049366527166214,
+          "rotation": 0.9277890622615814,
+          "structure_fit": 1.0,
+          "style": 0.828571
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.978295,
+        "generation_index": 1,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8904415999999999
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.9049366527166214,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "Why is Fixture so determined?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:confident"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9797187764197588,
+          "pairing": 0.8794416833333334,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8788526160320996,
+          "rotation": 0.9797187764197588,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.971478,
+        "generation_index": 4,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8794416833333334
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8788526160320996,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture's determined reaction says plenty.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:confident"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8592357039451599,
+          "pairing": 0.8777528166666666,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.881780311218989,
+          "rotation": 0.8592357039451599,
+          "structure_fit": 1.0,
+          "style": 0.71981
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.954626,
+        "generation_index": 2,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8777528166666666
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.881780311218989,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "What has Fixture reacting like this?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:determined,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "determined",
+          "reacting"
+        ]
+      }
+    ],
+    "split": "development"
+  },
+  {
+    "abstained": false,
+    "abstention_reason": null,
+    "candidate_analysis": {
+      "caption_potential": 0.9,
+      "characters": [
+        "Fixture candidate 5"
+      ],
+      "composition": "balanced two-subject",
+      "confidence": 0.9,
+      "emotion": "surprise",
+      "fan_art_probability": 0.0,
+      "franchise": "Synthetic Adventure",
+      "personal_artwork_probability": 0.0,
+      "scene_archetype": "group decision",
+      "text_overlay": false,
+      "unsafe_probability": 0.0,
+      "watermark_probability": 0.02
+    },
+    "case_id": "qlob-fixture-candidate-04",
+    "configuration_hash": "f18661fde46da145d7038eb44616dde287d22970aa814dee842ee8beda85d576",
+    "displayed_captions": [
+      "Why is Fixture so surprised?",
+      "Fixture's surprised reaction says plenty.",
+      "What has Fixture reacting like this?"
+    ],
+    "duplicate": {
+      "hard_rejection_reason": null,
+      "novelty_score": 0.319275,
+      "warnings": [
+        "historical date precision cannot prove the 180-day boundary"
+      ]
+    },
+    "fixture_uri": "fixture://candidate-04",
+    "generated_pool": [
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9293289035558701,
+          "pairing": 0.8895228500000001,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.9051154804978219,
+          "rotation": 0.9293289035558701,
+          "structure_fit": 1.0,
+          "style": 0.828571
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.978479,
+        "generation_index": 1,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8895228500000001
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.9051154804978219,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "Why is Fixture so surprised?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9617900066077709,
+          "pairing": 0.8785229333333333,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8763058382584212,
+          "rotation": 0.9617900066077709,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.968197,
+        "generation_index": 4,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8785229333333333
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8763058382584212,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture's surprised reaction says plenty.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8592357039451599,
+          "pairing": 0.8768340666666667,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8817435612189891,
+          "rotation": 0.8592357039451599,
+          "structure_fit": 1.0,
+          "style": 0.71981
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.954536,
+        "generation_index": 2,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8768340666666667
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8817435612189891,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "What has Fixture reacting like this?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8248448967933655,
+          "pairing": 0.8785229333333333,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8616120039238094,
+          "rotation": 0.9144145175814629,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "reaction",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.95009,
+        "generation_index": 7,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8785229333333333
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8616120039238094,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture has entered the chat.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8610267639160156,
+          "pairing": 0.8658340333333334,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8542396624915278,
+          "rotation": 0.9730202481150627,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.805524
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.946633,
+        "generation_index": 5,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8658340333333334
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8542396624915278,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Every detail points back to Fixture.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 0.8337529180751806,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8638239651918411,
+          "pairing": 0.8470497571087712,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8737284275744805,
+          "rotation": 0.9282144084572792,
+          "structure_fit": 1.0,
+          "style": 0.630763
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.941921,
+        "generation_index": 3,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8470497571087712
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8737284275744805,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "How would you explain Fixture's surprised reaction?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "length_outside_channel_range:7/5-6",
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8042182922363281,
+          "pairing": 0.8658340333333334,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8490793359063544,
+          "rotation": 0.9720689654350281,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.805524
+        },
+        "editorial_angle": "reaction",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.940431,
+        "generation_index": 6,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8658340333333334
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8490793359063544,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "That surprised look needs no explanation.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      }
+    ],
+    "grounding": {
+      "passed": true,
+      "unsupported_claims": []
+    },
+    "latency_ms": 124.501,
+    "model_usage": {},
+    "profile_version": 1,
+    "prompt_version": "captions-v4",
+    "recommendation": "Why is Fixture so surprised?",
+    "retrieval": {
+      "channels": [
+        "composition",
+        "emotion",
+        "fusion",
+        "lexical",
+        "recent",
+        "semantic",
+        "topic",
+        "visual"
+      ],
+      "considered_count": 38,
+      "retrieval_run_id": 2,
+      "role_coverage": [
+        "visual_analogue"
+      ],
+      "selected_evidence": [
+        {
+          "entity_id": 2,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.11065613096612628,
+          "retrieval_channel": "fusion",
+          "selected_rank": 1
+        },
+        {
+          "entity_id": 7,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.12533101045296166,
+          "retrieval_channel": "fusion",
+          "selected_rank": 2
+        },
+        {
+          "entity_id": 12,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.09339548378390536,
+          "retrieval_channel": "fusion",
+          "selected_rank": 3
+        },
+        {
+          "entity_id": 10,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.11819173935006473,
+          "retrieval_channel": "fusion",
+          "selected_rank": 4
+        },
+        {
+          "entity_id": 6,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.09282828282828282,
+          "retrieval_channel": "fusion",
+          "selected_rank": 5
+        }
+      ]
+    },
+    "selected_candidates": [
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9293289035558701,
+          "pairing": 0.8895228500000001,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.9051154804978219,
+          "rotation": 0.9293289035558701,
+          "structure_fit": 1.0,
+          "style": 0.828571
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.978479,
+        "generation_index": 1,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8895228500000001
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.9051154804978219,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "Why is Fixture so surprised?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9617900066077709,
+          "pairing": 0.8785229333333333,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8763058382584212,
+          "rotation": 0.9617900066077709,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.968197,
+        "generation_index": 4,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8785229333333333
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8763058382584212,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture's surprised reaction says plenty.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8592357039451599,
+          "pairing": 0.8768340666666667,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8817435612189891,
+          "rotation": 0.8592357039451599,
+          "structure_fit": 1.0,
+          "style": 0.71981
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.954536,
+        "generation_index": 2,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8768340666666667
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8817435612189891,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "What has Fixture reacting like this?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      }
+    ],
+    "split": "development"
+  },
+  {
+    "abstained": false,
+    "abstention_reason": null,
+    "candidate_analysis": {
+      "caption_potential": 0.81,
+      "characters": [
+        "Fixture candidate 2"
+      ],
+      "composition": "centered",
+      "confidence": 0.9,
+      "emotion": "surprise",
+      "fan_art_probability": 0.0,
+      "franchise": "Synthetic Adventure",
+      "personal_artwork_probability": 0.0,
+      "scene_archetype": "reaction",
+      "text_overlay": false,
+      "unsafe_probability": 0.0,
+      "watermark_probability": 0.02
+    },
+    "case_id": "qlob-fixture-candidate-01",
+    "configuration_hash": "f18661fde46da145d7038eb44616dde287d22970aa814dee842ee8beda85d576",
+    "displayed_captions": [
+      "Why is Fixture so surprised?",
+      "Fixture's surprised reaction says plenty.",
+      "What has Fixture reacting like this?"
+    ],
+    "duplicate": {
+      "hard_rejection_reason": null,
+      "novelty_score": 0.361642,
+      "warnings": [
+        "historical date precision cannot prove the 180-day boundary"
+      ]
+    },
+    "fixture_uri": "fixture://candidate-01",
+    "generated_pool": [
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9293289035558701,
+          "pairing": 0.88807945,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.905057744497822,
+          "rotation": 0.9293289035558701,
+          "structure_fit": 1.0,
+          "style": 0.828571
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.978338,
+        "generation_index": 1,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.88807945
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.905057744497822,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "Why is Fixture so surprised?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9617900066077709,
+          "pairing": 0.8770795333333332,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8762481022584212,
+          "rotation": 0.9617900066077709,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.968055,
+        "generation_index": 4,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8770795333333332
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8762481022584212,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture's surprised reaction says plenty.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8592357039451599,
+          "pairing": 0.8753906666666667,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8816858252189891,
+          "rotation": 0.8592357039451599,
+          "structure_fit": 1.0,
+          "style": 0.71981
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.954394,
+        "generation_index": 2,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8753906666666667
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8816858252189891,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "What has Fixture reacting like this?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8610267639160156,
+          "pairing": 0.8643906333333333,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8536563960638335,
+          "rotation": 0.9625096395611763,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.805524
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.945756,
+        "generation_index": 5,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8643906333333333
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8536563960638335,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Every detail points back to Fixture.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8248448967933655,
+          "pairing": 0.8770795333333332,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8570757868844046,
+          "rotation": 0.8248448967933655,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "reaction",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.943679,
+        "generation_index": 7,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8770795333333332
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8570757868844046,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture has entered the chat.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8042182922363281,
+          "pairing": 0.8643906333333333,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8483243250277333,
+          "rotation": 0.958123467862606,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.805524
+        },
+        "editorial_angle": "reaction",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.939314,
+        "generation_index": 6,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8643906333333333
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8483243250277333,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "That surprised look needs no explanation.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 0.8337529180751806,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8638239651918411,
+          "pairing": 0.8456063571087711,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8704511694112086,
+          "rotation": 0.8638239651918411,
+          "structure_fit": 1.0,
+          "style": 0.630763
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.937272,
+        "generation_index": 3,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8456063571087711
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8704511694112086,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "How would you explain Fixture's surprised reaction?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "length_outside_channel_range:7/5-6",
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      }
+    ],
+    "grounding": {
+      "passed": true,
+      "unsupported_claims": []
+    },
+    "latency_ms": 182.338,
+    "model_usage": {},
+    "profile_version": 1,
+    "prompt_version": "captions-v4",
+    "recommendation": "Why is Fixture so surprised?",
+    "retrieval": {
+      "channels": [
+        "composition",
+        "emotion",
+        "fusion",
+        "lexical",
+        "recent",
+        "semantic",
+        "topic",
+        "visual"
+      ],
+      "considered_count": 37,
+      "retrieval_run_id": 3,
+      "role_coverage": [
+        "caption_structure_example",
+        "visual_analogue"
+      ],
+      "selected_evidence": [
+        {
+          "entity_id": 7,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.14277341112281555,
+          "retrieval_channel": "fusion",
+          "selected_rank": 1
+        },
+        {
+          "entity_id": 5,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.11800844520073109,
+          "retrieval_channel": "fusion",
+          "selected_rank": 2
+        },
+        {
+          "entity_id": 12,
+          "entity_type": "post",
+          "evidence_role": "caption_structure_example",
+          "fusion_score": 0.07437137330754351,
+          "retrieval_channel": "fusion",
+          "selected_rank": 3
+        },
+        {
+          "entity_id": 10,
+          "entity_type": "post",
+          "evidence_role": "caption_structure_example",
+          "fusion_score": 0.09826078947263035,
+          "retrieval_channel": "fusion",
+          "selected_rank": 4
+        },
+        {
+          "entity_id": 11,
+          "entity_type": "post",
+          "evidence_role": "visual_analogue",
+          "fusion_score": 0.11943926748237582,
+          "retrieval_channel": "fusion",
+          "selected_rank": 5
+        },
+        {
+          "entity_id": 2,
+          "entity_type": "post",
+          "evidence_role": "caption_structure_example",
+          "fusion_score": 0.09390008497014835,
+          "retrieval_channel": "fusion",
+          "selected_rank": 6
+        },
+        {
+          "entity_id": 6,
+          "entity_type": "post",
+          "evidence_role": "caption_structure_example",
+          "fusion_score": 0.0748792270531401,
+          "retrieval_channel": "fusion",
+          "selected_rank": 7
+        }
+      ]
+    },
+    "selected_candidates": [
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9293289035558701,
+          "pairing": 0.88807945,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.905057744497822,
+          "rotation": 0.9293289035558701,
+          "structure_fit": 1.0,
+          "style": 0.828571
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.978338,
+        "generation_index": 1,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.88807945
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.905057744497822,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "Why is Fixture so surprised?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.9617900066077709,
+          "pairing": 0.8770795333333332,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8762481022584212,
+          "rotation": 0.9617900066077709,
+          "structure_fit": 0.8200000000000001,
+          "style": 0.914286
+        },
+        "editorial_angle": "observation",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.968055,
+        "generation_index": 4,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8770795333333332
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8762481022584212,
+          "trained": false
+        },
+        "structure": "observation",
+        "text": "Fixture's surprised reaction says plenty.",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture",
+            "visible_emotion:surprised"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      },
+      {
+        "attempt_number": 1,
+        "components": {
+          "grounding": 1.0,
+          "length_fit": 1.0,
+          "negative_feedback_risk": 0.0,
+          "novelty": 0.8592357039451599,
+          "pairing": 0.8753906666666667,
+          "policy": 1.0,
+          "positive_feedback": 0.0,
+          "preference": 0.8816858252189891,
+          "rotation": 0.8592357039451599,
+          "structure_fit": 1.0,
+          "style": 0.71981
+        },
+        "editorial_angle": "audience_inquiry",
+        "eligible": true,
+        "exclusion_reasons": [],
+        "final_score": 0.954394,
+        "generation_index": 2,
+        "generator_confidence": 0.84,
+        "generic_penalty": 0.0,
+        "pairing": {
+          "reason": "deterministic image-caption compatibility baseline",
+          "score": 0.8753906666666667
+        },
+        "preference": {
+          "calibrated": false,
+          "reason": "deterministic fallback: 0 pairwise labels",
+          "sample_count": 0,
+          "score": 0.8816858252189891,
+          "trained": false
+        },
+        "structure": "open_question",
+        "text": "What has Fixture reacting like this?",
+        "uncertainty": [],
+        "verification": {
+          "checks": {
+            "entities": true,
+            "events": true,
+            "language": true,
+            "policy": true,
+            "quotes": true,
+            "relationships": true
+          },
+          "grounding_score": 1.0,
+          "passed": true,
+          "policy_score": 1.0,
+          "supported_claims": [
+            "visible_entity:Fixture"
+          ],
+          "unsupported_claims": [],
+          "warnings": [
+            "unverified_candidate_evidence:surprised,reacting"
+          ]
+        },
+        "visible_evidence": [
+          "Fixture",
+          "surprised",
+          "reacting"
+        ]
+      }
+    ],
+    "split": "development"
+  }
+]
+```

@@ -201,8 +201,15 @@ class DiscoveryService:
         self, *, run_id: int | None = None, accepted_only: bool = False, limit: int = 100
     ) -> list[dict[str, object]]:
         with self.database.session() as session:
-            statement = select(CandidateImage).order_by(
-                desc(CandidateImage.final_rank_score), CandidateImage.id
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            statement = (
+                select(CandidateImage)
+                .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                .where(SearchRun.channel_id == channel_id)
+                .order_by(
+                    desc(CandidateImage.final_rank_score),
+                    CandidateImage.id,
+                )
             )
             if run_id is not None:
                 statement = statement.where(CandidateImage.search_run_id == run_id)
@@ -213,14 +220,18 @@ class DiscoveryService:
 
     def detail(self, candidate_id: int) -> dict[str, object]:
         with self.database.session() as session:
-            row = session.get(CandidateImage, candidate_id)
-            if row is None:
-                raise LookupError(f"candidate {candidate_id} not found")
+            row = self._candidate(session, candidate_id)
             return self._candidate_dict(session, row)
 
     def run_status(self, run_id: int) -> dict[str, object]:
         with self.database.session() as session:
-            run = session.get(SearchRun, run_id)
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            run = session.scalar(
+                select(SearchRun).where(
+                    SearchRun.id == run_id,
+                    SearchRun.channel_id == channel_id,
+                )
+            )
             if run is None:
                 raise LookupError(f"search run {run_id} not found")
             return {
@@ -238,9 +249,7 @@ class DiscoveryService:
         self, candidate_id: int, reason: str = "user_rejected"
     ) -> dict[str, object]:
         with self.database.session() as session:
-            candidate = session.get(CandidateImage, candidate_id)
-            if candidate is None:
-                raise LookupError(f"candidate {candidate_id} not found")
+            candidate = self._candidate(session, candidate_id)
             candidate.hard_rejection_reason = reason
             candidate.final_rank_score = 0.0
             audit(
@@ -254,9 +263,8 @@ class DiscoveryService:
 
     def block_domain(self, candidate_id: int) -> dict[str, object]:
         with self.database.session() as session:
-            candidate = session.get(CandidateImage, candidate_id)
-            if candidate is None:
-                raise LookupError(f"candidate {candidate_id} not found")
+            candidate = self._candidate(session, candidate_id)
+            channel_id = get_channel(session, self.settings.channel_handle).id
             if not candidate.source_domain:
                 raise ValueError("candidate has no source domain")
             existing = session.scalar(
@@ -274,7 +282,10 @@ class DiscoveryService:
                     )
                 )
             for item in session.scalars(
-                select(CandidateImage).where(
+                select(CandidateImage)
+                .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                .where(
+                    SearchRun.channel_id == channel_id,
                     CandidateImage.source_domain == candidate.source_domain,
                     CandidateImage.hard_rejection_reason.is_(None),
                 )
@@ -308,7 +319,7 @@ class DiscoveryService:
         )
         self._record_model_run(
             "analyze_candidate_image",
-            "candidate-analysis-v1",
+            "candidate-analysis-v2",
             [run_id, result.result_rank],
             result.model_dump(),
             analysis.model_dump(),
@@ -466,9 +477,13 @@ class DiscoveryService:
 
     def _active_profile(self) -> tuple[StyleProfile, dict[str, object]]:
         with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
             record = session.scalar(
                 select(StyleProfile)
-                .where(StyleProfile.is_active.is_(True))
+                .where(
+                    StyleProfile.channel_id == channel_id,
+                    StyleProfile.is_active.is_(True),
+                )
                 .order_by(desc(StyleProfile.version))
                 .limit(1)
             )
@@ -479,33 +494,49 @@ class DiscoveryService:
 
     @staticmethod
     def _plan_payload(profile: dict[str, object], days: int) -> dict[str, object]:
-        distribution = profile.get("franchise_distribution", [])
+        using_compatibility_franchise_distribution = (
+            "topic_distribution" not in profile
+            and "entity_distribution" not in profile
+        )
+        distribution = profile.get(
+            "topic_distribution",
+            profile.get(
+                "entity_distribution",
+                profile.get("franchise_distribution", []),
+            ),
+        )
         distribution_rows = cast(list[list[Any]], distribution)
         sample_size = int(
             cast(dict[str, Any], profile.get("caption_statistics", {})).get("sample_size", 0)
         )
         minimum_support = max(2, round(sample_size * 0.01))
-        known_franchises = [
+        known_topics = [
             (str(item[0]), int(item[1]))
             for item in distribution_rows
             if len(item) >= 2
             and str(item[0]).strip().lower() not in {"", "unknown", "none", "null"}
         ]
-        primary_franchise = known_franchises[0][0] if known_franchises else None
-        supported = [item for item in known_franchises if item[1] >= minimum_support]
-        focus_franchises = [
+        primary_topic = known_topics[0][0] if known_topics else None
+        supported = [item for item in known_topics if item[1] >= minimum_support]
+        focus_topics = [
             name for name, _count in sorted(supported, key=lambda item: (item[1], item[0]))
         ]
-        if primary_franchise and primary_franchise not in focus_franchises:
-            focus_franchises.append(primary_franchise)
-        return {
+        if primary_topic and primary_topic not in focus_topics:
+            focus_topics.append(primary_topic)
+        policy = cast(
+            dict[str, object],
+            profile.get("explicit_channel_policy", {}),
+        )
+        result: dict[str, object] = {
             "profile_version": profile.get("version"),
             "days": days,
-            "primary_franchise": primary_franchise,
-            "underused_franchises": focus_franchises[:5],
+            "primary_topic": primary_topic,
+            "underused_topics": focus_topics[:5],
             "preferred_compositions": profile.get("visual_compositions", []),
             "preferred_visual_formats": profile.get("visual_formats", []),
             "caption_structures": profile.get("dominant_caption_structures", []),
+            "source_policy": policy.get("source_policy", "preserve_and_review"),
+            "rights_policy": policy.get("rights_policy", "unknown_requires_review"),
             "recent_exclusions": [
                 "fan art",
                 "personal artwork",
@@ -515,6 +546,24 @@ class DiscoveryService:
             ],
             "current_queue_distribution": [],
         }
+        if using_compatibility_franchise_distribution:
+            result["primary_franchise"] = primary_topic
+            result["underused_franchises"] = focus_topics[:5]
+        return result
+
+    def _candidate(self, session: Session, candidate_id: int) -> CandidateImage:
+        channel_id = get_channel(session, self.settings.channel_handle).id
+        candidate = session.scalar(
+            select(CandidateImage)
+            .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+            .where(
+                CandidateImage.id == candidate_id,
+                SearchRun.channel_id == channel_id,
+            )
+        )
+        if candidate is None:
+            raise LookupError(f"candidate {candidate_id} not found")
+        return candidate
 
     def _provider(self, name: str, manual_urls: list[str], *, live: bool) -> SearchProvider:
         providers: dict[str, SearchProvider] = {

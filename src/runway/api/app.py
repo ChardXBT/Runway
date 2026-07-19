@@ -23,7 +23,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application = FastAPI(
         title="RunWay API",
         version=__version__,
-        description="Local-only Qlob Community-post intelligence and planning API",
+        description=(
+            "Local-only YouTube Community-post intelligence and planning API "
+            f"for the configured {active_settings.channel_name} channel"
+        ),
     )
     application.state.settings = active_settings
     application.state.database = database

@@ -1,0 +1,10 @@
+{
+  "case_ids": [
+    "qlob-fixture-candidate-03",
+    "qlob-fixture-candidate-27"
+  ],
+  "dataset_version": "canonical-v1",
+  "purpose": "holdout_release",
+  "use_count": 1,
+  "used_at": "2026-07-19T00:05:57.985845+00:00"
+}

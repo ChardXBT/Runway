@@ -128,7 +128,8 @@ class PlaywrightYouTubeAdapter:
         subprocess.Popen(command)
         input(
             "A normal Google Chrome window opened with RunWay's isolated profile. "
-            "Sign into the Qlob Editor account, confirm the Qlob Posts page is visible, "
+            f"Sign into the {self.settings.channel_name} Editor account, confirm the "
+            f"{self.settings.channel_name} Posts page is visible, "
             "then CLOSE that Chrome window and press Enter here..."
         )
 
@@ -202,11 +203,13 @@ class PlaywrightYouTubeAdapter:
                     valid=valid,
                     publisher="youtube-visible-browser",
                     detail=(
-                        "Qlob channel identity, posting access, and Community composer verified."
+                        f"{self.settings.channel_name} channel identity, posting access, "
+                        "and Community composer verified."
                         if valid
-                        else "Qlob publishing session is not ready; missing "
+                        else f"{self.settings.channel_name} publishing session is not "
+                        "ready; missing "
                         + ", ".join(missing)
-                        + ". Reconnect the Qlob Editor identity."
+                        + f". Reconnect the {self.settings.channel_name} Editor identity."
                     ),
                 )
             finally:
@@ -230,7 +233,9 @@ class PlaywrightYouTubeAdapter:
                 page.wait_for_timeout(1500)
                 self._stop_on_challenge(page)
                 if not self._session_contract_valid(page):
-                    raise RuntimeError("Qlob Editor session validation failed")
+                    raise RuntimeError(
+                        f"{self.settings.channel_name} Editor session validation failed"
+                    )
 
                 composer = page.locator("ytd-backstage-post-dialog-renderer:visible")
                 editor = composer.locator('#contenteditable-root[contenteditable="true"]')
@@ -377,7 +382,9 @@ class PlaywrightYouTubeAdapter:
                 page.wait_for_timeout(1500)
                 self._stop_on_challenge(page)
                 if not self._session_contract_valid(page, open_composer=False):
-                    raise RuntimeError("Qlob Editor session validation failed")
+                    raise RuntimeError(
+                        f"{self.settings.channel_name} Editor session validation failed"
+                    )
 
                 card = self._scheduled_card(page, current)
                 menu = self._first_visible(
@@ -458,7 +465,7 @@ class PlaywrightYouTubeAdapter:
                     verified=receipt.verified,
                     screenshot_paths=screenshots,
                     detail=(
-                        "Scheduled Qlob post was edited and verified."
+                        f"Scheduled {self.settings.channel_name} post was edited and verified."
                         if receipt.verified
                         else receipt.detail
                     ),
@@ -502,7 +509,9 @@ class PlaywrightYouTubeAdapter:
                 page.wait_for_timeout(1500)
                 self._stop_on_challenge(page)
                 if not self._session_contract_valid(page, open_composer=False):
-                    raise RuntimeError("Qlob Editor session validation failed")
+                    raise RuntimeError(
+                        f"{self.settings.channel_name} Editor session validation failed"
+                    )
 
                 card = self._scheduled_card(page, post)
                 menu = self._first_visible(
@@ -552,7 +561,8 @@ class PlaywrightYouTubeAdapter:
                     verified=removed,
                     screenshot_paths=screenshots,
                     detail=(
-                        "Scheduled Qlob post was removed and its absence verified."
+                        f"Scheduled {self.settings.channel_name} post was removed and "
+                        "its absence verified."
                         if removed
                         else "Delete was submitted, but the matching scheduled post remains."
                     ),
@@ -627,9 +637,10 @@ class PlaywrightYouTubeAdapter:
             screenshot_paths=screenshots,
             detail=(
                 "Scheduled post with matching caption, date, time, and image found "
-                "in Qlob's Scheduled tab."
+                f"in {self.settings.channel_name}'s Scheduled tab."
                 if verified
-                else "Qlob Scheduled-tab verification was incomplete; missing "
+                else f"{self.settings.channel_name} Scheduled-tab verification was "
+                "incomplete; missing "
                 + ", ".join(missing)
                 + ". Do not submit again."
             ),
@@ -639,7 +650,8 @@ class PlaywrightYouTubeAdapter:
         cards = self._scheduled_cards(page, post)
         if len(cards) != 1:
             raise RuntimeError(
-                "expected one scheduled Qlob post matching the exact caption, date, "
+                f"expected one scheduled {self.settings.channel_name} post matching "
+                "the exact caption, date, "
                 f"and time; found {len(cards)}"
             )
         return cards[0]
@@ -839,8 +851,13 @@ class PlaywrightYouTubeAdapter:
         *,
         open_composer: bool = True,
     ) -> dict[str, bool]:
-        heading = page.get_by_role("heading", name="Qlob, Verified", exact=True)
-        identity_verified = self._active_qlob_identity(page)
+        channel_name = self.settings.channel_name
+        heading = page.get_by_role(
+            "heading",
+            name=f"{channel_name}, Verified",
+            exact=True,
+        )
+        identity_verified = self._active_channel_identity(page)
         posting_access = False
         composer_ready = False
         if identity_verified:
@@ -876,17 +893,20 @@ class PlaywrightYouTubeAdapter:
                     page.keyboard.press("Escape")
         checks = {
             "configured channel URL": self.settings.publisher_channel_id in page.url,
-            "Qlob heading": heading.count() == 1 and heading.is_visible(),
-            "active Qlob identity": identity_verified,
-            "Qlob posting access": posting_access,
+            f"{channel_name} heading": heading.count() == 1 and heading.is_visible(),
+            f"active {channel_name} identity": identity_verified,
+            f"{channel_name} posting access": posting_access,
         }
         if open_composer:
             checks["Community composer"] = composer_ready
         return checks
 
-    def _active_qlob_identity(self, page: Any) -> bool:
+    def _active_channel_identity(self, page: Any) -> bool:
         try:
-            channel_marker = page.get_by_text("Qlob's channel", exact=True)
+            channel_marker = page.get_by_text(
+                f"{self.settings.channel_name}'s channel",
+                exact=True,
+            )
             manage_videos = page.get_by_text("Manage videos", exact=True)
             channel_marker.wait_for(state="visible", timeout=10_000)
             manage_videos.wait_for(state="visible", timeout=10_000)

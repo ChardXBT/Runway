@@ -64,7 +64,18 @@ async def test_manual_provider_rejects_non_http_urls() -> None:
     provider = ManualUrlProvider(["file:///secret.jpg"])
     with pytest.raises(ValueError, match="HTTP"):
         await provider.search(
-            SearchPlan(query_families=[], desired_visual_traits=[], excluded_concepts=[])
+            SearchPlan(
+                query_families=[],
+                desired_visual_traits=[],
+                excluded_concepts=[],
+                desired_entities=[],
+                desired_topics=[],
+                desired_actions=[],
+                desired_scenes=[],
+                desired_compositions=[],
+                source_policy="preserve_and_review",
+                rights_policy="unknown_requires_review",
+            )
         )
 
 
@@ -125,6 +136,13 @@ def test_live_browser_queries_rotate_across_families_before_repeating() -> None:
         ],
         desired_visual_traits=[],
         excluded_concepts=[],
+        desired_entities=[],
+        desired_topics=[],
+        desired_actions=[],
+        desired_scenes=[],
+        desired_compositions=[],
+        source_policy="preserve_and_review",
+        rights_policy="unknown_requires_review",
     )
 
     assert _diverse_queries(plan) == [

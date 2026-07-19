@@ -19,7 +19,7 @@ Observations and reactions provide useful structural alternatives, but avoid fla
 such as "[character] is very [emotion]" when the same visible fact can become a specific,
 interesting question.
 
-Match the supplied Qlob length, tone, and vocabulary patterns without copying historical or
+Match the supplied channel length, tone, and vocabulary patterns without copying historical or
 feedback text. Treat user-edited and approved examples as stronger evidence than unreviewed
 history. Treat rejected examples and their reason codes as patterns to avoid.
 

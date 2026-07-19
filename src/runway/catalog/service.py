@@ -20,6 +20,7 @@ from runway.db.models import (
     PostMedia,
     RawPostRecord,
 )
+from runway.db.repositories import get_channel
 from runway.media.service import hamming_similarity
 
 
@@ -30,16 +31,38 @@ class CatalogService:
 
     def status(self) -> dict[str, object]:
         with self.database.session() as session:
-            total = session.scalar(select(func.count(Post.id))) or 0
-            eligible = (
+            channel = get_channel(session, self.settings.channel_handle)
+            total = (
                 session.scalar(
-                    select(func.count(Post.id)).where(Post.is_training_eligible.is_(True))
+                    select(func.count(Post.id)).where(
+                        Post.channel_id == channel.id
+                    )
                 )
                 or 0
             )
-            assets = session.scalar(select(func.count(MediaAsset.id))) or 0
+            eligible = (
+                session.scalar(
+                    select(func.count(Post.id)).where(
+                        Post.channel_id == channel.id,
+                        Post.is_training_eligible.is_(True),
+                    )
+                )
+                or 0
+            )
+            assets = (
+                session.scalar(
+                    select(func.count(func.distinct(MediaAsset.id)))
+                    .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
+                    .join(Post, Post.id == PostMedia.post_id)
+                    .where(Post.channel_id == channel.id)
+                )
+                or 0
+            )
             last_capture = session.scalar(
-                select(CaptureRun).order_by(desc(CaptureRun.started_at)).limit(1)
+                select(CaptureRun)
+                .where(CaptureRun.channel_id == channel.id)
+                .order_by(desc(CaptureRun.started_at))
+                .limit(1)
             )
             return {
                 "total_posts": total,
@@ -73,7 +96,12 @@ class CatalogService:
         character: str | None = None,
     ) -> list[dict[str, object]]:
         with self.database.session() as session:
-            statement = select(Post).order_by(desc(Post.published_at), desc(Post.id))
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            statement = (
+                select(Post)
+                .where(Post.channel_id == channel_id)
+                .order_by(desc(Post.published_at), desc(Post.id))
+            )
             if search:
                 statement = statement.where(Post.caption.ilike(f"%{search}%"))
             if post_type:
@@ -91,7 +119,13 @@ class CatalogService:
 
     def detail(self, post_id: int) -> dict[str, object]:
         with self.database.session() as session:
-            post = session.get(Post, post_id)
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            post = session.scalar(
+                select(Post).where(
+                    Post.id == post_id,
+                    Post.channel_id == channel_id,
+                )
+            )
             if post is None:
                 raise LookupError(f"post {post_id} not found")
             result = self._post_summary(session, post)
@@ -111,7 +145,13 @@ class CatalogService:
 
     def set_training_eligibility(self, post_id: int, eligible: bool) -> dict[str, object]:
         with self.database.session() as session:
-            post = session.get(Post, post_id)
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            post = session.scalar(
+                select(Post).where(
+                    Post.id == post_id,
+                    Post.channel_id == channel_id,
+                )
+            )
             if post is None:
                 raise LookupError(f"post {post_id} not found")
             post.is_training_eligible = eligible
@@ -127,11 +167,27 @@ class CatalogService:
 
     def verify(self, *, write_reports: bool = True) -> dict[str, Any]:
         with self.database.session() as session:
-            posts = session.scalars(select(Post).order_by(Post.id)).all()
-            media = session.scalars(
-                select(MediaAsset).where(MediaAsset.kind == "historical").order_by(MediaAsset.id)
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            posts = session.scalars(
+                select(Post)
+                .where(Post.channel_id == channel_id)
+                .order_by(Post.id)
             ).all()
-            links = session.execute(select(PostMedia.post_id, PostMedia.media_asset_id)).all()
+            media = session.scalars(
+                select(MediaAsset)
+                .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
+                .join(Post, Post.id == PostMedia.post_id)
+                .where(
+                    Post.channel_id == channel_id,
+                    MediaAsset.kind == "historical",
+                )
+                .order_by(MediaAsset.id)
+            ).all()
+            links = session.execute(
+                select(PostMedia.post_id, PostMedia.media_asset_id)
+                .join(Post, Post.id == PostMedia.post_id)
+                .where(Post.channel_id == channel_id)
+            ).all()
             post_to_assets: dict[int, list[int]] = defaultdict(list)
             asset_to_posts: dict[int, list[int]] = defaultdict(list)
             for post_id, asset_id in links:
@@ -153,7 +209,11 @@ class CatalogService:
                 post.external_post_id for post in posts if post.external_post_id is not None
             )
             duplicate_external = [value for value, count in external_counter.items() if count > 1]
-            raw_records = session.scalars(select(RawPostRecord)).all()
+            raw_records = session.scalars(
+                select(RawPostRecord)
+                .join(CaptureRun, CaptureRun.id == RawPostRecord.capture_run_id)
+                .where(CaptureRun.channel_id == channel_id)
+            ).all()
             post_external = {post.external_post_id for post in posts if post.external_post_id}
             post_links = {post.permalink for post in posts if post.permalink}
             unmatched_raw = [
@@ -166,11 +226,19 @@ class CatalogService:
             ]
             capture_runs = session.scalars(
                 select(CaptureRun).where(
+                    CaptureRun.channel_id == channel_id,
                     or_(CaptureRun.status == "failed", CaptureRun.error_summary.is_not(None))
                 )
             ).all()
+            channel_capture_ids = session.scalars(
+                select(CaptureRun.id).where(CaptureRun.channel_id == channel_id)
+            ).all()
             diagnostics = session.scalars(
-                select(AuditEvent).where(AuditEvent.event_type == "capture_diagnostic")
+                select(AuditEvent).where(
+                    AuditEvent.event_type == "capture_diagnostic",
+                    AuditEvent.entity_type == "capture_run",
+                    AuditEvent.entity_id.in_(channel_capture_ids),
+                )
             ).all()
             dates = sorted(post.published_at for post in posts if post.published_at is not None)
             precision = Counter(post.date_precision for post in posts)

@@ -1,0 +1,108 @@
+{
+  "dataset_version": "canonical-v1",
+  "baseline_id": "baseline-876fe5f",
+  "case_labels": [
+    {
+      "case_id": "qlob-fixture-candidate-18",
+      "split": "development",
+      "cluster_id": "fixture-18",
+      "preferred_structures": ["open_question", "observation"],
+      "expected_terms": ["fixture", "determined", "reaction"],
+      "forbidden_terms": ["episode", "wife", "said"],
+      "label_source": "deterministic_fixture_policy"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-04",
+      "split": "development",
+      "cluster_id": "fixture-04",
+      "preferred_structures": ["open_question", "observation"],
+      "expected_terms": ["fixture", "surprised", "reaction"],
+      "forbidden_terms": ["episode", "wife", "said"],
+      "label_source": "deterministic_fixture_policy"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-01",
+      "split": "development",
+      "cluster_id": "fixture-01",
+      "preferred_structures": ["open_question", "reaction"],
+      "expected_terms": ["fixture", "surprised", "reacting"],
+      "forbidden_terms": ["episode", "wife", "said"],
+      "label_source": "deterministic_fixture_policy"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-09",
+      "split": "tuning",
+      "cluster_id": "fixture-09",
+      "preferred_structures": ["open_question", "reaction"],
+      "expected_terms": ["fixture", "determined", "reacting"],
+      "forbidden_terms": ["episode", "wife", "said"],
+      "label_source": "deterministic_fixture_policy"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-19",
+      "split": "tuning",
+      "cluster_id": "fixture-19",
+      "preferred_structures": ["open_question", "reaction"],
+      "expected_terms": ["fixture", "surprised", "reacting"],
+      "forbidden_terms": ["episode", "wife", "said"],
+      "label_source": "deterministic_fixture_policy"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-17",
+      "split": "tuning",
+      "cluster_id": "fixture-17",
+      "preferred_structures": ["open_question", "reaction"],
+      "expected_terms": ["fixture", "surprised", "reacting"],
+      "forbidden_terms": ["episode", "wife", "said"],
+      "label_source": "deterministic_fixture_policy"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-03",
+      "split": "locked_holdout",
+      "cluster_id": "fixture-03",
+      "preferred_structures": ["open_question", "reaction"],
+      "expected_terms": ["fixture", "determined", "reacting"],
+      "forbidden_terms": ["episode", "wife", "said"],
+      "label_source": "deterministic_fixture_policy"
+    },
+    {
+      "case_id": "qlob-fixture-candidate-27",
+      "split": "locked_holdout",
+      "cluster_id": "fixture-27",
+      "preferred_structures": ["open_question", "reaction"],
+      "expected_terms": ["fixture", "determined", "reacting"],
+      "forbidden_terms": ["episode", "wife", "said"],
+      "label_source": "deterministic_fixture_policy"
+    }
+  ],
+  "blind_preferences": [
+    {
+      "case_id": "blind-reaction-01",
+      "split": "blind_creator_preference",
+      "cluster_id": "blind-reaction-01",
+      "left": "Why does this reaction feel so familiar?",
+      "right": "What do you think?",
+      "preferred": "left"
+    },
+    {
+      "case_id": "blind-grounding-01",
+      "split": "blind_creator_preference",
+      "cluster_id": "blind-grounding-01",
+      "left": "Why is the visible subject surprised?",
+      "right": "Why did the character lose the championship?",
+      "preferred": "left"
+    }
+  ],
+  "critical_regressions": [
+    "unsupported_entity",
+    "invented_event",
+    "invented_quote",
+    "unsupported_relationship",
+    "unknown_rights_generation_reference",
+    "cross_channel_retrieval",
+    "duplicate_transformation",
+    "no_valid_caption_abstention",
+    "no_paid_provider_fallback",
+    "no_live_publishing"
+  ]
+}

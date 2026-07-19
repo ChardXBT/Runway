@@ -269,6 +269,9 @@ class Proposal(Base, TimestampMixin):
     generation_run_id: Mapped[int] = mapped_column(ForeignKey("generation_runs.id"), index=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
     candidate_image_id: Mapped[int] = mapped_column(ForeignKey("candidate_images.id"), index=True)
+    caption_slate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_slates.id"), index=True
+    )
     backup_candidate_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     planned_publish_at: Mapped[str] = mapped_column(String(40), index=True)
     scheduled_publish_at: Mapped[str | None] = mapped_column(String(40), index=True)
@@ -381,3 +384,350 @@ class BlockedSource(Base):
     value: Mapped[str] = mapped_column(Text)
     reason: Mapped[str] = mapped_column(Text, default="user blocked")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RepresentationRecord(Base):
+    __tablename__ = "representation_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_id",
+            "entity_type",
+            "entity_id",
+            "field",
+            "purpose",
+            "provider",
+            "model",
+            "model_version",
+            "source_content_hash",
+            "configuration_hash",
+            name="uq_representation_identity",
+        ),
+        Index(
+            "ix_representation_lookup",
+            "channel_id",
+            "entity_type",
+            "entity_id",
+            "purpose",
+            "active",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    field: Mapped[str] = mapped_column(String(80))
+    modality: Mapped[str] = mapped_column(String(40))
+    purpose: Mapped[str] = mapped_column(String(80), index=True)
+    provider: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    model_version: Mapped[str] = mapped_column(String(100))
+    dimensions: Mapped[int] = mapped_column(Integer)
+    vector_count: Mapped[int] = mapped_column(Integer, default=1)
+    dtype: Mapped[str] = mapped_column(String(40), default="float32")
+    serialized_data: Mapped[bytes] = mapped_column(LargeBinary)
+    normalized: Mapped[bool] = mapped_column(Boolean, default=True)
+    source_content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChannelPolicyRule(Base):
+    __tablename__ = "channel_policy_rules"
+    __table_args__ = (
+        Index(
+            "ix_channel_policy_active",
+            "channel_id",
+            "active",
+            "priority",
+            "rule_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    rule_type: Mapped[str] = mapped_column(String(80), index=True)
+    scope: Mapped[str] = mapped_column(String(80), default="channel")
+    priority: Mapped[int] = mapped_column(Integer, default=100)
+    value_json: Mapped[str] = mapped_column(Text, default="{}")
+    rule_text: Mapped[str | None] = mapped_column(Text)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(80), default="creator")
+    version_hash: Mapped[str] = mapped_column(String(64), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IntelligenceRetrievalRun(Base):
+    __tablename__ = "intelligence_retrieval_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    query_identity: Mapped[str] = mapped_column(String(128), index=True)
+    query_type: Mapped[str] = mapped_column(String(80), index=True)
+    candidate_image_id: Mapped[int | None] = mapped_column(
+        ForeignKey("candidate_images.id"), index=True
+    )
+    reference_media_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    modification_text: Mapped[str | None] = mapped_column(Text)
+    structured_constraints_json: Mapped[str] = mapped_column(Text, default="{}")
+    style_profile_id: Mapped[int | None] = mapped_column(ForeignKey("style_profiles.id"))
+    profile_version: Mapped[int | None] = mapped_column(Integer)
+    policy_version: Mapped[str] = mapped_column(String(64))
+    retrieval_configuration_json: Mapped[str] = mapped_column(Text)
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    embedding_versions_json: Mapped[str] = mapped_column(Text, default="{}")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+
+
+class RetrievalEvidenceRecord(Base):
+    __tablename__ = "retrieval_evidence_records"
+    __table_args__ = (
+        Index(
+            "ix_retrieval_evidence_selected",
+            "retrieval_run_id",
+            "selected",
+            "selected_rank",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    retrieval_run_id: Mapped[int] = mapped_column(
+        ForeignKey("intelligence_retrieval_runs.id"), index=True
+    )
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    retrieval_channel: Mapped[str] = mapped_column(String(80), index=True)
+    raw_score: Mapped[float] = mapped_column(Float)
+    normalized_score: Mapped[float] = mapped_column(Float)
+    fusion_score: Mapped[float] = mapped_column(Float)
+    recency_score: Mapped[float] = mapped_column(Float, default=0.0)
+    policy_score: Mapped[float] = mapped_column(Float, default=0.0)
+    diversity_penalty: Mapped[float] = mapped_column(Float, default=0.0)
+    duplicate_cluster: Mapped[str | None] = mapped_column(String(128), index=True)
+    exclusion_reason: Mapped[str | None] = mapped_column(Text)
+    selected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    selected_rank: Mapped[int | None] = mapped_column(Integer)
+    evidence_role: Mapped[str | None] = mapped_column(String(80), index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class CaptionSlate(Base):
+    __tablename__ = "caption_slates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    candidate_image_id: Mapped[int] = mapped_column(ForeignKey("candidate_images.id"), index=True)
+    proposal_id: Mapped[int | None] = mapped_column(ForeignKey("proposals.id"), index=True)
+    retrieval_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("intelligence_retrieval_runs.id"), index=True
+    )
+    model_run_id: Mapped[int | None] = mapped_column(ForeignKey("model_runs.id"), index=True)
+    editorial_brief_json: Mapped[str] = mapped_column(Text)
+    raw_output_json: Mapped[str] = mapped_column(Text)
+    generation_configuration_json: Mapped[str] = mapped_column(Text)
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    token_usage_json: Mapped[str] = mapped_column(Text, default="{}")
+    failure_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CaptionCandidateRecord(Base):
+    __tablename__ = "caption_candidate_records"
+    __table_args__ = (
+        UniqueConstraint("caption_slate_id", "rank", name="uq_caption_slate_rank"),
+        Index("ix_caption_candidate_display", "caption_slate_id", "displayed", "display_order"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    caption_slate_id: Mapped[int] = mapped_column(ForeignKey("caption_slates.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    language: Mapped[str] = mapped_column(String(40), default="und")
+    structure: Mapped[str] = mapped_column(String(80), index=True)
+    editorial_angle: Mapped[str] = mapped_column(String(120), index=True)
+    visible_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    uncertainty_json: Mapped[str] = mapped_column(Text, default="[]")
+    prohibited_claim_checks_json: Mapped[str] = mapped_column(Text, default="{}")
+    historical_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    feedback_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    generator_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    verifier_result_json: Mapped[str] = mapped_column(Text, default="{}")
+    eligible: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    exclusion_reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1)
+    generation_index: Mapped[int] = mapped_column(Integer, default=1)
+    grounding_score: Mapped[float] = mapped_column(Float, default=0.0)
+    policy_score: Mapped[float] = mapped_column(Float, default=0.0)
+    style_score: Mapped[float] = mapped_column(Float, default=0.0)
+    novelty_score: Mapped[float] = mapped_column(Float, default=0.0)
+    rotation_score: Mapped[float] = mapped_column(Float, default=0.0)
+    positive_feedback_score: Mapped[float] = mapped_column(Float, default=0.0)
+    negative_feedback_risk: Mapped[float] = mapped_column(Float, default=0.0)
+    pairing_score: Mapped[float] = mapped_column(Float, default=0.0)
+    preference_score: Mapped[float] = mapped_column(Float, default=0.0)
+    final_score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    displayed: Mapped[bool] = mapped_column(Boolean, default=False)
+    display_order: Mapped[int | None] = mapped_column(Integer)
+    selected: Mapped[bool] = mapped_column(Boolean, default=False)
+    edited: Mapped[bool] = mapped_column(Boolean, default=False)
+    replacement_text: Mapped[str | None] = mapped_column(Text)
+    decision_latency_ms: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CaptionExposure(Base):
+    __tablename__ = "caption_exposures"
+    __table_args__ = (
+        UniqueConstraint("proposal_id", "caption_slate_id", name="uq_proposal_slate_exposure"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id"), index=True)
+    caption_slate_id: Mapped[int] = mapped_column(ForeignKey("caption_slates.id"), index=True)
+    candidate_image_id: Mapped[int] = mapped_column(ForeignKey("candidate_images.id"), index=True)
+    ordered_candidate_ids_json: Mapped[str] = mapped_column(Text)
+    displayed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    selected_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_candidate_records.id")
+    )
+    final_caption: Mapped[str | None] = mapped_column(Text)
+    decision_type: Mapped[str | None] = mapped_column(String(80))
+    decision_latency_ms: Mapped[float | None] = mapped_column(Float)
+    interface_version: Mapped[str] = mapped_column(String(80), default="runway-generator-v1")
+
+
+class PairwisePreference(Base):
+    __tablename__ = "pairwise_preferences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    proposal_id: Mapped[int | None] = mapped_column(ForeignKey("proposals.id"), index=True)
+    candidate_image_id: Mapped[int | None] = mapped_column(
+        ForeignKey("candidate_images.id"), index=True
+    )
+    preferred_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_candidate_records.id")
+    )
+    preferred_text: Mapped[str] = mapped_column(Text)
+    dispreferred_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_candidate_records.id")
+    )
+    dispreferred_text: Mapped[str] = mapped_column(Text)
+    preference_source: Mapped[str] = mapped_column(String(80), index=True)
+    label_source: Mapped[str] = mapped_column(String(40), default="human", index=True)
+    strength: Mapped[float] = mapped_column(Float, default=1.0)
+    reason_codes_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    policy_version: Mapped[str | None] = mapped_column(String(64))
+    experiment_id: Mapped[str | None] = mapped_column(String(80), index=True)
+
+
+class FeedbackSignal(Base):
+    __tablename__ = "feedback_signals"
+    __table_args__ = (
+        Index("ix_feedback_signal_context", "channel_id", "target", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    proposal_id: Mapped[int | None] = mapped_column(ForeignKey("proposals.id"), index=True)
+    candidate_image_id: Mapped[int | None] = mapped_column(
+        ForeignKey("candidate_images.id"), index=True
+    )
+    target: Mapped[str] = mapped_column(String(40), index=True)
+    verdict: Mapped[str] = mapped_column(String(40), index=True)
+    value_text: Mapped[str | None] = mapped_column(Text)
+    reason_codes_json: Mapped[str] = mapped_column(Text, default="[]")
+    note: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(80), default="creator")
+    policy_version: Mapped[str | None] = mapped_column(String(64))
+    experiment_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ImageGenerationRun(Base):
+    __tablename__ = "image_generation_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    model_version: Mapped[str] = mapped_column(String(100))
+    capability: Mapped[str] = mapped_column(String(80))
+    creative_brief_json: Mapped[str] = mapped_column(Text)
+    reference_media_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    reference_rights_json: Mapped[str] = mapped_column(Text, default="[]")
+    consent_state: Mapped[str] = mapped_column(String(40), default="not_required")
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    negative_instructions: Mapped[str] = mapped_column(Text, default="")
+    seed: Mapped[int | None] = mapped_column(Integer)
+    parameters_json: Mapped[str] = mapped_column(Text, default="{}")
+    provider_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GeneratedAssetLineage(Base):
+    __tablename__ = "generated_asset_lineage"
+    __table_args__ = (
+        UniqueConstraint("generation_run_id", "media_asset_id", name="uq_generated_asset_lineage"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    generation_run_id: Mapped[int] = mapped_column(
+        ForeignKey("image_generation_runs.id"), index=True
+    )
+    media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    safety_result_json: Mapped[str] = mapped_column(Text, default="{}")
+    rights_result_json: Mapped[str] = mapped_column(Text, default="{}")
+    reference_similarity: Mapped[float | None] = mapped_column(Float)
+    historical_similarity: Mapped[float | None] = mapped_column(Float)
+    duplicate_result_json: Mapped[str] = mapped_column(Text, default="{}")
+    annotation_json: Mapped[str] = mapped_column(Text, default="{}")
+    ranking_json: Mapped[str] = mapped_column(Text, default="{}")
+    creator_decision: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class IntelligenceExperiment(Base):
+    __tablename__ = "intelligence_experiments"
+
+    experiment_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    channel_id: Mapped[int | None] = mapped_column(ForeignKey("channels.id"), index=True)
+    parent_experiment_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    hypothesis: Mapped[str] = mapped_column(Text)
+    baseline_commit: Mapped[str] = mapped_column(String(64))
+    candidate_commit: Mapped[str | None] = mapped_column(String(64))
+    datasets_json: Mapped[str] = mapped_column(Text)
+    configuration_json: Mapped[str] = mapped_column(Text)
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    components_json: Mapped[str] = mapped_column(Text, default="[]")
+    model_versions_json: Mapped[str] = mapped_column(Text, default="{}")
+    prompt_versions_json: Mapped[str] = mapped_column(Text, default="{}")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    hard_gates_json: Mapped[str] = mapped_column(Text, default="{}")
+    artifacts_json: Mapped[str] = mapped_column(Text, default="[]")
+    selection_decision: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)

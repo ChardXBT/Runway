@@ -1,0 +1,45 @@
+{
+  "artifact_version": "production-migration-verification-v1",
+  "backup": {
+    "path": "data/qlob-production/backups/runway-pre-0007-repair-20260718.db",
+    "sha256": "7d785933990210ffe48061d3dce76b913d2f5810a18a8074f0ae04f2b4c206ed"
+  },
+  "content_count_changes": {},
+  "content_counts_after": {
+    "annotation_corrections": 7,
+    "audit_events": 1858,
+    "blocked_sources": 1,
+    "candidate_images": 76,
+    "caption_feedback": 9,
+    "capture_runs": 1,
+    "channels": 1,
+    "generation_runs": 6,
+    "media_assets": 779,
+    "model_runs": 244,
+    "post_annotations": 698,
+    "post_media": 732,
+    "posts": 771,
+    "proposal_events": 40,
+    "proposals": 7,
+    "publish_attempts": 5,
+    "raw_post_records": 771,
+    "search_runs": 13,
+    "similarity_edges": 243253,
+    "style_profiles": 4
+  },
+  "database_integrity_after": "ok",
+  "database_integrity_before": "ok",
+  "live_publication_performed": false,
+  "migration_after": "0007_canonical_intelligence",
+  "migration_before": "0006_uncapped_lineup",
+  "schema_checks": {
+    "caption_candidate_attempt_number": true,
+    "caption_candidate_eligible": true,
+    "caption_candidate_exclusion_reasons": true,
+    "caption_candidate_generation_index": true,
+    "proposal_caption_slate_column": true,
+    "proposal_caption_slate_foreign_key": true,
+    "proposal_caption_slate_index": true
+  },
+  "verified_at": "2026-07-19T00:20:45.942438+00:00"
+}

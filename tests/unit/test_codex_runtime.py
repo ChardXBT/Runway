@@ -38,6 +38,13 @@ def _candidate_output() -> dict[str, object]:
         "fan_art_probability": 0.0,
         "caption_potential": 0.82,
         "confidence": 0.9,
+        "entities": [],
+        "objects": [],
+        "actions": [],
+        "relationships": [],
+        "setting": "unknown",
+        "ocr_text": [],
+        "field_confidence": {},
     }
 
 
@@ -125,6 +132,8 @@ async def test_codex_runtime_uses_chatgpt_guardrails_and_real_image(
     assert exec_command[exec_command.index("--image") + 1] == str(image.resolve())
     assert exec_command[-1] == "-"
     assert Path(exec_kwargs["cwd"]).parent.name == "codex-runtime"
+    assert "Analyze only the supplied candidate image and context." in exec_kwargs["input"]
+    assert "A channel may concern any domain." in exec_kwargs["input"]
     assert "OPENAI_API_KEY" not in exec_kwargs["env"]
     assert "CODEX_API_KEY" not in exec_kwargs["env"]
     assert "CODEX_ACCESS_TOKEN" not in exec_kwargs["env"]

@@ -1,0 +1,15 @@
+Annotate a bounded batch of image-based creator posts for channel-scoped retrieval. Attached images
+are ordered exactly as each post's zero-based image_indices. Consider every image in a multi-image
+post and every sampled frame in an animated contact sheet.
+
+First identify visual facts without using the historical caption: generic entities and entity
+types, people, optional fictional characters, organizations, products, teams, locations, animals,
+objects, actions, relationships, facial/body cues, setting, composition, visual medium, overlay
+text, and OCR. Then use the supplied caption only for editorial fields: intent, structure, angle,
+humor mechanism, audience invitation, image-caption relationship, implied context, tone, and
+language signals.
+
+Return exactly one result for every supplied post_id, with no duplicate or extra IDs. Use
+unknown/null rather than inventing an entity, franchise, character, quote, event, episode, plot
+fact, relationship, or OCR text. A channel need not involve animation or franchises. Confidence
+must be field-specific and between zero and one. Return only the requested schema.

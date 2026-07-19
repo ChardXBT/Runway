@@ -8,7 +8,8 @@ from sqlalchemy import func, select
 
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import CandidateImage, Proposal
+from runway.db.models import CandidateImage, Proposal, SearchRun
+from runway.db.repositories import get_channel
 from runway.discovery.service import DiscoveryService
 from runway.proposals.service import ProposalService
 
@@ -141,20 +142,32 @@ class EditorialService:
 
     def _review_count(self) -> int:
         with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
             return int(
                 session.scalar(
-                    select(func.count(Proposal.id)).where(Proposal.status == "needs_review")
+                    select(func.count(Proposal.id)).where(
+                        Proposal.channel_id == channel_id,
+                        Proposal.status == "needs_review",
+                    )
                 )
                 or 0
             )
 
     def _unused_candidate_count(self) -> int:
         with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
             return int(
                 session.scalar(
-                    select(func.count(CandidateImage.id)).where(
+                    select(func.count(CandidateImage.id))
+                    .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                    .where(
+                        SearchRun.channel_id == channel_id,
                         CandidateImage.hard_rejection_reason.is_(None),
-                        CandidateImage.id.not_in(select(Proposal.candidate_image_id)),
+                        CandidateImage.id.not_in(
+                            select(Proposal.candidate_image_id).where(
+                                Proposal.channel_id == channel_id
+                            )
+                        ),
                     )
                 )
                 or 0

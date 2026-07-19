@@ -1,0 +1,89 @@
+{
+  "artifact_version": "sealed-holdout-comparison-v1",
+  "baseline": {
+    "configuration_hash": "7302e247771c206804e73199a1e288fb651d9140f891b3c59bdf353e222c825e",
+    "mean_latency_ms": 69.385,
+    "no_edit_acceptance_proxy": {
+      "rate": 0.0,
+      "successes": 0,
+      "total": 2,
+      "wilson_95": [
+        0.0,
+        0.65762
+      ]
+    },
+    "pairwise_preference_accuracy_proxy": {
+      "rate": 0.0,
+      "successes": 0,
+      "total": 2,
+      "wilson_95": [
+        0.0,
+        0.65762
+      ]
+    },
+    "recommendations": [
+      {
+        "case_id": "qlob-fixture-candidate-03",
+        "text": "Why is Fixture so confident?"
+      },
+      {
+        "case_id": "qlob-fixture-candidate-27",
+        "text": "Why is Fixture so confident?"
+      }
+    ]
+  },
+  "candidate": {
+    "configuration_hash": "055bfd2a80ef67c60754fcccc1b4cc9b185e88942849cf5e98b4951f2bb1346a",
+    "grounding_pass_rate": 1.0,
+    "mean_latency_ms": 144.071,
+    "model_calls": 0,
+    "no_edit_acceptance_proxy": {
+      "rate": 1.0,
+      "successes": 2,
+      "total": 2,
+      "wilson_95": [
+        0.34238,
+        1.0
+      ]
+    },
+    "pairwise_preference_accuracy_proxy": {
+      "rate": 1.0,
+      "successes": 2,
+      "total": 2,
+      "wilson_95": [
+        0.34238,
+        1.0
+      ]
+    },
+    "recommendations": [
+      {
+        "case_id": "qlob-fixture-candidate-03",
+        "text": "Why is Fixture so determined?"
+      },
+      {
+        "case_id": "qlob-fixture-candidate-27",
+        "text": "Why is Fixture so determined?"
+      }
+    ],
+    "unsupported_claim_rate": 0.0
+  },
+  "case_count": 2,
+  "holdout_access": {
+    "model_calls_during_scoring": 0,
+    "sealed_artifact": "benchmarks/intelligence/experiments/HOLDOUT_EVALUATED.json",
+    "use_count": 1
+  },
+  "latency": {
+    "absolute_increase_ms": 74.686,
+    "candidate_to_baseline_ratio": 2.0764,
+    "judgment": "The local deterministic pipeline is slower. No latency threshold was preregistered; this release judgment treats 144.071 ms of local overhead as operationally immaterial beside model latency. Real model latency was not measured."
+  },
+  "observed_primary_delta": 1.0,
+  "quality_judgment": {
+    "human_creator_preference_measured": false,
+    "label_scope": "deterministic_fixture_policy_proxy_not_human_preference",
+    "meaningful_observed_improvement": true,
+    "statistically_conclusive": false,
+    "uncertainty_note": "The observed gain is 100 percentage points, but n=2 produces wide, overlapping Wilson intervals. It supports deterministic cutover behavior, not a claim of human preference superiority."
+  }
+}

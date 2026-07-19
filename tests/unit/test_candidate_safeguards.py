@@ -35,6 +35,13 @@ def test_fan_art_is_hard_rejected(database, settings) -> None:
         fan_art_probability=0.8,
         caption_potential=0.8,
         confidence=0.9,
+        entities=[],
+        objects=[],
+        actions=[],
+        relationships=[],
+        setting="unknown",
+        ocr_text=[],
+        field_confidence={},
     )
     duplicate = DuplicateResult(
         is_exact=False,
@@ -144,6 +151,13 @@ def _rank_inputs(
             fan_art_probability=0.01,
             caption_potential=0.8,
             confidence=0.9,
+            entities=[],
+            objects=[],
+            actions=[],
+            relationships=[],
+            setting="unknown",
+            ocr_text=[],
+            field_confidence={},
         ),
         DuplicateResult(
             is_exact=False,

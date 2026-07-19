@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -27,6 +28,57 @@ from runway.analysis.schemas import (
     StyleSummary,
 )
 from runway.config import Settings
+
+
+def _mock_subject_label(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 .'-]", "", value).strip()
+    parts = cleaned.split()
+    if not parts:
+        return "this scene"
+    generic_markers = {
+        "animated",
+        "attendee",
+        "attendees",
+        "character",
+        "characters",
+        "figure",
+        "group",
+        "people",
+        "person",
+        "unidentified",
+        "unknown",
+    }
+    words = set(cleaned.casefold().replace("-", " ").split())
+    if parts[0][:1].islower() or words & generic_markers:
+        plural_markers = {
+            "attendees",
+            "characters",
+            "group",
+            "people",
+        }
+        return "they" if words & plural_markers else "the subject"
+    if cleaned.casefold().startswith("fixture subject "):
+        return cleaned
+    return parts[0]
+
+
+def _mock_emotion_label(value: str) -> str:
+    words = set(re.sub(r"[^a-z ]", " ", value.casefold()).split())
+    mappings = (
+        ({"excited", "excitement", "thrilled", "eager"}, "excited"),
+        ({"surprise", "surprised", "shocked", "astonished"}, "surprised"),
+        ({"angry", "anger", "furious", "annoyed"}, "angry"),
+        ({"sad", "sadness", "upset", "dejected"}, "upset"),
+        ({"worried", "anxious", "nervous", "afraid", "fear"}, "worried"),
+        ({"happy", "happiness", "joy", "joyful", "delighted"}, "happy"),
+        ({"confused", "confusion", "puzzled", "bewildered"}, "confused"),
+        ({"determination", "determined", "confident", "confidence"}, "determined"),
+    )
+    for markers, label in mappings:
+        if words & markers:
+            return label
+    compact = " ".join(sorted(words))
+    return compact if 0 < len(compact.split()) <= 2 else "curious"
 
 
 class AgentRuntimeError(RuntimeError):
@@ -82,10 +134,12 @@ class MockAgentRuntime:
         families = ["Synthetic Ensemble", "Synthetic Adventure", "Synthetic Comedy"]
         structures = ["observational statement", "short question", "reaction punchline"]
         intent = "discussion" if "?" in caption else "reaction"
+        entity_name = f"Fixture subject {(post_id % 5) + 1}"
+        action = "reacting" if post_id % 2 else "comparing options"
         return HistoricalAnnotation(
             franchise=families[post_id % len(families)],
             show_name=families[post_id % len(families)],
-            visible_characters=[f"Fixture character {(post_id % 5) + 1}"],
+            visible_characters=[entity_name],
             visible_character_count=1,
             scene_description=f"Synthetic character-focused scene for catalogue post {post_id}.",
             visual_medium="digital animation still",
@@ -102,7 +156,33 @@ class MockAgentRuntime:
                 "characters": 0.7,
                 "scene": 0.92,
                 "caption": 0.95,
+                "entities": 0.88,
+                "actions": 0.84,
+                "relationships": 0.72,
+                "ocr": 0.9,
             },
+            entities=[
+                {
+                    "name": entity_name,
+                    "entity_type": "fictional_character",
+                    "confidence": 0.88,
+                    "canonical_name": entity_name,
+                }
+            ],
+            people=[],
+            organizations=[],
+            products=[],
+            teams=[],
+            locations=[],
+            animals=[],
+            objects=["fixture prop"],
+            actions=[action],
+            relationships=[],
+            setting="synthetic scene",
+            ocr_text=[],
+            editorial_angle="reaction" if post_id % 2 else "comparison",
+            audience_invitation_type="question" if "?" in caption else "reaction",
+            image_caption_relationship="caption interprets visible reaction",
         )
 
     async def annotate_historical_posts(
@@ -126,20 +206,26 @@ class MockAgentRuntime:
         median = payload.get("median_caption_words", "unknown")
         return StyleSummary(
             summary=(
-                "Fixture Qlob style favors compact, playful reaction captions "
+                "This fixture channel favors compact, playful reaction captions "
                 f"near {median} words, "
                 "with questions used selectively and images framed around one clear emotional beat."
             ),
             cited_post_ids=post_ids[:5],
             rotation_observations=[
                 "Alternate centered reactions with comparison compositions.",
-                "Avoid repeating the same fixture franchise on consecutive days.",
+                "Avoid repeating the same fixture topic on consecutive days.",
             ],
         )
 
     async def create_search_plan(self, payload: Mapping[str, Any]) -> SearchPlan:
-        underused = [str(value) for value in payload.get("underused_franchises", [])]
-        topic = underused[0] if underused else "animated ensemble"
+        underused = [
+            str(value)
+            for value in payload.get(
+                "underused_topics",
+                payload.get("underused_franchises", []),
+            )
+        ]
+        topic = underused[0] if underused else "channel subject"
         return SearchPlan(
             query_families=[
                 SearchQueryFamily(
@@ -157,15 +243,24 @@ class MockAgentRuntime:
             ],
             desired_visual_traits=["clear subject", "strong expression", "minimal overlay text"],
             excluded_concepts=[str(value) for value in payload.get("recent_exclusions", [])],
+            desired_entities=[],
+            desired_topics=[topic],
+            desired_actions=["clear visible action", "expressive reaction"],
+            desired_scenes=[],
+            desired_compositions=["close-up", "group scene", "wide composition"],
+            source_policy=str(payload.get("source_policy", "preserve_and_review")),
+            rights_policy=str(payload.get("rights_policy", "unknown_requires_review")),
         )
 
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
         candidate_id = int(payload.get("candidate_id", 0))
+        subject = f"Fixture subject {(candidate_id % 7) + 1}"
+        action = "reacting" if candidate_id % 2 else "choosing together"
         return CandidateAnalysis(
             franchise=["Synthetic Ensemble", "Synthetic Adventure", "Synthetic Comedy"][
                 candidate_id % 3
             ],
-            characters=[f"Fixture candidate {(candidate_id % 7) + 1}"],
+            characters=[subject],
             scene_archetype="reaction" if candidate_id % 2 else "group decision",
             composition="centered" if candidate_id % 2 else "balanced two-subject",
             emotion="surprise" if candidate_id % 3 else "determination",
@@ -176,39 +271,135 @@ class MockAgentRuntime:
             fan_art_probability=0.0,
             caption_potential=0.78 + (candidate_id % 5) * 0.03,
             confidence=0.9,
+            entities=[
+                {
+                    "name": subject,
+                    "entity_type": "fictional_character",
+                    "confidence": 0.9,
+                    "canonical_name": subject,
+                }
+            ],
+            objects=["fixture prop"],
+            actions=[action],
+            relationships=["subjects share the visible scene"] if candidate_id % 2 == 0 else [],
+            setting="synthetic fixture",
+            ocr_text=[],
+            field_confidence={
+                "entities": 0.9,
+                "emotion": 0.88,
+                "actions": 0.84,
+                "scene": 0.9,
+                "ocr": 0.95,
+            },
         )
 
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         candidate_id = int(payload.get("candidate_id", 0))
         references = [int(value) for value in payload.get("historical_post_ids", [])][:4]
-        questions = [
-            "Why does this feel like a bad idea?",
-            "What happened right before this?",
-            "How did the plan get this far?",
-            "What is everyone looking at?",
-        ]
-        observations = [
-            "That confidence lasted exactly three seconds.",
-            "Everyone saw that coming except him.",
-            "A completely normal amount of dramatic tension.",
-        ]
-        reactions = [
-            "The face of someone who learned nothing.",
-            "This should end well.",
-        ]
-        ordered_questions = (
-            questions[candidate_id % len(questions) :] + questions[: candidate_id % len(questions)]
+        analysis = payload.get("candidate_analysis", {})
+        analysis_row = analysis if isinstance(analysis, Mapping) else {}
+        characters = analysis_row.get("characters", [])
+        raw_subject = (
+            str(characters[0])
+            if isinstance(characters, list) and characters
+            else f"this scene {candidate_id}"
         )
-        candidates = [
-            *[CaptionCandidate(text=text, structure="open_question") for text in ordered_questions],
-            *[CaptionCandidate(text=text, structure="observation") for text in observations],
-            *[CaptionCandidate(text=text, structure="reaction") for text in reactions],
+        subject = _mock_subject_label(raw_subject)
+        emotion = _mock_emotion_label(
+            str(analysis_row.get("emotion") or "curious").strip()
+        )
+        action_values = analysis_row.get("actions", [])
+        action = (
+            str(action_values[0])
+            if isinstance(action_values, list) and action_values
+            else "reacting"
+        )
+        subject_start = subject[:1].upper() + subject[1:]
+        possessive = f"{subject}'" if subject.endswith("s") else f"{subject}'s"
+        possessive_start = possessive[:1].upper() + possessive[1:]
+        brief = payload.get("editorial_brief", {})
+        brief_row = brief if isinstance(brief, Mapping) else {}
+        structures = [
+            str(value)
+            for value in brief_row.get(
+                "target_structures",
+                ["open_question", "observation", "reaction"],
+            )
         ]
+        templates: dict[str, list[str]] = {
+            "open_question": [
+                f"Why is {subject} so {emotion}?",
+                f"What has {subject} {action} like this?",
+                f"How would you explain {subject}'s {emotion} reaction?",
+            ],
+            "yes_no_question": [f"Is {subject} ready for this?"],
+            "observation": [
+                f"{possessive_start} {emotion} reaction says plenty.",
+                f"Every detail points back to {subject}.",
+            ],
+            "reaction": [
+                f"That {emotion} look needs no explanation.",
+                f"{subject_start} has entered the chat.",
+            ],
+            "comparison": [f"{subject_start} versus the plan: place your bets."],
+            "prediction": [f"{subject_start} is about to make this interesting."],
+            "fill_in_blank": [f"{subject_start} is reacting to ____."],
+            "poll": [f"Pick {possessive} next move: stay or go?"],
+            "quiz": [f"Can you name what {subject} noticed?"],
+            "call_to_action": [f"Choose the best explanation for {subject}'s reaction."],
+            "explanation": [
+                f"This scene centers on {subject} and the visible action of {action}."
+            ],
+            "promotional_statement": [f"Introducing {possessive} most {emotion} moment."],
+            "quote_or_reference": [f"“{subject_start} looks {emotion}.”"],
+        }
+        candidates: list[CaptionCandidate] = []
+        for structure in structures:
+            for text in templates.get(structure, templates["observation"]):
+                candidates.append(
+                    CaptionCandidate(
+                        text=text,
+                        structure=structure,
+                        language=str(brief_row.get("target_language", "en")),
+                        editorial_angle=(
+                            "audience_inquiry"
+                            if structure.endswith("question")
+                            else structure
+                        ),
+                        visible_evidence=[subject, emotion, action],
+                        uncertainty=[],
+                        historical_evidence=references,
+                        feedback_evidence=[],
+                        confidence=0.84,
+                    )
+                )
+                if len(candidates) >= 9:
+                    break
+            if len(candidates) >= 9:
+                break
+        for fallback_structure in ("open_question", "observation", "reaction"):
+            if len(candidates) >= 6:
+                break
+            for text in templates[fallback_structure]:
+                if text not in {candidate.text for candidate in candidates}:
+                    candidates.append(
+                        CaptionCandidate(
+                            text=text,
+                            structure=fallback_structure,
+                            language=str(brief_row.get("target_language", "en")),
+                            editorial_angle=fallback_structure,
+                            visible_evidence=[subject, emotion, action],
+                            uncertainty=[],
+                            historical_evidence=references,
+                            feedback_evidence=[],
+                            confidence=0.82,
+                        )
+                    )
+                if len(candidates) >= 6:
+                    break
         return CaptionCandidateSet(
             candidates=candidates,
-            rationale=(
-                "Offers question-first, observational, and reaction-led fixture structures."
-            ),
+            rationale="Uses the channel brief and only deterministic visible fixture facts.",
             confidence=0.86,
             referenced_historical_post_ids=references,
             factual_uncertainty_warning=None,
@@ -291,7 +482,7 @@ class OpenAIAgentRuntime:
     ) -> HistoricalAnnotationBatch:
         return await self._parse(
             HistoricalAnnotationBatch,
-            "annotate-history-batch-v2.txt",
+            "annotate-history-batch-v3.txt",
             payload,
         )
 
@@ -302,10 +493,10 @@ class OpenAIAgentRuntime:
         return await self._parse(SearchPlan, "search-plan-v1.txt", payload)
 
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
-        return await self._parse(CandidateAnalysis, "candidate-analysis-v1.txt", payload)
+        return await self._parse(CandidateAnalysis, "candidate-analysis-v2.txt", payload)
 
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
-        return await self._parse(CaptionCandidateSet, "captions-v2.txt", payload)
+        return await self._parse(CaptionCandidateSet, "captions-v4.txt", payload)
 
 
 class CodexAgentRuntime:
@@ -587,7 +778,7 @@ class CodexAgentRuntime:
     ) -> HistoricalAnnotationBatch:
         return await self._parse(
             HistoricalAnnotationBatch,
-            "annotate-history-batch-v2.txt",
+            "annotate-history-batch-v3.txt",
             payload,
             require_image=True,
         )
@@ -601,7 +792,7 @@ class CodexAgentRuntime:
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
         return await self._parse(
             CandidateAnalysis,
-            "candidate-analysis-v1.txt",
+            "candidate-analysis-v2.txt",
             payload,
             require_image=True,
         )
@@ -609,7 +800,7 @@ class CodexAgentRuntime:
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         return await self._parse(
             CaptionCandidateSet,
-            "captions-v3.txt",
+            "captions-v4.txt",
             payload,
             require_image=True,
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import typer
 from PIL import Image, ImageDraw
+from sqlalchemy import func, select
 
 from runway.analysis.runtime import AgentRuntimeError, CodexAgentRuntime
 from runway.analysis.service import AnalysisService
@@ -24,14 +26,27 @@ from runway.catalog.service import CatalogService
 from runway.config import get_settings
 from runway.db import initialize_database
 from runway.discovery.service import DiscoveryService
+from runway.evaluation.datasets import DatasetRepository
+from runway.evaluation.experiments import ExperimentRunner
+from runway.evaluation.generalization import evaluate_generalization_fixtures
+from runway.evaluation.reports import write_json
+from runway.evaluation.runner import (
+    load_frozen_baseline,
+    run_candidate_evaluation,
+)
+from runway.generation.providers import ImageGenerationProviderRegistry
+from runway.generation.schemas import CreativeBrief
+from runway.generation.service import ImageGenerationService
+from runway.intelligence.embeddings import RepresentationProviderRegistry
 from runway.intelligence.profile import StyleProfileService
+from runway.intelligence.retrieval import RetrievalService
 from runway.logging import configure_logging
 from runway.proposals.service import ProposalService
 from runway.publishing.youtube import PlaywrightYouTubeAdapter, YouTubeBrowserPublisher
 
 app = typer.Typer(
     name="runway",
-    help="Local-only Qlob Community-post intelligence and planning.",
+    help="Local-only, channel-adaptive Community-post intelligence and planning.",
     no_args_is_help=True,
 )
 capture_app = typer.Typer(help="One-time, user-initiated historical capture.")
@@ -43,6 +58,10 @@ generate_app = typer.Typer(help="Generate proposal batches.")
 queue_app = typer.Typer(help="Inspect and operate the approval queue.")
 agent_app = typer.Typer(help="Manage the local ChatGPT-authenticated Codex runtime.")
 publisher_app = typer.Typer(help="Operate the guarded visible YouTube publisher.")
+intelligence_app = typer.Typer(help="Evaluate and inspect the canonical intelligence engine.")
+embeddings_app = typer.Typer(help="Inspect or backfill versioned local representations.")
+retrieval_app = typer.Typer(help="Inspect persisted hybrid-retrieval evidence.")
+image_app = typer.Typer(help="Operate the safe image-generation provider boundary.")
 
 app.add_typer(capture_app, name="capture")
 app.add_typer(catalog_app, name="catalog")
@@ -53,6 +72,10 @@ app.add_typer(generate_app, name="generate")
 app.add_typer(queue_app, name="queue")
 app.add_typer(agent_app, name="agent")
 app.add_typer(publisher_app, name="publisher")
+app.add_typer(intelligence_app, name="intelligence")
+app.add_typer(embeddings_app, name="embeddings")
+app.add_typer(retrieval_app, name="retrieval")
+app.add_typer(image_app, name="images")
 
 
 @app.callback()
@@ -62,13 +85,455 @@ def root() -> None:
 
 @app.command("init")
 def initialize() -> None:
-    """Create local directories, run migrations, and seed the Qlob channel."""
+    """Create local directories, run migrations, and seed the configured channel."""
     settings = get_settings()
     database = initialize_database(settings)
     typer.echo(f"Initialized {settings.product_name} at {settings.resolved_data_dir}")
     typer.echo(f"Database: {database.settings.database_path}")
     state = "enabled" if settings.publishing_enabled else "disabled"
     typer.echo(f"Publishing: {state}")
+
+
+def _intelligence_root() -> Path:
+    return (
+        get_settings().project_root
+        / "benchmarks"
+        / "intelligence"
+    )
+
+
+def _load_json(path: Path) -> dict[str, object]:
+    value: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise typer.BadParameter(f"{path} does not contain a JSON object")
+    return value
+
+
+@intelligence_app.command("baseline")
+def intelligence_baseline() -> None:
+    """Verify and summarize the immutable pre-upgrade benchmark."""
+    root = _intelligence_root() / "baseline-876fe5f"
+    failures: list[str] = []
+    for line in (root / "checksums.sha256").read_text(encoding="utf-8").splitlines():
+        expected, filename = line.split(maxsplit=1)
+        path = root / filename.strip()
+        observed = hashlib.sha256(path.read_bytes()).hexdigest()
+        if observed != expected:
+            failures.append(filename.strip())
+    payload = load_frozen_baseline()
+    result = {
+        "status": "verified" if not failures else "failed",
+        "directory": str(root),
+        "checksum_failures": failures,
+        "manifest": payload["manifest"],
+        "metrics": payload["metrics"],
+    }
+    typer.echo(json.dumps(result, indent=2, default=str))
+    if failures:
+        raise typer.Exit(code=1)
+
+
+@intelligence_app.command("evaluate")
+def intelligence_evaluate(
+    split: str = typer.Option(
+        "development",
+        help="development, tuning, or locked_holdout",
+    ),
+    output: Path | None = typer.Option(None),
+    release_candidate: bool = typer.Option(
+        False,
+        "--release-candidate",
+        help="Required for the one-time locked-holdout run.",
+    ),
+) -> None:
+    """Run deterministic canonical-engine cases without paid calls or publishing."""
+    allowed = {"development", "tuning", "locked_holdout"}
+    if split not in allowed:
+        raise typer.BadParameter(f"split must be one of {', '.join(sorted(allowed))}")
+    if split == "locked_holdout" and not release_candidate:
+        raise typer.BadParameter(
+            "locked_holdout requires --release-candidate after tuning is complete"
+        )
+    purpose = (
+        "holdout_release"
+        if split == "locked_holdout"
+        else ("tuning" if split == "tuning" else "development")
+    )
+    destination = output or (
+        _intelligence_root() / "evaluations" / f"canonical-{split}"
+    )
+    result = asyncio.run(
+        run_candidate_evaluation(
+            splits={split},  # type: ignore[arg-type]
+            purpose=purpose,  # type: ignore[arg-type]
+            destination=destination,
+        )
+    )
+    typer.echo(json.dumps(result["metrics"], indent=2))
+    typer.echo(f"Artifacts: {destination}")
+
+
+@intelligence_app.command("compare")
+def intelligence_compare(
+    candidate: Path = typer.Option(..., exists=True, dir_okay=False),
+) -> None:
+    """Compare saved canonical results to identical frozen benchmark case IDs."""
+    candidate_payload = _load_json(candidate)
+    runner = ExperimentRunner()
+    result = runner.compare(load_frozen_baseline(), candidate_payload)
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("tune")
+def intelligence_tune(
+    candidate: Path = typer.Option(..., exists=True, dir_okay=False),
+) -> None:
+    """Run the bounded, seeded, model-free search on tuning cases only."""
+    result = ExperimentRunner().tune(_load_json(candidate))
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("ablate")
+def intelligence_ablate(
+    candidate: Path = typer.Option(..., exists=True, dir_okay=False),
+    tuning_summary: Path = typer.Option(..., exists=True, dir_okay=False),
+) -> None:
+    """Measure full-engine-minus-component effects on tuning cases."""
+    summary = _load_json(tuning_summary)
+    winner = summary.get("winner")
+    if not isinstance(winner, dict):
+        raise typer.BadParameter("tuning summary has no winner")
+    configuration = winner.get("configuration")
+    if not isinstance(configuration, dict):
+        raise typer.BadParameter("tuning winner has no configuration")
+    weights = configuration.get("weights")
+    if not isinstance(weights, dict) or not all(
+        isinstance(key, str) and isinstance(value, (int, float))
+        for key, value in weights.items()
+    ):
+        raise typer.BadParameter("tuning winner weights are malformed")
+    result = ExperimentRunner().ablate(
+        _load_json(candidate),
+        winning_weights={
+            str(key): float(value) for key, value in weights.items()
+        },
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("holdout")
+def intelligence_holdout(
+    candidate: Path = typer.Option(..., exists=True, dir_okay=False),
+    tuning_summary: Path = typer.Option(..., exists=True, dir_okay=False),
+) -> None:
+    """Score the selected release configuration on the locked holdout once."""
+    summary = _load_json(tuning_summary)
+    winner = summary.get("winner")
+    if not isinstance(winner, dict):
+        raise typer.BadParameter("tuning summary has no winner")
+    configuration = winner.get("configuration")
+    weights = configuration.get("weights") if isinstance(configuration, dict) else None
+    if not isinstance(weights, dict):
+        raise typer.BadParameter("tuning winner weights are malformed")
+    numeric_weights = {
+        str(key): float(value)
+        for key, value in weights.items()
+        if isinstance(value, (int, float))
+    }
+    if len(numeric_weights) != len(weights):
+        raise typer.BadParameter("tuning winner weights are malformed")
+    result = ExperimentRunner().evaluate_holdout(
+        _load_json(candidate),
+        winning_weights=numeric_weights,
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("generalization")
+def intelligence_generalization() -> None:
+    """Run the five-channel same-image adaptation fixture."""
+    result = asyncio.run(evaluate_generalization_fixtures())
+    destination = _intelligence_root() / "experiments" / "generalization.json"
+    write_json(destination, result)
+    typer.echo(json.dumps(result, indent=2, default=str))
+    if not result["passed"]:
+        raise typer.Exit(code=1)
+
+
+@intelligence_app.command("experiments")
+def intelligence_experiments() -> None:
+    """List preserved experiment artifacts and selection outcomes."""
+    root = _intelligence_root() / "experiments"
+    rows = []
+    for path in sorted(root.glob("exp-*/experiment.json")):
+        payload = _load_json(path)
+        rows.append(
+            {
+                "experiment_id": payload.get("experiment_id"),
+                "configuration_hash": payload.get("configuration_hash"),
+                "selection_decision": payload.get("selection_decision"),
+                "metrics": payload.get("metrics"),
+                "path": str(path),
+            }
+        )
+    typer.echo(json.dumps({"count": len(rows), "experiments": rows}, indent=2))
+
+
+@intelligence_app.command("inspect-case")
+def intelligence_inspect_case(
+    case_id: str = typer.Option(...),
+    artifact: Path = typer.Option(..., exists=True, dir_okay=False),
+) -> None:
+    """Inspect one persisted evaluation case with its evidence and candidates."""
+    payload = _load_json(artifact)
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        raise typer.BadParameter("artifact has no cases")
+    match = next(
+        (
+            row
+            for row in cases
+            if isinstance(row, dict) and row.get("case_id") == case_id
+        ),
+        None,
+    )
+    if match is None:
+        raise typer.BadParameter(f"case {case_id} was not found")
+    typer.echo(json.dumps(match, indent=2, default=str))
+
+
+@intelligence_app.command("export-blind-review")
+def intelligence_export_blind_review(
+    output: Path = typer.Option(...),
+    seed: int = typer.Option(20260718),
+) -> None:
+    """Export deterministically randomized caption pairs without hidden labels."""
+    destination = DatasetRepository().export_blind_review(output, seed=seed)
+    typer.echo(str(destination))
+
+
+@intelligence_app.command("import-blind-review")
+def intelligence_import_blind_review(
+    review: Path = typer.Option(..., exists=True, dir_okay=False),
+    output: Path | None = typer.Option(None),
+) -> None:
+    """Validate creator blind-review choices and preserve a scored report."""
+    payload = _load_json(review)
+    responses = payload.get("responses")
+    if not isinstance(responses, list):
+        raise typer.BadParameter("review must contain a responses list")
+    labels = {
+        row.case_id: row
+        for row in DatasetRepository().canonical().blind_preferences
+    }
+    scored = []
+    for response in responses:
+        if not isinstance(response, dict):
+            raise typer.BadParameter("each blind-review response must be an object")
+        case_id = str(response.get("case_id", ""))
+        choice = str(response.get("choice", ""))
+        if case_id not in labels or choice not in {"first", "second", "tie"}:
+            raise typer.BadParameter(f"invalid blind-review response for {case_id}")
+        scored.append({"case_id": case_id, "creator_choice": choice})
+    result = {
+        "dataset_version": DatasetRepository().canonical().dataset_version,
+        "response_count": len(scored),
+        "responses": scored,
+        "note": (
+            "Creator choices are stored as primary labels; "
+            "automated labels were not substituted."
+        ),
+    }
+    destination = output or (
+        _intelligence_root() / "experiments" / "blind-review-import.json"
+    )
+    write_json(destination, result)
+    typer.echo(json.dumps(result, indent=2))
+
+
+@intelligence_app.command("active-learning")
+def intelligence_active_learning(
+    artifact: Path = typer.Option(..., exists=True, dir_okay=False),
+    limit: int = typer.Option(10, min=1, max=100),
+) -> None:
+    """Prioritize close-score, uncertain, or abstained cases for creator labels."""
+    payload = _load_json(artifact)
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        raise typer.BadParameter("artifact has no cases")
+    rows = []
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        pool = case.get("generated_pool")
+        candidates = pool if isinstance(pool, list) else []
+        scores = sorted(
+            [
+                float(row.get("final_score", 0.0))
+                for row in candidates
+                if isinstance(row, dict)
+                and isinstance(row.get("final_score"), (int, float))
+            ],
+            reverse=True,
+        )
+        gap = scores[0] - scores[1] if len(scores) > 1 else 1.0
+        grounding = case.get("grounding")
+        unsupported = (
+            grounding.get("unsupported_claims", [])
+            if isinstance(grounding, dict)
+            else []
+        )
+        priority = (
+            (1.0 - min(1.0, gap))
+            + (1.0 if case.get("abstained") else 0.0)
+            + (0.5 if unsupported else 0.0)
+        )
+        rows.append(
+            {
+                "case_id": case.get("case_id"),
+                "priority": round(priority, 6),
+                "top_score_gap": round(gap, 6),
+                "abstained": bool(case.get("abstained")),
+                "unsupported_claims": unsupported,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            -row["priority"]
+            if isinstance(row["priority"], (int, float))
+            else 0.0,
+            str(row["case_id"]),
+        )
+    )
+    typer.echo(json.dumps({"cases": rows[:limit]}, indent=2))
+
+
+@embeddings_app.command("status")
+def embeddings_status() -> None:
+    """Show registered providers and persisted representation counts."""
+    from runway.db.models import RepresentationRecord
+    from runway.db.repositories import get_channel
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    with database.session() as session:
+        channel = get_channel(session, settings.channel_handle)
+        count = int(
+            session.scalar(
+                select(func.count(RepresentationRecord.id)).where(
+                    RepresentationRecord.channel_id == channel.id
+                )
+            )
+            or 0
+        )
+        purposes = session.execute(
+            select(
+                RepresentationRecord.purpose,
+                func.count(RepresentationRecord.id),
+            )
+            .where(RepresentationRecord.channel_id == channel.id)
+            .group_by(RepresentationRecord.purpose)
+        ).all()
+    typer.echo(
+        json.dumps(
+            {
+                "providers": RepresentationProviderRegistry().status(),
+                "channel_id": channel.id,
+                "representation_count": count,
+                "purposes": {purpose: value for purpose, value in purposes},
+            },
+            indent=2,
+        )
+    )
+
+
+@embeddings_app.command("backfill")
+def embeddings_backfill(
+    limit: int = typer.Option(100, min=1, max=10000),
+    dry_run: bool = typer.Option(False),
+) -> None:
+    """Backfill canonical candidate representations through retrieval."""
+    from runway.db.models import CandidateImage, SearchRun
+    from runway.db.repositories import get_channel
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    with database.session() as session:
+        channel = get_channel(session, settings.channel_handle)
+        candidates = session.scalars(
+            select(CandidateImage)
+            .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+            .where(SearchRun.channel_id == channel.id)
+            .order_by(CandidateImage.id)
+            .limit(limit)
+        ).all()
+    if dry_run:
+        typer.echo(
+            json.dumps(
+                {"dry_run": True, "candidate_count": len(candidates)},
+                indent=2,
+            )
+        )
+        return
+    retrieval = RetrievalService(database, settings)
+    run_ids = [
+        retrieval.context_for_candidate(
+            candidate.media_asset_id,
+            candidate_id=candidate.id,
+        )["retrieval_run_id"]
+        for candidate in candidates
+        if not candidate.hard_rejection_reason
+    ]
+    typer.echo(
+        json.dumps(
+            {
+                "candidate_count": len(candidates),
+                "retrieval_runs": run_ids,
+                "paid_provider_calls": 0,
+            },
+            indent=2,
+        )
+    )
+
+
+@retrieval_app.command("inspect")
+def retrieval_inspect(run_id: int = typer.Option(..., min=1)) -> None:
+    """Inspect considered, excluded, fused, and selected evidence."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = RetrievalService(database, settings).inspect_run(run_id)
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@image_app.command("providers")
+def image_providers() -> None:
+    """List explicit image providers and paid/local capability flags."""
+    typer.echo(
+        json.dumps(ImageGenerationProviderRegistry().status(), indent=2)
+    )
+
+
+@image_app.command("mock")
+def image_mock(
+    instruction: str = typer.Option(..., min=3, max=2000),
+    output_count: int = typer.Option(1, min=1, max=4),
+    seed: int | None = typer.Option(None, min=0),
+) -> None:
+    """Generate offline deterministic fixtures and re-enter normal validation."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = asyncio.run(
+        ImageGenerationService(database, settings).generate(
+            CreativeBrief(
+                capability="text_to_image",
+                instruction=instruction,
+                seed=seed,
+            ),
+            provider_name="mock",
+            output_count=output_count,
+        )
+    )
+    typer.echo(json.dumps(result, indent=2))
 
 
 def _command_version(command: str, *args: str) -> str | None:
@@ -249,7 +714,7 @@ def agent_login() -> None:
 
 @agent_app.command("smoke")
 def agent_smoke() -> None:
-    """Run one small Luna/low structured-image request without touching the Qlob database."""
+    """Run one small structured-image request without touching configured channel data."""
     settings = get_settings()
     smoke_settings = settings.model_copy(update={"agent_runtime": "codex"})
     try:
@@ -298,7 +763,7 @@ def agent_smoke() -> None:
 
 @publisher_app.command("login")
 def publisher_login() -> None:
-    """Open the dedicated publisher profile for manual Qlob Editor sign-in."""
+    """Open the dedicated publisher profile for manual channel Editor sign-in."""
     settings = get_settings()
     settings.ensure_directories()
     PlaywrightYouTubeAdapter(settings).login_interactive()
@@ -307,7 +772,7 @@ def publisher_login() -> None:
 
 @publisher_app.command("status")
 def publisher_status() -> None:
-    """Validate the feature gate, Qlob channel, Editor role, and composer."""
+    """Validate the feature gate, configured channel, Editor role, and composer."""
     settings = get_settings()
     database = initialize_database(settings)
     result = asyncio.run(YouTubeBrowserPublisher(database, settings).validate_session())
@@ -347,7 +812,7 @@ def publisher_confirm(
 
 @publisher_app.command("verify")
 def publisher_verify(proposal_id: int = typer.Option(..., min=1)) -> None:
-    """Re-check Qlob's Scheduled tab without resubmitting."""
+    """Re-check the configured channel's Scheduled tab without resubmitting."""
     settings = get_settings()
     database = initialize_database(settings)
     result = asyncio.run(
@@ -386,8 +851,9 @@ def capture_status() -> None:
 
 @capture_app.command("youtube-posts")
 def capture_youtube_posts(
-    channel_url: str = typer.Option(
-        "https://www.youtube.com/@Qlob/posts", help="Requested channel Posts URL."
+    channel_url: str | None = typer.Option(
+        None,
+        help="Requested channel Posts URL; defaults to the configured channel handle.",
     ),
     headed: bool = typer.Option(False, "--headed", help="Launch a visible managed browser."),
     cdp_url: str | None = typer.Option(None, help="Explicit user-started Chrome CDP endpoint."),
@@ -401,6 +867,10 @@ def capture_youtube_posts(
 ) -> None:
     """Capture Community posts through fixtures or an explicit visible browser."""
     settings = get_settings()
+    requested_channel_url = (
+        channel_url
+        or f"https://www.youtube.com/@{settings.channel_handle}/posts"
+    )
     database = initialize_database(settings)
     service = CaptureService(database, settings)
     if fixture:
@@ -420,13 +890,15 @@ def capture_youtube_posts(
     typer.echo(f"Dedicated browser profile: {settings.browser_profile_dir}")
     typer.echo("RunWay never requests or stores your Google password.")
     typer.echo("This operation is read-only and will not create, edit, delete, or publish.")
-    typer.echo(f"Requested channel: @{settings.channel_handle} — {channel_url}")
+    typer.echo(
+        f"Requested channel: @{settings.channel_handle} — {requested_channel_url}"
+    )
     typer.echo("Press Ctrl+C once to pause safely; rerun with --resume to continue.")
     if not yes and not typer.confirm("Open the visible browser and begin read-only capture?"):
         raise typer.Abort()
     try:
         result = BrowserCaptureService(service, settings).run(
-            channel_url,
+            requested_channel_url,
             cdp_url=cdp_url,
             resume=resume,
             max_posts=max_posts,

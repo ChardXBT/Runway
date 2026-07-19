@@ -1,21 +1,48 @@
 from __future__ import annotations
 
 import json
-import re
+import math
 from collections import Counter
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import desc, select
 
-from runway.analysis.features import text_similarity
+from runway.captions.taxonomy import analyze_caption
+from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import CandidateImage, CaptionFeedback, Proposal
-from runway.db.repositories import audit
+from runway.db.models import (
+    CandidateImage,
+    CaptionFeedback,
+    FeedbackSignal,
+    Proposal,
+    SearchRun,
+)
+from runway.db.repositories import audit, get_channel
+from runway.intelligence.embeddings import (
+    DeterministicTextEmbeddingProvider,
+    cosine,
+)
+from runway.intelligence.policies import ChannelPolicyService
 
 POSITIVE_VERDICTS = {"accepted", "edited", "preferred", "selected"}
 NEGATIVE_VERDICTS = {"rejected"}
 ALLOWED_VERDICTS = POSITIVE_VERDICTS | NEGATIVE_VERDICTS
-ALLOWED_STRUCTURES = {"open_question", "observation", "reaction"}
+ALLOWED_STRUCTURES = {
+    "open_question",
+    "yes_no_question",
+    "observation",
+    "reaction",
+    "comparison",
+    "prediction",
+    "fill_in_blank",
+    "poll",
+    "quiz",
+    "call_to_action",
+    "explanation",
+    "promotional_statement",
+    "quote_or_reference",
+}
 ALLOWED_IMAGE_VERDICTS = {"good", "bad", "unsure"}
 ALLOWED_REASON_CODES = {
     "too_generic",
@@ -30,37 +57,20 @@ ALLOWED_REASON_CODES = {
     "image_good_caption_bad",
     "caption_good_image_bad",
     "source_concern",
+    "image_not_a_fit",
     "human_edit",
     "selected_alternative",
     "approved",
 }
-OPEN_QUESTION_RE = re.compile(r"^\s*(why|how|what|who|where|when)\b", re.IGNORECASE)
-
-
 def caption_structure(caption: str) -> str:
-    if caption.rstrip().endswith("?") and OPEN_QUESTION_RE.match(caption):
-        return "open_question"
-    if caption.rstrip().endswith("?"):
-        return "open_question"
-    lowered = caption.lower()
-    if any(
-        marker in lowered
-        for marker in (
-            "that look",
-            "the face of",
-            "this should",
-            "moments before",
-            "when you",
-            "me when",
-        )
-    ):
-        return "reaction"
-    return "observation"
+    return analyze_caption(caption).structure
 
 
 class CaptionFeedbackService:
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, settings: Settings | None = None):
         self.database = database
+        self.settings = settings or database.settings
+        self.text_provider = DeterministicTextEmbeddingProvider()
 
     def record(
         self,
@@ -72,6 +82,7 @@ class CaptionFeedbackService:
         preferred_structure: str | None = None,
         reason_codes: list[str] | None = None,
         image_verdict: str | None = None,
+        pairing_verdict: str | None = None,
         note: str | None = None,
     ) -> dict[str, object]:
         normalized_verdict = verdict.strip().lower()
@@ -85,12 +96,36 @@ class CaptionFeedbackService:
             raise ValueError(f"unsupported feedback reasons: {', '.join(sorted(unexpected))}")
         if image_verdict is not None and image_verdict not in ALLOWED_IMAGE_VERDICTS:
             raise ValueError(f"unsupported image verdict: {image_verdict}")
+        if pairing_verdict is not None and pairing_verdict not in ALLOWED_IMAGE_VERDICTS:
+            raise ValueError(f"unsupported pairing verdict: {pairing_verdict}")
         clean_note = note.strip() if note else None
         if clean_note and len(clean_note) > 1000:
             raise ValueError("feedback note must be 1000 characters or fewer")
 
         with self.database.session() as session:
-            proposal = session.get(Proposal, proposal_id)
+            channel = get_channel(session, self.settings.channel_handle)
+            proposal = session.scalar(
+                select(Proposal).where(
+                    Proposal.id == proposal_id,
+                    Proposal.channel_id == channel.id,
+                )
+            )
+            if proposal is None:
+                raise LookupError(f"proposal {proposal_id} not found")
+            channel_id = proposal.channel_id
+        policy = ChannelPolicyService(
+            self.database,
+            self.settings,
+        ).ensure_defaults(channel_id)
+
+        with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
+            proposal = session.scalar(
+                select(Proposal).where(
+                    Proposal.id == proposal_id,
+                    Proposal.channel_id == channel.id,
+                )
+            )
             if proposal is None:
                 raise LookupError(f"proposal {proposal_id} not found")
             source = (generated_caption or proposal.final_caption).strip()
@@ -143,37 +178,124 @@ class CaptionFeedbackService:
                         "reason_codes": normalized_reasons,
                         "preferred_structure": structure,
                         "image_verdict": image_verdict,
+                        "pairing_verdict": pairing_verdict,
                     },
                 )
+                session.add(
+                    FeedbackSignal(
+                        channel_id=proposal.channel_id,
+                        proposal_id=proposal.id,
+                        candidate_image_id=proposal.candidate_image_id,
+                        target="caption",
+                        verdict=normalized_verdict,
+                        value_text=preferred or source,
+                        reason_codes_json=reasons_json,
+                        note=clean_note,
+                        source="creator",
+                        policy_version=policy.version,
+                    )
+                )
+                if image_verdict is not None:
+                    session.add(
+                        FeedbackSignal(
+                            channel_id=proposal.channel_id,
+                            proposal_id=proposal.id,
+                            candidate_image_id=proposal.candidate_image_id,
+                            target="image",
+                            verdict=self._normalized_target_verdict(image_verdict),
+                            value_text=None,
+                            reason_codes_json=reasons_json,
+                            note=clean_note,
+                            source="creator",
+                            policy_version=policy.version,
+                        )
+                    )
+                inferred_pairing = pairing_verdict
+                if inferred_pairing is None and image_verdict is not None:
+                    inferred_pairing = (
+                        "good"
+                        if image_verdict == "good"
+                        and normalized_verdict in POSITIVE_VERDICTS
+                        else (
+                            "bad"
+                            if image_verdict == "bad"
+                            or normalized_verdict in NEGATIVE_VERDICTS
+                            else "unsure"
+                        )
+                    )
+                if inferred_pairing is not None:
+                    session.add(
+                        FeedbackSignal(
+                            channel_id=proposal.channel_id,
+                            proposal_id=proposal.id,
+                            candidate_image_id=proposal.candidate_image_id,
+                            target="pairing",
+                            verdict=self._normalized_target_verdict(inferred_pairing),
+                            value_text=preferred or source,
+                            reason_codes_json=reasons_json,
+                            note=clean_note,
+                            source="creator",
+                            policy_version=policy.version,
+                        )
+                    )
             feedback_id = existing.id
         return self.detail(feedback_id)
 
     def detail(self, feedback_id: int) -> dict[str, object]:
         with self.database.session() as session:
-            row = session.get(CaptionFeedback, feedback_id)
+            channel = get_channel(session, self.settings.channel_handle)
+            row = session.scalar(
+                select(CaptionFeedback)
+                .join(Proposal, Proposal.id == CaptionFeedback.proposal_id)
+                .where(
+                    CaptionFeedback.id == feedback_id,
+                    Proposal.channel_id == channel.id,
+                )
+            )
             if row is None:
                 raise LookupError(f"caption feedback {feedback_id} not found")
             return self._row(row)
 
     def list_for_proposal(self, proposal_id: int) -> list[dict[str, object]]:
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
             rows = session.scalars(
                 select(CaptionFeedback)
-                .where(CaptionFeedback.proposal_id == proposal_id)
+                .join(Proposal, Proposal.id == CaptionFeedback.proposal_id)
+                .where(
+                    CaptionFeedback.proposal_id == proposal_id,
+                    Proposal.channel_id == channel.id,
+                )
                 .order_by(desc(CaptionFeedback.created_at), desc(CaptionFeedback.id))
             ).all()
             return [self._row(row) for row in rows]
 
     def context_for_candidate(self, candidate_id: int) -> dict[str, object]:
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
             candidate = session.get(CandidateImage, candidate_id)
             if candidate is None:
                 raise LookupError(f"candidate {candidate_id} not found")
+            search_run = session.get(SearchRun, candidate.search_run_id)
+            if search_run is None or search_run.channel_id != channel.id:
+                raise LookupError(f"candidate {candidate_id} has no search run")
+            channel_id = search_run.channel_id
             current_topic = self._topic(candidate)
             rows = session.scalars(
                 select(CaptionFeedback)
+                .join(Proposal, Proposal.id == CaptionFeedback.proposal_id)
+                .where(Proposal.channel_id == channel_id)
                 .order_by(desc(CaptionFeedback.created_at), desc(CaptionFeedback.id))
                 .limit(200)
+            ).all()
+            image_signals = session.scalars(
+                select(FeedbackSignal)
+                .where(
+                    FeedbackSignal.channel_id == channel_id,
+                    FeedbackSignal.target == "image",
+                )
+                .order_by(desc(FeedbackSignal.created_at), desc(FeedbackSignal.id))
+                .limit(100)
             ).all()
             feedback_candidates = {
                 item.id: item
@@ -189,7 +311,14 @@ class CaptionFeedbackService:
                 other = feedback_candidates.get(row.candidate_image_id)
                 score = self._topic_relevance(current_topic, self._topic(other) if other else {})
                 score += 0.2 if row.preferred_structure == "open_question" else 0.0
-                score += min(row.id / 1_000_000, 0.05)
+                created = row.created_at
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=UTC)
+                age_days = max(
+                    0.0,
+                    (datetime.now(UTC) - created).total_seconds() / 86400,
+                )
+                score += 0.15 * math.exp(-math.log(2) * age_days / 90.0)
                 scored.append((score, row.id, row))
 
             positive_rows = [
@@ -210,17 +339,19 @@ class CaptionFeedbackService:
             for row in rows:
                 reason_counts.update(json.loads(row.reason_codes_json))
 
+            policy = ChannelPolicyService(
+                self.database,
+                self.settings,
+            ).ensure_defaults(channel_id)
             return {
                 "editorial_policy": {
-                    "primary_goal": "open-ended questions that invite community discussion",
-                    "recommended_structure": "open_question",
-                    "required_option_mix": {
-                        "open_question": 1,
-                        "observation": 1,
-                        "reaction": 1,
-                    },
-                    "avoid_yes_no_questions": True,
+                    "preferred_structures": policy.preferred_structures,
+                    "recommended_structure": policy.preferred_structures[0],
+                    "question_first": policy.question_first,
+                    "language": policy.language,
+                    "locale": policy.locale,
                     "avoid_generic_engagement_bait": True,
+                    "policy_version": policy.version,
                 },
                 "positive_examples": [
                     {
@@ -246,6 +377,15 @@ class CaptionFeedbackService:
                     "preferred_structures": structure_counts.most_common(),
                     "common_feedback_reasons": reason_counts.most_common(10),
                 },
+                "image_preferences": {
+                    "accepted": sum(
+                        signal.verdict == "accepted" for signal in image_signals
+                    ),
+                    "rejected": sum(
+                        signal.verdict == "rejected" for signal in image_signals
+                    ),
+                    "unsure": sum(signal.verdict == "unsure" for signal in image_signals),
+                },
             }
 
     def positive_similarity(self, caption: str, context: dict[str, object]) -> float:
@@ -253,7 +393,10 @@ class CaptionFeedbackService:
         if not isinstance(examples, list):
             return 0.0
         values = [
-            text_similarity(caption, str(item.get("preferred_caption") or ""))
+            self._semantic_similarity(
+                caption,
+                str(item.get("preferred_caption") or ""),
+            )
             for item in examples
             if isinstance(item, dict) and item.get("preferred_caption")
         ]
@@ -264,7 +407,7 @@ class CaptionFeedbackService:
         if not isinstance(examples, list):
             return 0.0
         values = [
-            text_similarity(caption, str(item.get("caption") or ""))
+            self._semantic_similarity(caption, str(item.get("caption") or ""))
             for item in examples
             if isinstance(item, dict) and item.get("caption")
         ]
@@ -293,8 +436,29 @@ class CaptionFeedbackService:
             first = str(current.get(key) or "")
             second = str(other.get(key) or "")
             if first and second:
-                score += 0.25 * max(text_similarity(first, second), 0.0)
+                provider = DeterministicTextEmbeddingProvider()
+                first_vector = provider.embed_text(first, purpose="feedback_topic").as_array()[0]
+                second_vector = provider.embed_text(
+                    second,
+                    purpose="feedback_topic",
+                ).as_array()[0]
+                score += 0.25 * max(cosine(first_vector, second_vector), 0.0)
         return score
+
+    def _semantic_similarity(self, first: str, second: str) -> float:
+        first_vector = self.text_provider.embed_text(
+            first,
+            purpose="caption_feedback",
+        ).as_array()[0]
+        second_vector = self.text_provider.embed_text(
+            second,
+            purpose="caption_feedback",
+        ).as_array()[0]
+        return cosine(first_vector, second_vector)
+
+    @staticmethod
+    def _normalized_target_verdict(value: str) -> str:
+        return {"good": "accepted", "bad": "rejected", "unsure": "unsure"}[value]
 
     @staticmethod
     def _row(row: CaptionFeedback) -> dict[str, object]:

@@ -103,7 +103,7 @@ def text_similarity(first: str, second: str) -> float:
     return float(np.dot(a, b))
 
 
-def qlob_style_score(caption: str, stats: dict[str, Any]) -> float:
+def channel_style_score(caption: str, stats: dict[str, Any]) -> float:
     features = caption_features(caption)
     median = float(stats.get("median_words", 1))
     distance = abs(float(features["word_count"]) - median) / max(median, 1)

@@ -12,7 +12,7 @@ from sqlalchemy import desc, func, select
 from runway.analysis.features import (
     aggregate_caption_features,
     caption_features,
-    qlob_style_score,
+    channel_style_score,
     text_embedding,
 )
 from runway.analysis.runtime import AgentRuntime, runtime_for
@@ -26,8 +26,11 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
     AuditEvent,
+    CaptionFeedback,
+    FeedbackSignal,
     MediaAsset,
     ModelRun,
+    PairwisePreference,
     Post,
     PostAnnotation,
     PostMedia,
@@ -36,11 +39,12 @@ from runway.db.models import (
     utcnow,
 )
 from runway.db.repositories import audit, get_channel
+from runway.intelligence.policies import ChannelPolicyService
 from runway.media.service import cosine_similarity, ensure_fixture_images, inspect_image
 
 
 class StyleProfileService:
-    schema_version = "style-profile-v2"
+    schema_version = "channel-profile-v3"
 
     def __init__(
         self,
@@ -54,9 +58,19 @@ class StyleProfileService:
 
     async def build(self) -> dict[str, object]:
         with self.database.session() as session:
+            target_channel = get_channel(session, self.settings.channel_handle)
+            channel_id = target_channel.id
+            channel_name = target_channel.name
+        policy = ChannelPolicyService(self.database, self.settings).ensure_defaults(channel_id)
+        with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
             posts = session.scalars(
-                select(Post).where(Post.is_training_eligible.is_(True)).order_by(Post.id)
+                select(Post)
+                .where(
+                    Post.channel_id == channel.id,
+                    Post.is_training_eligible.is_(True),
+                )
+                .order_by(Post.id)
             ).all()
             if len(posts) < 3:
                 raise ValueError("at least three training-eligible posts are required")
@@ -66,14 +80,29 @@ class StyleProfileService:
                 holdout_ids.extend(post.id for post in posts if post.id not in holdout_ids)
                 holdout_ids = holdout_ids[:holdout_count]
             training = [post for post in posts if post.id not in set(holdout_ids)]
-            all_annotations = {
-                annotation.post_id: annotation
-                for annotation in session.scalars(
-                    select(PostAnnotation).where(
-                        PostAnnotation.annotation_version == AnalysisService.annotation_version,
-                    )
-                ).all()
+            annotation_priority = {
+                version: index
+                for index, version in enumerate(
+                    reversed(AnalysisService.compatible_annotation_versions)
+                )
             }
+            all_annotations: dict[int, PostAnnotation] = {}
+            for annotation in session.scalars(
+                select(PostAnnotation)
+                .where(
+                    PostAnnotation.post_id.in_([post.id for post in posts]),
+                    PostAnnotation.annotation_version.in_(
+                        AnalysisService.compatible_annotation_versions
+                    ),
+                )
+                .order_by(PostAnnotation.created_at, PostAnnotation.id)
+            ):
+                current = all_annotations.get(annotation.post_id)
+                if current is None or annotation_priority.get(
+                    annotation.annotation_version,
+                    -1,
+                ) > annotation_priority.get(current.annotation_version, -1):
+                    all_annotations[annotation.post_id] = annotation
             annotations = {
                 post.id: all_annotations[post.id] for post in training if post.id in all_annotations
             }
@@ -107,12 +136,38 @@ class StyleProfileService:
             franchise_counts = Counter(
                 str(effective_annotations[post.id]["franchise"] or "unknown") for post in training
             )
+            entity_counts: Counter[str] = Counter()
+            action_counts: Counter[str] = Counter()
             character_counts: Counter[str] = Counter()
             for post in training:
+                for entity in cast(
+                    list[dict[str, object]],
+                    effective_annotations[post.id].get("entities", []),
+                ):
+                    name = str(entity.get("canonical_name") or entity.get("name") or "").strip()
+                    if name:
+                        entity_counts[name] += 1
+                action_counts.update(
+                    str(value)
+                    for value in cast(
+                        list[object],
+                        effective_annotations[post.id].get("actions", []),
+                    )
+                    if str(value).strip()
+                )
                 character_counts.update(
                     str(value)
                     for value in cast(list[object], effective_annotations[post.id]["characters"])
                 )
+            topic_counts = Counter(
+                {
+                    name: count
+                    for name, count in franchise_counts.items()
+                    if name.strip().casefold() not in {"", "unknown", "none", "null"}
+                }
+            )
+            if not topic_counts:
+                topic_counts.update(entity_counts)
             visual_formats = Counter(
                 self._canonical_visual_format(str(effective_annotations[post.id]["visual_format"]))
                 for post in training
@@ -155,10 +210,35 @@ class StyleProfileService:
             )
             rejected = session.scalars(
                 select(Proposal)
-                .where(Proposal.status == "rejected")
-                .order_by(desc(Proposal.id))
+                .where(
+                    Proposal.channel_id == channel.id,
+                    Proposal.status == "rejected",
+                )
+                .order_by(desc(Proposal.rejected_at), desc(Proposal.id))
                 .limit(5)
             ).all()
+            recent_proposals = session.scalars(
+                select(Proposal)
+                .where(Proposal.channel_id == channel.id)
+                .order_by(desc(Proposal.updated_at), desc(Proposal.id))
+                .limit(30)
+            ).all()
+            legacy_feedback = session.scalars(
+                select(CaptionFeedback)
+                .join(Proposal, Proposal.id == CaptionFeedback.proposal_id)
+                .where(Proposal.channel_id == channel.id)
+            ).all()
+            feedback_signals = session.scalars(
+                select(FeedbackSignal).where(FeedbackSignal.channel_id == channel.id)
+            ).all()
+            pairwise_count = int(
+                session.scalar(
+                    select(func.count(PairwisePreference.id)).where(
+                        PairwisePreference.channel_id == channel.id
+                    )
+                )
+                or 0
+            )
             next_version = (
                 session.scalar(
                     select(func.max(StyleProfile.version)).where(
@@ -168,6 +248,21 @@ class StyleProfileService:
                 or 0
             ) + 1
             cutoff = max(post.updated_at for post in posts)
+
+        preferred_structures = Counter(
+            value.preferred_structure
+            for value in legacy_feedback
+            if value.preferred_structure
+        )
+        image_verdicts = Counter(
+            signal.verdict for signal in feedback_signals if signal.target == "image"
+        )
+        caption_verdicts = Counter(
+            signal.verdict for signal in feedback_signals if signal.target == "caption"
+        )
+        pairing_verdicts = Counter(
+            signal.verdict for signal in feedback_signals if signal.target == "pairing"
+        )
 
         representative_examples = [
             {
@@ -227,6 +322,9 @@ class StyleProfileService:
             "visual_formats": visual_formats.most_common(5),
             "visual_compositions": compositions.most_common(5),
             "franchise_distribution": franchise_counts.most_common(5),
+            "entity_distribution": entity_counts.most_common(10),
+            "topic_distribution": topic_counts.most_common(10),
+            "action_distribution": action_counts.most_common(10),
             "character_distribution": character_counts.most_common(10),
             "representative_post_ids": [post.id for post in representatives],
             "representative_examples": representative_examples,
@@ -246,9 +344,12 @@ class StyleProfileService:
             )
         profile: dict[str, Any] = {
             "schema_version": self.schema_version,
-            "annotation_version": AnalysisService.annotation_version,
+            "annotation_versions": sorted(
+                {annotation.annotation_version for annotation in all_annotations.values()}
+            ),
             "version": next_version,
-            "channel": self.settings.channel_name,
+            "channel": channel_name,
+            "channel_id": channel_id,
             "training_post_ids": [post.id for post in training],
             "holdout_post_ids": holdout_ids,
             "holdout_fraction": round(len(holdout_ids) / len(posts), 6),
@@ -263,6 +364,9 @@ class StyleProfileService:
             },
             "franchise_distribution": franchise_counts.most_common(),
             "character_distribution": character_counts.most_common(),
+            "entity_distribution": entity_counts.most_common(),
+            "topic_distribution": topic_counts.most_common(),
+            "action_distribution": action_counts.most_common(),
             "reviewed_training_annotation_post_ids": reviewed_training_post_ids,
             "reviewed_training_annotation_count": len(reviewed_training_post_ids),
             "reviewed_catalogue_annotation_post_ids": reviewed_catalogue_post_ids,
@@ -294,7 +398,7 @@ class StyleProfileService:
             "outliers": self._outliers(training),
             "rotation_patterns": summary.rotation_observations,
             "recent_overuse_rules": {
-                "avoid_consecutive_franchise": True,
+                "avoid_consecutive_topic": True,
                 "avoid_consecutive_composition": True,
                 "duplicate_window_days": self.settings.duplicate_window_days,
             },
@@ -304,13 +408,76 @@ class StyleProfileService:
             ],
             "summary": summary.summary,
             "summary_cited_post_ids": summary.cited_post_ids,
+            "profile_reliability": {
+                "history_samples": len(training),
+                "minimum_reliable_samples": 20,
+                "reliable": len(training) >= 20,
+                "missing_evidence": (
+                    ["more creator history"] if len(training) < 20 else []
+                ),
+            },
+            "long_term_channel_dna": {
+                "language": policy.language,
+                "locale": policy.locale,
+                "caption_statistics": caption_stats,
+                "structures": structures.most_common(10),
+                "vocabulary": caption_stats.get("common_openings", []),
+                "punctuation": {
+                    "question_frequency": caption_stats.get("question_frequency", 0),
+                    "exclamation_frequency": caption_stats.get(
+                        "exclamation_frequency",
+                        0,
+                    ),
+                    "emoji_frequency": caption_stats.get("emoji_frequency", 0),
+                },
+                "visual_formats": visual_formats.most_common(10),
+                "compositions": compositions.most_common(10),
+                "entities": entity_counts.most_common(20),
+                "topics": topic_counts.most_common(20),
+                "actions": action_counts.most_common(20),
+            },
+            "recent_editorial_mode": {
+                "recent_post_ids": [
+                    cast(int, example["post_id"])
+                    for example in chronological_examples[:10]
+                ],
+                "scheduled_or_approved_proposal_ids": [
+                    proposal.id
+                    for proposal in recent_proposals
+                    if proposal.status
+                    in {
+                        "approved",
+                        "internally_scheduled",
+                        "publishing",
+                        "externally_scheduled",
+                        "publish_unverified",
+                    }
+                ],
+                "recent_rejection_ids": [proposal.id for proposal in rejected],
+                "rotation_windows": [3, 10, 30],
+            },
+            "explicit_channel_policy": policy.model_dump(),
+            "learned_creator_preference": {
+                "legacy_feedback_count": len(legacy_feedback),
+                "pairwise_preference_count": pairwise_count,
+                "preferred_structures": preferred_structures.most_common(),
+                "image_verdicts": image_verdicts.most_common(),
+                "caption_verdicts": caption_verdicts.most_common(),
+                "pairing_verdicts": pairing_verdicts.most_common(),
+            },
+            "audience_performance": {
+                "status": "observed_history_only",
+                "like_samples": sum(post.like_count is not None for post in training),
+                "comment_samples": sum(post.comment_count is not None for post in training),
+                "used_for_creator_preference": False,
+            },
         }
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
-            for current in session.scalars(
+            for existing_profile in session.scalars(
                 select(StyleProfile).where(StyleProfile.channel_id == channel.id)
             ):
-                current.is_active = False
+                existing_profile.is_active = False
             record = StyleProfile(
                 channel_id=channel.id,
                 version=next_version,
@@ -351,9 +518,13 @@ class StyleProfileService:
 
     def active(self) -> dict[str, Any]:
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
             record = session.scalar(
                 select(StyleProfile)
-                .where(StyleProfile.is_active.is_(True))
+                .where(
+                    StyleProfile.channel_id == channel.id,
+                    StyleProfile.is_active.is_(True),
+                )
                 .order_by(desc(StyleProfile.version))
                 .limit(1)
             )
@@ -367,8 +538,11 @@ class StyleProfileService:
 
     def list_profiles(self) -> list[dict[str, object]]:
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
             records = session.scalars(
-                select(StyleProfile).order_by(desc(StyleProfile.version))
+                select(StyleProfile)
+                .where(StyleProfile.channel_id == channel.id)
+                .order_by(desc(StyleProfile.version))
             ).all()
             return [
                 {
@@ -383,8 +557,9 @@ class StyleProfileService:
 
     def detail(self, profile_id: int) -> dict[str, Any]:
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
             record = session.get(StyleProfile, profile_id)
-            if record is None:
+            if record is None or record.channel_id != channel.id:
                 raise LookupError(f"style profile {profile_id} not found")
             result = cast(dict[str, Any], json.loads(record.profile_json))
             result["id"] = record.id
@@ -403,21 +578,37 @@ class StyleProfileService:
         training_ids = [int(value) for value in cast(list[Any], profile["training_post_ids"])]
         holdout_ids = [int(value) for value in cast(list[Any], profile["holdout_post_ids"])]
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
             posts = {
                 post.id: post
                 for post in session.scalars(
-                    select(Post).where(Post.id.in_(training_ids + holdout_ids))
-                )
-            }
-            annotations = {
-                annotation.post_id: annotation
-                for annotation in session.scalars(
-                    select(PostAnnotation).where(
-                        PostAnnotation.post_id.in_(training_ids + holdout_ids),
-                        PostAnnotation.annotation_version == AnalysisService.annotation_version,
+                    select(Post).where(
+                        Post.channel_id == channel.id,
+                        Post.id.in_(training_ids + holdout_ids),
                     )
                 )
             }
+            annotations: dict[int, PostAnnotation] = {}
+            priority = {
+                version: index
+                for index, version in enumerate(
+                    reversed(AnalysisService.compatible_annotation_versions)
+                )
+            }
+            for annotation in session.scalars(
+                select(PostAnnotation).where(
+                    PostAnnotation.post_id.in_(training_ids + holdout_ids),
+                    PostAnnotation.annotation_version.in_(
+                        AnalysisService.compatible_annotation_versions
+                    ),
+                )
+            ):
+                current = annotations.get(annotation.post_id)
+                if current is None or priority.get(
+                    annotation.annotation_version,
+                    -1,
+                ) > priority.get(current.annotation_version, -1):
+                    annotations[annotation.post_id] = annotation
             effective_annotations = {
                 post_id: effective_annotation_fields(annotation)
                 for post_id, annotation in annotations.items()
@@ -432,8 +623,8 @@ class StyleProfileService:
         ]
         ranking_hits = 0
         for post_id in holdout_ids:
-            own = qlob_style_score(posts[post_id].caption or "", stats)
-            distractor = max(qlob_style_score(caption, stats) for caption in generic)
+            own = channel_style_score(posts[post_id].caption or "", stats)
+            distractor = max(channel_style_score(caption, stats) for caption in generic)
             ranking_hits += own > distractor
         ranking_accuracy = ranking_hits / len(holdout_ids) if holdout_ids else 0.0
 
@@ -444,6 +635,7 @@ class StyleProfileService:
                 .where(
                     AuditEvent.event_type == "annotation_reviewed",
                     AuditEvent.entity_type == "post",
+                    AuditEvent.entity_id.in_(training_ids + holdout_ids),
                 )
                 .order_by(AuditEvent.created_at, AuditEvent.id)
             ).all()
@@ -451,7 +643,9 @@ class StyleProfileService:
                 if event.entity_id is None:
                     continue
                 details = json.loads(event.details_json)
-                if details.get("annotation_version") != AnalysisService.annotation_version:
+                if details.get(
+                    "annotation_version"
+                ) not in AnalysisService.compatible_annotation_versions:
                     continue
                 expected_fields = details.get("expected_fields", {})
                 if not isinstance(expected_fields, dict):
@@ -462,10 +656,10 @@ class StyleProfileService:
         reviewed_correct = 0
         reviewed_post_ids: set[int] = set()
         for (post_id, field), expected in reviewed_labels.items():
-            annotation = annotations.get(post_id)
-            if annotation is None:
+            review_annotation = annotations.get(post_id)
+            if review_annotation is None:
                 continue
-            original = json.loads(annotation.original_output_json)
+            original = json.loads(review_annotation.original_output_json)
             reviewed_total += 1
             reviewed_post_ids.add(post_id)
             reviewed_correct += (
@@ -479,10 +673,11 @@ class StyleProfileService:
             similarities = train_matrix @ vector
             top_indices = np.argsort(similarities)[::-1][:3]
             expected = effective_annotations.get(post_id)
+            expected_topics = self._topic_keys(expected) if expected else set()
             if expected and any(
                 effective_annotations.get(train_matched[index])
-                and effective_annotations[train_matched[index]]["franchise"]
-                == expected["franchise"]
+                and self._topic_keys(effective_annotations[train_matched[index]])
+                & expected_topics
                 for index in top_indices
             ):
                 retrieval_hits += 1
@@ -495,7 +690,7 @@ class StyleProfileService:
             "holdout_samples": len(holdout_ids),
             "holdout_fraction": profile["holdout_fraction"],
             "image_caption_matching": matching,
-            "qlob_caption_ranking_accuracy": round(ranking_accuracy, 6),
+            "channel_caption_ranking_accuracy": round(ranking_accuracy, 6),
             "reviewed_annotation_field_accuracy": (
                 round(reviewed_correct / reviewed_total, 6) if reviewed_total else None
             ),
@@ -503,7 +698,7 @@ class StyleProfileService:
             "reviewed_annotation_posts": len(reviewed_post_ids),
             "review_sample_strategy": "manual uncertainty/outlier audit; not a random sample",
             "duplicate_detection": duplicate_metrics,
-            "retrieval_top3_franchise_relevance": round(retrieval_relevance, 6),
+            "retrieval_top3_topic_relevance": round(retrieval_relevance, 6),
             "sample_errors": matching.get("errors", []),
             "limitations": [
                 "Image-caption matching, caption ranking, and retrieval relevance use the "
@@ -663,6 +858,22 @@ class StyleProfileService:
         return selected
 
     @staticmethod
+    def _topic_keys(annotation: dict[str, object]) -> set[str]:
+        values: set[str] = set()
+        franchise = str(annotation.get("franchise") or "").strip().casefold()
+        if franchise and franchise not in {"unknown", "none", "null"}:
+            values.add(franchise)
+        for entity in cast(list[object], annotation.get("entities", [])):
+            if isinstance(entity, dict):
+                name = str(entity.get("canonical_name") or entity.get("name") or "")
+            else:
+                name = str(entity)
+            normalized = name.strip().casefold()
+            if normalized:
+                values.add(normalized)
+        return values
+
+    @staticmethod
     def _canonical_caption_structure(caption: str) -> str:
         features = caption_features(caption)
         words = cast(list[str], features["tokens"])
@@ -752,7 +963,7 @@ class StyleProfileService:
         )
         stats = profile["caption_statistics"]
         lines = [
-            f"# Qlob style profile v{version}",
+            f"# {profile['channel']} channel profile v{version}",
             "",
             profile["summary"],
             "",
@@ -762,6 +973,7 @@ class StyleProfileService:
             f"- Question frequency: {stats.get('question_frequency', 0):.1%}",
             f"- Exclamation frequency: {stats.get('exclamation_frequency', 0):.1%}",
             f"- Representative post IDs: {profile['summary_cited_post_ids']}",
+            f"- Policy version: {profile['explicit_channel_policy']['version']}",
             "",
             "This is a reproducible retrieval/style profile, not model-weight fine-tuning.",
         ]
@@ -779,9 +991,10 @@ class StyleProfileService:
             "",
             f"- Train / holdout: {report['training_samples']} / {report['holdout_samples']}",
             f"- Image-caption matching: {report['image_caption_matching']['accuracy']:.1%}",
-            f"- Qlob-like caption ranking: {report['qlob_caption_ranking_accuracy']:.1%}",
-            "- Retrieval top-3 franchise relevance: "
-            f"{report['retrieval_top3_franchise_relevance']:.1%}",
+            "- Channel-caption ranking: "
+            f"{report['channel_caption_ranking_accuracy']:.1%}",
+            "- Retrieval top-3 topic relevance: "
+            f"{report['retrieval_top3_topic_relevance']:.1%}",
             "- Transformed duplicate recall: "
             f"{report['duplicate_detection']['transformed_true_positive_rate']:.1%}",
             "",

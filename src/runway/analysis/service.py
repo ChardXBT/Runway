@@ -23,7 +23,7 @@ from runway.db.models import (
     SimilarityEdge,
     utcnow,
 )
-from runway.db.repositories import audit
+from runway.db.repositories import audit, get_channel
 from runway.media.service import cosine_similarity, prepare_model_image
 
 CORRECTION_OUTPUT_ALIASES = {
@@ -36,10 +36,37 @@ CORRECTION_OUTPUT_ALIASES = {
 
 def effective_annotation_fields(annotation: PostAnnotation) -> dict[str, object]:
     """Return normalized annotation fields with human review overlays applied."""
+    try:
+        original = json.loads(annotation.original_output_json or "{}")
+    except json.JSONDecodeError:
+        original = {}
+    if not isinstance(original, dict):
+        original = {}
+    characters = json.loads(annotation.characters_json)
+    generic_entities = original.get("entities", [])
+    if not isinstance(generic_entities, list):
+        generic_entities = []
+    confidence_payload = original.get("confidence", {})
+    character_confidence = (
+        confidence_payload.get("characters", 0.0)
+        if isinstance(confidence_payload, dict)
+        else 0.0
+    )
+    if not isinstance(character_confidence, (int, float)):
+        character_confidence = 0.0
+    if not generic_entities:
+        generic_entities = [
+            {
+                "name": str(value),
+                "entity_type": "character",
+                "confidence": float(character_confidence),
+            }
+            for value in characters
+        ]
     fields: dict[str, object] = {
         "franchise": annotation.franchise,
         "show_name": annotation.show_name,
-        "characters": json.loads(annotation.characters_json),
+        "characters": characters,
         "visible_character_count": annotation.visible_character_count,
         "scene_description": annotation.scene_description,
         "visual_format": annotation.visual_format,
@@ -51,6 +78,25 @@ def effective_annotation_fields(annotation: PostAnnotation) -> dict[str, object]
         "humor_style": annotation.humor_style,
         "tone": annotation.tone,
         "text_in_image": annotation.text_in_image,
+        "entities": generic_entities,
+        "people": original.get("people", []),
+        "organizations": original.get("organizations", []),
+        "products": original.get("products", []),
+        "teams": original.get("teams", []),
+        "locations": original.get("locations", []),
+        "animals": original.get("animals", []),
+        "objects": original.get("objects", []),
+        "actions": original.get("actions", []),
+        "relationships": original.get("relationships", []),
+        "setting": original.get("setting", "unknown"),
+        "ocr_text": original.get("ocr_text", []),
+        "editorial_angle": original.get("editorial_angle", "unknown"),
+        "audience_invitation_type": original.get("audience_invitation_type", "none"),
+        "image_caption_relationship": original.get(
+            "image_caption_relationship",
+            "unknown",
+        ),
+        "field_confidence": original.get("confidence", {}),
     }
     corrections = json.loads(annotation.reviewed_fields_json or "{}")
     if not isinstance(corrections, dict):
@@ -60,8 +106,9 @@ def effective_annotation_fields(annotation: PostAnnotation) -> dict[str, object]
 
 
 class AnalysisService:
-    annotation_version = "historical-annotation-v2"
-    prompt_version = "annotate-history-batch-v2"
+    annotation_version = "historical-annotation-v3"
+    compatible_annotation_versions = ("historical-annotation-v3", "historical-annotation-v2")
+    prompt_version = "annotate-history-batch-v3"
 
     def __init__(
         self,
@@ -80,8 +127,14 @@ class AnalysisService:
         max_posts: int | None = None,
     ) -> dict[str, int]:
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
             posts = session.scalars(
-                select(Post).where(Post.is_training_eligible.is_(True)).order_by(Post.id)
+                select(Post)
+                .where(
+                    Post.channel_id == channel.id,
+                    Post.is_training_eligible.is_(True),
+                )
+                .order_by(Post.id)
             ).all()
             existing_ids = set(
                 session.scalars(
@@ -216,8 +269,14 @@ class AnalysisService:
 
     def rebuild_similarity_edges(self) -> int:
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
             posts = session.scalars(
-                select(Post).where(Post.is_training_eligible.is_(True)).order_by(Post.id)
+                select(Post)
+                .where(
+                    Post.channel_id == channel.id,
+                    Post.is_training_eligible.is_(True),
+                )
+                .order_by(Post.id)
             ).all()
             annotation_map = {
                 annotation.post_id: annotation
@@ -238,7 +297,14 @@ class AnalysisService:
                 )
                 if media is not None:
                     media_map[post.id] = media
-            session.execute(delete(SimilarityEdge))
+            post_ids = [post.id for post in posts]
+            if post_ids:
+                session.execute(
+                    delete(SimilarityEdge).where(
+                        (SimilarityEdge.source_post_id.in_(post_ids))
+                        | (SimilarityEdge.target_post_id.in_(post_ids))
+                    )
+                )
             count = 0
             for index, source in enumerate(posts):
                 for target in posts[index + 1 :]:
@@ -389,6 +455,10 @@ class AnalysisService:
 
     def similar_posts(self, post_id: int, limit: int = 8) -> list[dict[str, object]]:
         with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
+            source = session.get(Post, post_id)
+            if source is None or source.channel_id != channel.id:
+                raise LookupError(f"post {post_id} was not found in @{channel.handle}")
             edges = session.scalars(
                 select(SimilarityEdge).where(
                     (SimilarityEdge.source_post_id == post_id)
@@ -409,7 +479,7 @@ class AnalysisService:
             results: list[dict[str, object]] = []
             for score, target_id, edge in sorted(scored, reverse=True)[:limit]:
                 post = session.get(Post, target_id)
-                if post:
+                if post and post.channel_id == channel.id:
                     results.append(
                         {
                             "post_id": post.id,
@@ -460,11 +530,15 @@ class AnalysisService:
             first_effective["franchise"],
             first_effective["composition"],
             *cast(list[object], first_effective["characters"]),
+            *cast(list[object], first_effective["actions"]),
+            *cast(list[object], first_effective["objects"]),
         }
         second_values = {
             second_effective["franchise"],
             second_effective["composition"],
             *cast(list[object], second_effective["characters"]),
+            *cast(list[object], second_effective["actions"]),
+            *cast(list[object], second_effective["objects"]),
         }
         first_values.discard(None)
         second_values.discard(None)
@@ -544,15 +618,22 @@ def image_matrix_for_posts(
     matched: list[int] = []
     with database.session() as session:
         for post_id in post_ids:
-            media = session.scalar(
+            media_rows = session.scalars(
                 select(MediaAsset)
                 .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
                 .where(PostMedia.post_id == post_id)
                 .order_by(PostMedia.position)
-                .limit(1)
-            )
-            if media and media.embedding_vector:
-                vectors.append(np.frombuffer(media.embedding_vector, dtype=np.float32))
+            ).all()
+            media_vectors = [
+                np.frombuffer(media.embedding_vector, dtype=np.float32)
+                for media in media_rows
+                if media.embedding_vector
+            ]
+            dimensions = {vector.size for vector in media_vectors}
+            if media_vectors and len(dimensions) == 1:
+                pooled = np.mean(np.vstack(media_vectors), axis=0)
+                norm = float(np.linalg.norm(pooled))
+                vectors.append(pooled / norm if norm else pooled)
                 matched.append(post_id)
     if not vectors:
         return np.empty((0, 0), dtype=np.float32), []

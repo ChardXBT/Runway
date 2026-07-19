@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from runway.db.models import AuditEvent, Channel
 
 
-def get_channel(session: Session, handle: str = "Qlob") -> Channel:
+def get_channel(session: Session, handle: str) -> Channel:
     channel = session.scalar(select(Channel).where(Channel.handle == handle))
     if channel is None:
         raise LookupError(f"channel @{handle} has not been initialized")

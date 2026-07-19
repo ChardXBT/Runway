@@ -7,7 +7,7 @@ from sqlalchemy import select
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import CandidateImage, MediaAsset, Proposal, ProposalEvent
-from runway.db.repositories import audit
+from runway.db.repositories import audit, get_channel
 from runway.domain.enums import ProposalStatus
 from runway.domain.state_machine import require_transition
 from runway.publishing.base import (
@@ -34,7 +34,13 @@ class InternalPublisher:
 
     async def prepare_post(self, proposal_id: int) -> PreparedPost:
         with self.database.session() as session:
-            proposal = session.get(Proposal, proposal_id)
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            proposal = session.scalar(
+                select(Proposal).where(
+                    Proposal.id == proposal_id,
+                    Proposal.channel_id == channel_id,
+                )
+            )
             if proposal is None:
                 raise LookupError(f"proposal {proposal_id} not found")
             if proposal.status != ProposalStatus.APPROVED.value:
@@ -56,7 +62,13 @@ class InternalPublisher:
     async def schedule_post(self, proposal_id: int) -> PublishResult:
         await self.prepare_post(proposal_id)
         with self.database.session() as session:
-            proposal = session.get(Proposal, proposal_id)
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            proposal = session.scalar(
+                select(Proposal).where(
+                    Proposal.id == proposal_id,
+                    Proposal.channel_id == channel_id,
+                )
+            )
             if proposal is None:
                 raise LookupError(f"proposal {proposal_id} not found")
             require_transition(proposal.status, ProposalStatus.INTERNALLY_SCHEDULED)
@@ -87,7 +99,13 @@ class InternalPublisher:
 
     async def verify_scheduled_post(self, proposal_id: int) -> VerificationResult:
         with self.database.session() as session:
-            proposal = session.scalar(select(Proposal).where(Proposal.id == proposal_id))
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            proposal = session.scalar(
+                select(Proposal).where(
+                    Proposal.id == proposal_id,
+                    Proposal.channel_id == channel_id,
+                )
+            )
             if proposal is None:
                 raise LookupError(f"proposal {proposal_id} not found")
             verified = proposal.status == ProposalStatus.INTERNALLY_SCHEDULED.value

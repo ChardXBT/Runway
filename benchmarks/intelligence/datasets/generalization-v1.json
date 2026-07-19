@@ -1,0 +1,93 @@
+{
+  "dataset_version": "generalization-v1",
+  "shared_image": {
+    "image_id": "shared-neutral-scene-01",
+    "visible_facts": [
+      "one person examines a red object on a desk",
+      "a second person watches",
+      "no visible text"
+    ]
+  },
+  "channels": [
+    {
+      "fixture_id": "reaction-channel",
+      "name": "Reaction Loop",
+      "language": "en",
+      "locale": "en-CA",
+      "question_first": true,
+      "preferred_structures": ["open_question", "reaction", "observation"],
+      "history": [
+        "Why is this suddenly so serious?",
+        "That look says everything.",
+        "What happened right before this?"
+      ],
+      "topics": ["reactions", "visual comedy"],
+      "expected_structure": "open_question",
+      "expected_terms": ["why", "what", "look", "reaction"]
+    },
+    {
+      "fixture_id": "sports-channel",
+      "name": "Tactics Board",
+      "language": "en",
+      "locale": "en-US",
+      "question_first": false,
+      "preferred_structures": ["prediction", "comparison", "open_question"],
+      "history": [
+        "The adjustment that changes the next possession.",
+        "Which option creates the better matchup?",
+        "Watch how the second defender responds."
+      ],
+      "topics": ["sports analysis", "tactics"],
+      "expected_structure": "prediction",
+      "expected_terms": ["option", "next", "adjustment", "decision"]
+    },
+    {
+      "fixture_id": "science-channel",
+      "name": "Small Lab",
+      "language": "en",
+      "locale": "en-GB",
+      "question_first": false,
+      "preferred_structures": ["explanation", "quiz", "observation"],
+      "history": [
+        "The colour change reveals the reaction.",
+        "A simple observation with a useful explanation.",
+        "Can you identify the variable being tested?"
+      ],
+      "topics": ["education", "science"],
+      "expected_structure": "explanation",
+      "expected_terms": ["observe", "test", "object", "evidence"]
+    },
+    {
+      "fixture_id": "gaming-channel",
+      "name": "Checkpoint",
+      "language": "en",
+      "locale": "en-US",
+      "question_first": true,
+      "preferred_structures": ["poll", "open_question", "prediction"],
+      "history": [
+        "Pick the next move: inspect or ignore?",
+        "What would you try first?",
+        "This choice changes the whole run."
+      ],
+      "topics": ["gaming", "player decisions"],
+      "expected_structure": "poll",
+      "expected_terms": ["pick", "choice", "next", "move"]
+    },
+    {
+      "fixture_id": "brand-channel",
+      "name": "Form Studio",
+      "language": "en",
+      "locale": "en-US",
+      "question_first": false,
+      "preferred_structures": ["promotional_statement", "observation", "explanation"],
+      "history": [
+        "A closer look at the detail behind the design.",
+        "Built for a simpler everyday routine.",
+        "Meet the form that keeps the desk clear."
+      ],
+      "topics": ["product design", "brand"],
+      "expected_structure": "promotional_statement",
+      "expected_terms": ["design", "detail", "form", "desk"]
+    }
+  ]
+}

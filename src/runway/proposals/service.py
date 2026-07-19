@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from runway.captions.exposures import CaptionExposureService
 from runway.captions.feedback import CaptionFeedbackService
 from runway.captions.service import CaptionService
 from runway.config import Settings
@@ -17,10 +18,12 @@ from runway.db.base import Database
 from runway.db.models import (
     CandidateImage,
     CaptionFeedback,
+    CaptionSlate,
     GenerationRun,
     MediaAsset,
     Proposal,
     ProposalEvent,
+    SearchRun,
     StyleProfile,
 )
 from runway.db.repositories import audit, get_channel
@@ -34,7 +37,8 @@ class ProposalService:
         self.database = database
         self.settings = settings
         self.caption_service = CaptionService(database, settings)
-        self.feedback = CaptionFeedbackService(database)
+        self.feedback = CaptionFeedbackService(database, settings)
+        self.exposures = CaptionExposureService(database, settings)
         self.retrieval = RetrievalService(database, settings)
         self._schedule_lock = threading.Lock()
 
@@ -50,7 +54,10 @@ class ProposalService:
             channel = get_channel(session, self.settings.channel_handle)
             profile = session.scalar(
                 select(StyleProfile)
-                .where(StyleProfile.is_active.is_(True))
+                .where(
+                    StyleProfile.channel_id == channel.id,
+                    StyleProfile.is_active.is_(True),
+                )
                 .order_by(desc(StyleProfile.version))
                 .limit(1)
             )
@@ -58,10 +65,20 @@ class ProposalService:
                 raise LookupError("build a style profile before generating proposals")
             accepted = session.scalars(
                 select(CandidateImage)
-                .where(CandidateImage.hard_rejection_reason.is_(None))
+                .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                .where(
+                    SearchRun.channel_id == channel.id,
+                    CandidateImage.hard_rejection_reason.is_(None),
+                )
                 .order_by(desc(CandidateImage.final_rank_score), CandidateImage.id)
             ).all()
-            used_ids = set(session.scalars(select(Proposal.candidate_image_id)).all())
+            used_ids = set(
+                session.scalars(
+                    select(Proposal.candidate_image_id).where(
+                        Proposal.channel_id == channel.id
+                    )
+                ).all()
+            )
             candidates = [candidate for candidate in accepted if candidate.id not in used_ids]
             target_times = [
                 self._planned_datetime(
@@ -84,8 +101,6 @@ class ProposalService:
                     "unused accepted candidates; "
                     f"only {len(candidates)} are available"
                 )
-            primary_candidates = candidates[:missing_count]
-            reserve_candidates = candidates[missing_count:]
             run = GenerationRun(
                 channel_id=channel.id,
                 style_profile_id=profile.id,
@@ -122,18 +137,34 @@ class ProposalService:
                     created_ids.append(existing.id)
                     continue
 
-                candidate = primary_candidates[candidate_index]
-                candidate_index += 1
-                captions = await self.caption_service.generate(candidate.id)
+                captions = None
+                candidate = None
+                while candidate_index < len(candidates):
+                    current_candidate = candidates[candidate_index]
+                    candidate_index += 1
+                    current_captions = await self.caption_service.generate(
+                        current_candidate.id
+                    )
+                    if current_captions.abstained:
+                        continue
+                    candidate = current_candidate
+                    captions = current_captions
+                    break
+                if candidate is None or captions is None:
+                    raise ValueError(
+                        "no unused candidate produced a grounded caption slate; "
+                        "RunWay did not create filler"
+                    )
                 context = self.retrieval.context_for_candidate(
                     candidate.media_asset_id,
                     candidate_id=candidate.id,
                 )
                 backup_ids: list[int] = []
-                if reserve_candidates:
-                    for backup_offset in range(min(2, len(reserve_candidates))):
-                        index = (candidate_index * 2 + backup_offset) % len(reserve_candidates)
-                        backup_ids.append(reserve_candidates[index].id)
+                remaining_candidates = candidates[candidate_index:]
+                if remaining_candidates:
+                    backup_ids = [
+                        value.id for value in remaining_candidates[:2]
+                    ]
                 with self.database.session() as session:
                     current = session.get(CandidateImage, candidate.id)
                     if current is None or current.hard_rejection_reason:
@@ -142,6 +173,7 @@ class ProposalService:
                         generation_run_id=run_id,
                         channel_id=channel_id,
                         candidate_image_id=current.id,
+                        caption_slate_id=captions.slate_id,
                         backup_candidate_ids_json=json.dumps(backup_ids),
                         planned_publish_at=planned_at.isoformat(),
                         recommended_caption=captions.recommended,
@@ -165,6 +197,11 @@ class ProposalService:
                     )
                     session.add(proposal)
                     session.flush()
+                    if captions.slate_id is not None:
+                        slate = session.get(CaptionSlate, captions.slate_id)
+                        if slate is None or slate.channel_id != channel_id:
+                            raise ValueError("caption slate is missing or outside the channel")
+                        slate.proposal_id = proposal.id
                     self._event(
                         session,
                         proposal.id,
@@ -217,7 +254,12 @@ class ProposalService:
         limit: int = 100,
     ) -> list[dict[str, object]]:
         with self.database.session() as session:
-            statement = select(Proposal).order_by(Proposal.created_at, Proposal.id)
+            channel_id = self._channel_id(session)
+            statement = (
+                select(Proposal)
+                .where(Proposal.channel_id == channel_id)
+                .order_by(Proposal.created_at, Proposal.id)
+            )
             if status:
                 statement = statement.where(Proposal.status == status)
             proposals = session.scalars(statement.limit(limit)).all()
@@ -225,22 +267,35 @@ class ProposalService:
 
     def next_for_review(self, *, exclude_id: int | None = None) -> dict[str, object] | None:
         with self.database.session() as session:
+            channel_id = self._channel_id(session)
             statement = (
                 select(Proposal)
-                .where(Proposal.status == ProposalStatus.NEEDS_REVIEW.value)
+                .where(
+                    Proposal.channel_id == channel_id,
+                    Proposal.status == ProposalStatus.NEEDS_REVIEW.value,
+                )
                 .order_by(Proposal.created_at, Proposal.id)
                 .limit(1)
             )
             if exclude_id is not None:
                 statement = statement.where(Proposal.id != exclude_id)
             proposal = session.scalar(statement)
-            return self._proposal_dict(session, proposal) if proposal else None
+            result = self._proposal_dict(session, proposal) if proposal else None
+            proposal_id = proposal.id if proposal else None
+        if proposal_id is not None:
+            self.exposures.record_display(proposal_id)
+        return result
 
     def next_generation_date(self) -> date:
         timezone_name, _default_time = self._schedule_config()
         timezone = ZoneInfo(timezone_name)
         with self.database.session() as session:
-            values = session.scalars(select(Proposal.planned_publish_at)).all()
+            channel_id = self._channel_id(session)
+            values = session.scalars(
+                select(Proposal.planned_publish_at).where(
+                    Proposal.channel_id == channel_id
+                )
+            ).all()
         dates = [
             datetime.fromisoformat(value).astimezone(timezone).date() for value in values if value
         ]
@@ -249,14 +304,18 @@ class ProposalService:
 
     def detail(self, proposal_id: int) -> dict[str, object]:
         with self.database.session() as session:
-            proposal = session.get(Proposal, proposal_id)
-            if proposal is None:
-                raise LookupError(f"proposal {proposal_id} not found")
+            proposal = self._get(session, proposal_id)
             return self._proposal_dict(session, proposal, include_events=True)
 
     def generation_status(self, run_id: int) -> dict[str, object]:
         with self.database.session() as session:
-            run = session.get(GenerationRun, run_id)
+            channel_id = self._channel_id(session)
+            run = session.scalar(
+                select(GenerationRun).where(
+                    GenerationRun.id == run_id,
+                    GenerationRun.channel_id == channel_id,
+                )
+            )
             if run is None:
                 raise LookupError(f"generation run {run_id} not found")
             return {
@@ -287,9 +346,11 @@ class ProposalService:
             ProposalStatus.PUBLISH_FAILED.value,
         }
         with self.database.session() as session:
+            channel_id = self._channel_id(session)
             proposals = session.scalars(
                 select(Proposal)
                 .where(
+                    Proposal.channel_id == channel_id,
                     Proposal.scheduled_publish_at.is_not(None),
                     Proposal.status.in_(lineup_statuses),
                 )
@@ -351,7 +412,10 @@ class ProposalService:
 
     def workflow_summary(self) -> dict[str, object]:
         with self.database.session() as session:
-            rows = session.scalars(select(Proposal)).all()
+            channel_id = self._channel_id(session)
+            rows = session.scalars(
+                select(Proposal).where(Proposal.channel_id == channel_id)
+            ).all()
         counts: dict[str, int] = {}
         for proposal in rows:
             counts[proposal.status] = counts.get(proposal.status, 0) + 1
@@ -393,7 +457,9 @@ class ProposalService:
             ProposalStatus.PUBLISH_FAILED.value,
         }
         with self.database.session() as session:
+            channel_id = self._channel_id(session)
             statement = select(Proposal.scheduled_publish_at).where(
+                Proposal.channel_id == channel_id,
                 Proposal.scheduled_publish_at.is_not(None),
                 Proposal.status.in_(reserving_statuses),
             )
@@ -455,6 +521,13 @@ class ProposalService:
                 audit(session, "caption_edited", "proposal", proposal.id, {})
         if unchanged:
             return self.detail(proposal_id)
+        self.exposures.record_decision(
+            proposal_id,
+            decision_type="edited",
+            final_caption=cleaned,
+            original_caption=old,
+            reason_codes=reason_codes or ["human_edit"],
+        )
         self.feedback.record(
             proposal_id,
             verdict="edited",
@@ -500,6 +573,13 @@ class ProposalService:
                 {"index": index, "final_caption": proposal.final_caption},
             )
             selected = proposal.final_caption
+        self.exposures.record_decision(
+            proposal_id,
+            decision_type="selected",
+            final_caption=selected,
+            original_caption=old,
+            reason_codes=["selected_alternative"],
+        )
         self.feedback.record(
             proposal_id,
             verdict="selected",
@@ -556,6 +636,13 @@ class ProposalService:
                 )
                 generated_caption = proposal.recommended_caption
                 final_caption = proposal.final_caption
+        self.exposures.record_decision(
+            proposal_id,
+            decision_type="accepted",
+            final_caption=final_caption,
+            original_caption=generated_caption,
+            reason_codes=["approved"],
+        )
         self.feedback.record(
             proposal_id,
             verdict="accepted",
@@ -593,6 +680,13 @@ class ProposalService:
             audit(session, "proposal_rejected", "proposal", proposal.id, {"reason": reason})
             rejected_caption = proposal.final_caption
         inferred_reasons = reason_codes or self._reason_codes(reason)
+        self.exposures.record_decision(
+            proposal_id,
+            decision_type="rejected",
+            final_caption=None,
+            original_caption=rejected_caption,
+            reason_codes=inferred_reasons,
+        )
         self.feedback.record(
             proposal_id,
             verdict="rejected",
@@ -675,8 +769,18 @@ class ProposalService:
                 "factual_uncertainty_warning": proposal.factual_uncertainty_warning,
             }
         captions = await self.caption_service.generate(candidate_id)
+        if captions.abstained:
+            raise ValueError(
+                "caption regeneration abstained; the existing caption slate was preserved"
+            )
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            proposal.caption_slate_id = captions.slate_id
+            if captions.slate_id is not None:
+                slate = session.get(CaptionSlate, captions.slate_id)
+                if slate is None or slate.channel_id != proposal.channel_id:
+                    raise ValueError("regenerated caption slate is missing or outside the channel")
+                slate.proposal_id = proposal.id
             proposal.recommended_caption = captions.recommended
             proposal.alternative_captions_json = json.dumps(captions.alternatives)
             proposal.caption_rationale = captions.rationale
@@ -702,6 +806,7 @@ class ProposalService:
                     "final_caption_preserved": final_was_user_edited,
                 },
             )
+        self.exposures.record_display(proposal_id)
         return self.detail(proposal_id)
 
     async def replace_image(
@@ -723,7 +828,9 @@ class ProposalService:
             if replacement_id is None:
                 replacement = session.scalar(
                     select(CandidateImage)
+                    .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
                     .where(
+                        SearchRun.channel_id == proposal.channel_id,
                         CandidateImage.hard_rejection_reason.is_(None),
                         CandidateImage.id != proposal.candidate_image_id,
                     )
@@ -731,10 +838,22 @@ class ProposalService:
                     .limit(1)
                 )
                 replacement_id = replacement.id if replacement else None
-            replacement = session.get(CandidateImage, replacement_id) if replacement_id else None
+            replacement = (
+                session.scalar(
+                    select(CandidateImage)
+                    .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                    .where(
+                        CandidateImage.id == replacement_id,
+                        SearchRun.channel_id == proposal.channel_id,
+                    )
+                )
+                if replacement_id
+                else None
+            )
             already_used = (
                 session.scalar(
                     select(Proposal.id).where(
+                        Proposal.channel_id == proposal.channel_id,
                         Proposal.candidate_image_id == replacement_id,
                         Proposal.id != proposal.id,
                     )
@@ -745,9 +864,15 @@ class ProposalService:
             if already_used:
                 replacement = session.scalar(
                     select(CandidateImage)
+                    .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
                     .where(
+                        SearchRun.channel_id == proposal.channel_id,
                         CandidateImage.hard_rejection_reason.is_(None),
-                        CandidateImage.id.not_in(select(Proposal.candidate_image_id)),
+                        CandidateImage.id.not_in(
+                            select(Proposal.candidate_image_id).where(
+                                Proposal.channel_id == proposal.channel_id
+                            )
+                        ),
                     )
                     .order_by(desc(CandidateImage.final_rank_score), CandidateImage.id)
                     .limit(1)
@@ -758,6 +883,11 @@ class ProposalService:
             selected_id = replacement.id
             old_candidate = proposal.candidate_image_id
         captions = await self.caption_service.generate(selected_id)
+        if captions.abstained:
+            raise ValueError(
+                "replacement image produced no grounded caption slate; "
+                "the proposal was preserved"
+            )
         context = self.retrieval.context_for_candidate(
             replacement.media_asset_id,
             candidate_id=selected_id,
@@ -780,6 +910,12 @@ class ProposalService:
                 )
                 proposal.approved_at = None
             proposal.candidate_image_id = selected_id
+            proposal.caption_slate_id = captions.slate_id
+            if captions.slate_id is not None:
+                slate = session.get(CaptionSlate, captions.slate_id)
+                if slate is None or slate.channel_id != proposal.channel_id:
+                    raise ValueError("replacement caption slate is missing or outside the channel")
+                slate.proposal_id = proposal.id
             proposal.rights_decision = None
             proposal.rights_reviewed_at = None
             proposal.recommended_caption = captions.recommended
@@ -808,6 +944,7 @@ class ProposalService:
                 {"candidate_image_id": selected_id},
             )
             audit(session, "proposal_image_replaced", "proposal", proposal.id, {})
+        self.exposures.record_display(proposal_id)
         return self.detail(proposal_id)
 
     def reschedule(self, proposal_id: int, new_date: date) -> dict[str, object]:
@@ -915,9 +1052,16 @@ class ProposalService:
                 codes.append(code)
         return codes or ["not_engaging"]
 
-    @staticmethod
-    def _get(session: Session, proposal_id: int) -> Proposal:
-        proposal = session.get(Proposal, proposal_id)
+    def _channel_id(self, session: Session) -> int:
+        return get_channel(session, self.settings.channel_handle).id
+
+    def _get(self, session: Session, proposal_id: int) -> Proposal:
+        proposal = session.scalar(
+            select(Proposal).where(
+                Proposal.id == proposal_id,
+                Proposal.channel_id == self._channel_id(session),
+            )
+        )
         if proposal is None:
             raise LookupError(f"proposal {proposal_id} not found")
         return proposal
@@ -998,9 +1142,17 @@ class ProposalService:
             if candidate and candidate.preview_asset_id
             else None
         )
+        slate = (
+            session.get(CaptionSlate, proposal.caption_slate_id)
+            if proposal.caption_slate_id
+            else None
+        )
         result: dict[str, object] = {
             "id": proposal.id,
             "generation_run_id": proposal.generation_run_id,
+            "caption_slate_id": proposal.caption_slate_id,
+            "retrieval_run_id": slate.retrieval_run_id if slate else None,
+            "caption_slate_status": slate.status if slate else None,
             "planned_publish_at": proposal.planned_publish_at,
             "scheduled_publish_at": proposal.scheduled_publish_at,
             "status": proposal.status,

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "runway-local"
 version = "0.1.0"
-description = "Local-only YouTube Community-post intelligence and planning for Qlob"
+description = "Local-only, channel-adaptive YouTube Community-post intelligence and planning"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "Proprietary" }

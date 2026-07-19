@@ -31,14 +31,30 @@ def test_migrations_seed_channel_and_enable_wal(database: Database) -> None:
         planning_horizon = session.execute(
             text("SELECT planning_horizon_days FROM channels LIMIT 1")
         ).scalar_one()
+        canonical_tables = session.execute(
+            text(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' "
+                "AND name IN ('representation_records', 'intelligence_retrieval_runs', "
+                "'caption_slates', 'caption_candidate_records', "
+                "'image_generation_runs', 'intelligence_experiments')"
+            )
+        ).scalar_one()
+        caption_slate_column = session.execute(
+            text(
+                "SELECT count(*) FROM pragma_table_info('proposals') "
+                "WHERE name='caption_slate_id'"
+            )
+        ).scalar_one()
     assert channel_count == 1
     assert journal_mode.lower() == "wal"
     assert foreign_keys == 1
-    assert migration == "0006_uncapped_lineup"
+    assert migration == "0007_canonical_intelligence"
     assert feedback_table == 1
     assert publisher_table == 1
     assert schedule_slot == 1
     assert planning_horizon == 0
+    assert canonical_tables == 6
+    assert caption_slate_column == 1
 
 
 def test_health_app_is_local_and_publishing_is_disabled(settings: Settings) -> None:

@@ -1,0 +1,46 @@
+{
+  "artifact_version": "locked-holdout-result-v1",
+  "configuration_hash": "055bfd2a80ef67c60754fcccc1b4cc9b185e88942849cf5e98b4951f2bb1346a",
+  "dataset_version": "canonical-v1",
+  "evaluated_at": "2026-07-19T00:06:10.960219+00:00",
+  "metrics": {
+    "abstention_rate": 0.0,
+    "case_count": 2,
+    "cases": [
+      {
+        "abstained": false,
+        "accepted_proxy": true,
+        "case_id": "qlob-fixture-candidate-03",
+        "expected_term_hit": true,
+        "forbidden_term_hit": false,
+        "grounded": true,
+        "grounding_score": 1.0,
+        "pairwise_correct_proxy": true,
+        "selected_structure": "open_question",
+        "selected_text": "Why is Fixture so determined?",
+        "unsupported_claims": 0
+      },
+      {
+        "abstained": false,
+        "accepted_proxy": true,
+        "case_id": "qlob-fixture-candidate-27",
+        "expected_term_hit": true,
+        "forbidden_term_hit": false,
+        "grounded": true,
+        "grounding_score": 1.0,
+        "pairwise_correct_proxy": true,
+        "selected_structure": "open_question",
+        "selected_text": "Why is Fixture so determined?",
+        "unsupported_claims": 0
+      }
+    ],
+    "grounding_pass_rate": 1.0,
+    "label_scope": "deterministic_fixture_policy_proxy_not_human_preference",
+    "no_edit_acceptance_proxy": 1.0,
+    "objective": 1.0,
+    "pairwise_preference_accuracy_proxy": 1.0,
+    "unsupported_claim_rate": 0.0
+  },
+  "model_calls_during_scoring": 0,
+  "use_count": 1
+}

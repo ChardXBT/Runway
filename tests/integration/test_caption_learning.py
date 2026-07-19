@@ -12,7 +12,13 @@ from runway.captions.service import CaptionService
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import CandidateImage, CaptionFeedback
+from runway.db.models import (
+    CandidateImage,
+    CaptionExposure,
+    CaptionFeedback,
+    FeedbackSignal,
+    PairwisePreference,
+)
 from runway.discovery.service import DiscoveryService
 from runway.intelligence.profile import StyleProfileService
 from runway.proposals.service import ProposalService
@@ -51,12 +57,16 @@ async def test_grounded_question_first_caption_and_feedback_memory(
 
     captions = await CaptionService(database, settings).generate(candidate_id)
     assert captions.recommended == "Why is Homer so excited?"
-    assert captions.alternatives[0].endswith(".")
-    assert captions.alternatives[1].endswith(".")
+    assert all(
+        caption.endswith((".", "?", "!"))
+        for caption in captions.alternatives
+    )
 
     proposals = ProposalService(database, settings)
     generated = await proposals.generate_batch(days=1, start_date=date(2030, 3, 5))
     proposal_id = int(generated["proposal_ids"][0])
+    selected = proposals.select_alternative(proposal_id, 0)
+    assert selected["status"] == "needs_review"
     edited = proposals.edit_caption(
         proposal_id,
         "What has Homer so excited?",
@@ -111,4 +121,31 @@ async def test_grounded_question_first_caption_and_feedback_memory(
         rows = session.scalars(
             select(CaptionFeedback).where(CaptionFeedback.proposal_id == proposal_id)
         ).all()
-    assert len(rows) == 3
+        exposure = session.scalar(
+            select(CaptionExposure).where(CaptionExposure.proposal_id == proposal_id)
+        )
+        pairwise = session.scalars(
+            select(PairwisePreference).where(
+                PairwisePreference.proposal_id == proposal_id
+            )
+        ).all()
+        feedback_targets = set(
+            session.scalars(
+                select(FeedbackSignal.target).where(
+                    FeedbackSignal.proposal_id == proposal_id
+                )
+            )
+        )
+    assert len(rows) == 4
+    assert {row.verdict for row in rows} == {
+        "selected",
+        "edited",
+        "preferred",
+        "rejected",
+    }
+    assert exposure is not None
+    assert exposure.decision_type == "edited"
+    assert {"selected", "human_edit"} <= {
+        row.preference_source for row in pairwise
+    }
+    assert feedback_targets == {"caption", "image", "pairing"}

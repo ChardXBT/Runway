@@ -1,0 +1,109 @@
+{
+  "artifact_version": "intelligence-experiment-v1",
+  "artifacts": [],
+  "baseline_commit": "876fe5f814b1a58f0d11b9eaf29f4c508f20595d",
+  "candidate_commit": null,
+  "completed_at": "2026-07-18T23:18:22.042632+00:00",
+  "components": [
+    "generic_penalty",
+    "grounding",
+    "negative_feedback_risk",
+    "novelty",
+    "pairing",
+    "policy",
+    "positive_feedback",
+    "preference",
+    "rotation",
+    "style"
+  ],
+  "configuration": {
+    "seed": 20260718,
+    "weights": {
+      "generic_penalty": -0.12,
+      "grounding": 0.26,
+      "negative_feedback_risk": -0.08,
+      "novelty": 0.07,
+      "pairing": 0.09,
+      "policy": 0.12,
+      "positive_feedback": 0.06,
+      "preference": 0.23,
+      "rotation": 0.06,
+      "style": 0.08
+    }
+  },
+  "configuration_hash": "42da30839b91d659fbcefd15b76327c366920709902a58b9b97d5bd1c297fe61",
+  "datasets": {
+    "split": "tuning",
+    "version": "canonical-v1"
+  },
+  "experiment_id": "exp-73273c3d775f",
+  "hard_gates": {
+    "holdout_not_read": true,
+    "paid_calls": 0,
+    "publishing_mutations": 0
+  },
+  "hypothesis": "balance grounding, preference, and novelty",
+  "metrics": {
+    "abstention_rate": 0.0,
+    "case_count": 3,
+    "cases": [
+      {
+        "abstained": false,
+        "accepted_proxy": true,
+        "case_id": "qlob-fixture-candidate-09",
+        "expected_term_hit": true,
+        "forbidden_term_hit": false,
+        "grounded": true,
+        "grounding_score": 1.0,
+        "pairwise_correct_proxy": true,
+        "selected_structure": "open_question",
+        "selected_text": "Why is Fixture so determined?",
+        "unsupported_claims": 0
+      },
+      {
+        "abstained": false,
+        "accepted_proxy": true,
+        "case_id": "qlob-fixture-candidate-19",
+        "expected_term_hit": true,
+        "forbidden_term_hit": false,
+        "grounded": true,
+        "grounding_score": 1.0,
+        "pairwise_correct_proxy": true,
+        "selected_structure": "open_question",
+        "selected_text": "Why is Fixture so surprised?",
+        "unsupported_claims": 0
+      },
+      {
+        "abstained": false,
+        "accepted_proxy": true,
+        "case_id": "qlob-fixture-candidate-17",
+        "expected_term_hit": true,
+        "forbidden_term_hit": false,
+        "grounded": true,
+        "grounding_score": 1.0,
+        "pairwise_correct_proxy": true,
+        "selected_structure": "open_question",
+        "selected_text": "Why is Fixture so surprised?",
+        "unsupported_claims": 0
+      }
+    ],
+    "grounding_pass_rate": 1.0,
+    "label_scope": "deterministic_fixture_policy_proxy_not_human_preference",
+    "no_edit_acceptance_proxy": 1.0,
+    "objective": 1.0,
+    "pairwise_preference_accuracy_proxy": 1.0,
+    "unsupported_claim_rate": 0.0
+  },
+  "model_versions": {
+    "scoring": "deterministic-offline-v1"
+  },
+  "notes": "Automated objective uses deterministic fixture-policy labels, not human preference.",
+  "parent_experiment_id": null,
+  "prompt_versions": {
+    "annotation": "historical-annotation-v3",
+    "caption": "captions-v4"
+  },
+  "rejection_reason": "lower deterministic tuning objective than the selected configuration",
+  "selection_decision": "rejected",
+  "started_at": "2026-07-18T23:18:22.042627+00:00"
+}

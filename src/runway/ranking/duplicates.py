@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import CandidateImage, MediaAsset, Post, PostMedia
+from runway.db.models import CandidateImage, MediaAsset, Post, PostMedia, SearchRun
+from runway.db.repositories import get_channel
 from runway.media.service import (
     ImageFeatures,
     cosine_similarity,
@@ -45,7 +46,23 @@ class DuplicateDetector:
         reference_time: datetime | None = None,
     ) -> DuplicateResult:
         with self.database.session() as session:
-            statement = select(MediaAsset)
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            historical_asset_ids = (
+                select(PostMedia.media_asset_id)
+                .join(Post, Post.id == PostMedia.post_id)
+                .where(Post.channel_id == channel_id)
+            )
+            candidate_asset_ids = (
+                select(CandidateImage.media_asset_id)
+                .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                .where(SearchRun.channel_id == channel_id)
+            )
+            statement = select(MediaAsset).where(
+                or_(
+                    MediaAsset.id.in_(historical_asset_ids),
+                    MediaAsset.id.in_(candidate_asset_ids),
+                )
+            )
             if exclude_asset_id is not None:
                 statement = statement.where(MediaAsset.id != exclude_asset_id)
             assets = session.scalars(statement).all()
@@ -53,11 +70,23 @@ class DuplicateDetector:
             if source_url:
                 same_source = bool(
                     session.scalar(
-                        select(MediaAsset.id).where(MediaAsset.original_url == source_url).limit(1)
+                        select(MediaAsset.id)
+                        .where(
+                            MediaAsset.original_url == source_url,
+                            or_(
+                                MediaAsset.id.in_(historical_asset_ids),
+                                MediaAsset.id.in_(candidate_asset_ids),
+                            ),
+                        )
+                        .limit(1)
                     )
                     or session.scalar(
                         select(CandidateImage.id)
-                        .where(CandidateImage.direct_image_url == source_url)
+                        .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                        .where(
+                            SearchRun.channel_id == channel_id,
+                            CandidateImage.direct_image_url == source_url,
+                        )
                         .limit(1)
                     )
                 )
@@ -92,7 +121,10 @@ class DuplicateDetector:
             scored.sort(reverse=True)
             closest = [asset_id for _score, asset_id, _p, _c, _s in scored[:5]]
             within_window, date_warning = self._within_window(
-                session, closest, reference_time or datetime.now(UTC)
+                session,
+                closest,
+                reference_time or datetime.now(UTC),
+                channel_id,
             )
             semantic_recent = (
                 highest_semantic >= self.settings.duplicate_semantic_threshold
@@ -125,13 +157,17 @@ class DuplicateDetector:
         session: Session,
         asset_ids: list[int],
         reference_time: datetime,
+        channel_id: int,
     ) -> tuple[bool | None, str | None]:
         if not asset_ids:
             return False, None
         rows = session.execute(
             select(Post.published_at, Post.date_precision)
             .join(PostMedia, PostMedia.post_id == Post.id)
-            .where(PostMedia.media_asset_id.in_(asset_ids))
+            .where(
+                Post.channel_id == channel_id,
+                PostMedia.media_asset_id.in_(asset_ids),
+            )
         ).all()
         if not rows:
             return False, None

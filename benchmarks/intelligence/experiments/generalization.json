@@ -1,0 +1,69 @@
+{
+  "all_expected_structures": true,
+  "all_grounded": true,
+  "artifact_version": "cross-channel-generalization-v1",
+  "channel_count": 5,
+  "channel_policy_isolation": true,
+  "channels": [
+    {
+      "caption": "Why is the subject so focused?",
+      "expected_structure": "open_question",
+      "fixture_id": "reaction-channel",
+      "grounded": true,
+      "language": "en",
+      "policy_isolated": true,
+      "policy_version": "ec8c1f00b6f62aef5f0e559d537d79a0bca0055679b5a1ad8a6509e45ecc53b9",
+      "selected_structure": "open_question",
+      "unsupported_claims": []
+    },
+    {
+      "caption": "The subject is about to make this interesting.",
+      "expected_structure": "prediction",
+      "fixture_id": "sports-channel",
+      "grounded": true,
+      "language": "en",
+      "policy_isolated": true,
+      "policy_version": "082f8aaa974427996e205631f7d022504ae931de2b1c1472352385a1b11b78e1",
+      "selected_structure": "prediction",
+      "unsupported_claims": []
+    },
+    {
+      "caption": "This scene centers on the subject and the visible action of examining.",
+      "expected_structure": "explanation",
+      "fixture_id": "science-channel",
+      "grounded": true,
+      "language": "en",
+      "policy_isolated": true,
+      "policy_version": "8e3de328dee356eff3b637a4aedf0ef45ca97790e1c4d935cc9539d52a34bd25",
+      "selected_structure": "explanation",
+      "unsupported_claims": []
+    },
+    {
+      "caption": "Pick the subject's next move: stay or go?",
+      "expected_structure": "poll",
+      "fixture_id": "gaming-channel",
+      "grounded": true,
+      "language": "en",
+      "policy_isolated": true,
+      "policy_version": "75903517da05271f9abc5b8ae1c5c9ca1188c28bf9c7da8fa690a2cf42006430",
+      "selected_structure": "poll",
+      "unsupported_claims": []
+    },
+    {
+      "caption": "Introducing the subject's most focused moment.",
+      "expected_structure": "promotional_statement",
+      "fixture_id": "brand-channel",
+      "grounded": true,
+      "language": "en",
+      "policy_isolated": true,
+      "policy_version": "a2b5ddf343c3458d52f0ec7739a2ca652011b9ee7064246b99081cc51b9ccb6d",
+      "selected_structure": "promotional_statement",
+      "unsupported_claims": []
+    }
+  ],
+  "dataset_version": "generalization-v1",
+  "passed": true,
+  "same_image_different_captions": true,
+  "shared_image_id": "shared-neutral-scene-01",
+  "unique_caption_count": 5
+}
