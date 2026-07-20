@@ -172,3 +172,8 @@ def test_frinkiac_query_compaction_keeps_character_and_action() -> None:
         == "Lisa saxophone"
     )
     assert FrinkiacSearchProvider._spread_sample(list(range(10)), 3) == [0, 4, 9]
+    assert FrinkiacSearchProvider._spread_sample(
+        list(range(10)),
+        3,
+        offset=1,
+    ) == [3, 7, 2]

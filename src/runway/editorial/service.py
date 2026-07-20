@@ -7,12 +7,13 @@ from typing import cast
 
 from sqlalchemy import func, select
 
+from runway.analysis.runtime import AgentTerminalError
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import CandidateImage, Proposal, SearchRun, StyleProfile
 from runway.db.repositories import get_channel
 from runway.discovery.service import DiscoveryService
-from runway.proposals.service import ProposalService
+from runway.proposals.service import NoDistinctCandidateError, ProposalService
 
 
 class EditorialService:
@@ -85,44 +86,81 @@ class EditorialService:
             missing = max(0, target - self._review_count())
             available = self._unused_candidate_count()
             if missing and available:
-                generated_ids.extend(await self._generate(min(missing, available)))
+                generated_ids.extend(await self._try_generate(min(missing, available)))
 
             missing = max(0, target - self._review_count())
             if missing and live_discovery:
                 if not self.settings.enable_browser_search:
                     detail = "No unused candidates remain and browser discovery is disabled."
                 else:
-                    discovery_result = await DiscoveryService(
-                        self.database,
-                        self.settings,
-                    ).discover(
-                        days=missing,
-                        provider_name="browser",
-                        live=True,
-                    )
+                    discovery_attempts: list[dict[str, object]] = []
+                    try:
+                        browser_result = await DiscoveryService(
+                            self.database, self.settings
+                        ).discover(days=missing, provider_name="browser", live=True)
+                    except AgentTerminalError:
+                        # Authentication and included-usage limits must stop the run;
+                        # Runway never falls through to a paid model provider.
+                        raise
+                    except Exception as exc:
+                        # Search engines can challenge or time out independently of the
+                        # model runtime. Preserve the failure and continue to the safe,
+                        # topic-specific fallback instead of emptying the Generator.
+                        browser_result = {
+                            "provider": "browser",
+                            "status": "failed",
+                            "error": f"{type(exc).__name__}: {exc}",
+                            "accepted": 0,
+                        }
+                    discovery_attempts.append(browser_result)
                     available = self._unused_candidate_count()
                     if available:
-                        generated_ids.extend(await self._generate(min(missing, available)))
-                    elif self._supports_frinkiac_fallback():
-                        fallback = await DiscoveryService(
-                            self.database,
-                            self.settings,
-                        ).discover(
-                            days=missing,
-                            provider_name="frinkiac",
+                        generated_ids.extend(
+                            await self._try_generate(min(missing, available))
                         )
-                        fallback["fallback_from"] = "browser"
-                        discovery_result = fallback
-                        available = self._unused_candidate_count()
-                        if available:
-                            generated_ids.extend(await self._generate(min(missing, available)))
+
+                    missing = max(0, target - self._review_count())
+                    if missing and self._supports_frinkiac_fallback():
+                        # A browser run can produce technically accepted images that are
+                        # nevertheless too similar to recent posts. Keep replenishing from
+                        # the reliable frame source instead of treating that stale pool as
+                        # proof that no fresh images exist.
+                        for _attempt in range(2):
+                            fallback = await DiscoveryService(
+                                self.database,
+                                self.settings,
+                            ).discover(
+                                days=missing,
+                                provider_name="frinkiac",
+                            )
+                            fallback["fallback_from"] = "browser"
+                            discovery_attempts.append(fallback)
+                            available = self._unused_candidate_count()
+                            if available:
+                                generated_ids.extend(
+                                    await self._try_generate(min(missing, available))
+                                )
+                            missing = max(0, target - self._review_count())
+                            if not missing:
+                                break
+
+                    discovery_result = {
+                        "status": (
+                            "completed"
+                            if any(attempt.get("accepted") for attempt in discovery_attempts)
+                            else "completed_without_usable_candidates"
+                        ),
+                        "attempts": discovery_attempts,
+                    }
 
             if detail is None:
                 detail = (
                     "Editorial options are ready."
                     if self._review_count()
                     else (
-                        "No usable image candidates were found. Try Generate more for a new search."
+                        "A fresh search completed, but every result was unsafe, unusable, "
+                        "duplicate, or too similar to recent posts. Generate more will search "
+                        "a different result window."
                     )
                 )
             completed_at = datetime.now(UTC).isoformat()
@@ -150,6 +188,12 @@ class EditorialService:
             start_date=self.proposals.next_generation_date(),
         )
         return [int(value) for value in cast(list[int], result["proposal_ids"])]
+
+    async def _try_generate(self, count: int) -> list[int]:
+        try:
+            return await self._generate(count)
+        except NoDistinctCandidateError:
+            return []
 
     def _review_count(self) -> int:
         with self.database.session() as session:

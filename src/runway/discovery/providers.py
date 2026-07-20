@@ -280,8 +280,9 @@ class FrinkiacSearchProvider:
         "television",
     )
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, sample_offset: int = 0):
         self.settings = settings
+        self.sample_offset = max(0, sample_offset)
 
     async def search(self, plan: SearchPlan, cursor: str | None = None) -> SearchPage:
         del cursor
@@ -289,7 +290,7 @@ class FrinkiacSearchProvider:
         seen_frames: set[tuple[str, int]] = set()
         queries = _diverse_queries(plan)[: self.settings.browser_search_max_queries]
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            for original_query in queries:
+            for query_index, original_query in enumerate(queries):
                 compact_query = self._compact_query(original_query)
                 response = await client.get(self.api_url, params={"q": compact_query})
                 response.raise_for_status()
@@ -300,6 +301,7 @@ class FrinkiacSearchProvider:
                 for raw in self._spread_sample(
                     payload,
                     self.settings.browser_search_results_per_query,
+                    offset=self.sample_offset + query_index,
                 ):
                     if not isinstance(raw, dict):
                         continue
@@ -348,14 +350,21 @@ class FrinkiacSearchProvider:
         return SearchPage(results=results)
 
     @staticmethod
-    def _spread_sample(values: list[Any], count: int) -> list[Any]:
+    def _spread_sample(
+        values: list[Any],
+        count: int,
+        *,
+        offset: int = 0,
+    ) -> list[Any]:
         if count <= 0 or not values:
             return []
         if len(values) <= count:
             return list(values)
         if count == 1:
-            return [values[0]]
+            return [values[offset % len(values)]]
         indexes = [round(position * (len(values) - 1) / (count - 1)) for position in range(count)]
+        shift = (max(0, offset) * count) % len(values)
+        indexes = [(index + shift) % len(values) for index in indexes]
         return [values[index] for index in indexes]
 
     @classmethod

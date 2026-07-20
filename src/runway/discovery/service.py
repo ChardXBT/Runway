@@ -648,12 +648,27 @@ class DiscoveryService:
         if name == "browser":
             return BrowserSearchProvider(self.settings, live=live)
         if name == "frinkiac":
-            return FrinkiacSearchProvider(self.settings)
+            return FrinkiacSearchProvider(
+                self.settings,
+                sample_offset=self._provider_run_count("frinkiac"),
+            )
         if name == "api":
             return ApiSearchProvider(self.settings)
         if name not in providers:
             raise ValueError(f"unknown search provider {name}")
         return providers[name]
+
+    def _provider_run_count(self, provider_name: str) -> int:
+        with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            return len(
+                session.scalars(
+                    select(SearchRun.id).where(
+                        SearchRun.channel_id == channel_id,
+                        SearchRun.provider == provider_name,
+                    )
+                ).all()
+            )
 
     def _record_model_run(
         self,

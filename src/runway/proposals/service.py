@@ -33,6 +33,10 @@ from runway.intelligence.retrieval import RetrievalService
 from runway.ranking.diversity import CandidateDiversitySelector
 
 
+class NoDistinctCandidateError(ValueError):
+    """The current unused candidate pool cannot satisfy the diversity policy."""
+
+
 class ProposalService:
     def __init__(self, database: Database, settings: Settings):
         self.database = database
@@ -110,7 +114,7 @@ class ProposalService:
             )
             missing_count = days - len(occupied)
             if not candidates and missing_count:
-                raise ValueError(
+                raise NoDistinctCandidateError(
                     "no sufficiently distinct unused candidate is available; "
                     "Runway will not create repetitive filler"
                 )
