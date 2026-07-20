@@ -81,6 +81,10 @@ class LineupRemoveRequest(BaseModel):
     confirmed: Literal[True]
 
 
+class LineupPushRequest(BaseModel):
+    confirmed: Literal[True]
+
+
 class MetadataCorrectionRequest(BaseModel):
     fields: dict[str, object] = Field(min_length=1)
 
@@ -472,6 +476,48 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
         limit: int = Query(default=5000, ge=1, le=10000),
     ) -> dict[str, object]:
         return proposals.queue_status(days=days, limit=limit)
+
+    @router.post("/lineup/push")
+    async def push_lineup_to_youtube(
+        _payload: LineupPushRequest,
+    ) -> dict[str, object]:
+        try:
+            lineup = proposals.queue_status()
+            scheduled_value = lineup.get("scheduled")
+            scheduled = scheduled_value if isinstance(scheduled_value, list) else []
+            proposal_ids = [
+                int(item["id"])
+                for item in scheduled
+                if isinstance(item, dict)
+                and item.get("status") == "internally_scheduled"
+                and isinstance(item.get("id"), int)
+            ]
+            if not proposal_ids:
+                return {
+                    "detail": "YouTube is already up to date. No new Lineup posts were queued.",
+                    "queued_proposal_ids": [],
+                    "lineup": lineup,
+                    "publisher_queue": publisher_queue.status(),
+                }
+
+            session_status = await youtube_publisher.validate_session()
+            if not session_status.valid:
+                raise ValueError(session_status.detail)
+            queued = publisher_queue.enqueue_many(proposal_ids)
+            return {
+                "detail": (
+                    f"{len(proposal_ids)} new Lineup "
+                    f"{'post was' if len(proposal_ids) == 1 else 'posts were'} "
+                    "queued for YouTube."
+                ),
+                "queued_proposal_ids": proposal_ids,
+                "lineup": proposals.queue_status(),
+                "publisher_queue": queued,
+            }
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @router.patch("/lineup/{proposal_id}")
     def update_lineup(

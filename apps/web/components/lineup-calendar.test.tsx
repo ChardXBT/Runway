@@ -184,6 +184,117 @@ describe("LineupCalendar", () => {
     expect(fetchMock.mock.calls[0][0]).toContain("/api/lineup/12/retry");
   });
 
+  it("pushes every new Lineup post once and locks duplicate clicks", async () => {
+    let resolveResponse!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      resolveResponse = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+
+    const push = screen.getByRole("button", {
+      name: "Push 2 to YouTube",
+    });
+    fireEvent.click(push);
+    fireEvent.click(push);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/lineup/push");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      confirmed: true,
+    });
+    expect(
+      screen.getByRole("button", { name: "Checking session…" }),
+    ).toBeDisabled();
+
+    resolveResponse({
+      ok: true,
+      json: async () => ({
+        detail: "YouTube is already up to date.",
+        queued_proposal_ids: [],
+        lineup,
+        publisher_queue: {
+          running: false,
+          queued: 0,
+          paused: false,
+          paused_reason: null,
+        },
+      }),
+    });
+    await waitFor(() =>
+      expect(screen.getByText("YouTube is already up to date.")).toBeInTheDocument(),
+    );
+  });
+
+  it("never claims a malformed YouTube push succeeded and requires refresh", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ queued_proposal_ids: [12, 13] }),
+      }),
+    );
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Push 2 to YouTube" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "could not verify the YouTube queue response",
+    );
+    expect(
+      screen.getByRole("link", { name: "Verify in Settings" }),
+    ).toHaveAttribute("href", "/settings#platform-connection");
+    expect(
+      screen.getByRole("button", { name: "Push 2 to YouTube" }),
+    ).toBeDisabled();
+    expect(screen.queryByText(/sync complete/i)).not.toBeInTheDocument();
+  });
+
+  it("turns an occupied drag target into a confirmed animated swap", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ lineup }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    const calendar = screen.getByLabelText("Runway release calendar");
+    const source = within(calendar).getByRole("button", {
+      name: /Select First line/,
+    });
+    const target = within(calendar)
+      .getByRole("button", { name: /Select Second line/ })
+      .closest("article");
+    expect(source).toHaveAttribute("draggable", "true");
+    expect(target).not.toBeNull();
+    const dataTransfer = {
+      effectAllowed: "",
+      dropEffect: "",
+      setData: vi.fn(),
+      getData: vi.fn(),
+    };
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragEnter(target!, { dataTransfer });
+    expect(within(target!).getByText("Swap")).toBeInTheDocument();
+    fireEvent.drop(target!, { dataTransfer });
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Swap on confirmation.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Release date")).toHaveValue("2026-08-09");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm changes" }),
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(source).toHaveClass("lineup-settled");
+    expect(
+      within(calendar).getByRole("button", { name: /Select Second line/ }),
+    ).toHaveClass("lineup-settled");
+  });
+
   it("opens a clear swap confirmation from the one-day shortcut", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

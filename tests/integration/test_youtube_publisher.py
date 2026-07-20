@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import select
 
 from runway.analysis.service import AnalysisService
 from runway.capture.service import CaptureService
@@ -324,6 +325,58 @@ async def test_persisted_queue_starts_after_application_restart(
     assert publisher.attempt_status(int(queued["id"]))["status"] == "verified"
     assert len(adapter.schedule_calls) == 1
     assert coordinator.status()["queued"] == 0
+
+
+@pytest.mark.asyncio
+async def test_lineup_batch_validates_every_post_before_queueing(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(
+        database,
+        enabled_settings,
+        FakeYouTubeAdapter(),
+    )
+    with database.session() as session:
+        second = session.get(Proposal, second_id)
+        assert second is not None
+        second.status = "rejected"
+
+    with pytest.raises(ValueError, match="internally scheduled proposal"):
+        publisher.queue_attempts([first_id, second_id])
+
+    with database.session() as session:
+        attempts = session.scalars(select(PublishAttempt)).all()
+    assert attempts == []
+
+
+@pytest.mark.asyncio
+async def test_lineup_batch_is_serialized_and_deduplicated(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    adapter = FakeYouTubeAdapter()
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(database, enabled_settings, adapter)
+    coordinator = PublisherQueueCoordinator(publisher)
+
+    queued = coordinator.enqueue_many([first_id, second_id, first_id])
+    assert len(queued["attempts"]) == 2
+
+    for _ in range(300):
+        if coordinator.status()["queued"] == 0 and not coordinator.status()["running"]:
+            break
+        await asyncio.sleep(0.01)
+
+    assert [post.proposal_id for post in adapter.schedule_calls] == [
+        first_id,
+        second_id,
+    ]
+    assert coordinator.status()["queued"] == 0
+    assert coordinator.status()["running"] is False
 
 
 @pytest.mark.asyncio

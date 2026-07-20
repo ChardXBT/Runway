@@ -1204,7 +1204,12 @@ class YouTubeBrowserPublisher:
         finally:
             self._confirm_lock.release()
 
-    def queue_attempt(self, proposal_id: int) -> dict[str, object]:
+    def queue_attempt(
+        self,
+        proposal_id: int,
+        *,
+        trigger: str = "human_accept",
+    ) -> dict[str, object]:
         """Persist an accept-and-schedule request without waiting for the browser."""
         self._require_enabled()
         post, payload_hash = self._prepared_post(proposal_id)
@@ -1249,10 +1254,21 @@ class YouTubeBrowserPublisher:
                 {
                     "attempt_id": attempt.id,
                     "planned_publish_at": post.planned_publish_at,
-                    "trigger": "human_accept",
+                    "trigger": trigger,
                 },
             )
             return self._attempt_dict(attempt)
+
+    def queue_attempts(self, proposal_ids: list[int]) -> list[dict[str, object]]:
+        """Validate an ordered Lineup batch before persisting any queue requests."""
+        unique_ids = list(dict.fromkeys(proposal_ids))
+        self._require_enabled()
+        for proposal_id in unique_ids:
+            self._prepared_post(proposal_id)
+        return [
+            self.queue_attempt(proposal_id, trigger="human_lineup_push")
+            for proposal_id in unique_ids
+        ]
 
     def next_queued_attempt_id(self) -> int | None:
         with self.database.session() as session:

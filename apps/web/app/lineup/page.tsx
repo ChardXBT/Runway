@@ -1,7 +1,15 @@
 import { LineupCalendar } from "@/components/lineup-calendar";
 import { apiGet } from "@/lib/api";
-import { isLineupSchedule, proposalList } from "@/lib/guards";
-import type { LineupSchedule, Proposal } from "@/lib/types";
+import {
+  isLineupSchedule,
+  isPublisherQueueStatus,
+  proposalList,
+} from "@/lib/guards";
+import type {
+  LineupSchedule,
+  Proposal,
+  PublisherQueueStatus,
+} from "@/lib/types";
 
 const fallback: LineupSchedule = {
   timezone: "America/Toronto",
@@ -12,8 +20,15 @@ const fallback: LineupSchedule = {
   scheduled: [],
 };
 
+const fallbackPublisherQueue: PublisherQueueStatus = {
+  running: false,
+  queued: 0,
+  paused: false,
+  paused_reason: null,
+};
+
 export default async function LineupPage() {
-  const [lineup, published, settings] = await Promise.all([
+  const [lineup, published, settings, publisherQueue] = await Promise.all([
     apiGet<LineupSchedule>("/api/queue?limit=5000", fallback, isLineupSchedule),
     apiGet<Proposal[]>(
       "/api/proposals?status=published&limit=500",
@@ -28,6 +43,11 @@ export default async function LineupPage() {
       "publishing_enabled" in value &&
       typeof value.publishing_enabled === "boolean",
     ),
+    apiGet<PublisherQueueStatus>(
+      "/api/publisher/queue",
+      fallbackPublisherQueue,
+      isPublisherQueueStatus,
+    ),
   ]);
 
   return (
@@ -35,6 +55,7 @@ export default async function LineupPage() {
       initialLineup={lineup}
       initialPublished={published}
       publishingEnabled={settings.publishing_enabled}
+      initialPublisherQueue={publisherQueue}
     />
   );
 }

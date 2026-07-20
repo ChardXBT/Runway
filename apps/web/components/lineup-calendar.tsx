@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import {
+  DragEvent,
   KeyboardEvent,
   useEffect,
   useMemo,
@@ -25,10 +26,15 @@ import {
 import {
   conflictingLineupDates,
   isLineupSchedule,
+  isPublisherQueueStatus,
   isProposal,
   isRecord,
 } from "@/lib/guards";
-import type { LineupSchedule, Proposal } from "@/lib/types";
+import type {
+  LineupSchedule,
+  Proposal,
+  PublisherQueueStatus,
+} from "@/lib/types";
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
   month: "long",
@@ -115,6 +121,26 @@ function isMutationResponse(
   );
 }
 
+type LineupPushResponse = {
+  detail: string;
+  queued_proposal_ids: number[];
+  lineup: LineupSchedule;
+  publisher_queue: PublisherQueueStatus;
+};
+
+function isLineupPushResponse(value: unknown): value is LineupPushResponse {
+  return (
+    isRecord(value) &&
+    typeof value.detail === "string" &&
+    Array.isArray(value.queued_proposal_ids) &&
+    value.queued_proposal_ids.every(
+      (proposalId) => typeof proposalId === "number" && Number.isInteger(proposalId),
+    ) &&
+    isLineupSchedule(value.lineup) &&
+    isPublisherQueueStatus(value.publisher_queue)
+  );
+}
+
 type RecoveryResponse = {
   lineup?: LineupSchedule;
   proposal?: Proposal;
@@ -130,16 +156,25 @@ function isRecoveryResponse(value: unknown): value is RecoveryResponse {
 }
 
 type DialogMode = "edit" | "remove" | null;
-type LineupAction = "edit" | "remove" | "retry" | "verify" | null;
+type LineupAction = "edit" | "remove" | "retry" | "verify" | "push" | null;
+
+const idlePublisherQueue: PublisherQueueStatus = {
+  running: false,
+  queued: 0,
+  paused: false,
+  paused_reason: null,
+};
 
 export function LineupCalendar({
   initialLineup,
   initialPublished = [],
   publishingEnabled,
+  initialPublisherQueue = idlePublisherQueue,
 }: {
   initialLineup: LineupSchedule;
   initialPublished?: Proposal[];
   publishingEnabled: boolean;
+  initialPublisherQueue?: PublisherQueueStatus;
 }) {
   const initialPublishedSorted = useMemo(
     () =>
@@ -153,6 +188,10 @@ export function LineupCalendar({
     [initialPublished],
   );
   const [lineup, setLineup] = useState(initialLineup);
+  const [publisherQueue, setPublisherQueue] = useState(initialPublisherQueue);
+  const [watchPublisher, setWatchPublisher] = useState(
+    initialPublisherQueue.running || initialPublisherQueue.queued > 0,
+  );
   const initialSelection =
     initialLineup.scheduled[0] ?? initialPublishedSorted[0] ?? null;
   const initialMonthValue = initialSelection
@@ -175,6 +214,10 @@ export function LineupCalendar({
   const [uncertainProposalId, setUncertainProposalId] = useState<number | null>(
     null,
   );
+  const [pushOutcomeUncertain, setPushOutcomeUncertain] = useState(false);
+  const [draggedId, setDraggedId] = useState<number | null>(null);
+  const [dragTargetDate, setDragTargetDate] = useState<string | null>(null);
+  const [recentlyChangedIds, setRecentlyChangedIds] = useState<number[]>([]);
   const actionLock = useRef(false);
   const dialogRef = useRef<HTMLElement>(null);
   const dialogOpener = useRef<HTMLElement | null>(null);
@@ -244,7 +287,11 @@ export function LineupCalendar({
     const first = new Date(month);
     const gridStart = new Date(first);
     gridStart.setUTCDate(1 - first.getUTCDay());
-    return Array.from({ length: 42 }, (_, index) => {
+    const daysInMonth = new Date(
+      Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0),
+    ).getUTCDate();
+    const visibleDays = Math.ceil((first.getUTCDay() + daysInMonth) / 7) * 7;
+    return Array.from({ length: visibleDays }, (_, index) => {
       const day = new Date(gridStart);
       day.setUTCDate(gridStart.getUTCDate() + index);
       return day;
@@ -259,6 +306,13 @@ export function LineupCalendar({
         monthKey,
     );
   }, [allPosts, lineup.timezone, month]);
+  const waitingForYouTube = useMemo(
+    () =>
+      lineup.scheduled.filter(
+        (proposal) => proposal.status === "internally_scheduled",
+      ),
+    [lineup.scheduled],
+  );
 
   function setNotice(text: string, error = false) {
     setMessage(text);
@@ -343,19 +397,29 @@ export function LineupCalendar({
         : null);
   }
 
-  function openEdit(dateOverride?: string, opener?: HTMLElement) {
-    if (!selected || !canEditProposal(selected)) return;
+  function openEditFor(
+    proposal: Proposal,
+    dateOverride?: string,
+    opener?: HTMLElement,
+  ) {
+    if (!canEditProposal(proposal)) return;
     rememberOpener(opener);
-    setDraftCaption(selected.final_caption);
+    setSelectedId(proposal.id);
+    setDraftCaption(proposal.final_caption);
     setDraftDate(
       dateOverride ??
-        localDate(proposalSlot(selected), lineup.timezone) ??
+        localDate(proposalSlot(proposal), lineup.timezone) ??
         "",
     );
     setDialogError("");
     setDialogOutcomeUncertain(false);
     setDialog("edit");
     setNotice("");
+  }
+
+  function openEdit(dateOverride?: string, opener?: HTMLElement) {
+    if (!selected) return;
+    openEditFor(selected, dateOverride, opener);
   }
 
   function openRemove(opener?: HTMLElement) {
@@ -381,11 +445,12 @@ export function LineupCalendar({
     return shiftIsoDate(current, offset);
   }
 
-  function draftValidation(
-    date = draftDate,
-    caption = draftCaption,
+  function draftValidationFor(
+    proposal: Proposal | null,
+    date: string,
+    caption: string,
   ): string | null {
-    if (!selected) return "Select a post first.";
+    if (!proposal) return "Select a post first.";
     if (!caption.trim()) return "Caption cannot be empty.";
     if (!date) return "Choose a release date.";
     const isPast = scheduleIsPast(
@@ -400,7 +465,7 @@ export function LineupCalendar({
       return `Choose a future ${displayTime(lineup.default_time)} ${displayTimezone(lineup.timezone)} slot.`;
     }
     const occupants = (scheduledByDate.get(date) ?? []).filter(
-      (proposal) => proposal.id !== selected.id,
+      (occupant) => occupant.id !== proposal.id,
     );
     if (occupants.length > 1) {
       return "That date already has conflicting Runway posts. Refresh and verify Lineup before making changes.";
@@ -410,6 +475,13 @@ export function LineupCalendar({
       return `${date} is occupied by “${occupant.final_caption},” which is ${statusLabel(occupant.status).toLowerCase()} and cannot be swapped safely.`;
     }
     return null;
+  }
+
+  function draftValidation(
+    date = draftDate,
+    caption = draftCaption,
+  ): string | null {
+    return draftValidationFor(selected, date, caption);
   }
 
   function quickMoveDisabled(offset: number) {
@@ -470,6 +542,9 @@ export function LineupCalendar({
       });
       const payload = await parseMutation(response);
       setLineup(payload.lineup);
+      setRecentlyChangedIds(
+        swapped ? [selected.id, swapped.id] : [selected.id],
+      );
       setDialog(null);
       setNotice(
         swapped
@@ -495,6 +570,67 @@ export function LineupCalendar({
       actionLock.current = false;
       setBusy(null);
     }
+  }
+
+  function beginDrag(
+    event: DragEvent<HTMLButtonElement>,
+    proposal: Proposal,
+  ) {
+    if (busy !== null || !canEditProposal(proposal)) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(proposal.id));
+    setSelectedId(proposal.id);
+    setDraggedId(proposal.id);
+    setDragTargetDate(null);
+    setNotice(`Moving “${proposal.final_caption}” — choose a future date.`);
+  }
+
+  function dragOverDate(event: DragEvent<HTMLElement>, date: string) {
+    const proposal = lineup.scheduled.find((item) => item.id === draggedId);
+    if (
+      !proposal ||
+      draftValidationFor(proposal, date, proposal.final_caption) !== null
+    ) {
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragTargetDate(date);
+  }
+
+  function dropOnDate(
+    event: DragEvent<HTMLElement>,
+    date: string,
+  ) {
+    event.preventDefault();
+    const proposal = lineup.scheduled.find((item) => item.id === draggedId);
+    setDraggedId(null);
+    setDragTargetDate(null);
+    if (!proposal) return;
+    const validation = draftValidationFor(
+      proposal,
+      date,
+      proposal.final_caption,
+    );
+    if (validation) {
+      setNotice(validation, true);
+      return;
+    }
+    const currentDate = localDate(proposalSlot(proposal), lineup.timezone);
+    if (date === currentDate) {
+      setNotice("That post is already on this date.");
+      return;
+    }
+    openEditFor(proposal, date, event.currentTarget);
+  }
+
+  function endDrag() {
+    setDraggedId(null);
+    setDragTargetDate(null);
   }
 
   async function confirmRemove() {
@@ -613,6 +749,67 @@ export function LineupCalendar({
     }
   }
 
+  async function pushLineupToYouTube() {
+    if (
+      actionLock.current ||
+      busy !== null ||
+      pushOutcomeUncertain ||
+      !publishingEnabled ||
+      waitingForYouTube.length === 0 ||
+      publisherQueue.paused
+    ) {
+      return;
+    }
+    actionLock.current = true;
+    setBusy("push");
+    setNotice(
+      `Checking the Qlob publisher session before queuing ${waitingForYouTube.length} ${waitingForYouTube.length === 1 ? "post" : "posts"}…`,
+    );
+    try {
+      const response = await fetch(`${API_URL}/api/lineup/push`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      const payload = await readApiJson(response, {
+        validate: isLineupPushResponse,
+        failureMessage: "The Lineup could not be pushed to YouTube.",
+        malformedMessage:
+          "Runway could not verify the YouTube queue response. Refresh Lineup before trying again.",
+      });
+      if (conflictingLineupDates(payload.lineup).length) {
+        throw new ApiError(
+          "The refreshed Lineup contains conflicting daily slots. Refresh and inspect Activity before taking another action.",
+          { uncertainOutcome: true },
+        );
+      }
+      setLineup(payload.lineup);
+      setPublisherQueue(payload.publisher_queue);
+      setWatchPublisher(payload.queued_proposal_ids.length > 0);
+      setNotice(
+        payload.queued_proposal_ids.length > 0
+          ? `${payload.detail} Runway will update each status as the visible browser confirms it.`
+          : payload.detail,
+      );
+    } catch (error) {
+      const uncertain = hasUncertainOutcome(error);
+      setPushOutcomeUncertain(uncertain);
+      setNotice(
+        error instanceof ApiError
+          ? error.message
+          : actionError(
+              error,
+              "The Lineup was not queued. Check the publisher connection and try again.",
+              "The queue response could not be verified. Refresh Lineup before pushing again.",
+            ),
+        true,
+      );
+    } finally {
+      actionLock.current = false;
+      setBusy(null);
+    }
+  }
+
   function moveMonth(offset: number) {
     setMonth((current) => {
       const next = new Date(current);
@@ -673,6 +870,87 @@ export function LineupCalendar({
     };
   }, [dialog]);
 
+  useEffect(() => {
+    if (recentlyChangedIds.length === 0) return;
+    const timer = window.setTimeout(() => setRecentlyChangedIds([]), 700);
+    return () => window.clearTimeout(timer);
+  }, [recentlyChangedIds]);
+
+  useEffect(() => {
+    if (!watchPublisher || !publishingEnabled) return;
+    let cancelled = false;
+    let timer: number | undefined;
+
+    async function refreshPublisher() {
+      try {
+        const [lineupResponse, queueResponse] = await Promise.all([
+          fetch(`${API_URL}/api/queue?limit=5000`, { cache: "no-store" }),
+          fetch(`${API_URL}/api/publisher/queue`, { cache: "no-store" }),
+        ]);
+        const [freshLineup, freshQueue] = await Promise.all([
+          readApiJson(lineupResponse, {
+            validate: isLineupSchedule,
+            failureMessage: "Lineup status could not be refreshed.",
+          }),
+          readApiJson(queueResponse, {
+            validate: isPublisherQueueStatus,
+            failureMessage: "YouTube queue status could not be refreshed.",
+          }),
+        ]);
+        if (cancelled) return;
+        if (conflictingLineupDates(freshLineup).length) {
+          throw new ApiError(
+            "The refreshed Lineup contains conflicting daily slots. Refresh and inspect Activity before taking another action.",
+            { uncertainOutcome: true },
+          );
+        }
+        setLineup(freshLineup);
+        setPublisherQueue(freshQueue);
+        if (freshQueue.paused) {
+          setWatchPublisher(false);
+          setNotice(
+            freshQueue.paused_reason ??
+              "YouTube scheduling paused before the next post. Check Platform connection, then resume.",
+            true,
+          );
+          return;
+        }
+        if (!freshQueue.running && freshQueue.queued === 0) {
+          setWatchPublisher(false);
+          const remaining = freshLineup.scheduled.filter(
+            (proposal) => proposal.status === "internally_scheduled",
+          ).length;
+          setNotice(
+            remaining === 0
+              ? "YouTube sync complete. Every queued Lineup post is verified."
+              : `YouTube sync stopped with ${remaining} ${remaining === 1 ? "post" : "posts"} still waiting. Review the red or amber statuses before retrying.`,
+            remaining > 0,
+          );
+          return;
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setNotice(
+          actionError(
+            error,
+            "Runway could not refresh YouTube progress. Scheduling may still be running; refresh Lineup to verify.",
+            "Runway could not verify YouTube progress. Scheduling may still be running; refresh Lineup to verify.",
+          ),
+          true,
+        );
+      }
+      if (!cancelled) {
+        timer = window.setTimeout(refreshPublisher, 1500);
+      }
+    }
+
+    timer = window.setTimeout(refreshPublisher, 700);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [publishingEnabled, watchPublisher]);
+
   const occupiedTarget = draftDate
     ? scheduledByDate.get(draftDate)
     : undefined;
@@ -682,6 +960,22 @@ export function LineupCalendar({
   const currentDraftError = dialog === "edit" ? draftValidation() : null;
   const displayedDialogError = dialogError || currentDraftError || "";
   const today = localDate(new Date(), lineup.timezone) ?? undefined;
+  const queueInMotion = publisherQueue.running || publisherQueue.queued > 0;
+  const pushDisabled =
+    !publishingEnabled ||
+    busy !== null ||
+    pushOutcomeUncertain ||
+    queueInMotion ||
+    publisherQueue.paused ||
+    waitingForYouTube.length === 0;
+  const pushLabel =
+    busy === "push"
+      ? "Checking session…"
+      : queueInMotion
+        ? `Scheduling ${publisherQueue.queued || "next"}…`
+        : waitingForYouTube.length > 0
+          ? `Push ${waitingForYouTube.length} to YouTube`
+          : "YouTube is up to date";
 
   return (
     <div ref={pageRef} className="lineup-page" tabIndex={-1}>
@@ -701,6 +995,62 @@ export function LineupCalendar({
           Back to Generator
         </Link>
       </header>
+
+      <section
+        className={[
+          "lineup-youtube-bar",
+          publisherQueue.paused ? "paused" : "",
+          queueInMotion ? "working" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        aria-label="YouTube synchronization"
+      >
+        <span className="lineup-youtube-mark" aria-hidden="true">
+          ▶
+        </span>
+        <div>
+          <strong>
+            {!publishingEnabled
+              ? "YouTube is off in this running session"
+              : publisherQueue.paused
+                ? "YouTube needs attention"
+                : queueInMotion
+                  ? "Scheduling through the visible browser"
+                  : waitingForYouTube.length > 0
+                    ? `${waitingForYouTube.length} ready for YouTube`
+                    : "Lineup and YouTube are synchronized"}
+          </strong>
+          <span>
+            {!publishingEnabled
+              ? "Restart Runway with publishing enabled before making external changes."
+              : publisherQueue.paused
+                ? publisherQueue.paused_reason ??
+                  "Check the publisher login before resuming."
+                : queueInMotion
+                  ? `${publisherQueue.queued} remaining in the serialized queue. One post is handled at a time.`
+                  : waitingForYouTube.length > 0
+                    ? `Push every new post in date order. Runway preserves one post per day at ${displayTime(lineup.default_time)} ${displayTimezone(lineup.timezone)}.`
+                    : "Every upcoming post shown as scheduled has a verified YouTube result."}
+          </span>
+        </div>
+        <div className="lineup-youtube-actions">
+          <button
+            type="button"
+            className="button lineup-push"
+            onClick={pushLineupToYouTube}
+            disabled={pushDisabled}
+            aria-busy={busy === "push" || queueInMotion}
+          >
+            {pushLabel}
+          </button>
+          {(pushOutcomeUncertain || publisherQueue.paused) && (
+            <Link href="/settings#platform-connection">
+              {pushOutcomeUncertain ? "Verify in Settings" : "Fix connection"}
+            </Link>
+          )}
+        </div>
+      </section>
 
       <section className="lineup-toolbar" aria-label="Calendar controls">
         <div>
@@ -743,9 +1093,14 @@ export function LineupCalendar({
             className="lineup-calendar"
             aria-label="Runway release calendar"
           >
+            <p id="lineup-drag-help" className="visually-hidden">
+              Editable future posts can be dragged to another calendar date.
+              Dropping on an occupied editable date opens a confirmed swap.
+              Keyboard users can use Edit or choose date for the same action.
+            </p>
             <div className="lineup-section-label">
               <strong>Calendar</strong>
-              <span>{monthFormatter.format(month)}</span>
+              <span>Drag a post to move or swap</span>
             </div>
             <div className="lineup-weekdays" aria-hidden="true">
               {"Sun Mon Tue Wed Thu Fri Sat".split(" ").map((day) => (
@@ -760,28 +1115,68 @@ export function LineupCalendar({
                   proposals.find((item) => item.status !== "published") ??
                   proposals[0];
                 const inMonth = day.getUTCMonth() === month.getUTCMonth();
+                const draggedProposal = lineup.scheduled.find(
+                  (item) => item.id === draggedId,
+                );
+                const isDropTarget =
+                  dragTargetDate === key &&
+                  draggedProposal !== undefined &&
+                  localDate(
+                    proposalSlot(draggedProposal),
+                    lineup.timezone,
+                  ) !== key;
+                const isSwapTarget =
+                  isDropTarget &&
+                  proposals.some(
+                    (item) =>
+                      item.id !== draggedId && item.status !== "published",
+                  );
                 return (
                   <article
                     className={[
                       "lineup-day",
                       inMonth ? "" : "outside",
                       proposal ? "occupied" : "",
+                      isDropTarget ? "drop-target" : "",
+                      isSwapTarget ? "swap-target" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
                     key={key}
+                    onDragOver={(event) => dragOverDate(event, key)}
+                    onDragEnter={(event) => dragOverDate(event, key)}
+                    onDrop={(event) => dropOnDate(event, key)}
                   >
                     <time dateTime={key}>{day.getUTCDate()}</time>
+                    {isDropTarget && (
+                      <span className="lineup-drop-label" aria-hidden="true">
+                        {isSwapTarget ? "Swap" : "Move here"}
+                      </span>
+                    )}
                     {proposal && (
                       <button
                         type="button"
                         className={[
                           selectedId === proposal.id ? "selected" : "",
+                          draggedId === proposal.id ? "dragging" : "",
+                          recentlyChangedIds.includes(proposal.id)
+                            ? "lineup-settled"
+                            : "",
                           `status-tone-${statusTone(proposal.status)}`,
                         ]
                           .filter(Boolean)
                           .join(" ")}
                         onClick={() => select(proposal)}
+                        draggable={
+                          busy === null && canEditProposal(proposal)
+                        }
+                        onDragStart={(event) => beginDrag(event, proposal)}
+                        onDragEnd={endDrag}
+                        aria-describedby={
+                          canEditProposal(proposal)
+                            ? "lineup-drag-help"
+                            : undefined
+                        }
                         aria-label={`Select ${proposal.final_caption}, ${dayFormatter.format(day)}, ${statusLabel(proposal.status)}`}
                       >
                         {proposal.candidate?.preview_url && (
@@ -1145,9 +1540,9 @@ export function LineupCalendar({
                 {occupiedOther && !currentDraftError && (
                   <p className="swap-notice">
                     <strong>Swap on confirmation.</strong> {draftDate} currently
-                    holds “{occupiedOther.final_caption}.” Confirming moves that post
-                    to this post’s current date—there will still be only one Runway
-                    post per day.
+                    holds “{occupiedOther.final_caption}” — confirming moves that
+                    post to this post’s current date, so there will still be only one
+                    Runway post per day.
                   </p>
                 )}
                 {dialogOutcomeUncertain && (

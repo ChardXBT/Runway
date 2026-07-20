@@ -74,6 +74,11 @@ def test_lineup_mutations_require_literal_confirmation(settings: Settings) -> No
             "/api/lineup/1/remove",
             json={"confirmed": False},
         )
+        push = client.post(
+            "/api/lineup/push",
+            json={"confirmed": False},
+        )
 
     assert update.status_code == 422
     assert removal.status_code == 422
+    assert push.status_code == 422

@@ -27,6 +27,15 @@ class PublisherQueueCoordinator:
             **self.status(),
         }
 
+    def enqueue_many(self, proposal_ids: list[int]) -> dict[str, object]:
+        """Persist a validated batch before starting the serialized browser worker."""
+        attempts = self.publisher.queue_attempts(proposal_ids)
+        self._start_if_ready()
+        return {
+            "attempts": attempts,
+            **self.status(),
+        }
+
     def start(self) -> dict[str, object]:
         """Resume persisted queued work after an application restart."""
         self._start_if_ready()
