@@ -99,6 +99,7 @@ class EditorialApproveRequest(BaseModel):
 
 class EditorialRejectRequest(BaseModel):
     reason: str = Field(default="not a fit", min_length=1, max_length=500)
+    reason_codes: list[str] = Field(default_factory=list, max_length=10)
 
 
 class EnsureOptionsRequest(BaseModel):
@@ -221,7 +222,7 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
             rejected = proposals.reject(
                 proposal_id,
                 payload.reason,
-                reason_codes=["not_engaging"],
+                reason_codes=payload.reason_codes or ["not_engaging"],
                 image_verdict="bad",
             )
             return {
@@ -389,9 +390,14 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     @router.post("/publisher/session/validate")
     def validate_publisher_session() -> dict[str, object]:
         try:
-            return asyncio.run(youtube_publisher.validate_session()).model_dump()
+            asyncio.run(youtube_publisher.validate_session())
+            return youtube_publisher.connection_status()
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @router.get("/publisher/session/status")
+    def publisher_session_status() -> dict[str, object]:
+        return youtube_publisher.connection_status()
 
     @router.post("/publisher/connectors/validate")
     def validate_connector_access(

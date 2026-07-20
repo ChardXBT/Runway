@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Settings, SettingsForm } from "./settings-form";
 
 const settings: Settings = {
+  connector_account_email: "tryrunwaytoday@gmail.com",
   channel_name: "Qlob",
   channel_handle: "@Qlob",
   timezone: "America/Toronto",
@@ -35,6 +36,14 @@ afterEach(() => {
 });
 
 describe("SettingsForm", () => {
+  it("shows the configured local scheduling time and timezone", () => {
+    render(<SettingsForm initial={settings} />);
+
+    const preview = screen.getByText("Schedule preview").closest("p");
+    expect(preview).toHaveTextContent("10:00 AM");
+    expect(preview).toHaveTextContent("America/Toronto");
+  });
+
   it("validates locally and preserves the invalid entry without submitting", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

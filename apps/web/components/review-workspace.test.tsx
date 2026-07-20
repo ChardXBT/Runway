@@ -160,7 +160,48 @@ describe("ReviewWorkspace", () => {
     expect(fetchMock.mock.calls[0][0]).toContain(
       "/api/editorial/proposals/42/reject",
     );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      reason: "The complete option was not a fit.",
+      reason_codes: ["not_engaging"],
+    });
     expect(await screen.findByDisplayValue("Another option.")).toBeInTheDocument();
+  });
+
+  it("records a targeted cluster signal when asking for fewer similar images", async () => {
+    const next = { ...proposal, id: 46, final_caption: "A distinct option." };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        decision: "rejected",
+        proposal: { ...proposal, status: "rejected" },
+        next_proposal: next,
+        workflow: { ...workflow, needs_review: 3, rejected: 1 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Fewer like this" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "/api/editorial/proposals/42/reject",
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      reason:
+        "This image is too similar to recent options. Show fewer images from this visual cluster.",
+      reason_codes: ["too_similar"],
+    });
+    expect(await screen.findByDisplayValue("A distinct option.")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Similar images will receive a negative preference signal.",
+    );
   });
 
   it("keeps the primary decision surface to Reject, Edit, and Accept", () => {
@@ -176,6 +217,9 @@ describe("ReviewWorkspace", () => {
     expect(controls).toHaveTextContent("Edit");
     expect(controls).toHaveTextContent("Accept");
     expect(screen.getByRole("button", { name: "Replace image" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Fewer like this" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Regenerate captions" }),
     ).toBeInTheDocument();

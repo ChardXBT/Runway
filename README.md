@@ -259,6 +259,8 @@ pauses the outbox. Once a Schedule click may have happened, an inconclusive resu
   refuses even the ordinary-Chrome isolated profile, keep publishing disabled
   and schedule the prepared image/caption manually in normal YouTube.
 
-See `docs/COMPLETION_GUIDE.md` for the remaining path to production,
-`docs/OPERATIONS.md` for routine commands, `docs/BUILD_REPORT.md` for the fixture proof, and
-`docs/QLOB_PRODUCTION_VALIDATION.md` for the real-data pass.
+See `docs/COMPLETION_GUIDE.md` for the operating and completion criteria,
+`docs/OPERATIONS.md` for routine commands, `docs/BUILD_STATUS.md` for the latest measured quality
+gate, `docs/BUILD_REPORT.md` for the fixture proof, and `docs/QLOB_PRODUCTION_VALIDATION.md` for the
+real-data pass. Current external constraints and deferred productization work are tracked in
+`docs/CURRENT_LIMITATIONS.md`.

@@ -3,6 +3,7 @@ import type {
   GenerationActivity,
   LineupSchedule,
   Proposal,
+  PublisherConnectionStatus,
   PublisherQueueStatus,
   WorkflowStatus,
 } from "@/lib/types";
@@ -82,6 +83,33 @@ export function isPublisherQueueStatus(
     typeof value.paused === "boolean" &&
     !(value.running && value.paused) &&
     (value.paused_reason === null || typeof value.paused_reason === "string")
+  );
+}
+
+export function isPublisherConnectionStatus(
+  value: unknown,
+): value is PublisherConnectionStatus {
+  if (!isRecord(value) || !isRecord(value.checks)) return false;
+  const states = new Set([
+    "disabled",
+    "unchecked",
+    "connected",
+    "stale",
+    "needs_attention",
+  ]);
+  return (
+    typeof value.state === "string" &&
+    states.has(value.state) &&
+    (value.valid === null || typeof value.valid === "boolean") &&
+    typeof value.detail === "string" &&
+    typeof value.publisher === "string" &&
+    (value.checked_at === null || isDateString(value.checked_at)) &&
+    typeof value.stale === "boolean" &&
+    isFiniteNumber(value.stale_after_hours) &&
+    value.stale_after_hours > 0 &&
+    Object.values(value.checks).every((passed) => typeof passed === "boolean") &&
+    (value.last_verified_publish_at === null ||
+      isDateString(value.last_verified_publish_at))
   );
 }
 

@@ -26,6 +26,7 @@ import type {
 type Action =
   | "accept"
   | "reject"
+  | "similar"
   | "options"
   | "resume"
   | "regenerate"
@@ -275,7 +276,10 @@ export function ReviewWorkspace({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: "The complete option was not a fit." }),
+          body: JSON.stringify({
+            reason: "The complete option was not a fit.",
+            reason_codes: ["not_engaging"],
+          }),
         },
       );
       await finishDecision(
@@ -290,6 +294,45 @@ export function ReviewWorkspace({
           error,
           "Rejection failed. This option is still on screen.",
           "The rejection response could not be verified. Reload Generator before making another decision.",
+        ),
+        true,
+      );
+    } finally {
+      actionLock.current = false;
+      setBusy(null);
+    }
+  }
+
+  async function showFewerLikeThis() {
+    if (!proposal || actionLock.current || decisionUncertain) return;
+    actionLock.current = true;
+    setBusy("similar");
+    setNotice("");
+    try {
+      const response = await fetch(
+        `${API_URL}/api/editorial/proposals/${proposal.id}/reject`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reason:
+              "This image is too similar to recent options. Show fewer images from this visual cluster.",
+            reason_codes: ["too_similar"],
+          }),
+        },
+      );
+      await finishDecision(
+        await parseResponse(response),
+        "Hidden. Similar images will receive a negative preference signal.",
+      );
+    } catch (error) {
+      const uncertain = hasUncertainOutcome(error);
+      setDecisionUncertain(uncertain);
+      setNotice(
+        actionError(
+          error,
+          "The similarity feedback failed. This option is still on screen.",
+          "The similarity response could not be verified. Reload Generator before making another decision.",
         ),
         true,
       );
@@ -605,6 +648,14 @@ export function ReviewWorkspace({
               )}
 
               <div className="generator-tools" aria-label="Regenerate this option">
+                <button
+                  type="button"
+                  disabled={busy !== null || decisionUncertain}
+                  onClick={showFewerLikeThis}
+                  aria-busy={busy === "similar"}
+                >
+                  {busy === "similar" ? "Saving preference…" : "Fewer like this"}
+                </button>
                 <button
                   type="button"
                   disabled={busy !== null || decisionUncertain}

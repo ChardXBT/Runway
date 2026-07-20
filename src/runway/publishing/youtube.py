@@ -22,6 +22,7 @@ from sqlalchemy import desc, select
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
+    AuditEvent,
     CandidateImage,
     CaptionFeedback,
     MediaAsset,
@@ -217,6 +218,7 @@ class PlaywrightYouTubeAdapter:
                 return PublisherSessionStatus(
                     valid=valid,
                     publisher="youtube-visible-browser",
+                    checks=checks,
                     detail=(
                         f"{self.settings.channel_name} channel identity, posting access, "
                         "and Community composer verified."
@@ -298,6 +300,7 @@ class PlaywrightYouTubeAdapter:
                 return PublisherSessionStatus(
                     valid=valid,
                     publisher="youtube-visible-browser",
+                    checks=checks,
                     detail=(
                         "Editor access and Community publishing controls verified. "
                         "No post was created."
@@ -1112,17 +1115,156 @@ class YouTubeBrowserPublisher:
                 publisher=self.publisher_name,
                 detail="Publishing is locked by RUNWAY_PUBLISHING_ENABLED=false.",
             )
-        return await self.adapter.validate_session()
+        return await self._validated_adapter_session(source="manual_connection_check")
 
     async def validate_channel_access(
         self,
         channel_url: str,
     ) -> PublisherSessionStatus:
-        return await self.adapter.validate_channel_access(channel_url)
+        try:
+            status = await self.adapter.validate_channel_access(channel_url)
+        except Exception as exc:
+            self._record_session_status(
+                PublisherSessionStatus(
+                    valid=False,
+                    publisher=self.publisher_name,
+                    detail=f"{type(exc).__name__}: {exc}",
+                ),
+                source="connector_access_check",
+                error_type=type(exc).__name__,
+            )
+            raise
+        self._record_session_status(status, source="connector_access_check")
+        return status
+
+    async def _validated_adapter_session(self, *, source: str) -> PublisherSessionStatus:
+        try:
+            status = await self.adapter.validate_session()
+        except Exception as exc:
+            self._record_session_status(
+                PublisherSessionStatus(
+                    valid=False,
+                    publisher=self.publisher_name,
+                    detail=f"{type(exc).__name__}: {exc}",
+                ),
+                source=source,
+                error_type=type(exc).__name__,
+            )
+            raise
+        self._record_session_status(status, source=source)
+        return status
+
+    def _record_session_status(
+        self,
+        status: PublisherSessionStatus,
+        *,
+        source: str,
+        error_type: str | None = None,
+    ) -> None:
+        with self.database.session() as session:
+            audit(
+                session,
+                (
+                    "youtube_session_validated"
+                    if status.valid
+                    else "youtube_session_validation_failed"
+                ),
+                "publisher",
+                None,
+                {
+                    "valid": status.valid,
+                    "publisher": status.publisher,
+                    "detail": status.detail,
+                    "checks": status.checks,
+                    "source": source,
+                    "error_type": error_type,
+                },
+            )
+
+    def connection_status(self) -> dict[str, object]:
+        """Return the last durable read-only publisher check without opening Chrome."""
+        stale_after = timedelta(hours=24)
+        if not self.settings.publishing_enabled:
+            return {
+                "state": "disabled",
+                "valid": None,
+                "detail": "Enable publishing in the local environment before checking YouTube.",
+                "publisher": self.publisher_name,
+                "checked_at": None,
+                "stale": False,
+                "stale_after_hours": 24,
+                "checks": {},
+                "last_verified_publish_at": None,
+            }
+
+        with self.database.session() as session:
+            validation = session.scalar(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.event_type.in_(
+                        [
+                            "youtube_session_validated",
+                            "youtube_session_validation_failed",
+                        ]
+                    )
+                )
+                .order_by(desc(AuditEvent.created_at), desc(AuditEvent.id))
+                .limit(1)
+            )
+            last_verified = session.scalar(
+                select(AuditEvent)
+                .where(AuditEvent.event_type == "youtube_schedule_verified")
+                .order_by(desc(AuditEvent.created_at), desc(AuditEvent.id))
+                .limit(1)
+            )
+
+        last_verified_at = (
+            last_verified.created_at.isoformat() if last_verified is not None else None
+        )
+        if validation is None:
+            return {
+                "state": "unchecked",
+                "valid": None,
+                "detail": "No saved-session check has been recorded yet.",
+                "publisher": self.publisher_name,
+                "checked_at": None,
+                "stale": False,
+                "stale_after_hours": 24,
+                "checks": {},
+                "last_verified_publish_at": last_verified_at,
+            }
+
+        details = json.loads(validation.details_json)
+        valid = bool(details.get("valid"))
+        checked_at = validation.created_at
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=UTC)
+        stale = valid and datetime.now(UTC) - checked_at > stale_after
+        raw_checks = details.get("checks")
+        checks = (
+            {
+                str(label): bool(passed)
+                for label, passed in raw_checks.items()
+                if isinstance(label, str) and isinstance(passed, bool)
+            }
+            if isinstance(raw_checks, dict)
+            else {}
+        )
+        return {
+            "state": "stale" if stale else ("connected" if valid else "needs_attention"),
+            "valid": valid,
+            "detail": str(details.get("detail") or "Publisher connection status recorded."),
+            "publisher": str(details.get("publisher") or self.publisher_name),
+            "checked_at": checked_at.isoformat(),
+            "stale": stale,
+            "stale_after_hours": 24,
+            "checks": checks,
+            "last_verified_publish_at": last_verified_at,
+        }
 
     async def prepare_attempt(self, proposal_id: int) -> PublishPreparation:
         self._require_enabled()
-        status = await self.adapter.validate_session()
+        status = await self._validated_adapter_session(source="publish_preparation")
         if not status.valid:
             raise ValueError(status.detail)
         post, payload_hash = self._prepared_post(proposal_id)
@@ -1340,7 +1482,7 @@ class YouTubeBrowserPublisher:
                     raise StalePublishAttempt(
                         f"publish attempt {attempt_id} was superseded before submission"
                     )
-            session_status = await self.adapter.validate_session()
+            session_status = await self._validated_adapter_session(source="queue_preflight")
             if not session_status.valid:
                 self._record_preflight_failure(attempt_id, session_status.detail)
                 raise ValueError(session_status.detail)
@@ -1474,7 +1616,9 @@ class YouTubeBrowserPublisher:
             applied_external: list[tuple[PreparedPost, PreparedPost]] = []
             if external_records:
                 self._require_enabled()
-                session_status = await self.adapter.validate_session()
+                session_status = await self._validated_adapter_session(
+                    source="lineup_update_preflight"
+                )
                 if not session_status.valid:
                     raise ValueError(session_status.detail)
                 for record in external_records:
@@ -1633,7 +1777,9 @@ class YouTubeBrowserPublisher:
             externally_synced = False
             if original_status == ProposalStatus.EXTERNALLY_SCHEDULED.value:
                 self._require_enabled()
-                session_status = await self.adapter.validate_session()
+                session_status = await self._validated_adapter_session(
+                    source="lineup_remove_preflight"
+                )
                 if not session_status.valid:
                     raise ValueError(session_status.detail)
                 receipt = await self.adapter.remove(current)

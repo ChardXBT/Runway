@@ -25,7 +25,7 @@ export default async function RootLayout({
       isRecord(value) && typeof value.publishing_enabled === "boolean",
   );
   return (
-    <html lang="en">
+    <html lang="en" data-scroll-behavior="smooth">
       <body>
         <a className="skip-link" href="#main-content">
           Skip to content

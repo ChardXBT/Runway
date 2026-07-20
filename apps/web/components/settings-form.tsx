@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
 import { actionError, readApiJson } from "@/lib/client-api";
@@ -8,6 +8,7 @@ import { isValidTimeZone } from "@/lib/datetime";
 import { isRecord } from "@/lib/guards";
 
 export type Settings = {
+  connector_account_email: string;
   channel_name: string;
   channel_handle: string;
   timezone: string;
@@ -35,6 +36,7 @@ type FormStatus = {
 export function isSettings(value: unknown): value is Settings {
   if (!isRecord(value)) return false;
   return (
+    typeof value.connector_account_email === "string" &&
     typeof value.channel_name === "string" &&
     typeof value.channel_handle === "string" &&
     typeof value.timezone === "string" &&
@@ -87,6 +89,30 @@ export function SettingsForm({ initial }: { initial: Settings }) {
   const duplicateWindow = Number(draft.duplicateWindowDays);
   const duplicateWindowInvalid =
     !Number.isInteger(duplicateWindow) || duplicateWindow < 1;
+  const timezonePreview = useMemo(() => {
+    if (timezoneInvalid || timeInvalid) return null;
+    const [hour, minute] = draft.defaultPostTime.split(":").map(Number);
+    const readableTime = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "UTC",
+    }).format(new Date(Date.UTC(2026, 0, 1, hour, minute)));
+    const zoneName =
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: draft.timezone.trim(),
+        timeZoneName: "long",
+      })
+        .formatToParts(new Date())
+        .find((part) => part.type === "timeZoneName")?.value ??
+      draft.timezone.trim();
+    return `${readableTime} ${zoneName} (${draft.timezone.trim()})`;
+  }, [
+    draft.defaultPostTime,
+    draft.timezone,
+    timeInvalid,
+    timezoneInvalid,
+  ]);
 
   function updateDraft(
     key: keyof typeof draft,
@@ -251,6 +277,14 @@ export function SettingsForm({ initial }: { initial: Settings }) {
             />
           </label>
         </div>
+        <p className="settings-timezone-preview" role="status">
+          <strong>Schedule preview</strong>
+          <span>
+            {timezonePreview
+              ? `Each accepted post takes one open day at ${timezonePreview}.`
+              : "Enter a valid timezone and time to preview the daily slot."}
+          </span>
+        </p>
         <label>
           <span>Duplicate window</span>
           <input

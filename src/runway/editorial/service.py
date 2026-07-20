@@ -115,9 +115,7 @@ class EditorialService:
                     discovery_attempts.append(browser_result)
                     available = self._unused_candidate_count()
                     if available:
-                        generated_ids.extend(
-                            await self._try_generate(min(missing, available))
-                        )
+                        generated_ids.extend(await self._try_generate(min(missing, available)))
 
                     missing = max(0, target - self._review_count())
                     if missing and self._supports_frinkiac_fallback():

@@ -4,45 +4,52 @@ import { useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
 import { actionError, readApiJson } from "@/lib/client-api";
-import { isPublisherQueueStatus, isRecord } from "@/lib/guards";
-import type { PublisherQueueStatus } from "@/lib/types";
+import {
+  isPublisherConnectionStatus,
+  isPublisherQueueStatus,
+} from "@/lib/guards";
+import type {
+  PublisherConnectionStatus,
+  PublisherQueueStatus,
+} from "@/lib/types";
 
-type ConnectionState = "unchecked" | "valid" | "invalid";
+function connectionTime(value: string | null) {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Unverified time" : date.toLocaleString();
+}
 
-type ConnectionResponse = {
-  valid: boolean;
-  detail?: string;
-};
-
-function isConnectionResponse(value: unknown): value is ConnectionResponse {
-  return (
-    isRecord(value) &&
-    typeof value.valid === "boolean" &&
-    (value.detail === undefined || typeof value.detail === "string")
-  );
+function friendlyCheckLabel(value: string) {
+  return value
+    .replace("configured channel URL", "Configured Qlob channel")
+    .replace("active Qlob identity", "Qlob identity selected")
+    .replace("Qlob heading", "Qlob channel heading")
+    .replace("Qlob posting access", "Community posting access");
 }
 
 export function PlatformConnection({
   publishingEnabled,
   channelId,
+  connectorEmail,
   browserChannel,
   initialQueue,
+  initialConnection,
 }: {
   publishingEnabled: boolean;
   channelId: string;
+  connectorEmail: string;
   browserChannel: string;
   initialQueue: PublisherQueueStatus;
+  initialConnection: PublisherConnectionStatus;
 }) {
-  const [connection, setConnection] = useState<ConnectionState>("unchecked");
+  const [connection, setConnection] = useState(initialConnection);
   const [queue, setQueue] = useState(initialQueue);
   const [busy, setBusy] = useState<"check" | "resume" | null>(null);
   const actionLock = useRef(false);
-  const [detailIsError, setDetailIsError] = useState(false);
-  const [detail, setDetail] = useState(
-    publishingEnabled
-      ? "Run a connection check before the first live scheduling session."
-      : "Enable publishing in the local environment before checking YouTube.",
+  const [detailIsError, setDetailIsError] = useState(
+    initialConnection.state === "needs_attention",
   );
+  const [detail, setDetail] = useState(initialConnection.detail);
 
   async function checkConnection() {
     if (!publishingEnabled || actionLock.current) return;
@@ -55,26 +62,26 @@ export function PlatformConnection({
         method: "POST",
       });
       const payload = await readApiJson(response, {
-        validate: isConnectionResponse,
+        validate: isPublisherConnectionStatus,
         failureMessage: "The YouTube connection check failed.",
       });
-      setConnection(payload.valid ? "valid" : "invalid");
-      setDetailIsError(!payload.valid);
-      setDetail(
-        payload.detail ||
-          (payload.valid
-            ? "The saved Qlob Editor session is ready."
-            : "The saved session does not currently have usable Qlob access."),
-      );
+      setConnection(payload);
+      setDetailIsError(payload.state === "needs_attention");
+      setDetail(payload.detail);
     } catch (error) {
-      setConnection("invalid");
-      setDetailIsError(true);
-      setDetail(
-        actionError(
-          error,
-          "The YouTube connection check failed. The saved session was not marked connected.",
-        ),
+      const failure = actionError(
+        error,
+        "The YouTube connection check failed. The saved session was not marked connected.",
       );
+      setConnection((current) => ({
+        ...current,
+        state: "needs_attention",
+        valid: false,
+        stale: false,
+        detail: failure,
+      }));
+      setDetailIsError(true);
+      setDetail(failure);
     } finally {
       actionLock.current = false;
       setBusy(null);
@@ -122,11 +129,20 @@ export function PlatformConnection({
 
   const stateLabel = !publishingEnabled
     ? "Disabled"
-    : connection === "valid"
+    : connection.state === "connected"
       ? "Connected"
-      : connection === "invalid"
+      : connection.state === "stale"
+        ? "Check is stale"
+        : connection.state === "needs_attention"
         ? "Needs attention"
         : "Ready to check";
+  const stateClass =
+    connection.state === "connected"
+      ? "valid"
+      : connection.state === "needs_attention"
+        ? "invalid"
+        : connection.state;
+  const connectionChecks = Object.entries(connection.checks);
 
   return (
     <section
@@ -139,7 +155,7 @@ export function PlatformConnection({
           <p className="eyebrow">Platform connection</p>
           <h2 id="connection-title">YouTube · Qlob</h2>
         </div>
-        <span className={`connection-state ${connection}`}>
+        <span className={`connection-state ${stateClass}`}>
           <i aria-hidden="true" />
           {stateLabel}
         </span>
@@ -150,8 +166,8 @@ export function PlatformConnection({
           <div>
             <strong>Confirm Editor access</strong>
             <p>
-              Use the Google account YouTube identifies as an Editor for the Qlob
-              channel.
+              Invite <code>{connectorEmail}</code> to Qlob as Editor (Limited).
+              This can create posts without exposing revenue data.
             </p>
           </div>
         </li>
@@ -187,18 +203,28 @@ export function PlatformConnection({
           </div>
         </li>
       </ol>
+      {connectionChecks.length > 0 && (
+        <ul className="connection-checks" aria-label="Last verified capabilities">
+          {connectionChecks.map(([label, passed]) => (
+            <li className={passed ? "passed" : "failed"} key={label}>
+              <span aria-hidden="true">{passed ? "✓" : "!"}</span>
+              <span>{friendlyCheckLabel(label)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <dl className="connection-facts">
         <div>
           <dt>Channel</dt>
           <dd>{channelId}</dd>
         </div>
         <div>
-          <dt>Browser</dt>
-          <dd>{browserChannel === "chrome" ? "Google Chrome" : browserChannel}</dd>
+          <dt>Last checked</dt>
+          <dd>{connectionTime(connection.checked_at)}</dd>
         </div>
         <div>
-          <dt>Automation</dt>
-          <dd>One Runway post daily at the configured Eastern time</dd>
+          <dt>Last verified post</dt>
+          <dd>{connectionTime(connection.last_verified_publish_at)}</dd>
         </div>
         <div>
           <dt>Queue</dt>
@@ -228,7 +254,7 @@ export function PlatformConnection({
         >
           {busy === "check" ? "Checking saved session…" : "Check saved session"}
         </button>
-        {(queue.paused || connection === "invalid") && (
+        {(queue.paused || connection.state === "needs_attention") && (
           <button
             type="button"
             className="button secondary"
@@ -241,8 +267,10 @@ export function PlatformConnection({
         )}
       </div>
       <small>
-        Sign-in stays in Runway’s private Chrome profile. Passwords and verification codes
-        are never handled by the application.
+        Publisher browser: {browserChannel === "chrome" ? "Google Chrome" : browserChannel}.
+        Sign-in stays in Runway’s private profile; passwords and verification codes are
+        never handled by the application. A connected check becomes stale after{" "}
+        {connection.stale_after_hours} hours.
       </small>
     </section>
   );

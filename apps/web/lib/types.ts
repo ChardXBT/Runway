@@ -98,6 +98,18 @@ export type PublisherQueueStatus = {
   mode?: "youtube" | "internal_only";
 };
 
+export type PublisherConnectionStatus = {
+  state: "disabled" | "unchecked" | "connected" | "stale" | "needs_attention";
+  valid: boolean | null;
+  detail: string;
+  publisher: string;
+  checked_at: string | null;
+  stale: boolean;
+  stale_after_hours: number;
+  checks: Record<string, boolean>;
+  last_verified_publish_at: string | null;
+};
+
 export type LineupSchedule = {
   timezone: string;
   default_time: string;

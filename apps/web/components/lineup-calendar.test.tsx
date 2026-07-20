@@ -122,6 +122,24 @@ describe("LineupCalendar", () => {
     });
   });
 
+  it("uses a warning state and local-only removal copy when YouTube is off", () => {
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled={false} />);
+
+    expect(screen.getByLabelText("YouTube synchronization")).toHaveClass(
+      "disabled",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(
+      "This removes only the local Runway slot",
+    );
+    expect(dialog).toHaveTextContent("it does not change anything on YouTube");
+    expect(dialog).not.toHaveTextContent(
+      "removes the scheduled post from YouTube",
+    );
+  });
+
   it("preserves the exact slot when only the caption changes", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

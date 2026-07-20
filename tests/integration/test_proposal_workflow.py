@@ -53,7 +53,14 @@ async def test_continuous_workflow_actions_and_restart_persistence(
     regenerated = await proposals.regenerate_captions(first_id)
     assert regenerated["final_caption"] == "Human-edited final caption?!"
 
-    rejected = proposals.reject(second_id, "too repetitive")
+    rejected = proposals.reject(
+        second_id,
+        "too repetitive",
+        reason_codes=["too_similar"],
+        image_verdict="bad",
+    )
+    assert rejected["caption_feedback"][-1]["reason_codes"] == ["too_similar"]
+    assert rejected["caption_feedback"][-1]["image_verdict"] == "bad"
     old_candidate = rejected["candidate_image_id"]
     replaced = await proposals.replace_image(second_id)
     assert replaced["status"] == "needs_review"

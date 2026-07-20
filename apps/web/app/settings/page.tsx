@@ -1,12 +1,19 @@
 import { PlatformConnection } from "@/components/platform-connection";
 import { isSettings, SettingsForm } from "@/components/settings-form";
 import { apiGet } from "@/lib/api";
-import { isPublisherQueueStatus } from "@/lib/guards";
-import type { PublisherQueueStatus } from "@/lib/types";
+import {
+  isPublisherConnectionStatus,
+  isPublisherQueueStatus,
+} from "@/lib/guards";
+import type {
+  PublisherConnectionStatus,
+  PublisherQueueStatus,
+} from "@/lib/types";
 
 type Settings = Parameters<typeof SettingsForm>[0]["initial"];
 
 const fallback: Settings = {
+  connector_account_email: "tryrunwaytoday@gmail.com",
   channel_name: "Qlob",
   channel_handle: "Qlob",
   timezone: "America/Toronto",
@@ -27,7 +34,7 @@ const fallback: Settings = {
 };
 
 export default async function SettingsPage() {
-  const [settings, publisherQueue] = await Promise.all([
+  const [settings, publisherQueue, publisherConnection] = await Promise.all([
     apiGet<Settings>("/api/settings/full", fallback, isSettings),
     apiGet<PublisherQueueStatus>("/api/publisher/queue", {
       running: false,
@@ -35,6 +42,21 @@ export default async function SettingsPage() {
       paused: false,
       paused_reason: null,
     }, isPublisherQueueStatus),
+    apiGet<PublisherConnectionStatus>(
+      "/api/publisher/session/status",
+      {
+        state: "unchecked",
+        valid: null,
+        detail: "Connection history is unavailable until the local service responds.",
+        publisher: "youtube-visible-browser-v1",
+        checked_at: null,
+        stale: false,
+        stale_after_hours: 24,
+        checks: {},
+        last_verified_publish_at: null,
+      },
+      isPublisherConnectionStatus,
+    ),
   ]);
   return (
     <>
@@ -51,8 +73,10 @@ export default async function SettingsPage() {
       <PlatformConnection
         publishingEnabled={settings.publishing_enabled}
         channelId={settings.publisher_channel_id}
+        connectorEmail={settings.connector_account_email}
         browserChannel={settings.publisher_browser_channel}
         initialQueue={publisherQueue}
+        initialConnection={publisherConnection}
       />
       <SettingsForm initial={settings} />
     </>

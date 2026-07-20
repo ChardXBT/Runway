@@ -13,6 +13,8 @@ posts through a visible YouTube browser.
    - `Accept` records positive evidence, assigns the next free 10:00 AM Eastern day,
      enters the post in the persisted YouTube outbox, and opens the next option.
    - `Reject` records the complete image/caption option as negative evidence and opens the next option.
+   - `Fewer like this` rejects the current look with an explicit `too_similar` image-cluster signal,
+     suppressing visually related candidates in later ranking.
 5. Continue for as many options as desired. There is no schedule-horizon cap.
 
 The schedule rule applies only to Runway: at most one bot post per `America/Toronto` local date.
@@ -66,6 +68,14 @@ Schedule once, captures screenshots, and verifies the Scheduled tab. Any preflig
 pauses the outbox. A possibly submitted post enters `publish_unverified` and is never automatically
 resubmitted.
 
+Settings reads the last durable publisher check without opening Chrome. A successful result becomes
+stale after 24 hours. `Check saved session` performs the fresh read-only browser capability check and
+records its individual channel, identity, posting-access, and composer results.
+
+Profile reports training readiness separately for caption, image, and pairing. A target becomes
+trainable only when it has at least eight training-eligible human pairwise labels; held-out study
+labels do not inflate this threshold.
+
 ## Publisher setup
 
 ```powershell
@@ -73,8 +83,8 @@ resubmitted.
 .\.venv\Scripts\runway.exe publisher status
 ```
 
-Use the Google account YouTube identifies as a Qlob Editor. The dedicated publisher profile remains
-local under the ignored data directory.
+Invite the configured connector account as `Editor (Limited)`, then use that Google identity for the
+publisher login. The dedicated publisher profile remains local under the ignored data directory.
 
 Enable the local feature gate:
 
@@ -102,3 +112,6 @@ Software completion requires:
 
 Account-specific YouTube acceptance is complete only after one real approved option appears in
 Qlob’s Scheduled tab with the exact image, caption, date, and time.
+
+See `docs/CURRENT_LIMITATIONS.md` for browser/API constraints, connector proof boundaries, model
+activation requirements, analytics gaps, and the work required before multi-user signup is honest.

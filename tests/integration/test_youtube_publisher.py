@@ -11,7 +11,7 @@ from runway.analysis.service import AnalysisService
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import CandidateImage, Proposal, PublishAttempt
+from runway.db.models import AuditEvent, CandidateImage, Proposal, PublishAttempt
 from runway.db.repositories import get_channel
 from runway.discovery.service import DiscoveryService
 from runway.intelligence.profile import StyleProfileService
@@ -60,6 +60,10 @@ class FakeYouTubeAdapter:
             valid=self.session_valid,
             publisher="fixture",
             detail=self.session_detail,
+            checks={
+                "configured channel URL": self.session_valid,
+                "Community composer": self.session_valid,
+            },
         )
 
     async def schedule(self, post: PreparedPost) -> BrowserScheduleReceipt:
@@ -178,6 +182,48 @@ async def test_publisher_requires_feature_gate_and_exact_one_time_confirmation(
             confirmation_phrase=preparation.confirmation_phrase,
         )
     assert len(adapter.schedule_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_publisher_connection_status_is_durable_and_becomes_stale(
+    database: Database,
+    settings: Settings,
+) -> None:
+    adapter = FakeYouTubeAdapter()
+    enabled_settings = settings.model_copy(update={"publishing_enabled": True})
+    publisher = YouTubeBrowserPublisher(database, enabled_settings, adapter)
+
+    assert publisher.connection_status()["state"] == "unchecked"
+    checked = await publisher.validate_session()
+    assert checked.valid is True
+    connected = publisher.connection_status()
+    assert connected["state"] == "connected"
+    assert connected["checks"] == {
+        "configured channel URL": True,
+        "Community composer": True,
+    }
+
+    with database.session() as session:
+        validation = session.scalar(
+            select(AuditEvent)
+            .where(AuditEvent.event_type == "youtube_session_validated")
+            .order_by(AuditEvent.id.desc())
+            .limit(1)
+        )
+        assert validation is not None
+        validation.created_at = datetime.now(UTC) - timedelta(hours=25)
+    stale = publisher.connection_status()
+    assert stale["state"] == "stale"
+    assert stale["stale"] is True
+
+    adapter.session_valid = False
+    adapter.session_detail = "Sign in to the Qlob Editor account."
+    failed = await publisher.validate_session()
+    assert failed.valid is False
+    needs_attention = publisher.connection_status()
+    assert needs_attention["state"] == "needs_attention"
+    assert needs_attention["valid"] is False
+    assert needs_attention["checked_at"] is not None
 
 
 @pytest.mark.asyncio

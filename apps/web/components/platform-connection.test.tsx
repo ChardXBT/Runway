@@ -3,6 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PlatformConnection } from "./platform-connection";
 
+const initialConnection = {
+  state: "unchecked" as const,
+  valid: null,
+  detail: "No saved-session check has been recorded yet.",
+  publisher: "youtube-visible-browser-v1",
+  checked_at: null,
+  stale: false,
+  stale_after_hours: 24,
+  checks: {},
+  last_verified_publish_at: null,
+};
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -13,9 +25,18 @@ describe("PlatformConnection", () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
+        state: "connected",
         valid: true,
         publisher: "youtube-community-browser",
         detail: "Qlob Editor session is ready.",
+        checked_at: "2026-07-20T13:00:00Z",
+        stale: false,
+        stale_after_hours: 24,
+        checks: {
+          "configured channel URL": true,
+          "Qlob posting access": true,
+        },
+        last_verified_publish_at: "2026-07-20T12:30:00Z",
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -24,7 +45,9 @@ describe("PlatformConnection", () => {
       <PlatformConnection
         publishingEnabled
         channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
+        initialConnection={initialConnection}
         initialQueue={{
           running: false,
           queued: 0,
@@ -49,7 +72,13 @@ describe("PlatformConnection", () => {
       <PlatformConnection
         publishingEnabled={false}
         channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
+        initialConnection={{
+          ...initialConnection,
+          state: "disabled",
+          detail: "Enable publishing before checking YouTube.",
+        }}
         initialQueue={{
           running: false,
           queued: 0,
@@ -87,7 +116,9 @@ describe("PlatformConnection", () => {
       <PlatformConnection
         publishingEnabled
         channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
+        initialConnection={initialConnection}
         initialQueue={{
           running: false,
           queued: 0,
@@ -126,7 +157,9 @@ describe("PlatformConnection", () => {
       <PlatformConnection
         publishingEnabled
         channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
+        initialConnection={initialConnection}
         initialQueue={{
           running: false,
           queued: 2,
@@ -144,5 +177,42 @@ describe("PlatformConnection", () => {
       "Sign-in is still required.",
     );
     expect(screen.getByText("Paused")).toBeInTheDocument();
+  });
+
+  it("shows a durable stale connection without opening the browser on render", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <PlatformConnection
+        publishingEnabled
+        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        connectorEmail="tryrunwaytoday@gmail.com"
+        browserChannel="chrome"
+        initialConnection={{
+          ...initialConnection,
+          state: "stale",
+          valid: true,
+          stale: true,
+          checked_at: "2026-07-18T13:00:00Z",
+          detail: "Qlob channel identity and posting access were verified.",
+          checks: {
+            "configured channel URL": true,
+            "active Qlob identity": true,
+            "Community composer": true,
+          },
+        }}
+        initialQueue={{
+          running: false,
+          queued: 0,
+          paused: false,
+          paused_reason: null,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Check is stale")).toBeInTheDocument();
+    expect(screen.getByText("Configured Qlob channel")).toBeInTheDocument();
+    expect(screen.getByText("Qlob identity selected")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

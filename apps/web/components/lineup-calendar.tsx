@@ -999,6 +999,7 @@ export function LineupCalendar({
       <section
         className={[
           "lineup-youtube-bar",
+          !publishingEnabled ? "disabled" : "",
           publisherQueue.paused ? "paused" : "",
           queueInMotion ? "working" : "",
         ]
@@ -1586,8 +1587,9 @@ export function LineupCalendar({
                 <p className="eyebrow danger">Remove from Lineup</p>
                 <h2 id="lineup-dialog-title">Pull this release?</h2>
                 <p id="lineup-remove-copy" className="dialog-copy">
-                  This explicitly removes the scheduled post from YouTube and cancels
-                  its Runway slot. The decision remains in Activity.
+                  {publishingEnabled
+                    ? "This explicitly removes the scheduled post from YouTube and cancels its Runway slot. The decision remains in Activity."
+                    : "YouTube is off. This removes only the local Runway slot; it does not change anything on YouTube. The decision remains in Activity."}
                 </p>
                 {dialogOutcomeUncertain && (
                   <a className="dialog-recovery" href="/lineup">
