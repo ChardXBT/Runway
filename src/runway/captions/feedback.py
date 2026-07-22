@@ -21,10 +21,7 @@ from runway.db.models import (
     SearchRun,
 )
 from runway.db.repositories import audit, get_channel
-from runway.intelligence.embeddings import (
-    DeterministicTextEmbeddingProvider,
-    cosine,
-)
+from runway.intelligence.embeddings import ActiveRepresentationResolver
 from runway.intelligence.policies import ChannelPolicyService
 
 POSITIVE_VERDICTS = {"accepted", "edited", "preferred", "selected"}
@@ -75,7 +72,7 @@ class CaptionFeedbackService:
     def __init__(self, database: Database, settings: Settings | None = None):
         self.database = database
         self.settings = settings or database.settings
-        self.text_provider = DeterministicTextEmbeddingProvider()
+        self.representations = ActiveRepresentationResolver(database)
 
     def record(
         self,
@@ -439,7 +436,11 @@ class CaptionFeedbackService:
                     if row.candidate_image_id is not None
                     else None
                 )
-                score = self._topic_relevance(current_topic, self._topic(other) if other else {})
+                score = self._topic_relevance(
+                    channel_id,
+                    current_topic,
+                    self._topic(other) if other else {},
+                )
                 structure = caption_structure(row.value_text) if row.value_text else None
                 score += 0.2 if structure == "open_question" else 0.0
                 created = row.created_at
@@ -519,12 +520,18 @@ class CaptionFeedbackService:
                 },
             }
 
-    def positive_similarity(self, caption: str, context: dict[str, object]) -> float:
+    def positive_similarity(
+        self,
+        channel_id: int,
+        caption: str,
+        context: dict[str, object],
+    ) -> float:
         examples = context.get("positive_examples", [])
         if not isinstance(examples, list):
             return 0.0
         values = [
             self._semantic_similarity(
+                channel_id,
                 caption,
                 str(item.get("preferred_caption") or ""),
             )
@@ -533,12 +540,17 @@ class CaptionFeedbackService:
         ]
         return max(values, default=0.0)
 
-    def negative_similarity(self, caption: str, context: dict[str, object]) -> float:
+    def negative_similarity(
+        self,
+        channel_id: int,
+        caption: str,
+        context: dict[str, object],
+    ) -> float:
         examples = context.get("negative_examples", [])
         if not isinstance(examples, list):
             return 0.0
         values = [
-            self._semantic_similarity(caption, str(item.get("caption") or ""))
+            self._semantic_similarity(channel_id, caption, str(item.get("caption") or ""))
             for item in examples
             if isinstance(item, dict) and item.get("caption")
         ]
@@ -554,8 +566,12 @@ class CaptionFeedbackService:
             return {}
         return value if isinstance(value, dict) else {}
 
-    @staticmethod
-    def _topic_relevance(current: dict[str, Any], other: dict[str, Any]) -> float:
+    def _topic_relevance(
+        self,
+        channel_id: int,
+        current: dict[str, Any],
+        other: dict[str, Any],
+    ) -> float:
         score = 0.0
         if current.get("franchise") and current.get("franchise") == other.get("franchise"):
             score += 1.0
@@ -567,25 +583,22 @@ class CaptionFeedbackService:
             first = str(current.get(key) or "")
             second = str(other.get(key) or "")
             if first and second:
-                provider = DeterministicTextEmbeddingProvider()
-                first_vector = provider.embed_text(first, purpose="feedback_topic").as_array()[0]
-                second_vector = provider.embed_text(
+                similarity = self.representations.text_similarity(
+                    channel_id,
+                    first,
                     second,
-                    purpose="feedback_topic",
-                ).as_array()[0]
-                score += 0.25 * max(cosine(first_vector, second_vector), 0.0)
+                    score_purpose="feedback_topic",
+                )
+                score += 0.25 * max(similarity.score, 0.0)
         return score
 
-    def _semantic_similarity(self, first: str, second: str) -> float:
-        first_vector = self.text_provider.embed_text(
+    def _semantic_similarity(self, channel_id: int, first: str, second: str) -> float:
+        return self.representations.text_similarity(
+            channel_id,
             first,
-            purpose="caption_feedback",
-        ).as_array()[0]
-        second_vector = self.text_provider.embed_text(
             second,
-            purpose="caption_feedback",
-        ).as_array()[0]
-        return cosine(first_vector, second_vector)
+            score_purpose="caption_feedback",
+        ).score
 
     @staticmethod
     def _normalized_target_verdict(value: str) -> str:

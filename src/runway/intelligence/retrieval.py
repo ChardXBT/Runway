@@ -35,11 +35,12 @@ from runway.db.models import (
     StyleProfile,
 )
 from runway.db.repositories import get_channel
+from runway.intelligence.content_modes import ChannelContentModeService
 from runway.intelligence.embeddings import (
+    ActiveRepresentationResolver,
     ImageEmbeddingProvider,
     MultimodalEmbeddingProvider,
     RepresentationProviderRegistry,
-    RepresentationStore,
     TextEmbeddingProvider,
     configuration_hash,
     content_hash,
@@ -138,7 +139,8 @@ class RetrievalService:
 
             registry = configured_provider_registry(settings)
         self.registry = registry
-        self.store = RepresentationStore(database)
+        self.resolver = ActiveRepresentationResolver(database, registry)
+        self.store = self.resolver.store
         self.configuration = configuration or RetrievalConfiguration()
         self.policy_service = ChannelPolicyService(database, settings)
 
@@ -472,8 +474,8 @@ class RetrievalService:
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
             media = session.get(MediaAsset, media_asset_id)
-            if media is None or media.embedding_vector is None:
-                raise LookupError(f"candidate media {media_asset_id} has no local embedding")
+            if media is None:
+                raise LookupError(f"candidate media {media_asset_id} was not found")
             if media_asset_id not in self._channel_media_ids(session, channel.id):
                 raise LookupError(f"candidate media {media_asset_id} is outside @{channel.handle}")
             candidate: CandidateImage | None = None
@@ -933,6 +935,19 @@ class RetrievalService:
             }
             for row in policy.rules
         ]
+        content_modes = cast(dict[str, object], profile.get("content_modes", {}))
+        candidate_mode_scores = ChannelContentModeService(
+            self.database,
+            self.resolver,
+        ).score_candidate(
+            channel_id=channel_id,
+            candidate_description=json.dumps(
+                context["candidate_analysis"],
+                sort_keys=True,
+                default=str,
+            ),
+            content_modes=content_modes,
+        )
         evidence_brief = {
             "explicit_rules": explicit_rules,
             "visual_facts": cast(dict[str, object], context["candidate_analysis"]),
@@ -943,6 +958,7 @@ class RetrievalService:
             "positive_evidence": caption_examples,
             "negative_evidence": negative_examples,
             "rotation_constraints": rotation,
+            "content_mode_scores": candidate_mode_scores,
             "output_requirements": {
                 "language": policy.language,
                 "locale": policy.locale,
@@ -975,6 +991,8 @@ class RetrievalService:
                 ),
                 "long_term_channel_dna": profile.get("long_term_channel_dna", {}),
                 "recent_editorial_mode": profile.get("recent_editorial_mode", {}),
+                "content_modes": content_modes,
+                "candidate_mode_scores": candidate_mode_scores,
                 "learned_creator_preference": profile.get(
                     "learned_creator_preference",
                     {},
@@ -1416,33 +1434,17 @@ class RetrievalService:
         TextEmbeddingProvider | ImageEmbeddingProvider | MultimodalEmbeddingProvider,
         RepresentationSet | None,
     ]:
-        active_set = self.store.active_set(
-            channel_id=channel_id,
+        provider, resolution = self.resolver.resolve(
+            channel_id,
+            modality=modality,
             scope=scope,
             purpose=purpose,
         )
-        provider: TextEmbeddingProvider | ImageEmbeddingProvider | MultimodalEmbeddingProvider
-        if modality == "text":
-            provider = self.registry.text(
-                active_set.provider if active_set is not None else "runway-local"
-            )
-        elif modality == "image":
-            provider = self.registry.image(
-                active_set.provider if active_set is not None else "runway-local"
-            )
-        else:
-            provider = self.registry.multimodal(
-                active_set.provider if active_set is not None else "runway-local"
-            )
-        if active_set is not None and (
-            provider.model != active_set.model
-            or provider.version != active_set.model_version
-            or provider.configuration_fingerprint != active_set.configuration_hash
-        ):
-            raise RuntimeError(
-                "configured provider identity does not match the active "
-                f"representation set {active_set.id}; no fallback was attempted"
-            )
+        active_set = (
+            self.store.active_set(channel_id=channel_id, scope=scope, purpose=purpose)
+            if resolution.representation_set_id is not None
+            else None
+        )
         return provider, active_set
 
     def _active_set_snapshot(self, channel_id: int) -> dict[str, object]:

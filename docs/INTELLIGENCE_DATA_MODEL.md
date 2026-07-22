@@ -1,7 +1,8 @@
 # Runway intelligence data model
 
 This document describes the canonical intelligence-data flywheel introduced by
-Alembic revision `0008_intelligence_data_flywheel`. It supplements
+Alembic revision `0008_intelligence_data_flywheel` and extended additively by
+`0010_neural_intelligence`. It supplements
 [`DATA_MODEL.md`](DATA_MODEL.md) and the committed structural contract at
 [`schema/intelligence-data-flywheel.json`](schema/intelligence-data-flywheel.json).
 
@@ -50,10 +51,16 @@ channels
   |       +-- caption_feedback (legacy evidence, reconciled but preserved)
   |
   +-- caption_slates --< caption_candidate_records
-  |                         |
-  |                         +-- parent candidate for human edits
-  |                         +-- immutable feature snapshot
-  |                         +-- exact semantic representation
+  |         |               |
+  |         |               +-- parent candidate for human edits
+  |         |               +-- immutable feature snapshot
+  |         |               +-- exact semantic representation
+  |         |
+  |         +-- multimodal_rerank_runs
+  |
+  +-- candidate_exposures
+  |
+  +-- composed_retrieval_examples
   |
   +-- preference_datasets --< preference_dataset_items
   |             |
@@ -75,17 +82,33 @@ nullability, default, primary-key, foreign-key, unique-constraint, and index
 metadata. Its fingerprint is:
 
 ```text
-503e7471206e1465c01ad2bbea9f7a6ee3aa9b0446c7aee6f0e8b4ca4fa4a06d
+cd024bcb9cd41464a3319145577c3dbdf51cf2d2229943237d8255abf0f445d2
 ```
 
 `runway database schema-verify` structurally compares the live database with
 that snapshot. A matching hash alone is not treated as sufficient: the command
 also reports missing, unexpected, and changed structures.
 
-The migration creates its new structures explicitly. It does not call mutable
+The migrations create their new structures explicitly. They do not call mutable
 ORM metadata to construct them. Migration tests prove that a clean install and
 an upgrade from `0007_canonical_intelligence` converge to the same normalized
-schema.
+schema at `0010_neural_intelligence`.
+
+## Neural-intelligence additions
+
+Revision `0010_neural_intelligence` keeps the same canonical engine and adds
+three narrow tables:
+
+- `candidate_exposures` records prospective display and selection propensities;
+- `multimodal_rerank_runs` records shadow joint-reranker inputs, dimensions,
+  ordering, configuration, representations, and latency;
+- `composed_retrieval_examples` stores versioned reference/instruction/target
+  examples without pretending deterministic fusion is learned retrieval.
+
+It also adds split caption-evidence provenance, claim-grounding and reranker
+metadata, three-arm blind-study fields, semantic topic eligibility, and candidate
+exposure fields. Existing historical rows remain valid; missing prospective
+provenance is reported rather than synthesized.
 
 ## Representation lifecycle
 

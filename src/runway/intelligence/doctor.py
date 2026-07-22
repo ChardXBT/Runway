@@ -17,6 +17,7 @@ from sqlalchemy import func, select, text
 from runway.analysis.service import AnalysisService
 from runway.captions.feature_snapshots import FEATURE_SCHEMA_VERSION
 from runway.captions.feedback import ALLOWED_REASON_CODES
+from runway.captions.preference_models import PRODUCT_CHALLENGER_MINIMUM_LABELS
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -24,9 +25,11 @@ from runway.db.models import (
     AnnotationCorrection,
     AnnotationRefreshRun,
     BlindStudy,
+    CandidateExposure,
     CaptionCandidateRecord,
     CaptionFeedback,
     CaptionSlate,
+    ComposedRetrievalExample,
     FeedbackSignal,
     GeneratedAssetLineage,
     ImageGenerationRun,
@@ -36,6 +39,8 @@ from runway.db.models import (
     IntelligenceExperiment,
     IntelligenceRetrievalRun,
     MediaAsset,
+    ModelRun,
+    MultimodalRerankRun,
     PairwisePreference,
     Post,
     PostAnnotation,
@@ -152,7 +157,7 @@ class DoctorReport:
 class IntelligenceDoctor:
     """Read-only integrity audit for the canonical intelligence flywheel."""
 
-    expected_migration = "0009_editorial_diversity"
+    expected_migration = "0010_neural_intelligence"
     forbidden_capability_tokens = IntelligenceCapabilityRegistry.FORBIDDEN_TOKENS
 
     def __init__(
@@ -181,6 +186,7 @@ class IntelligenceDoctor:
             ("captions", self._check_captions),
             ("learning", self._check_learning),
             ("preference_models", self._check_preference_models),
+            ("neural_intelligence", self._check_neural_intelligence),
             ("feedback", self._check_feedback),
             ("agent_harness", self._check_agent_harness),
             ("image_generation", self._check_image_generation),
@@ -348,6 +354,22 @@ class IntelligenceDoctor:
                 JOIN blind_studies s ON s.id = c.blind_study_id
                 WHERE p.source_study_response_id IS NOT NULL
                   AND p.channel_id != s.channel_id
+            """,
+            "candidate_exposure": """
+                SELECT COUNT(*)
+                FROM candidate_exposures e
+                JOIN candidate_images c ON c.id = e.candidate_image_id
+                JOIN search_runs r ON r.id = c.search_run_id
+                WHERE e.channel_id != r.channel_id
+            """,
+            "multimodal_rerank": """
+                SELECT COUNT(*)
+                FROM multimodal_rerank_runs m
+                JOIN candidate_images c ON c.id = m.candidate_image_id
+                JOIN search_runs r ON r.id = c.search_run_id
+                LEFT JOIN caption_slates s ON s.id = m.caption_slate_id
+                WHERE m.channel_id != r.channel_id
+                   OR (m.caption_slate_id IS NOT NULL AND m.channel_id != s.channel_id)
             """,
         }
         with self.database.session() as session:
@@ -952,7 +974,15 @@ class IntelligenceDoctor:
             )
 
     def _check_learning(self) -> None:
-        allowed_sources = {"human", "synthetic", "policy", "automated", "audience"}
+        allowed_sources = {
+            "human",
+            "teacher",
+            "synthetic",
+            "policy",
+            "automated",
+            "audience",
+            "engineering_fixture",
+        }
         allowed_targets = {"caption", "image", "pairing"}
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
@@ -1028,12 +1058,23 @@ class IntelligenceDoctor:
                 invalid["feature_snapshot"].append(row.id)
             if (
                 not is_study
+                and row.label_source == "human"
                 and row.preference_source != "legacy"
                 and (row.source_proposal_event_id is None or row.source_exposure_id is None)
             ):
                 invalid["decision_provenance"].append(row.id)
-            if is_study and row.preference_source != "blind_creator_study":
+            if (
+                is_study
+                and row.label_source == "human"
+                and row.preference_source != "blind_creator_study"
+            ):
                 invalid["study_provenance"].append(row.id)
+            if (
+                is_study
+                and row.label_source == "engineering_fixture"
+                and row.preference_source != "offline_study_fixture"
+            ):
+                invalid["study_fixture_provenance"].append(row.id)
         for name, ids in invalid.items():
             self.report.add(
                 "critical",
@@ -1104,15 +1145,12 @@ class IntelligenceDoctor:
                     model_ids=[row.id for row in rows],
                 )
         for target, count in label_counts.items():
-            threshold = min(
-                (row.minimum_label_count for row in models if row.target == target),
-                default=8,
-            )
+            threshold = PRODUCT_CHALLENGER_MINIMUM_LABELS.get(target, 100)
             if count >= threshold and not active_by_target.get(target):
                 self.report.add(
                     "warning",
                     "preference_models.no_active_model",
-                    "Enough human labels exist but no model is active.",
+                    "The product challenger label threshold is met but no model is active.",
                     target=target,
                     labels=count,
                     threshold=threshold,
@@ -1187,6 +1225,106 @@ class IntelligenceDoctor:
                 "Preference datasets contain labels from another channel.",
                 count=dataset_channel_mismatch,
             )
+
+    def _check_neural_intelligence(self) -> None:
+        with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
+            slates = session.scalars(
+                select(CaptionSlate).where(CaptionSlate.channel_id == channel.id)
+            ).all()
+            model_runs = {
+                row.id: row
+                for row in session.scalars(
+                    select(ModelRun).where(
+                        ModelRun.id.in_(
+                            [row.model_run_id for row in slates if row.model_run_id is not None]
+                        )
+                    )
+                ).all()
+            }
+            exposures = session.scalars(
+                select(CandidateExposure).where(CandidateExposure.channel_id == channel.id)
+            ).all()
+            rerank_runs = session.scalars(
+                select(MultimodalRerankRun).where(MultimodalRerankRun.channel_id == channel.id)
+            ).all()
+            composed = session.scalars(
+                select(ComposedRetrievalExample).where(
+                    ComposedRetrievalExample.channel_id == channel.id
+                )
+            ).all()
+
+        invalid_provenance: list[int] = []
+        false_citations: list[int] = []
+        legacy_without_split_provenance = 0
+        for slate in slates:
+            model_run = model_runs.get(slate.model_run_id) if slate.model_run_id else None
+            is_current = model_run is not None and model_run.prompt_version == "captions-v5"
+            if not is_current and slate.model_supplied_evidence_json in {"", "[]"}:
+                legacy_without_split_provenance += 1
+                continue
+            try:
+                self._json_list(slate.retrieval_selected_evidence_json)
+                supplied = self._json_object(slate.model_supplied_evidence_json)
+                cited = self._json_object(slate.model_cited_evidence_json)
+                self._json_object(slate.ranker_used_evidence_json)
+                self._json_object(slate.reranker_run_json)
+            except ValueError:
+                invalid_provenance.append(slate.id)
+                continue
+            for evidence_field in ("historical_post_ids", "feedback_signal_ids"):
+                supplied_values = supplied.get(evidence_field, [])
+                cited_values = cited.get(evidence_field, [])
+                if not isinstance(supplied_values, list) or not isinstance(cited_values, list):
+                    invalid_provenance.append(slate.id)
+                    break
+                if not all(
+                    isinstance(value, int) and not isinstance(value, bool)
+                    for value in [*supplied_values, *cited_values]
+                ):
+                    invalid_provenance.append(slate.id)
+                    break
+                if not set(cited_values).issubset(supplied_values):
+                    false_citations.append(slate.id)
+
+        invalid_exposures = [
+            row.id
+            for row in exposures
+            if not 0.0 <= row.final_display_probability <= 1.0
+            or row.eligible_pool_size < 1
+            or (row.display_position is not None and row.display_position < 1)
+        ]
+        invalid_rerank_labels = [
+            row.id
+            for row in rerank_runs
+            if row.label_source not in {"human", "teacher", "synthetic", "policy"}
+        ]
+        false_human_composed = [
+            row.id for row in composed if row.label_source == "human" and not row.reviewed
+        ]
+        findings = {
+            "malformed_provenance": invalid_provenance,
+            "false_model_citations": false_citations,
+            "invalid_exposure_propensity": invalid_exposures,
+            "invalid_reranker_label_source": invalid_rerank_labels,
+            "unreviewed_human_composed_example": false_human_composed,
+        }
+        for name, ids in findings.items():
+            if ids:
+                self.report.add(
+                    "critical",
+                    f"neural_intelligence.{name}",
+                    "Neural-intelligence provenance or label-source integrity failed.",
+                    ids=ids[:20],
+                    count=len(ids),
+                )
+        self.report.measurements["neural_intelligence"] = {
+            "caption_slates": len(slates),
+            "candidate_exposures": len(exposures),
+            "multimodal_rerank_runs": len(rerank_runs),
+            "composed_retrieval_examples": len(composed),
+            "legacy_slates_without_split_provenance": legacy_without_split_provenance,
+        }
 
     def _check_feedback(self) -> None:
         with self.database.session() as session:
@@ -1332,10 +1470,17 @@ class IntelligenceDoctor:
             except (ValueError, TypeError):
                 invalid["malformed_json"].append(run.id)
         run_by_id = {run.id: run for run in runs}
+        registry = IntelligenceCapabilityRegistry()
         for step in steps:
             parent_run = run_by_id.get(step.agent_run_id)
-            if parent_run is not None and step.capability != parent_run.capability:
-                invalid["step_capability"].append(step.id)
+            if parent_run is not None:
+                if parent_run.capability == "editorial_pipeline":
+                    try:
+                        registry.resolve(step.capability)
+                    except LookupError:
+                        invalid["step_capability"].append(step.id)
+                elif step.capability != parent_run.capability:
+                    invalid["step_capability"].append(step.id)
             if step.status in {"completed", "failed", "abstained"} and (step.completed_at is None):
                 invalid["step_terminal_state"].append(step.id)
         for name, ids in invalid.items():

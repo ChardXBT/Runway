@@ -31,10 +31,10 @@ from runway.intelligence.agent_harness import (
     AgentStepResult,
     IntelligenceAgentHarness,
 )
+from runway.intelligence.embeddings import ActiveRepresentationResolver, cosine
 from runway.intelligence.policies import ChannelPolicyService
 from runway.media.service import (
     content_addressed_copy,
-    cosine_similarity,
     create_square_preview,
     inspect_image,
 )
@@ -59,6 +59,7 @@ class ImageGenerationService:
         self.detector = DuplicateDetector(database, settings)
         self.ranker = CandidateRanker(database, settings)
         self.harness = IntelligenceAgentHarness(database)
+        self.representations = ActiveRepresentationResolver(database)
 
     async def generate(
         self,
@@ -314,6 +315,7 @@ class ImageGenerationService:
             duplicate,
             source_domain="runway.local",
             rights_status="creator_owned",
+            image_path=output_path,
         )
         _stored, relative = content_addressed_copy(
             output_path,
@@ -431,10 +433,23 @@ class ImageGenerationService:
                 soft_warnings_json=json.dumps(ranking.warnings),
                 score_components_json=ranking.model_dump_json(),
                 selection_reason=ranking.selection_reason,
+                topic_eligibility_class=ranking.topic_eligibility_class,
+                topic_eligibility_json=json.dumps(
+                    ranking.topic_eligibility,
+                    sort_keys=True,
+                ),
+                representation_provenance_json=json.dumps(
+                    ranking.representation_provenance,
+                    sort_keys=True,
+                ),
             )
             session.add(candidate)
             session.flush()
-            reference_similarity = self._reference_similarity(features.embedding, references)
+            reference_similarity, reference_representation = self._reference_similarity(
+                channel_id,
+                output_path,
+                references,
+            )
             lineage = GeneratedAssetLineage(
                 channel_id=channel_id,
                 generation_run_id=generation_run_id,
@@ -460,7 +475,13 @@ class ImageGenerationService:
                 historical_similarity=duplicate.highest_semantic_similarity,
                 duplicate_result_json=duplicate.model_dump_json(),
                 annotation_json=analysis.model_dump_json(),
-                ranking_json=ranking.model_dump_json(),
+                ranking_json=json.dumps(
+                    {
+                        **ranking.model_dump(),
+                        "reference_similarity_representation": reference_representation,
+                    },
+                    sort_keys=True,
+                ),
                 review_status="pending",
             )
             session.add(lineage)
@@ -517,14 +538,38 @@ class ImageGenerationService:
             )
         return [by_id[media_id] for media_id in media_ids]
 
-    @staticmethod
     def _reference_similarity(
-        output_embedding: list[float],
+        self,
+        channel_id: int,
+        output_path: Path,
         references: list[MediaAsset],
-    ) -> float | None:
+    ) -> tuple[float | None, dict[str, object]]:
+        if not references:
+            return None, {}
+        output_vector, resolution = self.representations.image_vector(
+            channel_id,
+            output_path,
+            score_purpose="generated_reference_similarity_output",
+        )
         similarities = [
-            cosine_similarity(reference.embedding_vector, output_embedding)
+            cosine(
+                output_vector,
+                self.representations.image_vector(
+                    channel_id,
+                    self._media_path(reference),
+                    score_purpose="generated_reference_similarity_reference",
+                )[0],
+            )
             for reference in references
-            if reference.embedding_vector
         ]
-        return max(similarities) if similarities else None
+        return max(similarities), resolution.as_dict()
+
+    def _media_path(self, media: MediaAsset) -> Path:
+        raw = Path(media.local_path)
+        resolved = (raw if raw.is_absolute() else self.settings.resolved_data_dir / raw).resolve()
+        root = self.settings.resolved_data_dir.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(f"media asset {media.id} escapes the configured data root")
+        if not resolved.is_file():
+            raise FileNotFoundError(resolved)
+        return resolved

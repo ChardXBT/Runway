@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -31,8 +32,9 @@ from runway.db.models import (
 )
 from runway.db.repositories import get_channel
 from runway.intelligence.embeddings import (
-    DeterministicTextEmbeddingProvider,
+    ActiveRepresentationResolver,
     RepresentationStore,
+    TextEmbeddingProvider,
     configuration_hash,
     content_hash,
 )
@@ -45,6 +47,7 @@ class CaptionExposureService:
     def __init__(self, database: Database, settings: Settings):
         self.database = database
         self.settings = settings
+        self.representations = ActiveRepresentationResolver(database)
 
     def record_display(self, proposal_id: int) -> CaptionExposure | None:
         with self.database.session() as session:
@@ -261,8 +264,8 @@ class CaptionExposureService:
         )
         return f"legacy-decision:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
-    @staticmethod
     def _human_edit_candidate(
+        self,
         *,
         session: Session,
         proposal: Proposal,
@@ -384,7 +387,11 @@ class CaptionExposureService:
         )
         session.add(candidate)
         session.flush()
-        provider = DeterministicTextEmbeddingProvider()
+        raw_provider, resolution = self.representations.resolve(
+            proposal.channel_id,
+            modality="text",
+        )
+        provider = cast(TextEmbeddingProvider, raw_provider)
         representation = RepresentationStore.persist_in_session(
             session,
             channel_id=proposal.channel_id,
@@ -401,6 +408,7 @@ class CaptionExposureService:
                 "caption_slate_id": slate_id,
                 "origin": "human_edit",
                 "source_event_key": source_event_key,
+                "representation_resolution": resolution.as_dict(),
             },
         )
         candidate.representation_record_id = representation.id

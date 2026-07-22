@@ -15,9 +15,14 @@ from runway.db.base import Database
 from runway.db.models import (
     CaptionCandidateRecord,
     CaptionSlate,
+    IntelligenceAgentRun,
+    IntelligenceAgentStep,
     ModelRun,
+    MultimodalRerankRun,
+    PairwisePreference,
 )
 from runway.discovery.service import DiscoveryService
+from runway.intelligence.hard_negatives import HardNegativeMiningService
 from runway.intelligence.profile import StyleProfileService
 
 
@@ -99,11 +104,69 @@ async def test_complete_caption_slate_and_abstention_provenance_are_persisted(
             .order_by(CaptionCandidateRecord.rank)
         ).all()
         raw_attempts = json.loads(completed_slate.raw_output_json)
+        editorial_brief = json.loads(completed_slate.editorial_brief_json)
+        supplied = json.loads(completed_slate.model_supplied_evidence_json)
+        cited = json.loads(completed_slate.model_cited_evidence_json)
+        reranker = session.scalar(
+            select(MultimodalRerankRun).where(
+                MultimodalRerankRun.caption_slate_id == completed_slate.id
+            )
+        )
+        parent_run = session.scalar(
+            select(IntelligenceAgentRun).where(
+                IntelligenceAgentRun.run_key == f"caption-slate-{completed_slate.id}-adaptive-v1"
+            )
+        )
+        assert parent_run is not None
+        parent_steps = session.scalars(
+            select(IntelligenceAgentStep)
+            .where(IntelligenceAgentStep.agent_run_id == parent_run.id)
+            .order_by(IntelligenceAgentStep.sequence)
+        ).all()
     assert len(completed_records) == sum(len(attempt["candidates"]) for attempt in raw_attempts)
     displayed = [row for row in completed_records if row.displayed]
     assert len(displayed) == 3
     assert all(row.eligible for row in displayed)
     assert [row.display_order for row in displayed] == [1, 2, 3]
+    generated_angles = {candidate["editorial_angle"] for candidate in raw_attempts[0]["candidates"]}
+    assert set(editorial_brief["recommended_angles"]) <= generated_angles
+    assert set(cited["historical_post_ids"]) <= set(supplied["historical_post_ids"])
+    assert set(cited["feedback_signal_ids"]) <= set(supplied["feedback_signal_ids"])
+    assert reranker is not None
+    assert reranker.status == "shadow_completed"
+    assert reranker.label_source == "policy"
+    assert parent_run.status == "completed"
+    assert parent_run.capability == "editorial_pipeline"
+    parent_capabilities = [step.capability for step in parent_steps]
+    assert parent_capabilities[:6] == [
+        "retrieve_evidence",
+        "evidence_coverage",
+        "content_mode_selection",
+        "editorial_angle_planning",
+        "caption_generation",
+        "caption_verification",
+    ]
+    assert parent_capabilities[-2:] == [
+        "joint_multimodal_reranking",
+        "slate_diversity_optimization",
+    ]
+    assert parent_capabilities[6:-2] in ([], ["claim_level_grounding"])
+    assert parent_steps[-1].artifact_type == "caption_slate"
+    assert parent_steps[-1].artifact_id == str(completed_slate.id)
+
+    mined = HardNegativeMiningService(database, settings).mine(limit=50)
+    assert int(mined["created"]) > 0
+    assert mined["label_source"] == "policy"
+    assert mined["human_labels_created"] == 0
+    assert mined["product_training_eligible"] is False
+    with database.session() as session:
+        hard_negatives = session.scalars(
+            select(PairwisePreference).where(
+                PairwisePreference.preference_source == "hard_negative_mining"
+            )
+        ).all()
+    assert hard_negatives
+    assert {row.label_source for row in hard_negatives} == {"policy"}
 
     abstained = await CaptionService(
         database,
@@ -124,9 +187,17 @@ async def test_complete_caption_slate_and_abstention_provenance_are_persisted(
         model_run = session.get(ModelRun, abstained_slate.model_run_id)
         assert model_run is not None
         structured_output = json.loads(model_run.structured_output_json)
+        abstained_parent = session.scalar(
+            select(IntelligenceAgentRun).where(
+                IntelligenceAgentRun.run_key == f"caption-slate-{abstained_slate.id}-adaptive-v1"
+            )
+        )
     assert abstained_slate.status == "abstained"
     assert len(failed_records) == 6
     assert all(not row.eligible for row in failed_records)
     assert all(json.loads(row.verifier_result_json)["passed"] is False for row in failed_records)
     assert all(not row.displayed for row in failed_records)
     assert len(structured_output["attempts"]) == 2
+    assert abstained_parent is not None
+    assert abstained_parent.status == "abstained"
+    assert abstained_parent.error_summary

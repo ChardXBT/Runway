@@ -78,6 +78,9 @@ def test_existing_schema_upgrade_and_rollback_preserve_catalogue(
         "active_learning_batches",
         "active_learning_selections",
         "shadow_editorial_decisions",
+        "candidate_exposures",
+        "multimodal_rerank_runs",
+        "composed_retrieval_examples",
     }
     assert required_tables <= set(upgraded.get_table_names())
     assert "caption_slate_id" in {column["name"] for column in upgraded.get_columns("proposals")}
@@ -85,6 +88,6 @@ def test_existing_schema_upgrade_and_rollback_preserve_catalogue(
         assert connection.execute(text("SELECT count(*) FROM posts")).scalar_one() == post_count
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == "0009_editorial_diversity"
+            == "0010_neural_intelligence"
         )
     upgraded_engine.dispose()

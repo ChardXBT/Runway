@@ -15,7 +15,8 @@ from pathlib import Path
 
 import typer
 from PIL import Image, ImageDraw
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.engine import Engine
 
 from runway.analysis.runtime import AgentRuntimeError, CodexAgentRuntime
 from runway.analysis.service import AnalysisService
@@ -76,6 +77,9 @@ feedback_app = typer.Typer(help="Reconcile and verify canonical feedback signals
 runs_app = typer.Typer(help="Inspect persisted intelligence-agent runs.")
 study_app = typer.Typer(help="Operate preregistered blind creator studies.")
 active_learning_app = typer.Typer(help="Select and export high-information creator-label queues.")
+arena_app = typer.Typer(help="Operate the blinded three-arm raw-frontier arena.")
+neural_app = typer.Typer(help="Evaluate local neural representation challengers offline.")
+composed_app = typer.Typer(help="Prepare learned composed-image retrieval datasets.")
 
 app.add_typer(capture_app, name="capture")
 app.add_typer(catalog_app, name="catalog")
@@ -98,6 +102,9 @@ intelligence_app.add_typer(feedback_app, name="feedback")
 intelligence_app.add_typer(runs_app, name="runs")
 intelligence_app.add_typer(study_app, name="study")
 intelligence_app.add_typer(active_learning_app, name="active-learning")
+intelligence_app.add_typer(arena_app, name="arena")
+intelligence_app.add_typer(neural_app, name="neural")
+intelligence_app.add_typer(composed_app, name="composed-retrieval")
 
 
 @app.callback()
@@ -147,14 +154,27 @@ def _load_json_list_or_field(
     return value
 
 
+def _read_only_schema_engine(database_path: Path) -> Engine:
+    path = database_path.resolve()
+    if not path.is_file():
+        raise typer.BadParameter(f"database does not exist: {path}")
+    return create_engine(
+        f"sqlite+pysqlite:///file:{path.as_posix()}?mode=ro&uri=true",
+        future=True,
+    )
+
+
 @database_app.command("schema-status")
 def database_schema_status() -> None:
     """Report the current migration and deterministic schema fingerprint."""
     from runway.db.schema_contract import schema_snapshot
 
     settings = get_settings()
-    database = initialize_database(settings)
-    observed = schema_snapshot(database.engine)
+    engine = _read_only_schema_engine(settings.database_path)
+    try:
+        observed = schema_snapshot(engine)
+    finally:
+        engine.dispose()
     typer.echo(
         json.dumps(
             {
@@ -179,11 +199,14 @@ def database_schema_verify() -> None:
     )
 
     settings = get_settings()
-    database = initialize_database(settings)
+    engine = _read_only_schema_engine(settings.database_path)
     expected = load_schema_snapshot(
         settings.project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
     )
-    observed = schema_snapshot(database.engine)
+    try:
+        observed = schema_snapshot(engine)
+    finally:
+        engine.dispose()
     result = compare_schema_snapshots(expected, observed)
     typer.echo(json.dumps(result, indent=2, default=str))
     if not result["matches"]:
@@ -904,6 +927,252 @@ def intelligence_active_learning_export(
     settings = get_settings()
     database = initialize_database(settings)
     typer.echo(str(ActiveLearningService(database, settings).export(batch_id, output)))
+
+
+@arena_app.command("plan")
+def intelligence_arena_plan(
+    cases: Path = typer.Option(..., exists=True, dir_okay=False),
+    study_key: str = typer.Option(..., min=1),
+    seed: int = typer.Option(20260722),
+    target_cases: int = typer.Option(50, min=1, max=1000),
+) -> None:
+    """Persist a fixed-identity, same-image, three-arm arena plan."""
+    from runway.intelligence.frontier_arena import ArenaCasePlan, FrontierArenaService
+
+    parsed = [
+        ArenaCasePlan.model_validate(value)
+        for value in _load_json_list_or_field(cases, field="cases")
+    ]
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = FrontierArenaService(database, settings).plan(
+        study_key=study_key,
+        cases=parsed,
+        seed=seed,
+        target_case_count=target_cases,
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@arena_app.command("export")
+def intelligence_arena_export(
+    study_id: int = typer.Option(..., min=1),
+    output: Path = typer.Option(...),
+) -> None:
+    """Export a provenance-blind three-caption creator review file."""
+    from runway.intelligence.frontier_arena import FrontierArenaService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(str(FrontierArenaService(database, settings).export(study_id, output)))
+
+
+@arena_app.command("import")
+def intelligence_arena_import(
+    study_id: int = typer.Option(..., min=1),
+    review: Path = typer.Option(..., exists=True, dir_okay=False),
+    review_session: str = typer.Option(..., min=1),
+    reviewer_label: str = typer.Option("local-creator", min=1),
+) -> None:
+    """Import genuine creator arena responses; model origins remain hidden."""
+    from runway.intelligence.frontier_arena import (
+        ArenaResponseImport,
+        FrontierArenaService,
+    )
+
+    parsed = [
+        ArenaResponseImport.model_validate(value)
+        for value in _load_json_list_or_field(review, field="responses")
+    ]
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = FrontierArenaService(database, settings).import_responses(
+        study_id,
+        responses=parsed,
+        review_session=review_session,
+        reviewer_label=reviewer_label,
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@arena_app.command("status")
+def intelligence_arena_status(study_id: int = typer.Option(..., min=1)) -> None:
+    from runway.intelligence.frontier_arena import FrontierArenaService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(
+        json.dumps(
+            FrontierArenaService(database, settings).status(study_id),
+            indent=2,
+            default=str,
+        )
+    )
+
+
+@arena_app.command("report")
+def intelligence_arena_report(study_id: int = typer.Option(..., min=1)) -> None:
+    from runway.intelligence.frontier_arena import FrontierArenaService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(
+        json.dumps(
+            FrontierArenaService(database, settings).report(study_id),
+            indent=2,
+            default=str,
+        )
+    )
+
+
+def _neural_model_paths(values: list[str] | None) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for value in values or []:
+        key, separator, raw_path = value.partition("=")
+        if not separator or not key.strip() or not raw_path.strip():
+            raise typer.BadParameter("model paths must use challenger-key=local-directory")
+        result[key.strip()] = Path(raw_path.strip())
+    return result
+
+
+@neural_app.command("readiness")
+def intelligence_neural_readiness(
+    model_path: list[str] | None = typer.Option(None, "--model-path"),
+    output: Path | None = typer.Option(None),
+) -> None:
+    """Report local challenger readiness without loading or downloading weights."""
+    from runway.evaluation.neural_challengers import NeuralChallengerEvaluator
+
+    settings = get_settings()
+    evaluator = NeuralChallengerEvaluator(settings)
+    report = evaluator.readiness(_neural_model_paths(model_path))
+    if output is not None:
+        evaluator.write_report(report, output)
+    typer.echo(json.dumps(report, indent=2, default=str))
+
+
+@neural_app.command("evaluate-text")
+def intelligence_neural_evaluate_text(
+    challenger: str = typer.Option(..., min=1),
+    model_path: Path = typer.Option(..., exists=True, file_okay=False),
+    revision: str = typer.Option(..., min=1),
+    dataset: Path = typer.Option(..., exists=True, dir_okay=False),
+    license_verified: bool = typer.Option(False, "--license-verified"),
+    output: Path | None = typer.Option(None),
+) -> None:
+    """Compare a pinned local text encoder with the deterministic baseline."""
+    from runway.evaluation.neural_challengers import NeuralChallengerEvaluator
+
+    evaluator = NeuralChallengerEvaluator(get_settings())
+    report = evaluator.evaluate_text(
+        challenger,
+        model_path=model_path,
+        revision=revision,
+        cases=evaluator.load_text_cases(dataset),
+        license_verified=license_verified,
+    )
+    if output is not None:
+        evaluator.write_report(report, output)
+    typer.echo(json.dumps(report, indent=2, default=str))
+
+
+@neural_app.command("evaluate-image-text")
+def intelligence_neural_evaluate_image_text(
+    challenger: str = typer.Option(..., min=1),
+    model_path: Path = typer.Option(..., exists=True, file_okay=False),
+    revision: str = typer.Option(..., min=1),
+    dataset: Path = typer.Option(..., exists=True, dir_okay=False),
+    license_verified: bool = typer.Option(False, "--license-verified"),
+    output: Path | None = typer.Option(None),
+) -> None:
+    """Compare a pinned local aligned encoder with the deterministic baseline."""
+    from runway.evaluation.neural_challengers import NeuralChallengerEvaluator
+
+    evaluator = NeuralChallengerEvaluator(get_settings())
+    report = evaluator.evaluate_image_text(
+        challenger,
+        model_path=model_path,
+        revision=revision,
+        cases=evaluator.load_image_text_cases(dataset),
+        license_verified=license_verified,
+    )
+    if output is not None:
+        evaluator.write_report(report, output)
+    typer.echo(json.dumps(report, indent=2, default=str))
+
+
+@composed_app.command("readiness")
+def intelligence_composed_readiness() -> None:
+    from runway.intelligence.composed_retrieval import ComposedRetrievalService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(
+        json.dumps(
+            ComposedRetrievalService(database, settings).readiness(),
+            indent=2,
+            default=str,
+        )
+    )
+
+
+@composed_app.command("add-example")
+def intelligence_composed_add_example(
+    reference_media_id: int = typer.Option(..., min=1),
+    instruction: str = typer.Option(..., min=1),
+    target_media_id: int = typer.Option(..., min=1),
+    label_source: str = typer.Option("policy"),
+    split: str = typer.Option("development"),
+    reviewed: bool = typer.Option(False, "--reviewed"),
+) -> None:
+    """Add one provenance-labelled reference/instruction/target example."""
+    from runway.intelligence.composed_retrieval import ComposedRetrievalService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    result = ComposedRetrievalService(database, settings).add_example(
+        reference_media_asset_id=reference_media_id,
+        modification_instruction=instruction,
+        target_media_asset_id=target_media_id,
+        label_source=label_source,
+        split=split,
+        reviewed=reviewed,
+        instruction_source={"source": "explicit_cli_input"},
+    )
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@intelligence_app.command("hard-negatives-mine")
+def intelligence_hard_negatives_mine(
+    limit: int = typer.Option(500, min=1, max=10_000),
+) -> None:
+    """Mine policy-labelled contrasts without creating creator-truth labels."""
+    from runway.intelligence.hard_negatives import HardNegativeMiningService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(
+        json.dumps(
+            HardNegativeMiningService(database, settings).mine(limit=limit),
+            indent=2,
+            default=str,
+        )
+    )
+
+
+@intelligence_app.command("exposure-report")
+def intelligence_exposure_report() -> None:
+    from runway.intelligence.exposure_bias import CandidateExposureService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    typer.echo(
+        json.dumps(
+            CandidateExposureService(database, settings).report(),
+            indent=2,
+            default=str,
+        )
+    )
 
 
 @intelligence_app.command("providers")
@@ -1817,6 +2086,18 @@ def profile_evaluate() -> None:
     try:
         result = StyleProfileService(database, settings).evaluate()
     except LookupError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@profile_app.command("content-modes-backfill")
+def profile_content_modes_backfill() -> None:
+    """Add learned modes to the active profile without invoking a model runtime."""
+    settings = get_settings()
+    database = initialize_database(settings)
+    try:
+        result = StyleProfileService(database, settings).backfill_content_modes()
+    except (LookupError, ValueError, RuntimeError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(json.dumps(result, indent=2, default=str))
 

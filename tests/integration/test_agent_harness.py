@@ -10,6 +10,7 @@ from runway.db.base import Database
 from runway.db.models import IntelligenceAgentRun, IntelligenceAgentStep
 from runway.db.repositories import get_channel
 from runway.intelligence.agent_harness import (
+    AdaptiveEditorialRouter,
     AgentBudget,
     AgentBudgetExceeded,
     AgentHarnessError,
@@ -264,3 +265,67 @@ async def test_agent_harness_persists_typed_abstention_without_retry(
     assert detail["status"] == "abstained"
     assert detail["error_summary"] == ("Visible evidence is insufficient for a grounded caption.")
     assert detail["steps"][0]["status"] == "abstained"  # type: ignore[index]
+
+
+def test_agent_harness_persists_one_adaptive_observed_parent_trace(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database)
+    input_value = AgentInputEnvelope(
+        entity_ids=[17],
+        payload={"candidate_id": 17, "caption_slate_id": 23},
+    )
+    plan = AdaptiveEditorialRouter.plan(
+        input_value=input_value,
+        image_fact_confidence=0.92,
+        retrieval_coverage=0.9,
+        rank_separation=0.2,
+        factual_claim_risk=False,
+        identity_conflict=False,
+    )
+    outputs = {
+        step.capability: AgentOutputEnvelope(
+            payload={"observed": True, "capability": step.capability}
+        )
+        for step in plan.steps
+    }
+
+    run_id = harness.persist_observed_pipeline(
+        channel_id=channel_id,
+        plan=plan,
+        outputs=outputs,
+        provider="mock",
+        model="fixture",
+        prompt_version="captions-v5",
+        run_key="observed-caption-slate-23",
+        terminal_status="completed",
+        artifact_type="caption_slate",
+        artifact_id=23,
+        usage={"prompt_tokens": 4, "completion_tokens": 3},
+    )
+    replayed_id = harness.persist_observed_pipeline(
+        channel_id=channel_id,
+        plan=plan,
+        outputs=outputs,
+        provider="mock",
+        model="fixture",
+        prompt_version="captions-v5",
+        run_key="observed-caption-slate-23",
+        terminal_status="completed",
+        artifact_type="caption_slate",
+        artifact_id=23,
+        usage={"prompt_tokens": 4, "completion_tokens": 3},
+    )
+
+    assert replayed_id == run_id
+    detail = harness.inspect(run_id)
+    assert detail["capability"] == "editorial_pipeline"
+    assert detail["input"]["execution_mode"] == "observed_canonical_trace"  # type: ignore[index]
+    assert [step["capability"] for step in detail["steps"]] == [  # type: ignore[index]
+        step.capability for step in plan.steps
+    ]
+    assert detail["steps"][-1]["artifact_type"] == "caption_slate"  # type: ignore[index]
+    assert detail["steps"][-1]["artifact_id"] == "23"  # type: ignore[index]

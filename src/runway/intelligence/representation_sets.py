@@ -55,10 +55,15 @@ REQUIRED_CHALLENGER_ACTIVATION_GATES = frozenset(
         "schema_contract",
         "coverage",
         "channel_isolation",
-        "quality_non_regression",
+        "retrieval_improvement",
+        "downstream_caption_preference",
+        "duplicate_non_regression",
+        "grounding_non_regression",
         "latency_budget",
+        "hardware_recorded",
         "provider_provenance",
         "offline_only",
+        "rollback_verified",
     }
 )
 

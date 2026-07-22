@@ -15,6 +15,7 @@ from runway.db.models import (
 )
 from runway.db.repositories import get_channel
 from runway.intelligence.embeddings import (
+    ActiveRepresentationResolver,
     DeterministicTextEmbeddingProvider,
     RepresentationProviderRegistry,
     RepresentationStore,
@@ -88,6 +89,20 @@ def test_representation_set_plan_resume_validate_activate_and_rollback(
         gate_results={gate: True for gate in REQUIRED_CHALLENGER_ACTIVATION_GATES},
     )
     assert activated["active"] is True
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    resolved_provider, resolution = ActiveRepresentationResolver(database, registry).resolve(
+        channel_id,
+        modality="text",
+    )
+    assert resolved_provider.name == "fixture-v2"
+    assert resolution.representation_set_id == second_id
+    assert resolution.resolution == "active_set"
+    with pytest.raises(LookupError, match="not fall back"):
+        ActiveRepresentationResolver(database).resolve(
+            channel_id,
+            modality="text",
+        )
     with database.session() as session:
         assert session.get(RepresentationSet, first_id).status == "superseded"  # type: ignore[union-attr]
         assert session.get(RepresentationSet, second_id).active is True  # type: ignore[union-attr]

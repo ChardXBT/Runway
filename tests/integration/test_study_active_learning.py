@@ -50,7 +50,7 @@ def _study_cases(
     ]
 
 
-def test_blind_order_export_and_human_import_are_provenance_safe(
+def test_blind_order_export_and_offline_fixture_import_are_provenance_safe(
     database: Database,
     settings: Settings,
     tmp_path: Path,
@@ -99,17 +99,20 @@ def test_blind_order_export_and_human_import_are_provenance_safe(
         int(first["study_id"]),
         responses,
         review_session="creator-session-1",
+        reviewer_label="offline-test-fixture",
+        reviewer_kind="engineering_fixture",
     )
     assert imported["response_count"] == 9
     assert imported["pairwise_preferences_created"] == 9
     report = service.report(int(first["study_id"]))
-    assert report["sample_size"] == 9
+    assert imported["human_response_count"] == 0
+    assert report["sample_size"] == 0
     assert report["synthetic_labels"] == 0
     with database.session() as session:
         assert session.scalar(select(func.count(BlindStudyResponse.id))) == 9
         pairs = session.scalars(select(PairwisePreference)).all()
     assert len(pairs) == 9
-    assert {pair.label_source for pair in pairs} == {"human"}
+    assert {pair.label_source for pair in pairs} == {"engineering_fixture"}
     assert all(pair.source_study_response_id is not None for pair in pairs)
     assert any(pair.learning_split == "final_holdout" for pair in pairs)
     with pytest.raises(ValueError, match="duplicate labels"):
@@ -117,6 +120,8 @@ def test_blind_order_export_and_human_import_are_provenance_safe(
             int(first["study_id"]),
             responses[:1],
             review_session="creator-session-2",
+            reviewer_label="offline-test-fixture",
+            reviewer_kind="engineering_fixture",
         )
 
 

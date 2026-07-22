@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from sqlalchemy import select, text
+from sqlalchemy import text
 
 from runway.api.app import create_app
 from runway.config import Settings
@@ -49,7 +49,7 @@ def test_migrations_seed_channel_and_enable_wal(database: Database) -> None:
     assert channel_count == 1
     assert journal_mode.lower() == "wal"
     assert foreign_keys == 1
-    assert migration == "0009_editorial_diversity"
+    assert migration == "0010_neural_intelligence"
     assert feedback_table == 1
     assert publisher_table == 1
     assert schedule_slot == 1
@@ -111,25 +111,21 @@ def test_passive_connection_and_intelligence_status_are_truthful(
     assert intelligence.json()["active_model_targets"] == []
 
 
-def test_intelligence_readiness_requires_enough_labels_for_one_target(
+def test_intelligence_readiness_excludes_nonhuman_engineering_fixtures(
     database: Database,
     settings: Settings,
 ) -> None:
     with database.session() as session:
         channel_id = get_channel(session, settings.channel_handle).id
-        for target, count, split in (
-            ("caption", 7, "development"),
-            ("image", 1, "development"),
-            ("pairing", 8, "evaluation"),
-        ):
+        for target, count, split in (("caption", 8, "development"),):
             for index in range(count):
                 session.add(
                     PairwisePreference(
                         channel_id=channel_id,
                         preferred_text=f"Preferred {target} {index}",
                         dispreferred_text=f"Other {target} {index}",
-                        preference_source="creator_decision",
-                        label_source="human",
+                        preference_source="offline_engineering_fixture",
+                        label_source="engineering_fixture",
                         target=target,
                         learning_split=split,
                         idempotency_key=f"readiness:{target}:{index}",
@@ -139,35 +135,13 @@ def test_intelligence_readiness_requires_enough_labels_for_one_target(
     with TestClient(create_app(settings)) as client:
         collecting = client.get("/api/intelligence/status").json()
 
-    assert collecting["human_pairwise_labels"] == 16
-    assert collecting["human_pairwise_labels_by_target"]["pairing"] == 8
-    assert collecting["training_pairwise_labels_by_target"]["pairing"] == 0
-    assert collecting["trainable_targets"] == []
-    assert collecting["state"] == "collecting_creator_labels"
-
-    with database.session() as session:
-        channel_id = session.scalar(select(PairwisePreference.channel_id).limit(1))
-        assert channel_id is not None
-        session.add(
-            PairwisePreference(
-                channel_id=channel_id,
-                preferred_text="Preferred caption 8",
-                dispreferred_text="Other caption 8",
-                preference_source="creator_decision",
-                label_source="human",
-                target="caption",
-                learning_split="development",
-                idempotency_key="readiness:caption:7",
-            )
-        )
-
-    with TestClient(create_app(settings)) as client:
-        ready = client.get("/api/intelligence/status").json()
-
-    assert ready["training_pairwise_labels_by_target"] == {
-        "caption": 8,
-        "image": 1,
+    assert collecting["human_pairwise_labels"] == 0
+    assert collecting["training_pairwise_labels_by_target"] == {
+        "caption": 0,
+        "image": 0,
         "pairing": 0,
     }
-    assert ready["trainable_targets"] == ["caption"]
-    assert ready["state"] == "ready_to_train"
+    assert collecting["trainable_targets"] == []
+    assert collecting["state"] == "collecting_creator_labels"
+    assert collecting["engineering_minimum_labels_by_target"]["caption"] == 8
+    assert collecting["product_challenger_minimum_labels_by_target"]["caption"] == 100

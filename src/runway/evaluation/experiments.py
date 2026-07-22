@@ -334,7 +334,7 @@ class ExperimentRunner:
             "components": sorted(weights),
             "model_versions": {"scoring": "deterministic-offline-v1"},
             "prompt_versions": {
-                "caption": "captions-v4",
+                "caption": "captions-v5",
                 "annotation": "historical-annotation-v3",
             },
             "started_at": datetime.now(UTC).isoformat(),

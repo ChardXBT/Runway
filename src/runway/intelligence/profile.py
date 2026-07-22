@@ -26,8 +26,14 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
     AuditEvent,
+    BlindStudy,
+    BlindStudyCase,
+    BlindStudyResponse,
+    CaptionCandidateRecord,
+    CaptionExposure,
     CaptionFeedback,
     FeedbackSignal,
+    IntelligenceRetrievalRun,
     MediaAsset,
     ModelRun,
     PairwisePreference,
@@ -35,16 +41,19 @@ from runway.db.models import (
     PostAnnotation,
     PostMedia,
     Proposal,
+    RepresentationSet,
+    RetrievalEvidenceRecord,
     StyleProfile,
     utcnow,
 )
 from runway.db.repositories import audit, get_channel
+from runway.intelligence.content_modes import ChannelContentModeService
 from runway.intelligence.policies import ChannelPolicyService
 from runway.media.service import cosine_similarity, ensure_fixture_images, inspect_image
 
 
 class StyleProfileService:
-    schema_version = "channel-profile-v3"
+    schema_version = "channel-profile-v4"
 
     def __init__(
         self,
@@ -340,6 +349,10 @@ class StyleProfileService:
                 "style summary cited post IDs absent from its evidence payload: "
                 + ", ".join(str(value) for value in sorted(unknown_citations))
             )
+        content_modes = ChannelContentModeService(self.database).learn(
+            channel_id=channel_id,
+            post_ids=[post.id for post in training],
+        )
         profile: dict[str, Any] = {
             "schema_version": self.schema_version,
             "annotation_versions": sorted(
@@ -451,6 +464,7 @@ class StyleProfileService:
                 "recent_rejection_ids": [proposal.id for proposal in rejected],
                 "rotation_windows": [3, 10, 30],
             },
+            "content_modes": content_modes,
             "explicit_channel_policy": policy.model_dump(),
             "learned_creator_preference": {
                 "legacy_feedback_count": len(legacy_feedback),
@@ -531,6 +545,130 @@ class StyleProfileService:
             result["catalogue_cutoff"] = record.catalogue_cutoff.isoformat()
             return result
 
+    def backfill_content_modes(self) -> dict[str, object]:
+        """Create an immutable profile revision with learned content modes.
+
+        This intentionally reuses the active profile and active multimodal
+        representation set. It never invokes the generation runtime and is safe
+        to repeat: an equivalent learned mode payload leaves the active profile
+        unchanged.
+        """
+        with self.database.session() as session:
+            channel = get_channel(session, self.settings.channel_handle)
+            channel_id = channel.id
+            source = session.scalar(
+                select(StyleProfile)
+                .where(
+                    StyleProfile.channel_id == channel_id,
+                    StyleProfile.is_active.is_(True),
+                )
+                .order_by(desc(StyleProfile.version))
+                .limit(1)
+            )
+            if source is None:
+                raise LookupError("no active style profile")
+            source_id = source.id
+            source_version = source.version
+            source_cutoff = source.catalogue_cutoff
+            representatives = source.representative_post_ids_json
+            excluded = source.excluded_post_ids_json
+            profile = cast(dict[str, Any], json.loads(source.profile_json))
+
+        post_ids = [
+            int(value)
+            for value in cast(list[Any], profile.get("training_post_ids", []))
+            if isinstance(value, int) and not isinstance(value, bool)
+        ]
+        if len(post_ids) < 3:
+            raise ValueError("active profile has fewer than three training post IDs")
+        learned_modes = ChannelContentModeService(self.database).learn(
+            channel_id=channel_id,
+            post_ids=post_ids,
+        )
+        content_modes = cast(
+            dict[str, object],
+            json.loads(json.dumps(learned_modes, sort_keys=True)),
+        )
+        if content_modes.get("status") != "learned":
+            return {
+                "status": "blocked",
+                "profile_id": source_id,
+                "profile_version": source_version,
+                "content_modes": content_modes,
+            }
+        if profile.get("content_modes") == content_modes:
+            self._write_profile_reports(source_version, profile)
+            return {
+                "status": "unchanged",
+                "profile_id": source_id,
+                "profile_version": source_version,
+                "content_modes": content_modes,
+            }
+
+        with self.database.session() as session:
+            current = session.scalar(
+                select(StyleProfile)
+                .where(
+                    StyleProfile.channel_id == channel_id,
+                    StyleProfile.is_active.is_(True),
+                )
+                .order_by(desc(StyleProfile.version))
+                .limit(1)
+            )
+            if current is None or current.id != source_id:
+                raise RuntimeError("active style profile changed during content-mode backfill")
+            next_version = int(
+                session.scalar(
+                    select(func.max(StyleProfile.version)).where(
+                        StyleProfile.channel_id == channel_id
+                    )
+                )
+                or 0
+            ) + 1
+            profile["version"] = next_version
+            profile["content_modes"] = content_modes
+            profile["profile_derivation"] = {
+                "kind": "content_mode_backfill",
+                "source_profile_id": source_id,
+                "source_profile_version": source_version,
+                "content_mode_version": ChannelContentModeService.version,
+                "generation_runtime_invoked": False,
+            }
+            current.is_active = False
+            record = StyleProfile(
+                channel_id=channel_id,
+                version=next_version,
+                catalogue_cutoff=source_cutoff,
+                profile_json=json.dumps(profile, sort_keys=True),
+                representative_post_ids_json=representatives,
+                excluded_post_ids_json=excluded,
+                is_active=True,
+            )
+            session.add(record)
+            session.flush()
+            audit(
+                session,
+                "style_profile_content_modes_backfilled",
+                "style_profile",
+                record.id,
+                {
+                    "source_profile_id": source_id,
+                    "source_profile_version": source_version,
+                    "new_profile_version": next_version,
+                    "content_mode_count": content_modes.get("mode_count", 0),
+                    "generation_runtime_invoked": False,
+                },
+            )
+            profile_id = record.id
+        self._write_profile_reports(next_version, profile)
+        return {
+            "status": "created",
+            "profile_id": profile_id,
+            "profile_version": next_version,
+            "source_profile_id": source_id,
+            "content_modes": content_modes,
+        }
+
     def list_profiles(self) -> list[dict[str, object]]:
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
@@ -574,6 +712,7 @@ class StyleProfileService:
         holdout_ids = [int(value) for value in cast(list[Any], profile["holdout_post_ids"])]
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
+            channel_id = channel.id
             posts = {
                 post.id: post
                 for post in session.scalars(
@@ -679,7 +818,9 @@ class StyleProfileService:
         retrieval_relevance = retrieval_hits / len(holdout_matched) if holdout_matched else 0.0
 
         duplicate_metrics = self._duplicate_metrics()
+        current_pipeline = self._current_pipeline_metrics(channel_id)
         report: dict[str, Any] = {
+            "evaluation_version": "current-intelligence-evaluation-v2",
             "profile_version": profile["version"],
             "training_samples": len(training_ids),
             "holdout_samples": len(holdout_ids),
@@ -694,6 +835,17 @@ class StyleProfileService:
             "review_sample_strategy": "manual uncertainty/outlier audit; not a random sample",
             "duplicate_detection": duplicate_metrics,
             "retrieval_top3_topic_relevance": round(retrieval_relevance, 6),
+            "current_pipeline": current_pipeline,
+            "historical_metrics": {
+                "status": "historical_diagnostic_only",
+                "definitive": False,
+                "image_caption_matching": matching,
+                "generic_vs_channel_caption_ranking_accuracy": round(
+                    ranking_accuracy,
+                    6,
+                ),
+                "legacy_visual_top3_topic_relevance": round(retrieval_relevance, 6),
+            },
             "sample_errors": matching.get("errors", []),
             "limitations": [
                 "Image-caption matching, caption ranking, and retrieval relevance use the "
@@ -705,10 +857,143 @@ class StyleProfileService:
                 "YouTube exposed relative publication dates, so reconstructed timestamps "
                 "are approximate.",
                 "The system builds a retrieval profile; it does not fine-tune model weights.",
+                "Legacy image-caption projection, generic-caption ranking, and franchise-style "
+                "retrieval metrics are retained only as historical diagnostics. Current pipeline "
+                "evidence is reported separately and raw-frontier claims require human arena data.",
             ],
         }
         self._write_evaluation(report)
         return report
+
+    def _current_pipeline_metrics(self, channel_id: int) -> dict[str, object]:
+        with self.database.session() as session:
+            active_sets = session.scalars(
+                select(RepresentationSet)
+                .where(
+                    RepresentationSet.channel_id == channel_id,
+                    RepresentationSet.active.is_(True),
+                    RepresentationSet.status == "active",
+                )
+                .order_by(RepresentationSet.scope, RepresentationSet.purpose)
+            ).all()
+            selected_evidence = session.scalars(
+                select(RetrievalEvidenceRecord)
+                .join(
+                    IntelligenceRetrievalRun,
+                    IntelligenceRetrievalRun.id == RetrievalEvidenceRecord.retrieval_run_id,
+                )
+                .where(
+                    IntelligenceRetrievalRun.channel_id == channel_id,
+                    RetrievalEvidenceRecord.selected.is_(True),
+                )
+            ).all()
+            caption_rows = session.scalars(
+                select(CaptionCandidateRecord).where(
+                    CaptionCandidateRecord.channel_id == channel_id,
+                    CaptionCandidateRecord.displayed.is_(True),
+                )
+            ).all()
+            exposures = session.scalars(
+                select(CaptionExposure).where(CaptionExposure.channel_id == channel_id)
+            ).all()
+            human_labels = session.execute(
+                select(PairwisePreference.target, func.count(PairwisePreference.id))
+                .where(
+                    PairwisePreference.channel_id == channel_id,
+                    PairwisePreference.label_source == "human",
+                )
+                .group_by(PairwisePreference.target)
+            ).all()
+            arena_studies = session.scalars(
+                select(BlindStudy).where(
+                    BlindStudy.channel_id == channel_id,
+                    BlindStudy.target == "frontier_arena",
+                )
+            ).all()
+            arena_case_count = 0
+            arena_response_count = 0
+            if arena_studies:
+                study_ids = [study.id for study in arena_studies]
+                arena_case_count = int(
+                    session.scalar(
+                        select(func.count(BlindStudyCase.id)).where(
+                            BlindStudyCase.blind_study_id.in_(study_ids)
+                        )
+                    )
+                    or 0
+                )
+                arena_response_count = int(
+                    session.scalar(
+                        select(func.count(BlindStudyResponse.id))
+                        .join(
+                            BlindStudyCase,
+                            BlindStudyCase.id == BlindStudyResponse.blind_study_case_id,
+                        )
+                        .where(BlindStudyCase.blind_study_id.in_(study_ids))
+                        .where(BlindStudyResponse.reviewer_kind == "creator")
+                    )
+                    or 0
+                )
+
+        grounding_passes = 0
+        for row in caption_rows:
+            try:
+                result = json.loads(row.verifier_result_json)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            grounding_passes += bool(isinstance(result, dict) and result.get("passed") is True)
+        role_counts = Counter(row.evidence_role or "unassigned" for row in selected_evidence)
+        no_edit = sum(
+            exposure.decision_type in {"accepted", "selected", "approved"} for exposure in exposures
+        )
+        return {
+            "status": "current",
+            "representation_sets": [
+                {
+                    "id": row.id,
+                    "scope": row.scope,
+                    "purpose": row.purpose,
+                    "provider": row.provider,
+                    "model": row.model,
+                    "model_version": row.model_version,
+                    "coverage": (
+                        row.completed_count / row.expected_count if row.expected_count else 1.0
+                    ),
+                }
+                for row in active_sets
+            ],
+            "retrieval": {
+                "selected_evidence_count": len(selected_evidence),
+                "role_counts": dict(sorted(role_counts.items())),
+                "human_labelled_ndcg": None,
+                "human_labelled_recall_at_k": None,
+            },
+            "caption_pipeline": {
+                "displayed_candidate_count": len(caption_rows),
+                "grounding_pass_rate": (
+                    round(grounding_passes / len(caption_rows), 6) if caption_rows else None
+                ),
+                "exposure_count": len(exposures),
+                "observed_no_edit_acceptance_rate": (
+                    round(no_edit / len(exposures), 6) if exposures else None
+                ),
+            },
+            "human_preference_labels": {str(target): int(count) for target, count in human_labels},
+            "raw_frontier_arena": {
+                "study_count": len(arena_studies),
+                "case_count": arena_case_count,
+                "human_response_count": arena_response_count,
+                "comparison_data_available": arena_response_count > 0,
+                "superiority_claim_supported": False,
+                "superiority_requires": (
+                    "preregistered arm-specific win rate and confidence analysis; "
+                    "at least 50 directional cases"
+                ),
+                "status": (
+                    "results_available" if arena_response_count else "awaiting_human_review"
+                ),
+            },
+        }
 
     def _image_caption_matching(
         self,
@@ -957,6 +1242,12 @@ class StyleProfileService:
             json.dumps(profile, indent=2, sort_keys=True), encoding="utf-8"
         )
         stats = profile["caption_statistics"]
+        policy = profile.get("explicit_channel_policy")
+        policy_version = (
+            str(policy.get("version") or "not recorded")
+            if isinstance(policy, dict)
+            else "not recorded"
+        )
         lines = [
             f"# {profile['channel']} channel profile v{version}",
             "",
@@ -968,7 +1259,7 @@ class StyleProfileService:
             f"- Question frequency: {stats.get('question_frequency', 0):.1%}",
             f"- Exclamation frequency: {stats.get('exclamation_frequency', 0):.1%}",
             f"- Representative post IDs: {profile['summary_cited_post_ids']}",
-            f"- Policy version: {profile['explicit_channel_policy']['version']}",
+            f"- Policy version: {policy_version}",
             "",
             "This is a reproducible retrieval/style profile, not model-weight fine-tuning.",
         ]
@@ -982,14 +1273,24 @@ class StyleProfileService:
             json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
         )
         lines = [
-            f"# Style profile v{report['profile_version']} evaluation",
+            f"# Style profile v{report['profile_version']} current intelligence evaluation",
             "",
             f"- Train / holdout: {report['training_samples']} / {report['holdout_samples']}",
-            f"- Image-caption matching: {report['image_caption_matching']['accuracy']:.1%}",
-            f"- Channel-caption ranking: {report['channel_caption_ranking_accuracy']:.1%}",
-            f"- Retrieval top-3 topic relevance: {report['retrieval_top3_topic_relevance']:.1%}",
+            "- Active representation sets: "
+            f"{len(report['current_pipeline']['representation_sets'])}",
+            "- Human frontier-arena responses: "
+            f"{report['current_pipeline']['raw_frontier_arena']['human_response_count']}",
             "- Transformed duplicate recall: "
             f"{report['duplicate_detection']['transformed_true_positive_rate']:.1%}",
+            "",
+            "## Historical diagnostics (not definitive current quality scores)",
+            "",
+            "- Legacy image-caption projection: "
+            f"{report['image_caption_matching']['accuracy']:.1%}",
+            "- Generic-vs-channel caption ranking: "
+            f"{report['channel_caption_ranking_accuracy']:.1%}",
+            "- Legacy visual top-3 topic relevance: "
+            f"{report['retrieval_top3_topic_relevance']:.1%}",
             "",
             "## Limitations",
             "",

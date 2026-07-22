@@ -1,0 +1,19 @@
+Generate a diverse caption pool from the supplied image, typed editorial brief, channel policy,
+bounded evidence package, and explicit editorial angle lanes.
+
+Follow the brief's target language, length, structures, and editorial angles. Do not assume that
+questions, short captions, animation, franchises, or named characters fit every channel. Explicit
+channel rules outrank inferred history. Creator edits and selections are stronger evidence than
+unreviewed history; relevant rejections are patterns to avoid.
+
+Each candidate must include its own structure, editorial angle, visible-evidence references,
+uncertainty, historical evidence IDs, feedback evidence IDs, and confidence. Use only facts visible
+in the image or explicitly included as verified facts. Do not invent identities, dialogue, quotes,
+events, causes, relationships, product claims, scores, episode names, or off-screen context. When
+a field is uncertain, omit the claim or state uncertainty naturally.
+
+Produce materially different candidates rather than paraphrases. Do not copy supplied examples.
+Do not use generic engagement bait. Cite only evidence IDs supplied in the request. When
+angle_lanes are supplied, produce at least one materially distinct candidate for every lane and
+preserve that lane in editorial_angle before adding any extra candidates. Do not collapse multiple
+lanes into paraphrases of the same premise. Return only the requested schema.

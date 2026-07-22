@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, TypeVar
+from typing import Literal, Protocol, TypeVar, cast
 
 import numpy as np
 from sqlalchemy import desc, func, select
@@ -426,6 +426,189 @@ class RepresentationProviderRegistry:
             "multimodal": sorted(self._multimodal),
             "multi_vector": sorted(self._multi_vector),
         }
+
+
+@dataclass(frozen=True)
+class RepresentationResolution:
+    """Exact provider identity selected for one semantic score path."""
+
+    modality: Literal["text", "image", "multimodal"]
+    scope: str
+    purpose: str
+    provider: str
+    model: str
+    model_version: str
+    configuration_hash: str
+    representation_set_id: int | None
+    resolution: Literal["active_set", "deterministic_baseline"]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "modality": self.modality,
+            "scope": self.scope,
+            "purpose": self.purpose,
+            "provider": self.provider,
+            "model": self.model,
+            "model_version": self.model_version,
+            "configuration_hash": self.configuration_hash,
+            "representation_set_id": self.representation_set_id,
+            "resolution": self.resolution,
+        }
+
+
+@dataclass(frozen=True)
+class SemanticSimilarity:
+    score: float
+    representation: RepresentationResolution
+
+
+class ActiveRepresentationResolver:
+    """Canonical, channel-scoped provider resolver used by all semantic paths.
+
+    Historical records are still resolved by :class:`RepresentationStore`. This
+    resolver additionally guarantees that dynamic queries and comparisons use the
+    exact provider identity backing the active historical set. If an active set and
+    the configured local provider disagree, resolution fails closed instead of
+    silently falling back.
+    """
+
+    DEFAULTS: dict[str, tuple[str, str]] = {
+        "text": ("historical_text", "historical_caption_semantics"),
+        "image": ("historical_image", "historical_visual_semantics"),
+        "multimodal": ("historical_multimodal", "historical_pair_semantics"),
+    }
+
+    def __init__(
+        self,
+        database: Database,
+        registry: RepresentationProviderRegistry | None = None,
+    ):
+        self.database = database
+        if registry is None:
+            # Late import avoids a module cycle: neural providers implement the
+            # contracts defined in this module.
+            from runway.intelligence.neural_providers import configured_provider_registry
+
+            registry = configured_provider_registry(database.settings)
+        self.registry = registry
+        self.store = RepresentationStore(database)
+
+    def resolve(
+        self,
+        channel_id: int,
+        *,
+        modality: Literal["text", "image", "multimodal"],
+        scope: str | None = None,
+        purpose: str | None = None,
+    ) -> tuple[
+        TextEmbeddingProvider | ImageEmbeddingProvider | MultimodalEmbeddingProvider,
+        RepresentationResolution,
+    ]:
+        default_scope, default_purpose = self.DEFAULTS[modality]
+        effective_scope = scope or default_scope
+        effective_purpose = purpose or default_purpose
+        active_set = self.store.active_set(
+            channel_id=channel_id,
+            scope=effective_scope,
+            purpose=effective_purpose,
+        )
+        provider_name = active_set.provider if active_set is not None else "runway-local"
+        provider: TextEmbeddingProvider | ImageEmbeddingProvider | MultimodalEmbeddingProvider
+        if modality == "text":
+            provider = self.registry.text(provider_name)
+        elif modality == "image":
+            provider = self.registry.image(provider_name)
+        else:
+            provider = self.registry.multimodal(provider_name)
+        if active_set is not None and (
+            provider.model != active_set.model
+            or provider.version != active_set.model_version
+            or provider.configuration_fingerprint != active_set.configuration_hash
+        ):
+            raise RuntimeError(
+                "configured provider identity does not match active representation "
+                f"set {active_set.id}; no fallback was attempted"
+            )
+        return provider, RepresentationResolution(
+            modality=modality,
+            scope=effective_scope,
+            purpose=effective_purpose,
+            provider=provider.name,
+            model=provider.model,
+            model_version=provider.version,
+            configuration_hash=provider.configuration_fingerprint,
+            representation_set_id=active_set.id if active_set is not None else None,
+            resolution=("active_set" if active_set is not None else "deterministic_baseline"),
+        )
+
+    def text_similarity(
+        self,
+        channel_id: int,
+        first: str,
+        second: str,
+        *,
+        score_purpose: str,
+    ) -> SemanticSimilarity:
+        raw_provider, resolution = self.resolve(channel_id, modality="text")
+        provider = cast(TextEmbeddingProvider, raw_provider)
+        first_vector = provider.embed_text(first, purpose=score_purpose).as_array()[0]
+        second_vector = provider.embed_text(second, purpose=score_purpose).as_array()[0]
+        return SemanticSimilarity(
+            score=cosine(first_vector, second_vector),
+            representation=resolution,
+        )
+
+    def text_vector(
+        self,
+        channel_id: int,
+        text: str,
+        *,
+        score_purpose: str,
+    ) -> tuple[np.ndarray, RepresentationResolution]:
+        raw_provider, resolution = self.resolve(channel_id, modality="text")
+        provider = cast(TextEmbeddingProvider, raw_provider)
+        return provider.embed_text(text, purpose=score_purpose).as_array()[0], resolution
+
+    def image_vector(
+        self,
+        channel_id: int,
+        path: Path,
+        *,
+        score_purpose: str,
+    ) -> tuple[np.ndarray, RepresentationResolution]:
+        raw_provider, resolution = self.resolve(channel_id, modality="image")
+        provider = cast(ImageEmbeddingProvider, raw_provider)
+        return provider.embed_image(path, purpose=score_purpose).as_array()[0], resolution
+
+    def multimodal_vector(
+        self,
+        channel_id: int,
+        path: Path,
+        text: str,
+        *,
+        score_purpose: str,
+    ) -> tuple[np.ndarray, RepresentationResolution]:
+        raw_provider, resolution = self.resolve(channel_id, modality="multimodal")
+        provider = cast(MultimodalEmbeddingProvider, raw_provider)
+        return (
+            provider.embed_image_text(path, text, purpose=score_purpose).as_array()[0],
+            resolution,
+        )
+
+    def snapshot(self, channel_id: int) -> dict[str, object]:
+        result: dict[str, object] = {}
+        modalities: tuple[
+            Literal["text", "image", "multimodal"],
+            Literal["text", "image", "multimodal"],
+            Literal["text", "image", "multimodal"],
+        ] = ("text", "image", "multimodal")
+        for modality in modalities:
+            _provider, resolution = self.resolve(
+                channel_id,
+                modality=modality,
+            )
+            result[modality] = resolution.as_dict()
+        return result
 
 
 class RepresentationStore:

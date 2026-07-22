@@ -29,8 +29,9 @@ from runway.db.models import (
 from runway.db.repositories import audit, get_channel
 from runway.domain.enums import ProposalStatus, RunStatus
 from runway.domain.state_machine import require_transition
+from runway.intelligence.exposure_bias import CandidateExposureService
 from runway.intelligence.retrieval import RetrievalService
-from runway.ranking.diversity import CandidateDiversitySelector
+from runway.intelligence.slate_optimization import CandidateSlateOptimizer
 
 
 class NoDistinctCandidateError(ValueError):
@@ -44,8 +45,9 @@ class ProposalService:
         self.caption_service = CaptionService(database, settings)
         self.feedback = CaptionFeedbackService(database, settings)
         self.exposures = CaptionExposureService(database, settings)
+        self.candidate_exposures = CandidateExposureService(database, settings)
         self.retrieval = RetrievalService(database, settings)
-        self.diversity = CandidateDiversitySelector()
+        self.diversity = CandidateSlateOptimizer(database, settings)
         self._schedule_lock = threading.Lock()
 
     async def generate_batch(
@@ -90,14 +92,14 @@ class ProposalService:
                 .limit(20)
             ).all()
             accepted_by_id = {candidate.id: candidate for candidate in accepted}
-            candidates = self.diversity.order(
-                [candidate for candidate in accepted if candidate.id not in used_ids],
-                anchors=[
-                    accepted_by_id[candidate_id]
-                    for candidate_id in recent_anchor_ids
-                    if candidate_id in accepted_by_id
-                ],
-            )
+            available_candidates = [
+                candidate for candidate in accepted if candidate.id not in used_ids
+            ]
+            anchor_candidates = [
+                accepted_by_id[candidate_id]
+                for candidate_id in recent_anchor_ids
+                if candidate_id in accepted_by_id
+            ]
             target_times = [
                 self._planned_datetime(
                     local_start + timedelta(days=offset), timezone_name, default_time
@@ -113,7 +115,7 @@ class ProposalService:
                 ).all()
             )
             missing_count = days - len(occupied)
-            if not candidates and missing_count:
+            if not available_candidates and missing_count:
                 raise NoDistinctCandidateError(
                     "no sufficiently distinct unused candidate is available; "
                     "Runway will not create repetitive filler"
@@ -140,6 +142,33 @@ class ProposalService:
         created_ids: list[int] = []
         candidate_index = 0
         try:
+            selection_slate = self.diversity.select(
+                available_candidates,
+                anchors=anchor_candidates,
+                session_key=f"generation:{run_id}",
+            )
+            candidates = list(selection_slate.candidates)
+            if not candidates and missing_count:
+                raise NoDistinctCandidateError(
+                    "no sufficiently distinct unused candidate is available after active-"
+                    "representation slate optimization"
+                )
+            self.candidate_exposures.record_selection_pool(
+                channel_id=channel_id,
+                candidate_ids=[candidate.id for candidate in available_candidates],
+                selected_ids=[candidate.id for candidate in candidates],
+                session_key=f"generation:{run_id}",
+                diagnostics=selection_slate.diagnostics,
+                exploration_policy="deterministic_slate_v1",
+                randomized=False,
+            )
+            with self.database.session() as session:
+                loaded_run = session.get(GenerationRun, run_id)
+                if loaded_run is not None:
+                    loaded_run.selection_diagnostics_json = json.dumps(
+                        selection_slate.diagnostics,
+                        sort_keys=True,
+                    )
             for offset in range(days):
                 planned_date = local_start + timedelta(days=offset)
                 planned_at = self._planned_datetime(planned_date, timezone_name, default_time)
@@ -208,10 +237,10 @@ class ProposalService:
                     session.add(proposal)
                     session.flush()
                     if captions.slate_id is not None:
-                        slate = session.get(CaptionSlate, captions.slate_id)
-                        if slate is None or slate.channel_id != channel_id:
+                        caption_slate = session.get(CaptionSlate, captions.slate_id)
+                        if caption_slate is None or caption_slate.channel_id != channel_id:
                             raise ValueError("caption slate is missing or outside the channel")
-                        slate.proposal_id = proposal.id
+                        caption_slate.proposal_id = proposal.id
                     self._event(
                         session,
                         proposal.id,
@@ -294,6 +323,11 @@ class ProposalService:
             proposal_id = proposal.id if proposal else None
         if proposal_id is not None:
             self.exposures.record_display(proposal_id)
+            self.candidate_exposures.record_proposal_event(
+                proposal_id,
+                event_type="shown",
+                reason="presented in the creator review interface",
+            )
         return result
 
     def next_generation_date(self) -> date:
@@ -672,6 +706,11 @@ class ProposalService:
             image_verdict="good",
             source_event_id=decision_event_id,
         )
+        self.candidate_exposures.record_proposal_event(
+            proposal_id,
+            event_type="accepted",
+            reason="creator approved the image-caption proposal",
+        )
         return self.detail(proposal_id)
 
     def reject(
@@ -720,6 +759,11 @@ class ProposalService:
             note=reason,
             source_event_id=decision_event_id,
         )
+        self.candidate_exposures.record_proposal_event(
+            proposal_id,
+            event_type="rejected",
+            reason=reason,
+        )
         return self.detail(proposal_id)
 
     def record_feedback(
@@ -757,6 +801,12 @@ class ProposalService:
             note=note,
             source_event_id=source_event_id,
         )
+        if "fewer_like_this" in (reason_codes or []):
+            self.candidate_exposures.record_proposal_event(
+                proposal_id,
+                event_type="fewer_like_this",
+                reason=note or "creator requested fewer candidates like this",
+            )
         return self.detail(proposal_id)
 
     def review_rights(self, proposal_id: int, decision: str) -> dict[str, object]:
@@ -984,6 +1034,18 @@ class ProposalService:
             )
             audit(session, "proposal_image_replaced", "proposal", proposal.id, {})
         self.exposures.record_display(proposal_id)
+        self.candidate_exposures.record_proposal_event(
+            proposal_id,
+            event_type="replaced",
+            reason="creator replaced this image with another candidate",
+            candidate_image_id=old_candidate,
+        )
+        self.candidate_exposures.record_proposal_event(
+            proposal_id,
+            event_type="shown",
+            reason="replacement image presented in the creator review interface",
+            candidate_image_id=selected_id,
+        )
         return self.detail(proposal_id)
 
     def reschedule(self, proposal_id: int, new_date: date) -> dict[str, object]:

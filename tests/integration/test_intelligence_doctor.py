@@ -101,7 +101,7 @@ def test_doctor_detects_duplicate_derived_labels(
                     preferred_text="A",
                     dispreferred_text="B",
                     preference_source="fixture",
-                    label_source="human",
+                    label_source="engineering_fixture",
                     target="caption",
                     source_event_key="duplicate-event",
                     derivation_version="fixture-v1",

@@ -13,11 +13,13 @@ from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
+    CandidateExposure,
     CandidateImage,
     CaptionCandidateRecord,
     CaptionExposure,
     CaptionFeedback,
     FeedbackSignal,
+    GenerationRun,
     PairwisePreference,
 )
 from runway.discovery.service import DiscoveryService
@@ -63,6 +65,23 @@ async def test_grounded_question_first_caption_and_feedback_memory(
     proposals = ProposalService(database, settings)
     generated = await proposals.generate_batch(days=1, start_date=date(2030, 3, 5))
     proposal_id = int(generated["proposal_ids"][0])
+    generation_run_id = int(generated["generation_run_id"])
+    with database.session() as session:
+        generation_run = session.get(GenerationRun, generation_run_id)
+        candidate_exposures = session.scalars(
+            select(CandidateExposure).where(
+                CandidateExposure.session_key == f"generation:{generation_run_id}"
+            )
+        ).all()
+    assert generation_run is not None
+    selection_diagnostics = json.loads(generation_run.selection_diagnostics_json)
+    assert selection_diagnostics["version"] == "active-representation-slate-v1"
+    assert candidate_exposures
+    assert {row.event_type for row in candidate_exposures} <= {
+        "eligible_selected",
+        "eligible_withheld",
+    }
+    assert all(0.0 <= row.final_display_probability <= 1.0 for row in candidate_exposures)
     selected = proposals.select_alternative(proposal_id, 0)
     assert selected["status"] == "needs_review"
     with database.session() as session:
@@ -169,7 +188,12 @@ async def test_grounded_question_first_caption_and_feedback_memory(
     assert human_edits[0].feature_snapshot_hash
     assert human_edits[0].representation_record_id is not None
     verifier_result = json.loads(human_edits[0].verifier_result_json)
-    assert verifier_result["passed"] is True
+    # The generated proposal can use a different fixture image from the earlier direct
+    # caption request. Preserve the creator's edit, but never falsely mark unsupported
+    # identity or emotion claims as grounded against that proposal's own slate.
+    assert verifier_result["passed"] is False
+    assert "unsupported_entity:Homer" in verifier_result["unsupported_claims"]
+    assert "unsupported_emotion:excited" in verifier_result["unsupported_claims"]
     assert human_edits[0].verifier_version == "caption-verifier-v1"
     assert all(row.idempotency_key for row in pairwise)
     assert all(row.source_proposal_event_id for row in pairwise)

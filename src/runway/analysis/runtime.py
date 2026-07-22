@@ -324,6 +324,12 @@ class MockAgentRuntime:
         possessive_start = possessive[:1].upper() + possessive[1:]
         brief = payload.get("editorial_brief", {})
         brief_row = brief if isinstance(brief, Mapping) else {}
+        raw_lanes = payload.get("angle_lanes", [])
+        angle_lanes = [
+            str(value.get("lane") or "").strip()
+            for value in raw_lanes
+            if isinstance(value, Mapping) and str(value.get("lane") or "").strip()
+        ]
         structures = [
             str(value)
             for value in brief_row.get(
@@ -357,6 +363,32 @@ class MockAgentRuntime:
             "quote_or_reference": [f"“{subject_start} looks {emotion}.”"],
         }
         candidates: list[CaptionCandidate] = []
+        lane_structures = {
+            "audience_inquiry": "open_question",
+            "visible_reaction": "reaction",
+            "visual_observation": "observation",
+            "visible_action": "prediction",
+            "visible_relationship": "comparison",
+            "object_focus": "observation",
+        }
+        for lane in angle_lanes:
+            structure = lane_structures.get(lane, "observation")
+            text = templates.get(structure, templates["observation"])[0]
+            if text in {candidate.text for candidate in candidates}:
+                text = templates.get(structure, templates["observation"])[-1]
+            candidates.append(
+                CaptionCandidate(
+                    text=text,
+                    structure=structure,
+                    language=str(brief_row.get("target_language", "en")),
+                    editorial_angle=lane,
+                    visible_evidence=[subject, emotion, action],
+                    uncertainty=[],
+                    historical_evidence=references,
+                    feedback_evidence=[],
+                    confidence=0.84,
+                )
+            )
         for structure in structures:
             for text in templates.get(structure, templates["observation"]):
                 candidates.append(
@@ -549,7 +581,7 @@ class OpenAIAgentRuntime:
         return await self._parse(CandidateAnalysis, "candidate-analysis-v3.txt", payload)
 
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
-        return await self._parse(CaptionCandidateSet, "captions-v4.txt", payload)
+        return await self._parse(CaptionCandidateSet, "captions-v5.txt", payload)
 
     async def simulate_editorial_decision(
         self, payload: Mapping[str, Any]
@@ -862,7 +894,7 @@ class CodexAgentRuntime:
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         return await self._parse(
             CaptionCandidateSet,
-            "captions-v4.txt",
+            "captions-v5.txt",
             payload,
             require_image=True,
         )

@@ -5,16 +5,17 @@ feedback reconciliation, annotation refresh, blind studies, rollback, and the
 intelligence database doctor.
 
 It does not authorize YouTube publishing. Intelligence maintenance and
-evaluation must run with publishing disabled.
+evaluation must run with publishing and browser automation disabled.
 
 ## Safety envelope
 
-For every production-data intelligence command, set all three overrides in the
+For every production-data intelligence command, set all four overrides in the
 same terminal:
 
 ```powershell
 $env:RUNWAY_DATA_DIR = "data/qlob-production"
 $env:RUNWAY_PUBLISHING_ENABLED = "false"
+$env:RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED = "false"
 $env:RUNWAY_AGENT_RUNTIME = "mock"
 ```
 
@@ -23,17 +24,30 @@ These process-local values are deliberate:
 - `RUNWAY_DATA_DIR` selects the intended database explicitly.
 - `RUNWAY_PUBLISHING_ENABLED=false` prevents any scheduling path from being
   available during maintenance.
+- `RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=false` prevents authorized-browser
+  automation even if another shell has enabled publishing.
 - `RUNWAY_AGENT_RUNTIME=mock` prevents an unattended Codex or paid model call.
 
 Do not invoke `publisher confirm`, click Accept, or start a publisher worker
 during this runbook. Stop the API and web processes before schema migration or
 database restoration.
 
-## Read-only status
+## Read-only schema status
 
 ```powershell
 .\.venv\Scripts\runway.exe database schema-status
 .\.venv\Scripts\runway.exe database schema-verify
+```
+
+These two commands open the existing SQLite file in `mode=ro`. They fail when
+the database does not exist and never invoke Alembic. This contract is covered
+by a regression test.
+
+The remaining status commands initialize the application database and may apply
+a pending migration. Run them only after the backup and migration-rehearsal
+steps below:
+
+```powershell
 .\.venv\Scripts\runway.exe intelligence representations status
 .\.venv\Scripts\runway.exe intelligence feedback status
 .\.venv\Scripts\runway.exe intelligence preference status
@@ -57,7 +71,7 @@ without importing Runway or starting a service:
 ```powershell
 $source = "data/qlob-production/runway.db"
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
-$destination = "data/qlob-production/backups/runway-pre-0008-$stamp.db"
+$destination = "data/qlob-production/backups/runway-pre-0010-$stamp.db"
 
 @"
 import sqlite3
@@ -89,7 +103,41 @@ Record before migration:
 - preserved row counts for channels, posts, media, annotations, corrections,
   candidates, proposals, and feedback.
 
-Never overwrite or delete the pre-migration backup during validation.
+Never overwrite or delete the pre-migration backup during validation. The
+current head is `0010_neural_intelligence`; use `pre-0010` in new backup names.
+
+## Neural challenger and proof workflow
+
+Neural evaluation is offline-only and requires caller-supplied pinned local
+weights. Readiness never downloads or activates a model:
+
+```powershell
+.\.venv\Scripts\runway.exe intelligence neural readiness `
+  --output data/qlob-production/reports/neural-challenger-readiness.json
+```
+
+Use `intelligence neural evaluate-text` or `evaluate-image-text` only after a
+local model path, immutable revision, licence review, and labelled dataset are
+available. Evaluation artifacts remain inactive; representation activation
+still uses the explicit lifecycle gates below.
+
+The blinded startup-thesis workflow is:
+
+```powershell
+.\.venv\Scripts\runway.exe intelligence arena plan --cases <cases.json> `
+  --study-key <key> --target-cases 50
+.\.venv\Scripts\runway.exe intelligence arena export --study-id <id> `
+  --output <blind-review.json>
+.\.venv\Scripts\runway.exe intelligence arena import --study-id <id> `
+  --review <creator-review.json> --review-session <session>
+.\.venv\Scripts\runway.exe intelligence arena report --study-id <id>
+```
+
+Never import model or fixture choices as creator reviews. Product challenger
+training requires at least 100 genuine human labels for the specific target.
+
+For the full implementation and evaluation status, see
+[`NEURAL_INTELLIGENCE_UPGRADE.md`](NEURAL_INTELLIGENCE_UPGRADE.md).
 
 ## Rehearse the exact upgrade
 
@@ -105,8 +153,9 @@ Never overwrite or delete the pre-migration backup during validation.
 Example:
 
 ```powershell
-$env:RUNWAY_DATA_DIR = "data/qlob-production/migration-rehearsal-0008"
+$env:RUNWAY_DATA_DIR = "data/qlob-production/migration-rehearsal-0010"
 $env:RUNWAY_PUBLISHING_ENABLED = "false"
+$env:RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED = "false"
 $env:RUNWAY_AGENT_RUNTIME = "mock"
 .\.venv\Scripts\runway.exe init
 .\.venv\Scripts\runway.exe database schema-verify
@@ -116,7 +165,7 @@ $env:RUNWAY_AGENT_RUNTIME = "mock"
 Return `RUNWAY_DATA_DIR` to `data/qlob-production` only after the rehearsal
 passes.
 
-## Apply migration `0008`
+## Apply current migration `0010`
 
 With services stopped, a verified backup present, and the safety overrides set:
 
@@ -126,10 +175,10 @@ With services stopped, a verified backup present, and the safety overrides set:
 .\.venv\Scripts\runway.exe database intelligence-doctor --json
 ```
 
-Revision `0008_intelligence_data_flywheel` is additive and rollback-aware. It
-adds lifecycle tables and provenance fields while preserving `0007` source
-evidence. It also normalizes four historical server defaults so clean bootstrap
-and incremental upgrade converge exactly.
+Revision `0010_neural_intelligence` is additive and rollback-aware. It adds
+split evidence provenance, semantic topic/exposure metadata, three-arm arena
+fields, claim/reranker metadata, and the candidate-exposure, reranker-run, and
+composed-retrieval tables while preserving all `0009` evidence.
 
 If schema verification, integrity, foreign keys, or preserved counts differ,
 stop. Do not backfill or activate anything.

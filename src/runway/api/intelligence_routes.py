@@ -7,7 +7,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from runway.analysis.service import AnalysisService
-from runway.captions.preference_models import MINIMUM_LABELS, PREFERENCE_TARGETS
+from runway.captions.preference_models import (
+    ENGINEERING_MINIMUM_LABELS,
+    PREFERENCE_TARGETS,
+    PRODUCT_CHALLENGER_MINIMUM_LABELS,
+)
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -164,10 +168,15 @@ def build_intelligence_router(database: Database, settings: Settings) -> APIRout
         normalized_training_pairwise = {
             target: training_pairwise_counts.get(target, 0) for target in PREFERENCE_TARGETS
         }
-        trainable_targets = [
+        engineering_trainable_targets = [
             target
             for target in PREFERENCE_TARGETS
-            if normalized_training_pairwise[target] >= MINIMUM_LABELS[target]
+            if normalized_training_pairwise[target] >= ENGINEERING_MINIMUM_LABELS[target]
+        ]
+        product_challenger_targets = [
+            target
+            for target in PREFERENCE_TARGETS
+            if normalized_training_pairwise[target] >= PRODUCT_CHALLENGER_MINIMUM_LABELS[target]
         ]
         active_model_targets = sorted({str(model["target"]) for model in active_models})
         return {
@@ -181,16 +190,23 @@ def build_intelligence_router(database: Database, settings: Settings) -> APIRout
             "preference_datasets": dataset_count,
             "active_models": active_models,
             "active_model_targets": active_model_targets,
-            "training_minimum_labels_by_target": MINIMUM_LABELS,
-            "training_minimum_labels_per_target": min(MINIMUM_LABELS.values()),
-            "trainable_targets": trainable_targets,
+            "engineering_minimum_labels_by_target": ENGINEERING_MINIMUM_LABELS,
+            "product_challenger_minimum_labels_by_target": (PRODUCT_CHALLENGER_MINIMUM_LABELS),
+            "training_minimum_labels_by_target": PRODUCT_CHALLENGER_MINIMUM_LABELS,
+            "training_minimum_labels_per_target": min(PRODUCT_CHALLENGER_MINIMUM_LABELS.values()),
+            "engineering_trainable_targets": engineering_trainable_targets,
+            "product_challenger_targets": product_challenger_targets,
+            # Backward-compatible key now reflects the product-quality threshold.
+            "trainable_targets": product_challenger_targets,
             "blind_study_responses": blind_study_responses,
             "blind_study_target": 50,
             "state": (
                 "active"
                 if active_models
-                else "ready_to_train"
-                if trainable_targets
+                else "ready_for_product_challenger_training"
+                if product_challenger_targets
+                else "engineering_data_available"
+                if engineering_trainable_targets
                 else "collecting_creator_labels"
             ),
         }

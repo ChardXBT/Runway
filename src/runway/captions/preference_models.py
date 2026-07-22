@@ -27,11 +27,19 @@ from runway.db.repositories import get_channel
 from runway.intelligence.embeddings import configuration_hash
 
 PREFERENCE_TARGETS = ("caption", "image", "pairing")
-MINIMUM_LABELS = {
+ENGINEERING_MINIMUM_LABELS = {
     "caption": 8,
     "image": 8,
     "pairing": 8,
 }
+PRODUCT_CHALLENGER_MINIMUM_LABELS = {
+    "caption": 100,
+    "image": 100,
+    "pairing": 100,
+}
+# Backward-compatible public name; this is explicitly an algorithm smoke floor,
+# not a product-quality threshold.
+MINIMUM_LABELS = ENGINEERING_MINIMUM_LABELS
 REQUIRED_PREFERENCE_ACTIVATION_GATES = frozenset(
     {
         "artifact_integrity",
@@ -39,6 +47,7 @@ REQUIRED_PREFERENCE_ACTIVATION_GATES = frozenset(
         "channel_isolation",
         "quality_non_regression",
         "calibration_truthful",
+        "product_label_threshold",
         "offline_only",
     }
 )
@@ -104,9 +113,20 @@ class PreferenceDatasetService:
         *,
         seed: int = 20260718,
         feature_schema_version: str = FEATURE_SCHEMA_VERSION,
+        label_sources: frozenset[str] = frozenset({"human"}),
+        engineering_test: bool = False,
     ) -> dict[str, object]:
         if target not in PREFERENCE_TARGETS:
             raise ValueError(f"unsupported preference target: {target}")
+        if label_sources != frozenset({"human"}) and not (
+            engineering_test
+            and self.settings.agent_runtime == "mock"
+            and not self.settings.publishing_enabled
+        ):
+            raise ValueError(
+                "non-human preference datasets are allowed only in an explicit offline "
+                "engineering test"
+            )
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
             rows = session.scalars(
@@ -114,7 +134,7 @@ class PreferenceDatasetService:
                 .where(
                     PairwisePreference.channel_id == channel.id,
                     PairwisePreference.target == target,
-                    PairwisePreference.label_source == "human",
+                    PairwisePreference.label_source.in_(label_sources),
                     PairwisePreference.learning_split.in_(("development", "tuning")),
                     PairwisePreference.feature_schema_version == feature_schema_version,
                     PairwisePreference.feature_snapshot_hash.is_not(None),
@@ -150,6 +170,8 @@ class PreferenceDatasetService:
             "target": target,
             "seed": seed,
             "feature_schema_version": feature_schema_version,
+            "label_sources": sorted(label_sources),
+            "engineering_test": engineering_test,
             "split_policy": {
                 "train": [0, 69],
                 "validation": [70, 84],
@@ -270,7 +292,7 @@ class PreferenceModelService:
             raise ValueError(f"unsupported preference target: {target}")
         if epochs < 1 or epochs > 10_000:
             raise ValueError("epochs must be between 1 and 10000")
-        minimum = minimum_label_count or MINIMUM_LABELS[target]
+        minimum = minimum_label_count or ENGINEERING_MINIMUM_LABELS[target]
         if dataset_id is None:
             dataset_id = str(self.datasets.build(target, seed=seed)["dataset_id"])
         with self.database.session() as session:
@@ -438,6 +460,7 @@ class PreferenceModelService:
         *,
         reason: str,
         gate_results: dict[str, bool],
+        activation_tier: str = "product",
     ) -> dict[str, object]:
         if not reason.strip():
             raise ValueError("activation reason is required")
@@ -470,6 +493,26 @@ class PreferenceModelService:
                 or dataset.feature_schema_version != target.feature_schema_version
             ):
                 raise ValueError("preference-model dataset is missing, mutable, or incompatible")
+            dataset_configuration = _json_object(
+                dataset.configuration_json,
+                label="preference dataset configuration",
+            )
+            product_minimum = PRODUCT_CHALLENGER_MINIMUM_LABELS[target.target]
+            if activation_tier == "product":
+                if target.label_count < product_minimum:
+                    raise ValueError(
+                        f"product activation requires {product_minimum} genuine human "
+                        f"{target.target} labels; found {target.label_count}"
+                    )
+                if dataset_configuration.get("label_sources") != ["human"]:
+                    raise ValueError("product activation requires a human-only frozen dataset")
+            elif activation_tier == "engineering_test":
+                if self.settings.agent_runtime != "mock" or self.settings.publishing_enabled:
+                    raise ValueError(
+                        "engineering-test activation requires mock runtime and publishing disabled"
+                    )
+            else:
+                raise ValueError("activation_tier must be product or engineering_test")
             parameters = _json_object(
                 target.parameters_json,
                 label="preference model parameters",
@@ -550,7 +593,10 @@ class PreferenceModelService:
                     resource_id=str(target.id),
                     previous_resource_id=(str(previous.id) if previous is not None else None),
                     reason=reason.strip(),
-                    gate_results_json=json.dumps(gate_results, sort_keys=True),
+                    gate_results_json=json.dumps(
+                        {**gate_results, "activation_tier": activation_tier},
+                        sort_keys=True,
+                    ),
                 )
             )
         return self.inspect(model_version_id)

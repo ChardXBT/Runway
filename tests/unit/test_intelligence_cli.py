@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ def test_database_doctor_json_and_schema_verify_exit_cleanly(
     tmp_path: Path,
 ) -> None:
     _configure_data_dir(monkeypatch, tmp_path / "doctor")
+    initialize_database(get_settings())
     runner = CliRunner()
     schema = runner.invoke(app, ["database", "schema-verify"])
     assert schema.exit_code == 0, schema.output
@@ -47,6 +49,32 @@ def test_database_doctor_json_and_schema_verify_exit_cleanly(
     payload = _json_output(doctor.output)
     assert payload["status"] == "passed"
     assert payload["counts"]["critical"] == 0
+
+
+def test_schema_status_is_read_only_and_never_runs_migrations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "read-only-schema"
+    _configure_data_dir(monkeypatch, data_dir)
+    runner = CliRunner()
+    missing = runner.invoke(app, ["database", "schema-status"])
+    assert missing.exit_code == 2
+    assert not (data_dir / "runway.db").exists()
+
+    database = initialize_database(get_settings())
+    with database.engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE alembic_version SET version_num='0009_editorial_diversity'"
+        )
+    database.engine.dispose()
+
+    observed = runner.invoke(app, ["database", "schema-status"])
+    assert observed.exit_code == 0, observed.output
+    assert _json_output(observed.output)["migration"] == "0009_editorial_diversity"
+    with sqlite3.connect(data_dir / "runway.db") as connection:
+        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    assert revision == ("0009_editorial_diversity",)
 
 
 def test_provider_status_is_no_download_and_representation_plan_is_inactive(

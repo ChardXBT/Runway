@@ -33,6 +33,7 @@ class EditorialBrief(BaseModel):
     prohibited_claims: list[str]
     supported_entity_names: list[str]
     recent_rotation: dict[str, object]
+    content_mode: dict[str, object]
     possible_editorial_angles: list[str]
     recommended_angles: list[str]
     target_structures: list[str]
@@ -150,6 +151,30 @@ class EditorialPlanner:
         if policy.question_first:
             angles.insert(0, "audience_inquiry")
         preferred_angles = angles[:3]
+        mode_scores = cast(
+            list[dict[str, object]],
+            profile.get("candidate_mode_scores", []),
+        )
+        modes_payload = cast(dict[str, object], profile.get("content_modes", {}))
+        learned_modes = cast(list[dict[str, object]], modes_payload.get("modes", []))
+        selected_mode: dict[str, object] = {"status": "unavailable"}
+        if mode_scores:
+            leading_mode_id = str(mode_scores[0].get("mode_id") or "")
+            learned = next(
+                (
+                    mode
+                    for mode in learned_modes
+                    if str(mode.get("mode_id") or "") == leading_mode_id
+                ),
+                None,
+            )
+            selected_mode = {
+                "status": "selected",
+                "mode_id": leading_mode_id,
+                "fit_score": mode_scores[0].get("score", 0.0),
+                "prototype": learned or {},
+                "candidate_scores": mode_scores,
+            }
         return EditorialBrief(
             visible_facts=facts,
             uncertain_facts=uncertain,
@@ -159,6 +184,7 @@ class EditorialPlanner:
                 dict[str, object],
                 retrieval_context.get("rotation_state", {}),
             ),
+            content_mode=selected_mode,
             possible_editorial_angles=angles,
             recommended_angles=preferred_angles,
             target_structures=policy.preferred_structures,

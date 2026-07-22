@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Sequence
@@ -21,6 +22,94 @@ class SearchProvider(Protocol):
     name: str
 
     async def search(self, plan: SearchPlan, cursor: str | None = None) -> SearchPage: ...
+
+
+class EnsembleSearchProvider:
+    """Merge independent providers without hiding failures or duplicate provenance."""
+
+    name = "ensemble"
+
+    def __init__(self, providers: Sequence[SearchProvider], *, max_results: int = 100):
+        if not providers:
+            raise ValueError("search ensemble requires at least one provider")
+        names = [provider.name for provider in providers]
+        if len(set(names)) != len(names):
+            raise ValueError("search ensemble provider names must be unique")
+        self.providers = list(providers)
+        self.max_results = max(1, max_results)
+        self.last_diagnostics: dict[str, object] = {}
+
+    async def search(self, plan: SearchPlan, cursor: str | None = None) -> SearchPage:
+        outcomes = await asyncio.gather(
+            *(provider.search(plan, cursor=cursor) for provider in self.providers),
+            return_exceptions=True,
+        )
+        merged: dict[str, ImageSearchResult] = {}
+        contributions: dict[str, int] = {}
+        errors: dict[str, str] = {}
+        for provider, outcome in zip(self.providers, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                errors[provider.name] = f"{type(outcome).__name__}: {outcome}"
+                continue
+            contributions[provider.name] = len(outcome.results)
+            for result in outcome.results:
+                key = result.direct_image_url.strip()
+                if not key:
+                    continue
+                existing = merged.get(key)
+                if existing is None:
+                    metadata = dict(result.provider_metadata)
+                    metadata.update(
+                        {
+                            "ensemble_primary_provider": provider.name,
+                            "ensemble_contributors": [provider.name],
+                            "provider_original_rank": result.result_rank,
+                        }
+                    )
+                    merged[key] = result.model_copy(update={"provider_metadata": metadata})
+                else:
+                    metadata = dict(existing.provider_metadata)
+                    raw_contributors = metadata.get("ensemble_contributors", [])
+                    contributor_values = (
+                        raw_contributors if isinstance(raw_contributors, (list, tuple, set)) else []
+                    )
+                    contributors = {str(value) for value in contributor_values if str(value)}
+                    contributors.add(provider.name)
+                    metadata["ensemble_contributors"] = sorted(contributors)
+                    merged[key] = existing.model_copy(update={"provider_metadata": metadata})
+        if not merged and errors:
+            raise RuntimeError(
+                "all search ensemble providers failed: "
+                + "; ".join(f"{name}: {error}" for name, error in sorted(errors.items()))
+            )
+        ordered = sorted(
+            merged.values(),
+            key=lambda row: (
+                self._rank(row),
+                str(row.provider_metadata.get("ensemble_primary_provider", "")),
+                row.direct_image_url,
+            ),
+        )[: self.max_results]
+        results = [
+            row.model_copy(update={"result_rank": index}) for index, row in enumerate(ordered, 1)
+        ]
+        self.last_diagnostics = {
+            "providers_attempted": [provider.name for provider in self.providers],
+            "provider_contributions": contributions,
+            "provider_errors": errors,
+            "deduplicated_result_count": len(results),
+        }
+        return SearchPage(results=results)
+
+    @staticmethod
+    def _rank(result: ImageSearchResult) -> int:
+        value = result.provider_metadata.get("provider_original_rank", result.result_rank)
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return result.result_rank
+        try:
+            return int(value)
+        except ValueError:
+            return result.result_rank
 
 
 class PageImageExtractor(Protocol):

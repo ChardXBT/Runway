@@ -244,6 +244,12 @@ class CandidateImage(Base):
     soft_warnings_json: Mapped[str] = mapped_column(Text, default="[]")
     score_components_json: Mapped[str] = mapped_column(Text, default="{}")
     selection_reason: Mapped[str] = mapped_column(Text, default="")
+    topic_eligibility_class: Mapped[str] = mapped_column(
+        String(40), default="unassessed", index=True
+    )
+    topic_eligibility_json: Mapped[str] = mapped_column(Text, default="{}")
+    representation_provenance_json: Mapped[str] = mapped_column(Text, default="{}")
+    exploration_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     diversity_cluster_key: Mapped[str | None] = mapped_column(String(128), index=True)
     diversity_fingerprint_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -261,6 +267,7 @@ class GenerationRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_summary: Mapped[str | None] = mapped_column(Text)
+    selection_diagnostics_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
 class Proposal(Base, TimestampMixin):
@@ -652,6 +659,11 @@ class CaptionSlate(Base):
     latency_ms: Mapped[float | None] = mapped_column(Float)
     token_usage_json: Mapped[str] = mapped_column(Text, default="{}")
     failure_summary: Mapped[str | None] = mapped_column(Text)
+    retrieval_selected_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    model_supplied_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    model_cited_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    ranker_used_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    reranker_run_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -718,6 +730,11 @@ class CaptionCandidateRecord(Base):
     ranker_model_version_id: Mapped[int | None] = mapped_column(
         ForeignKey("preference_model_versions.id")
     )
+    model_supplied_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    model_cited_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    ranker_used_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    claim_verification_json: Mapped[str] = mapped_column(Text, default="[]")
+    reranker_result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -741,6 +758,67 @@ class CaptionExposure(Base):
     decision_type: Mapped[str | None] = mapped_column(String(80))
     decision_latency_ms: Mapped[float | None] = mapped_column(Float)
     interface_version: Mapped[str] = mapped_column(String(80), default="runway-generator-v1")
+
+
+class CandidateExposure(Base):
+    __tablename__ = "candidate_exposures"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_image_id",
+            "session_key",
+            "event_type",
+            name="uq_candidate_exposure_event",
+        ),
+        Index("ix_candidate_exposure_session", "channel_id", "session_key", "created_at"),
+        Index("ix_candidate_exposure_cluster", "channel_id", "cluster_key", "event_type"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    candidate_image_id: Mapped[int] = mapped_column(ForeignKey("candidate_images.id"), index=True)
+    search_run_id: Mapped[int | None] = mapped_column(ForeignKey("search_runs.id"), index=True)
+    caption_slate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_slates.id"), index=True
+    )
+    session_key: Mapped[str] = mapped_column(String(128), index=True)
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    cluster_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    pre_display_score: Mapped[float] = mapped_column(Float)
+    final_display_probability: Mapped[float] = mapped_column(Float)
+    display_position: Mapped[int | None] = mapped_column(Integer)
+    exploration_policy: Mapped[str] = mapped_column(String(80), default="deterministic")
+    randomized: Mapped[bool] = mapped_column(Boolean, default=False)
+    eligible_pool_size: Mapped[int] = mapped_column(Integer)
+    selected_reason: Mapped[str | None] = mapped_column(Text)
+    withheld_reason: Mapped[str | None] = mapped_column(Text)
+    representation_sets_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MultimodalRerankRun(Base):
+    __tablename__ = "multimodal_rerank_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    candidate_image_id: Mapped[int] = mapped_column(ForeignKey("candidate_images.id"), index=True)
+    caption_slate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_slates.id"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    provider: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(200))
+    prompt_version: Mapped[str] = mapped_column(String(80))
+    label_source: Mapped[str] = mapped_column(String(40), default="policy", index=True)
+    input_json: Mapped[str] = mapped_column(Text)
+    component_scores_json: Mapped[str] = mapped_column(Text)
+    baseline_order_json: Mapped[str] = mapped_column(Text)
+    final_order_json: Mapped[str] = mapped_column(Text)
+    changed_order: Mapped[bool] = mapped_column(Boolean, default=False)
+    configuration_json: Mapped[str] = mapped_column(Text)
+    configuration_hash: Mapped[str] = mapped_column(String(64), index=True)
+    representation_sets_json: Mapped[str] = mapped_column(Text, default="{}")
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PairwisePreference(Base):
@@ -1119,6 +1197,7 @@ class BlindStudy(Base):
     status: Mapped[str] = mapped_column(String(40), default="planned", index=True)
     split_policy_json: Mapped[str] = mapped_column(Text, default="{}")
     preregistration_json: Mapped[str] = mapped_column(Text, default="{}")
+    arm_identities_json: Mapped[str] = mapped_column(Text, default="{}")
     case_count: Mapped[int] = mapped_column(Integer, default=0)
     response_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -1149,6 +1228,11 @@ class BlindStudyCase(Base):
     second_candidate_id: Mapped[int | None] = mapped_column(
         ForeignKey("caption_candidate_records.id"), index=True
     )
+    third_caption: Mapped[str | None] = mapped_column(Text)
+    third_candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("caption_candidate_records.id"), index=True
+    )
+    arm_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     order_token: Mapped[str] = mapped_column(String(40))
     hidden_label_json: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -1175,6 +1259,11 @@ class BlindStudyResponse(Base):
     reason_codes_json: Mapped[str] = mapped_column(Text, default="[]")
     note: Mapped[str | None] = mapped_column(Text)
     decision_time_ms: Mapped[float | None] = mapped_column(Float)
+    grounding_problems_json: Mapped[str] = mapped_column(Text, default="[]")
+    genericness_score: Mapped[float | None] = mapped_column(Float)
+    repetition_score: Mapped[float | None] = mapped_column(Float)
+    model_cost_json: Mapped[str] = mapped_column(Text, default="{}")
+    latency_json: Mapped[str] = mapped_column(Text, default="{}")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1278,6 +1367,33 @@ class GeneratedAssetLineage(Base):
     ranking_json: Mapped[str] = mapped_column(Text, default="{}")
     review_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     creator_decision: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ComposedRetrievalExample(Base):
+    __tablename__ = "composed_retrieval_examples"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_id",
+            "reference_media_asset_id",
+            "modification_instruction",
+            "target_media_asset_id",
+            name="uq_composed_retrieval_example",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    reference_media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    modification_instruction: Mapped[str] = mapped_column(Text)
+    target_media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    label_source: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="candidate", index=True)
+    split: Mapped[str] = mapped_column(String(40), default="development", index=True)
+    reviewed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    instruction_source_json: Mapped[str] = mapped_column(Text, default="{}")
+    representation_sets_json: Mapped[str] = mapped_column(Text, default="{}")
+    evaluation_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

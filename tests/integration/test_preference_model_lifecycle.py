@@ -77,8 +77,8 @@ def _seed_pairs(
                     channel_id=channel_id,
                     preferred_text=preferred_text,
                     dispreferred_text=dispreferred_text,
-                    preference_source="blind_creator_study",
-                    label_source="human",
+                    preference_source="offline_engineering_fixture",
+                    label_source="engineering_fixture",
                     strength=1.0,
                     reason_codes_json="[]",
                     target=target,
@@ -107,8 +107,16 @@ def test_preference_dataset_and_model_are_reproducible_and_score_without_refit(
 ) -> None:
     _seed_pairs(database, settings, target="caption")
     datasets = PreferenceDatasetService(database, settings)
-    first_dataset = datasets.build("caption")
-    second_dataset = datasets.build("caption")
+    first_dataset = datasets.build(
+        "caption",
+        label_sources=frozenset({"engineering_fixture"}),
+        engineering_test=True,
+    )
+    second_dataset = datasets.build(
+        "caption",
+        label_sources=frozenset({"engineering_fixture"}),
+        engineering_test=True,
+    )
     assert first_dataset["dataset_id"] == second_dataset["dataset_id"]
     assert second_dataset["created"] is False
 
@@ -140,11 +148,19 @@ def test_preference_dataset_and_model_are_reproducible_and_score_without_refit(
             int(first_model["model_version_id"]),
             reason="must fail",
             gate_results={"quality": False},
+            activation_tier="engineering_test",
+        )
+    with pytest.raises(ValueError, match="100 genuine human"):
+        models.activate(
+            int(first_model["model_version_id"]),
+            reason="product threshold must stay closed",
+            gate_results=_passing_gates(),
         )
     models.activate(
         int(first_model["model_version_id"]),
         reason="fixture gates passed",
         gate_results=_passing_gates(),
+        activation_tier="engineering_test",
     )
 
     with database.session() as session:
@@ -195,6 +211,7 @@ def test_preference_dataset_and_model_are_reproducible_and_score_without_refit(
         int(challenger["model_version_id"]),
         reason="fixture challenger",
         gate_results=_passing_gates(),
+        activation_tier="engineering_test",
     )
     restored = models.rollback(
         int(challenger["model_version_id"]),
@@ -223,17 +240,30 @@ def test_preference_targets_are_separate_and_thresholds_fail_closed(
 
     _seed_pairs(database, settings, target="image")
     _seed_pairs(database, settings, target="pairing")
-    image_model = models.train("image")
-    pairing_model = models.train("pairing")
+    datasets = PreferenceDatasetService(database, settings)
+    image_dataset = datasets.build(
+        "image",
+        label_sources=frozenset({"engineering_fixture"}),
+        engineering_test=True,
+    )
+    pairing_dataset = datasets.build(
+        "pairing",
+        label_sources=frozenset({"engineering_fixture"}),
+        engineering_test=True,
+    )
+    image_model = models.train("image", dataset_id=str(image_dataset["dataset_id"]))
+    pairing_model = models.train("pairing", dataset_id=str(pairing_dataset["dataset_id"]))
     models.activate(
         int(image_model["model_version_id"]),
         reason="image fixture",
         gate_results=_passing_gates(),
+        activation_tier="engineering_test",
     )
     models.activate(
         int(pairing_model["model_version_id"]),
         reason="pairing fixture",
         gate_results=_passing_gates(),
+        activation_tier="engineering_test",
     )
     with database.session() as session:
         active_targets = set(
@@ -250,7 +280,12 @@ def test_preference_activation_rejects_incompatible_or_tampered_artifacts(
 ) -> None:
     _seed_pairs(database, settings, target="caption")
     service = PreferenceModelService(database, settings)
-    incompatible = service.train("caption")
+    dataset = PreferenceDatasetService(database, settings).build(
+        "caption",
+        label_sources=frozenset({"engineering_fixture"}),
+        engineering_test=True,
+    )
+    incompatible = service.train("caption", dataset_id=str(dataset["dataset_id"]))
     incompatible_id = int(incompatible["model_version_id"])
     with database.session() as session:
         row = session.get(PreferenceModelVersion, incompatible_id)
@@ -261,6 +296,7 @@ def test_preference_activation_rejects_incompatible_or_tampered_artifacts(
             incompatible_id,
             reason="must reject incompatible schema",
             gate_results=_passing_gates(),
+            activation_tier="engineering_test",
         )
 
     with database.session() as session:
@@ -278,6 +314,7 @@ def test_preference_activation_rejects_incompatible_or_tampered_artifacts(
             incompatible_id,
             reason="must reject malformed parameters",
             gate_results=_passing_gates(),
+            activation_tier="engineering_test",
         )
     with database.session() as session:
         row = session.get(PreferenceModelVersion, incompatible_id)

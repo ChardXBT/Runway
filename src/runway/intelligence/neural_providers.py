@@ -97,6 +97,8 @@ class SentenceTransformerTextProvider:
         revision: str,
         device: Literal["cpu", "cuda"] = "cpu",
         max_sequence_length: int | None = None,
+        query_prefix: str = "",
+        document_prefix: str = "",
     ):
         self.model_path, manifest = _require_local_model(
             model_path,
@@ -113,6 +115,8 @@ class SentenceTransformerTextProvider:
         self.version = revision.strip()
         self.device = device
         self.max_sequence_length = max_sequence_length
+        self.query_prefix = query_prefix
+        self.document_prefix = document_prefix
         self.configuration_fingerprint = configuration_hash(
             {
                 "adapter": "sentence-transformers-offline-v1",
@@ -122,6 +126,8 @@ class SentenceTransformerTextProvider:
                 "local_manifest": manifest,
                 "device": device,
                 "max_sequence_length": max_sequence_length,
+                "query_prefix": query_prefix,
+                "document_prefix": document_prefix,
                 "normalization": "l2",
                 "local_files_only": True,
                 "trust_remote_code": False,
@@ -158,9 +164,11 @@ class SentenceTransformerTextProvider:
     def embed_text(self, text: str, *, purpose: str) -> RepresentationResult:
         if not text.strip():
             raise ValueError("trained text provider cannot embed blank text")
+        prefix = self.query_prefix if "query" in purpose.casefold() else self.document_prefix
+        formatted = f"{prefix}{text}" if prefix else text
         try:
             encoded = self._load().encode(
-                [text],
+                [formatted],
                 convert_to_numpy=True,
                 normalize_embeddings=True,
                 show_progress_bar=False,

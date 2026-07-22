@@ -747,6 +747,13 @@
         "columns": [
           {
             "default": null,
+            "name": "arm_identities_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "baseline_identity",
             "nullable": false,
             "primary_key": 0,
@@ -893,6 +900,13 @@
         "columns": [
           {
             "default": null,
+            "name": "arm_metrics_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "blind_study_id",
             "nullable": false,
             "primary_key": 0,
@@ -1009,6 +1023,20 @@
             "nullable": false,
             "primary_key": 0,
             "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "third_candidate_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "third_caption",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
           }
         ],
         "foreign_keys": [
@@ -1055,6 +1083,16 @@
           {
             "columns": [
               "second_candidate_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "caption_candidate_records"
+          },
+          {
+            "columns": [
+              "third_candidate_id"
             ],
             "ondelete": null,
             "referred_columns": [
@@ -1120,6 +1158,13 @@
             ],
             "name": "ix_blind_study_cases_split",
             "unique": false
+          },
+          {
+            "columns": [
+              "third_candidate_id"
+            ],
+            "name": "ix_blind_study_cases_third_candidate_id",
+            "unique": false
           }
         ],
         "unique_constraints": [
@@ -1179,6 +1224,20 @@
           },
           {
             "default": null,
+            "name": "genericness_score",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "grounding_problems_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "id",
             "nullable": false,
             "primary_key": 1,
@@ -1190,6 +1249,20 @@
             "nullable": true,
             "primary_key": 0,
             "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "latency_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "model_cost_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           },
           {
             "default": null,
@@ -1211,6 +1284,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "repetition_score",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "FLOAT"
           },
           {
             "default": null,
@@ -1336,6 +1416,258 @@
           }
         ]
       },
+      "candidate_exposures": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "candidate_image_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "caption_slate_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "channel_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "cluster_key",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "display_position",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "eligible_pool_size",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "event_type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "exploration_policy",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "final_display_probability",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "pre_display_score",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "randomized",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BOOLEAN"
+          },
+          {
+            "default": null,
+            "name": "representation_sets_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "search_run_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "selected_reason",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "session_key",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
+          },
+          {
+            "default": null,
+            "name": "withheld_reason",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "candidate_image_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "candidate_images"
+          },
+          {
+            "columns": [
+              "caption_slate_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "caption_slates"
+          },
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "channels"
+          },
+          {
+            "columns": [
+              "search_run_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "search_runs"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "channel_id",
+              "cluster_key",
+              "event_type"
+            ],
+            "name": "ix_candidate_exposure_cluster",
+            "unique": false
+          },
+          {
+            "columns": [
+              "channel_id",
+              "session_key",
+              "created_at"
+            ],
+            "name": "ix_candidate_exposure_session",
+            "unique": false
+          },
+          {
+            "columns": [
+              "candidate_image_id"
+            ],
+            "name": "ix_candidate_exposures_candidate_image_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "caption_slate_id"
+            ],
+            "name": "ix_candidate_exposures_caption_slate_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "name": "ix_candidate_exposures_channel_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "cluster_key"
+            ],
+            "name": "ix_candidate_exposures_cluster_key",
+            "unique": false
+          },
+          {
+            "columns": [
+              "event_type"
+            ],
+            "name": "ix_candidate_exposures_event_type",
+            "unique": false
+          },
+          {
+            "columns": [
+              "search_run_id"
+            ],
+            "name": "ix_candidate_exposures_search_run_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "session_key"
+            ],
+            "name": "ix_candidate_exposures_session_key",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "candidate_image_id",
+              "session_key",
+              "event_type"
+            ],
+            "name": "uq_candidate_exposure_event"
+          }
+        ]
+      },
       "candidate_images": {
         "check_constraints": [],
         "columns": [
@@ -1394,6 +1726,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "exploration_metadata_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           },
           {
             "default": null,
@@ -1464,6 +1803,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "representation_provenance_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           },
           {
             "default": null,
@@ -1548,6 +1894,20 @@
             "nullable": false,
             "primary_key": 0,
             "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "topic_eligibility_class",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "topic_eligibility_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           }
         ],
         "foreign_keys": [
@@ -1624,6 +1984,13 @@
             ],
             "name": "ix_candidate_images_source_domain",
             "unique": false
+          },
+          {
+            "columns": [
+              "topic_eligibility_class"
+            ],
+            "name": "ix_candidate_images_topic_eligibility_class",
+            "unique": false
           }
         ],
         "unique_constraints": []
@@ -1651,6 +2018,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "claim_verification_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           },
           {
             "default": null,
@@ -1801,6 +2175,20 @@
           },
           {
             "default": null,
+            "name": "model_cited_evidence_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "model_supplied_evidence_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "negative_feedback_risk",
             "nullable": false,
             "primary_key": 0,
@@ -1878,6 +2266,13 @@
           },
           {
             "default": null,
+            "name": "ranker_used_evidence_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "replacement_text",
             "nullable": true,
             "primary_key": 0,
@@ -1889,6 +2284,13 @@
             "nullable": true,
             "primary_key": 0,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "reranker_result_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           },
           {
             "default": null,
@@ -2524,10 +2926,24 @@
           },
           {
             "default": null,
+            "name": "model_cited_evidence_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "model_run_id",
             "nullable": true,
             "primary_key": 0,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "model_supplied_evidence_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           },
           {
             "default": null,
@@ -2538,7 +2954,21 @@
           },
           {
             "default": null,
+            "name": "ranker_used_evidence_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "raw_output_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "reranker_run_json",
             "nullable": false,
             "primary_key": 0,
             "type": "TEXT"
@@ -2549,6 +2979,13 @@
             "nullable": true,
             "primary_key": 0,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "retrieval_selected_evidence_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           },
           {
             "default": null,
@@ -3047,6 +3484,196 @@
               "handle"
             ],
             "name": ""
+          }
+        ]
+      },
+      "composed_retrieval_examples": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "channel_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "evaluation_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "instruction_source_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "label_source",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "modification_instruction",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "reference_media_asset_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "representation_sets_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "reviewed",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BOOLEAN"
+          },
+          {
+            "default": null,
+            "name": "split",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "status",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "target_media_asset_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "channels"
+          },
+          {
+            "columns": [
+              "reference_media_asset_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "media_assets"
+          },
+          {
+            "columns": [
+              "target_media_asset_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "media_assets"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "name": "ix_composed_retrieval_examples_channel_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "label_source"
+            ],
+            "name": "ix_composed_retrieval_examples_label_source",
+            "unique": false
+          },
+          {
+            "columns": [
+              "reference_media_asset_id"
+            ],
+            "name": "ix_composed_retrieval_examples_reference_media_asset_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "reviewed"
+            ],
+            "name": "ix_composed_retrieval_examples_reviewed",
+            "unique": false
+          },
+          {
+            "columns": [
+              "split"
+            ],
+            "name": "ix_composed_retrieval_examples_split",
+            "unique": false
+          },
+          {
+            "columns": [
+              "status"
+            ],
+            "name": "ix_composed_retrieval_examples_status",
+            "unique": false
+          },
+          {
+            "columns": [
+              "target_media_asset_id"
+            ],
+            "name": "ix_composed_retrieval_examples_target_media_asset_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "channel_id",
+              "reference_media_asset_id",
+              "modification_instruction",
+              "target_media_asset_id"
+            ],
+            "name": "uq_composed_retrieval_example"
           }
         ]
       },
@@ -3564,6 +4191,13 @@
             "nullable": false,
             "primary_key": 1,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "selection_diagnostics_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
           },
           {
             "default": null,
@@ -5049,6 +5683,221 @@
               "task_type"
             ],
             "name": "ix_model_runs_task_type",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
+      "multimodal_rerank_runs": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "baseline_order_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "candidate_image_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "caption_slate_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "changed_order",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BOOLEAN"
+          },
+          {
+            "default": null,
+            "name": "channel_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "component_scores_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "configuration_hash",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(64)"
+          },
+          {
+            "default": null,
+            "name": "configuration_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "final_order_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "input_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "label_source",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "latency_ms",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "FLOAT"
+          },
+          {
+            "default": null,
+            "name": "model",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "prompt_version",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "provider",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(100)"
+          },
+          {
+            "default": null,
+            "name": "representation_sets_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "status",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "candidate_image_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "candidate_images"
+          },
+          {
+            "columns": [
+              "caption_slate_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "caption_slates"
+          },
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "channels"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "candidate_image_id"
+            ],
+            "name": "ix_multimodal_rerank_runs_candidate_image_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "caption_slate_id"
+            ],
+            "name": "ix_multimodal_rerank_runs_caption_slate_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "name": "ix_multimodal_rerank_runs_channel_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "configuration_hash"
+            ],
+            "name": "ix_multimodal_rerank_runs_configuration_hash",
+            "unique": false
+          },
+          {
+            "columns": [
+              "label_source"
+            ],
+            "name": "ix_multimodal_rerank_runs_label_source",
+            "unique": false
+          },
+          {
+            "columns": [
+              "status"
+            ],
+            "name": "ix_multimodal_rerank_runs_status",
             "unique": false
           }
         ],
@@ -8659,7 +9508,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "d1472d9ff17a995db56b8d2065dbee17629bca6af9eff902fccaa8c514597d2d",
-  "migration": "0009_editorial_diversity",
-  "table_count": 49
+  "fingerprint": "cd024bcb9cd41464a3319145577c3dbdf51cf2d2229943237d8255abf0f445d2",
+  "migration": "0010_neural_intelligence",
+  "table_count": 52
 }

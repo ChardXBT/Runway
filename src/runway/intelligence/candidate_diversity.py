@@ -57,7 +57,6 @@ class CandidateDiversityService:
         near_duplicate_review_quarantined = 0
         rights_warnings_removed = 0
         ranker = CandidateRanker(self.database, self.settings)
-        supported_topics = ranker._supported_topics()
         with self.database.session() as session:
             channel_id = get_channel(session, self.settings.channel_handle).id
             candidates = session.scalars(
@@ -92,13 +91,18 @@ class CandidateDiversityService:
                     and not is_known_adult_domain(candidate.source_domain)
                 )
                 analysis = candidate_analysis(candidate)
-                candidate_topics = ranker._candidate_topics(analysis)
-                topic_eligible = not supported_topics or bool(
-                    candidate_topics.intersection(supported_topics)
+                eligibility = ranker.topic_eligibility.evaluate(analysis)
+                topic_eligible = not eligibility.hard_reject
+                semantic_reconsideration = (
+                    candidate.hard_rejection_reason == "off_topic" and topic_eligible
                 )
                 if (
                     reconsider_legacy_policy
-                    and (legacy_policy_rejection or stale_domain_rejection)
+                    and (
+                        legacy_policy_rejection
+                        or stale_domain_rejection
+                        or semantic_reconsideration
+                    )
                     and topic_eligible
                 ):
                     components = json.loads(candidate.score_components_json)
@@ -107,6 +111,7 @@ class CandidateDiversityService:
                     candidate.final_rank_score = self._current_score(components)
                     components["hard_rejection_reason"] = None
                     components["source_risk_score"] = 0.0
+                    components["topic_eligibility"] = eligibility.model_dump()
                     components["final_rank_score"] = candidate.final_rank_score
                     candidate.score_components_json = json.dumps(components, sort_keys=True)
                     candidate.selection_reason = (
@@ -119,12 +124,11 @@ class CandidateDiversityService:
                     candidate.final_rank_score = 0.0
                     components = json.loads(candidate.score_components_json)
                     components["hard_rejection_reason"] = "off_topic"
+                    components["topic_eligibility"] = eligibility.model_dump()
                     components["final_rank_score"] = 0.0
                     candidate.score_components_json = json.dumps(components, sort_keys=True)
                     candidate.selection_reason = (
-                        "Rejected after canonical topic revalidation: "
-                        f"{sorted(candidate_topics) or ['unknown']} is outside "
-                        f"{sorted(supported_topics)}."
+                        f"Rejected after semantic topic revalidation: {eligibility.reason}."
                     )
                     off_topic_corrected += 1
                     for proposal in session.scalars(

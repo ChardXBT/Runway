@@ -444,11 +444,20 @@ class BlindStudyService:
         *,
         review_session: str,
         reviewer_label: str = "local-creator",
+        reviewer_kind: str = "creator",
     ) -> dict[str, object]:
         if not responses:
-            raise ValueError("response import requires at least one human response")
+            raise ValueError("response import requires at least one response")
         if not review_session.strip() or not reviewer_label.strip():
             raise ValueError("review session and reviewer label are required")
+        if reviewer_kind not in {"creator", "engineering_fixture"}:
+            raise ValueError("reviewer_kind must be creator or engineering_fixture")
+        if reviewer_kind == "engineering_fixture" and (
+            self.settings.agent_runtime != "mock" or self.settings.publishing_enabled
+        ):
+            raise ValueError(
+                "engineering fixture reviews require mock runtime and publishing disabled"
+            )
         response_keys = [response.case_key for response in responses]
         if len(set(response_keys)) != len(response_keys):
             raise ValueError("duplicate case responses in one import are not allowed")
@@ -483,7 +492,7 @@ class BlindStudyService:
                 row = BlindStudyResponse(
                     blind_study_case_id=case.id,
                     choice=response.choice,
-                    reviewer_kind="creator",
+                    reviewer_kind=reviewer_kind,
                     reviewer_label=reviewer_label.strip(),
                     review_session=review_session.strip(),
                     acceptable_choices_json=json.dumps(sorted(set(response.acceptable_choices))),
@@ -527,7 +536,7 @@ class BlindStudyService:
         return self.status(study_id) | {
             "imported": len(responses),
             "pairwise_preferences_created": created_preferences,
-            "label_source": "human",
+            "label_source": ("human" if reviewer_kind == "creator" else "engineering_fixture"),
         }
 
     def status(self, study_id: int) -> dict[str, object]:
@@ -552,6 +561,20 @@ class BlindStudyService:
                 )
                 or 0
             )
+            human_response_count = int(
+                session.scalar(
+                    select(func.count(BlindStudyResponse.id))
+                    .join(
+                        BlindStudyCase,
+                        BlindStudyCase.id == BlindStudyResponse.blind_study_case_id,
+                    )
+                    .where(
+                        BlindStudyCase.blind_study_id == study.id,
+                        BlindStudyResponse.reviewer_kind == "creator",
+                    )
+                )
+                or 0
+            )
             return {
                 "study_id": study.id,
                 "study_key": study.study_key,
@@ -559,11 +582,12 @@ class BlindStudyService:
                 "status": study.status,
                 "case_count": study.case_count,
                 "response_count": response_count,
+                "human_response_count": human_response_count,
                 "pending_count": study.case_count - response_count,
                 "split_counts": split_counts,
                 "minimum_export_cases": 50,
                 "export_ready": study.case_count >= 50,
-                "human_results_complete": response_count == study.case_count,
+                "human_results_complete": human_response_count == study.case_count,
             }
 
     def report(self, study_id: int) -> dict[str, object]:
@@ -576,6 +600,7 @@ class BlindStudyService:
                     BlindStudyResponse.blind_study_case_id == BlindStudyCase.id,
                 )
                 .where(BlindStudyCase.blind_study_id == study.id)
+                .where(BlindStudyResponse.reviewer_kind == "creator")
                 .order_by(BlindStudyCase.display_order)
             ).all()
         outcomes = Counter[str]()
@@ -672,8 +697,14 @@ class BlindStudyService:
                 preferred_text=preferred_text,
                 dispreferred_candidate_id=dispreferred_id,
                 dispreferred_text=dispreferred_text,
-                preference_source="blind_creator_study",
-                label_source="human",
+                preference_source=(
+                    "blind_creator_study"
+                    if response.reviewer_kind == "creator"
+                    else "offline_study_fixture"
+                ),
+                label_source=(
+                    "human" if response.reviewer_kind == "creator" else "engineering_fixture"
+                ),
                 strength=1.0,
                 reason_codes_json=response.reason_codes_json,
                 policy_version=None,

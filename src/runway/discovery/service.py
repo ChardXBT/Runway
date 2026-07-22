@@ -28,6 +28,7 @@ from runway.db.repositories import audit, get_channel
 from runway.discovery.providers import (
     ApiSearchProvider,
     BrowserSearchProvider,
+    EnsembleSearchProvider,
     FixtureSearchProvider,
     FrinkiacSearchProvider,
     ManualUrlProvider,
@@ -146,6 +147,9 @@ class DiscoveryService:
             if loaded_run:
                 saved = json.loads(loaded_run.query_plan_json)
                 saved["provider_results"] = provider_results
+                diagnostics = getattr(provider, "last_diagnostics", None)
+                if isinstance(diagnostics, dict):
+                    saved["provider_ensemble"] = diagnostics
                 loaded_run.query_plan_json = json.dumps(saved, sort_keys=True)
 
         created = 0
@@ -360,6 +364,7 @@ class DiscoveryService:
             duplicate,
             source_domain=result.source_domain,
             rights_status=result.rights_status,
+            image_path=source,
         )
 
         with self.database.session() as session:
@@ -465,6 +470,15 @@ class DiscoveryService:
                 soft_warnings_json=json.dumps(ranking.warnings),
                 score_components_json=ranking.model_dump_json(),
                 selection_reason=ranking.selection_reason,
+                topic_eligibility_class=ranking.topic_eligibility_class,
+                topic_eligibility_json=json.dumps(
+                    ranking.topic_eligibility,
+                    sort_keys=True,
+                ),
+                representation_provenance_json=json.dumps(
+                    ranking.representation_provenance,
+                    sort_keys=True,
+                ),
             )
             assign_diversity_fields(candidate, analysis)
             session.add(candidate)
@@ -654,6 +668,23 @@ class DiscoveryService:
             )
         if name == "api":
             return ApiSearchProvider(self.settings)
+        if name == "ensemble":
+            members: list[SearchProvider] = [
+                FrinkiacSearchProvider(
+                    self.settings,
+                    sample_offset=self._provider_run_count("ensemble"),
+                )
+            ]
+            if manual_urls:
+                members.append(ManualUrlProvider(manual_urls))
+            if self.settings.search_api_url and self.settings.search_api_key:
+                members.append(ApiSearchProvider(self.settings))
+            if self.settings.enable_browser_search and live:
+                members.append(BrowserSearchProvider(self.settings, live=True))
+            return EnsembleSearchProvider(
+                members,
+                max_results=self.settings.browser_search_max_results,
+            )
         if name not in providers:
             raise ValueError(f"unknown search provider {name}")
         return providers[name]
