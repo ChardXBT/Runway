@@ -47,7 +47,7 @@ class CandidateExposureService:
         selected_ids: Sequence[int],
         session_key: str,
         diagnostics: dict[str, object],
-        exploration_policy: str = "deterministic_slate_v1",
+        exploration_policy: str = "deterministic_slate_v2",
         randomized: bool = False,
         display_probabilities: dict[int, float] | None = None,
     ) -> dict[str, object]:

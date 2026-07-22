@@ -617,14 +617,17 @@ class StyleProfileService:
             )
             if current is None or current.id != source_id:
                 raise RuntimeError("active style profile changed during content-mode backfill")
-            next_version = int(
-                session.scalar(
-                    select(func.max(StyleProfile.version)).where(
-                        StyleProfile.channel_id == channel_id
+            next_version = (
+                int(
+                    session.scalar(
+                        select(func.max(StyleProfile.version)).where(
+                            StyleProfile.channel_id == channel_id
+                        )
                     )
+                    or 0
                 )
-                or 0
-            ) + 1
+                + 1
+            )
             profile["version"] = next_version
             profile["content_modes"] = content_modes
             profile["profile_derivation"] = {

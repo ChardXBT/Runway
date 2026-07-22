@@ -75,7 +75,12 @@ async def test_grounded_question_first_caption_and_feedback_memory(
         ).all()
     assert generation_run is not None
     selection_diagnostics = json.loads(generation_run.selection_diagnostics_json)
-    assert selection_diagnostics["version"] == "active-representation-slate-v1"
+    assert selection_diagnostics["version"] == "active-representation-slate-v2"
+    assert selection_diagnostics["neural_active"] is False
+    assert (
+        selection_diagnostics["deterministic_guardrails"]["deterministic_image_similarity"]
+        == "soft_penalty_only"
+    )
     assert candidate_exposures
     assert {row.event_type for row in candidate_exposures} <= {
         "eligible_selected",

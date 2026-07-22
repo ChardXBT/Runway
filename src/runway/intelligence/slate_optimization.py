@@ -29,7 +29,7 @@ class CandidateSlateResult:
 class CandidateSlateOptimizer:
     """Whole-slate active-representation optimizer with deterministic guardrails."""
 
-    version = "active-representation-slate-v1"
+    version = "active-representation-slate-v2"
     neural_cluster_threshold = 0.82
     semantic_suppression_threshold = 0.93
     deterministic_suppression_threshold = 0.88
@@ -85,6 +85,7 @@ class CandidateSlateOptimizer:
             vectors[candidate.id] = vector
             resolution = representation.as_dict()
         eligible = [candidate for candidate in ordered_pool if candidate.id in vectors]
+        neural_guardrail_active = bool(resolution and resolution.get("provider") != "runway-local")
         neural_clusters = self._semantic_clusters(eligible, vectors)
         recent_fatigue = self._recent_fatigue(channel_id)
         fingerprints = {
@@ -119,6 +120,7 @@ class CandidateSlateOptimizer:
                     fingerprints=fingerprints,
                     neural_clusters=neural_clusters,
                     recent_fatigue=recent_fatigue,
+                    enforce_semantic_suppression=neural_guardrail_active,
                 )
                 for candidate in remaining
             ]
@@ -162,6 +164,7 @@ class CandidateSlateOptimizer:
                 fingerprints=fingerprints,
                 neural_clusters=neural_clusters,
                 recent_fatigue=recent_fatigue,
+                enforce_semantic_suppression=neural_guardrail_active,
             )[1:]
             candidate_diagnostics[str(candidate.id)].update(
                 {
@@ -188,15 +191,20 @@ class CandidateSlateOptimizer:
                 max(cluster_counts.values(), default=0) / len(selected) if selected else None
             ),
             "representation": resolution,
-            "neural_active": bool(resolution and resolution.get("provider") != "runway-local"),
+            "neural_active": neural_guardrail_active,
             "deterministic_guardrails": {
                 "concept_key_repeat": "hard_suppression",
                 "fingerprint_similarity_threshold": self.deterministic_suppression_threshold,
-                "semantic_similarity_threshold": self.semantic_suppression_threshold,
+                "semantic_similarity_threshold": (
+                    self.semantic_suppression_threshold if neural_guardrail_active else None
+                ),
+                "deterministic_image_similarity": (
+                    "soft_penalty_only" if not neural_guardrail_active else "not_applicable"
+                ),
             },
             "vector_failures": vector_failures,
             "randomized": False,
-            "exploration_policy": "deterministic_slate_v1",
+            "exploration_policy": "deterministic_slate_v2",
         }
         return CandidateSlateResult(candidates=tuple(selected), diagnostics=diagnostics)
 
@@ -210,6 +218,7 @@ class CandidateSlateOptimizer:
         fingerprints: dict[int, DiversityFingerprint],
         neural_clusters: dict[int, str],
         recent_fatigue: Counter[str],
+        enforce_semantic_suppression: bool,
     ) -> tuple[CandidateImage, list[str], dict[str, float], float]:
         references = [*anchors, *selected]
         fingerprint = fingerprints[candidate.id]
@@ -239,7 +248,10 @@ class CandidateSlateOptimizer:
             reasons.append("deterministic_concept_repeat")
         if deterministic_similarity >= self.deterministic_suppression_threshold:
             reasons.append("deterministic_near_repeat")
-        if semantic_similarity >= self.semantic_suppression_threshold:
+        if (
+            enforce_semantic_suppression
+            and semantic_similarity >= self.semantic_suppression_threshold
+        ):
             reasons.append("active_representation_near_repeat")
         fatigue_count = recent_fatigue[candidate.diversity_cluster_key or "unclustered"]
         source_repeat = sum(
@@ -400,5 +412,5 @@ class CandidateSlateOptimizer:
             "representation": {},
             "neural_active": False,
             "randomized": False,
-            "exploration_policy": "deterministic_slate_v1",
+            "exploration_policy": "deterministic_slate_v2",
         }

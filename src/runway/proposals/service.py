@@ -159,7 +159,7 @@ class ProposalService:
                 selected_ids=[candidate.id for candidate in candidates],
                 session_key=f"generation:{run_id}",
                 diagnostics=selection_slate.diagnostics,
-                exploration_policy="deterministic_slate_v1",
+                exploration_policy="deterministic_slate_v2",
                 randomized=False,
             )
             with self.database.session() as session:
