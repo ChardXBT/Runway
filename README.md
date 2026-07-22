@@ -4,14 +4,15 @@ Runway is a local-only intelligence and planning application for image-based You
 posts. Qlob is the configured MVP channel, while the canonical intelligence kernel is
 channel-generic: it builds isolated, layered channel profiles; compiles persisted hybrid-retrieval
 evidence; verifies grounded caption slates; and learns separately from image, caption, and pairing
-decisions. It also manages a continuous editorial feed backed by a restart-safe scheduling
-outbox. Human edits, selections, accepts, and rejections become local retrieval and preference
+decisions. It also manages a continuous editorial feed and editable local Lineup. Human edits,
+selections, accepts, and rejections become local retrieval and preference
 evidence, so later passes improve without model-weight training.
 
-When the visible-browser publisher is enabled, the explicit `Accept` action assigns
-the first open 10:00 AM Eastern day and adds the post to a persisted FIFO outbox. Browser
-submissions run one at a time, and Runway reserves at most one bot post per local day. The schedule
-has no horizon cap; manually added Qlob posts are independent.
+`Accept` is local and editorial: it assigns the next open Lineup day and never creates YouTube
+queue work or opens a browser. Assisted publishing is the default. Only a separately confirmed
+Lineup action prepares a native posting workspace or, when all authorized-browser interlocks are
+enabled, adds exact payloads to the persisted FIFO outbox. Per-post date and time are editable in
+the channel timezone; the default time is only an initial suggestion.
 
 The real Qlob catalogue, retrieval profile, bounded live discovery, one-proposal review flow, and
 restart persistence were validated on 2026-07-17 without posting. See
@@ -49,9 +50,9 @@ restart persistence were validated on 2026-07-17 without posting. See
   constraints, source policy, and rights policy without downloading model weights.
 - A safe image-generation boundary records eligibility and complete lineage. Only the
   deterministic mock provider is enabled; paid and unknown-rights generation paths fail closed.
-- The external scheduler uses a separate visible persistent profile, a disabled-by-default feature
-  gate, a persisted serial outbox, payload hashing, screenshots, and conservative no-retry
-  recovery.
+- The external boundary offers default assisted preparation plus a separately authorized visible
+  browser mode with independent interlocks, a serial outbox, payload hashing, screenshots, and
+  conservative no-retry recovery.
 - Fixture, manual URL, experimental headed-browser, and optional API search providers share one
   provider interface.
 
@@ -203,7 +204,7 @@ It preserves page/image URLs and stops on challenges. It contains no stealth, CA
 proxy rotation, or identity-evasion behavior. Source metadata remains available in the local
   archive but is not part of the fast Runway decision path.
 
-## Guarded YouTube scheduling
+## Explicit YouTube handling
 
 The dedicated publisher profile is separate from the capture/discovery profiles:
 
@@ -214,18 +215,29 @@ The dedicated publisher profile is separate from the capture/discovery profiles:
 
 `publisher login` opens ordinary installed Google Chrome—not Playwright's
 automation browser—with an isolated Runway profile. Sign in manually with the
-Google account that has Qlob Editor access, confirm the Posts page is visible,
+Google account whose delegated role the channel owner configured for Qlob, confirm the Posts page is visible,
 close that Chrome window, and then press Enter in the terminal. Guarded
 publishing later reopens the saved profile through installed Chrome. Never
 disable Google account protections or copy cookies into Runway.
 
-With `RUNWAY_PUBLISHING_ENABLED=true`, every click on `Accept` is an explicit scheduling
-instruction for that exact image and caption. Runway assigns the next free daily slot, advances the
-Runway immediately, and processes the persisted outbox serially. Confirmed Lineup edits, moves,
-swaps, and removals are applied to YouTube first and saved locally only after verification. A
-session or YouTube error
-pauses the outbox. Once a Schedule click may have happened, an inconclusive result enters
-`publish_unverified` and can only be verified—not automatically resubmitted.
+The default `RUNWAY_PUBLISHING_MODE=assisted` validates selected Lineup payloads and builds an
+ordered workspace with exact image, caption, date, time, timezone, copy/download actions, and an
+explicit YouTube link. It creates no browser queue and its progress is session-local.
+
+Authorized browser handling requires all three settings and is available only from the confirmed
+Lineup action:
+
+```dotenv
+RUNWAY_PUBLISHING_MODE=authorized_browser
+RUNWAY_PUBLISHING_ENABLED=true
+RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=true
+```
+
+The worker processes the persisted outbox serially. Local Lineup edits, moves, swaps, and removals
+never mutate YouTube or auto-requeue; confirmed external posts are immutable in normal Lineup
+actions. A session or challenge error pauses before submission. Once a Schedule click may have
+happened, an inconclusive result enters `publish_unverified` and can only be verified—not
+automatically resubmitted.
 
 ## Known limitations
 

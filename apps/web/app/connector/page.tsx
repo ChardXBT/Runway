@@ -6,7 +6,8 @@ import { isRecord } from "@/lib/guards";
 
 export const metadata: Metadata = {
   title: "Connector",
-  description: "Invite Runway to your YouTube channel and verify Editor access.",
+  description:
+    "Invite Runway to your YouTube channel and verify observed Community posting capability.",
 };
 
 type ConnectorSettings = {

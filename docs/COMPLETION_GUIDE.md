@@ -1,8 +1,8 @@
 # Runway operating and completion guide
 
 Runway is a continuous Qlob editorial conveyor. It retrieves from the local Qlob history, finds and
-ranks images, proposes question-first captions, learns from every decision, and schedules approved
-posts through a visible YouTube browser.
+ranks images, proposes question-first captions, learns from every decision, and manages an editable
+local Lineup with explicit assisted or separately authorized external handling.
 
 ## The normal session
 
@@ -10,8 +10,8 @@ posts through a visible YouTube browser.
 2. Inspect the feed preview and caption.
 3. Optionally edit the caption or choose an alternative.
 4. Choose one action:
-   - `Accept` records positive evidence, assigns the next free 10:00 AM Eastern day,
-     enters the post in the persisted YouTube outbox, and opens the next option.
+   - `Accept` records positive evidence, assigns the next free default Lineup slot, performs no
+     YouTube action, and opens the next option.
    - `Reject` records the complete image/caption option as negative evidence and opens the next option.
    - `Fewer like this` rejects the current look with an explicit `too_similar` image-cluster signal,
      suppressing visually related candidates in later ranking.
@@ -47,7 +47,7 @@ challenges are never bypassed.
 Source URLs and source metadata remain in the local archive. They do not block the fast approval
 path.
 
-## Scheduling architecture
+## Scheduling and publishing architecture
 
 Approval performs these local operations in order, with a durable checkpoint at each state:
 
@@ -56,17 +56,23 @@ needs_review
   -> next free daily slot assigned
   -> approved
   -> internally_scheduled
-  -> persisted YouTube outbox
+  -> editable local Lineup
 ```
 
-The UI advances after the outbox entry is durable; it does not wait for browser automation. A
-single worker processes the outbox in FIFO order, so multiple rapid approvals cannot launch
-simultaneous publisher browsers.
+The UI advances after local scheduling is durable. Accept, caption/time edits, moves, swaps, and
+local removal never create a publisher attempt, validate a session, or open Chrome. Each Lineup
+item stores a complete timezone-aware timestamp; the default time is only the initial suggestion.
 
-The worker validates the saved Qlob Editor session, fills the exact image/caption/date/time, clicks
-Schedule once, captures screenshots, and verifies the Scheduled tab. Any preflight or browser error
-pauses the outbox. A possibly submitted post enters `publish_unverified` and is never automatically
-resubmitted.
+Only the confirmed Lineup publishing action crosses the external boundary. Default assisted mode
+validates exact media/caption/timestamp/rights fields and returns an ordered native posting
+workspace without queue or browser work. Its completion controls are session-local and do not mark
+external verification.
+
+Separately authorized browser mode creates the existing serial FIFO outbox. The worker validates
+observed Qlob posting capability, fills one exact image/caption/date/time at a time, clicks Schedule
+once, captures screenshots, and verifies the Scheduled tab. Any preflight or browser error pauses
+the outbox. A possibly submitted post enters `publish_unverified` and is never automatically
+resubmitted. Items in a requested batch are verified independently; the batch is not atomic.
 
 Settings reads the last durable publisher check without opening Chrome. A successful result becomes
 stale after 24 hours. `Check saved session` performs the fresh read-only browser capability check and
@@ -83,20 +89,30 @@ labels do not inflate this threshold.
 .\.venv\Scripts\runway.exe publisher status
 ```
 
-Invite the configured connector account as `Editor (Limited)`, then use that Google identity for the
-publisher login. The dedicated publisher profile remains local under the ignored data directory.
+The channel owner may invite the configured connector account as `Editor (Limited)`, then use that
+Google identity for publisher login. This is an owner-declared role. Runway observes whether the
+saved session exposes the expected channel and posting controls; it cannot query the exact role.
+The dedicated publisher profile remains local under the ignored data directory.
 
-Enable the local feature gate:
+Assisted mode is the safe default:
 
 ```dotenv
-RUNWAY_PUBLISHING_ENABLED=true
+RUNWAY_PUBLISHING_MODE=assisted
+RUNWAY_PUBLISHING_ENABLED=false
+RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=false
 RUNWAY_PUBLISHER_CHANNEL_ID=UCQ-nHijGwxNU3Go_wyLQ5Ng
 ```
 
-Restart Runway. The primary navigation should read `Auto-schedule on · One bot post daily`.
+Authorized browser operation requires all three interlocks:
+
+```dotenv
+RUNWAY_PUBLISHING_MODE=authorized_browser
+RUNWAY_PUBLISHING_ENABLED=true
+RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=true
+```
 
 The legacy CLI prepare/confirm commands remain available for diagnostics, but the normal product
-flow uses the explicit `Accept` action as the human scheduling instruction.
+flow uses the explicit confirmed Lineup action.
 
 ## Completion definition
 
@@ -106,12 +122,17 @@ Software completion requires:
 - uncapped next-slot allocation with one Runway post per local date;
 - automatic positive/negative feedback capture;
 - a persistent serial publisher outbox with pause-on-error behavior;
+- local-only Generator acceptance and Lineup mutation isolation;
+- a default assisted workspace that needs no valid publisher login;
 - desktop and mobile conveyor verification;
 - backend tests, strict typing, lint, format, frontend tests, production build, and audits;
 - private GitHub `main` synchronized with green CI.
 
 Account-specific YouTube acceptance is complete only after one real approved option appears in
 Qlob’s Scheduled tab with the exact image, caption, date, and time.
+
+This publishing refactor intentionally changes no intelligence/ML behavior, SQLAlchemy schema,
+Alembic migration, database engine, or production data.
 
 See `docs/CURRENT_LIMITATIONS.md` for browser/API constraints, connector proof boundaries, model
 activation requirements, analytics gaps, and the work required before multi-user signup is honest.

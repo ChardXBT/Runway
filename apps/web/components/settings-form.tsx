@@ -22,6 +22,9 @@ export type Settings = {
   openai_configured: boolean;
   browser_search_enabled: boolean;
   publishing_enabled: boolean;
+  publishing_mode: "assisted" | "authorized_browser";
+  youtube_automation_authorized: boolean;
+  authorized_browser_ready: boolean;
   caption_question_first: boolean;
   publisher_channel_id: string;
   publisher_browser_channel: string;
@@ -54,6 +57,10 @@ export function isSettings(value: unknown): value is Settings {
     typeof value.openai_configured === "boolean" &&
     typeof value.browser_search_enabled === "boolean" &&
     typeof value.publishing_enabled === "boolean" &&
+    (value.publishing_mode === "assisted" ||
+      value.publishing_mode === "authorized_browser") &&
+    typeof value.youtube_automation_authorized === "boolean" &&
+    typeof value.authorized_browser_ready === "boolean" &&
     typeof value.caption_question_first === "boolean" &&
     typeof value.publisher_channel_id === "string" &&
     typeof value.publisher_browser_channel === "string" &&
@@ -204,16 +211,26 @@ export function SettingsForm({ initial }: { initial: Settings }) {
 
   return (
     <>
-      <div className={settings.publishing_enabled ? "publishing-banner armed" : "publishing-banner"}>
+      <div
+        className={
+          settings.authorized_browser_ready
+            ? "publishing-banner armed"
+            : "publishing-banner"
+        }
+      >
         <strong>
-          {settings.publishing_enabled
-            ? "The guarded YouTube publisher is armed."
-            : "Live YouTube publishing is disabled."}
+          {settings.publishing_mode === "assisted"
+            ? "Assisted publishing is the active mode."
+            : settings.authorized_browser_ready
+              ? "Authorized browser publishing is armed."
+              : "Authorized browser publishing is locked."}
         </strong>
         <span>
-          {settings.publishing_enabled
-            ? `Qlob channel ${settings.publisher_channel_id} · visible browser · accepted posts enter Lineup automatically.`
-            : "Only local decisions and internal Lineup scheduling are available."}
+          {settings.publishing_mode === "assisted"
+            ? "The explicit Lineup action prepares exact native-YouTube instructions. Accept and calendar edits remain local-only."
+            : settings.authorized_browser_ready
+              ? `Channel ${settings.publisher_channel_id} · explicit Lineup confirmation · serialized visible browser.`
+              : "All authorized-browser interlocks must be configured together. No browser queue work can start."}
         </span>
       </div>
       <form
@@ -281,7 +298,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
           <strong>Schedule preview</strong>
           <span>
             {timezonePreview
-              ? `Each accepted post takes one open day at ${timezonePreview}.`
+              ? `New posts start at ${timezonePreview}; each Lineup item can use a different time.`
               : "Enter a valid timezone and time to preview the daily slot."}
           </span>
         </p>

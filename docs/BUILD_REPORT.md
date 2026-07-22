@@ -42,9 +42,10 @@ verified as `PRIVATE` after the initial push.
   edits are inline; approve, reject, and image replacement record learning and load the next option.
 - Added first-open-day allocation at 10:00 AM Toronto time, with a strict one-Runway-post-per-day
   invariant and no fixed scheduling horizon.
-- Implemented accept-to-schedule publishing through a persisted serial outbox with Qlob/Editor
-  checks, payload hashing, session-expiry pause/resume, screenshots, Scheduled-tab verification,
-  and conservative no-retry recovery after an ambiguous final click.
+- Superseded the original accept-to-schedule trigger: Accept now stops at the editable local
+  Lineup. Default assisted preparation creates no queue; a separately confirmed and authorized
+  Lineup action may use the persisted serial outbox with observed Qlob capability checks, payload
+  hashing, pause/resume, screenshots, and conservative no-retry recovery.
 - Source metadata remains preserved but is no longer an approval-form gate.
 - Added Alembic migrations `0004_feedback_and_publisher` and `0005_editorial_conveyor`.
 - Current local checks: Ruff lint/format passed, Mypy strict passed, Pytest 51 passed, ESLint passed,

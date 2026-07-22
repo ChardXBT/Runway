@@ -32,18 +32,20 @@ URLs and the managed capture run, accepts at most ten cards and 4 MiB per reques
 explicit source header, and cannot publish. Exact surface count and tail-ID agreement are required
 for completion. A general-purpose browser-to-database write endpoint was rejected.
 
-## Human approval, daily allocation, and publisher outbox
+## Editorial approval, local Lineup, and explicit publishing
 
 `Accept` is the proposal-specific human decision. It atomically reserves the first open
 10:00 AM Toronto slot, records positive learning, and moves the item through `InternalPublisher`
-before adding a persisted outbox attempt. A single worker drains approvals in FIFO order while the
-UI immediately presents the next option. The allocator has no fixed horizon and reserves no more
-than one Runway-generated post per local day.
+without adding a publisher attempt. The UI immediately presents the next option. The default time
+is an initial suggestion; the Lineup stores and edits a complete per-post timestamp. The allocator
+has no fixed horizon and currently reserves no more than one Runway-generated post per local day.
 
-`YouTubeBrowserPublisher` remains a separate visible-browser boundary using a dedicated profile.
-It validates the saved Qlob Editor session, hashes the approved payload, records screenshots/audit
-events, pauses safely before composer interaction when sign-in is needed, and never auto-retries an
-ambiguous final click. Model runtimes have no route to the approval or publisher endpoints.
+The explicit Lineup action is the only normal publishing trigger. Assisted mode validates exact
+payloads and returns native posting instructions without queue or browser work. Authorized-browser
+mode requires three independent configuration conditions before the existing serial worker can be
+queued. It validates observed channel capabilities, hashes the approved payload, records
+screenshots/audit events, pauses safely before composer interaction when sign-in is needed, and
+never auto-retries an ambiguous final click. Model runtimes have no publisher capability.
 
 ## Pluggable discovery
 

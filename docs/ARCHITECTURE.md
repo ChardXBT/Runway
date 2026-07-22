@@ -93,11 +93,17 @@ artifacts.
 
 ## External platform boundary
 
-The visible YouTube publisher is a separate service boundary. It cannot be
-invoked by the intelligence harness, requires the operator's explicit `Accept`
-decision, and is feature-gated. Approvals reserve the first open 10:00 AM
-Toronto slot with a strict one-Runway-post-per-day invariant, then enter a
-restart-safe serial FIFO outbox.
+The YouTube publisher is a separate service boundary and cannot be invoked by
+the intelligence harness. Generator acceptance records the existing feedback
+and reserves an editable local Lineup slot only. Normal Lineup edits invalidate
+stale payloads locally without queueing or opening a browser.
+
+Only a deliberate, confirmed Lineup action crosses the external boundary.
+Default `assisted` mode returns validated posting instructions without browser
+work. Separately gated `authorized_browser` mode enters the existing restart-safe
+serial FIFO outbox. Queue creation is not external success; every item is
+verified independently. The current one-Runway-post-per-local-day policy remains
+enforced while each post may use its own timezone-aware time.
 
 The API listens only on `127.0.0.1` and serves media from the configured local
 data directory. The offline fixture path uses the mock runtime. The real caption

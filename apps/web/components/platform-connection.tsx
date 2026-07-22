@@ -29,6 +29,7 @@ function friendlyCheckLabel(value: string) {
 
 export function PlatformConnection({
   publishingEnabled,
+  publishingMode = "authorized_browser",
   channelId,
   connectorEmail,
   browserChannel,
@@ -36,6 +37,7 @@ export function PlatformConnection({
   initialConnection,
 }: {
   publishingEnabled: boolean;
+  publishingMode?: "assisted" | "authorized_browser";
   channelId: string;
   connectorEmail: string;
   browserChannel: string;
@@ -127,8 +129,10 @@ export function PlatformConnection({
     }
   }
 
-  const stateLabel = !publishingEnabled
-    ? "Disabled"
+  const stateLabel = publishingMode === "assisted"
+    ? "Not required"
+    : !publishingEnabled
+      ? "Disabled"
     : connection.state === "connected"
       ? "Connected"
       : connection.state === "stale"
@@ -164,10 +168,11 @@ export function PlatformConnection({
         <li>
           <span>1</span>
           <div>
-            <strong>Confirm Editor access</strong>
+            <strong>Record the declared role</strong>
             <p>
-              Invite <code>{connectorEmail}</code> to Qlob as Editor (Limited).
-              This can create posts without exposing revenue data.
+              The channel owner may invite <code>{connectorEmail}</code> as Editor
+              (Limited). That is an owner-confirmed role, not a role returned to Runway
+              by an API.
             </p>
           </div>
         </li>
@@ -187,8 +192,8 @@ export function PlatformConnection({
           <div>
             <strong>Check the saved session</strong>
             <p>
-              The button below performs a real read-only session and channel access
-              check. It does not create or schedule a post.
+              In authorized-browser mode, the button performs a read-only observed
+              capability check. It does not create or schedule a post.
             </p>
           </div>
         </li>
@@ -214,6 +219,12 @@ export function PlatformConnection({
         </ul>
       )}
       <dl className="connection-facts">
+        <div>
+          <dt>Publishing mode</dt>
+          <dd>
+            {publishingMode === "assisted" ? "Assisted" : "Authorized browser"}
+          </dd>
+        </div>
         <div>
           <dt>Channel</dt>
           <dd>{channelId}</dd>
@@ -266,10 +277,18 @@ export function PlatformConnection({
           </button>
         )}
       </div>
+      {publishingMode === "assisted" && (
+        <p className="connection-detail">
+          Assisted preparation remains usable without a working publisher session.
+          Switch modes only through local configuration; Runway never falls back
+          silently between modes.
+        </p>
+      )}
       <small>
         Publisher browser: {browserChannel === "chrome" ? "Google Chrome" : browserChannel}.
         Sign-in stays in Runway’s private profile; passwords and verification codes are
-        never handled by the application. A connected check becomes stale after{" "}
+        never handled by the application. A capability check does not prove the exact
+        delegated role and becomes stale after{" "}
         {connection.stale_after_hours} hours.
       </small>
     </section>

@@ -35,6 +35,21 @@ export function localDate(value: string | Date, timeZone: string) {
   }
 }
 
+export function localTime(value: string | Date, timeZone: string) {
+  try {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime()) || !isValidTimeZone(timeZone)) return null;
+    return new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone,
+    }).format(date);
+  } catch {
+    return null;
+  }
+}
+
 function zonedPartsAsUtc(value: Date, timeZone: string) {
   const formatter = new Intl.DateTimeFormat("en-US", {
     year: "numeric",
@@ -107,6 +122,22 @@ export function scheduleIsPast(
   const instant = scheduleInstant(dateValue, timeValue, timeZone);
   if (!instant) return null;
   return instant.getTime() <= now.getTime();
+}
+
+export function zonedScheduleIso(
+  dateValue: string,
+  timeValue: string,
+  timeZone: string,
+) {
+  const instant = scheduleInstant(dateValue, timeValue, timeZone);
+  if (!instant) return null;
+  const offsetMinutes = Math.round(
+    (zonedPartsAsUtc(instant, timeZone) - instant.getTime()) / 60_000,
+  );
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absolute = Math.abs(offsetMinutes);
+  const offset = `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+  return `${dateValue}T${timeValue}:00${offset}`;
 }
 
 export function shiftIsoDate(value: string, days: number) {

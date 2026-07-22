@@ -35,13 +35,28 @@ export default async function LineupPage() {
       [],
       proposalList,
     ),
-    apiGet<{ publishing_enabled: boolean }>("/api/settings", {
-      publishing_enabled: false,
-    }, (value): value is { publishing_enabled: boolean } =>
+    apiGet<{
+      authorized_browser_ready: boolean;
+      publishing_mode: "assisted" | "authorized_browser";
+      channel_name: string;
+    }>("/api/settings", {
+      authorized_browser_ready: false,
+      publishing_mode: "assisted",
+      channel_name: "Qlob",
+    }, (value): value is {
+      authorized_browser_ready: boolean;
+      publishing_mode: "assisted" | "authorized_browser";
+      channel_name: string;
+    } =>
       typeof value === "object" &&
       value !== null &&
-      "publishing_enabled" in value &&
-      typeof value.publishing_enabled === "boolean",
+      "authorized_browser_ready" in value &&
+      typeof value.authorized_browser_ready === "boolean" &&
+      "publishing_mode" in value &&
+      (value.publishing_mode === "assisted" ||
+        value.publishing_mode === "authorized_browser") &&
+      "channel_name" in value &&
+      typeof value.channel_name === "string",
     ),
     apiGet<PublisherQueueStatus>(
       "/api/publisher/queue",
@@ -54,7 +69,9 @@ export default async function LineupPage() {
     <LineupCalendar
       initialLineup={lineup}
       initialPublished={published}
-      publishingEnabled={settings.publishing_enabled}
+      publishingEnabled={settings.authorized_browser_ready}
+      publishingMode={settings.publishing_mode}
+      channelName={settings.channel_name}
       initialPublisherQueue={publisherQueue}
     />
   );

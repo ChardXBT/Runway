@@ -15,7 +15,7 @@ Last validated: 2026-07-20
 - [x] Target-specific caption, image, and pairing readiness with held-out-label isolation
 - [x] Continuous one-decision review conveyor with immediate next-option loading
 - [x] Uncapped future scheduling at one Runway post per day, 10:00 AM Toronto time
-- [x] Approve-to-schedule persisted FIFO outbox
+- [x] Local-only approval plus explicit Lineup-to-publisher FIFO outbox
 - [x] Visible-browser Qlob publisher with channel/capability validation and duplicate prevention
 - [x] Durable passive connection status with a 24-hour stale threshold
 - [x] Persisted pause-and-resume behavior when the Google session needs attention

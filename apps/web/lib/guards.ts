@@ -1,7 +1,9 @@
 import type {
+  AssistedPublishingWorkspace,
   EditorialEnvelope,
   GenerationActivity,
   LineupSchedule,
+  LineupPushResponse,
   Proposal,
   PublisherConnectionStatus,
   PublisherQueueStatus,
@@ -83,6 +85,53 @@ export function isPublisherQueueStatus(
     typeof value.paused === "boolean" &&
     !(value.running && value.paused) &&
     (value.paused_reason === null || typeof value.paused_reason === "string")
+  );
+}
+
+export function isAssistedPublishingWorkspace(
+  value: unknown,
+): value is AssistedPublishingWorkspace {
+  if (!isRecord(value) || !Array.isArray(value.items)) return false;
+  return (
+    value.mode === "assisted" &&
+    typeof value.channel_name === "string" &&
+    typeof value.channel_id === "string" &&
+    typeof value.timezone === "string" &&
+    isValidTimeZone(value.timezone) &&
+    typeof value.youtube_url === "string" &&
+    value.youtube_url.startsWith("https://www.youtube.com/") &&
+    value.items.every(
+      (item) =>
+        isRecord(item) &&
+        isFiniteNumber(item.proposal_id) &&
+        Number.isInteger(item.proposal_id) &&
+        isDateString(item.planned_publish_at) &&
+        typeof item.caption === "string" &&
+        typeof item.image_url === "string" &&
+        item.image_url.startsWith("/media/") &&
+        typeof item.rights_status === "string" &&
+        Array.isArray(item.warnings) &&
+        item.warnings.every((warning) => typeof warning === "string"),
+    )
+  );
+}
+
+export function isLineupPushResponse(value: unknown): value is LineupPushResponse {
+  if (!isRecord(value)) return false;
+  const assistedValid =
+    value.assisted_workspace === undefined ||
+    isAssistedPublishingWorkspace(value.assisted_workspace);
+  return (
+    (value.mode === "assisted" || value.mode === "authorized_browser") &&
+    typeof value.detail === "string" &&
+    Array.isArray(value.queued_proposal_ids) &&
+    value.queued_proposal_ids.every(
+      (proposalId) => typeof proposalId === "number" && Number.isInteger(proposalId),
+    ) &&
+    assistedValid &&
+    (value.mode !== "assisted" || isAssistedPublishingWorkspace(value.assisted_workspace)) &&
+    isLineupSchedule(value.lineup) &&
+    isPublisherQueueStatus(value.publisher_queue)
   );
 }
 

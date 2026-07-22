@@ -72,7 +72,7 @@ export function ConnectorSetup({
       );
       const payload = await readApiJson(response, {
         validate: isConnectionResponse,
-        failureMessage: "Runway could not verify Editor access.",
+        failureMessage: "Runway could not verify Community posting capability.",
       });
       setState(payload.valid ? "connected" : "attention");
       setDetail(payload.detail);
@@ -81,7 +81,7 @@ export function ConnectorSetup({
       setDetail(
         actionError(
           error,
-          "Runway could not verify Editor access. Confirm the invitation was accepted and try again.",
+          "Runway could not verify Community posting capability. Confirm the invitation was accepted and try again.",
         ),
       );
     } finally {
@@ -105,9 +105,9 @@ export function ConnectorSetup({
           <p className="eyebrow">Connector / YouTube</p>
           <h1>Invite Runway backstage.</h1>
           <p className="lede">
-            Give Runway Editor access without sharing your password. We check the
-            channel controls in a read-only browser session before anything can be
-            scheduled.
+            The channel owner chooses a declared role without sharing a password.
+            Runway can observe posting controls in a read-only browser check, but it
+            cannot read or prove the exact delegated role through an API.
           </p>
         </div>
         <section className="connector-pass" aria-label="Runway invitation account">
@@ -176,7 +176,7 @@ export function ConnectorSetup({
                 <strong>Return and verify</strong>
                 <p>
                   Once Runway has accepted the invite, paste the channel URL in the
-                  access check. YouTube invitations expire after 30 days.
+                  capability check. YouTube invitations expire after 30 days.
                 </p>
               </div>
             </li>
@@ -184,8 +184,9 @@ export function ConnectorSetup({
           <aside className="connector-boundary">
             <strong>You stay in control.</strong>
             <p>
-              Editor access cannot manage channel permissions or delete the channel.
-              You can remove Runway at any time from the same Permissions screen.
+            Editor access cannot manage channel permissions or delete published
+            content. You can remove Runway at any time from the same Permissions
+            screen. Runway treats confirmed external posts as immutable.
             </p>
           </aside>
         </div>
@@ -201,8 +202,8 @@ export function ConnectorSetup({
             </span>
             <span>Read-only check</span>
           </div>
-          <p className="eyebrow">Verify access</p>
-          <h2 id="connector-check-title">Is the invitation working?</h2>
+          <p className="eyebrow">Observed capability</p>
+          <h2 id="connector-check-title">Are Community post controls available?</h2>
           <p>
             Runway checks that the saved account can open this channel and see its
             post creation controls. The check never publishes, edits, or deletes.
@@ -229,7 +230,9 @@ export function ConnectorSetup({
             disabled={!channelUrl.trim() || state === "checking"}
             aria-busy={state === "checking"}
           >
-            {state === "checking" ? "Checking Editor access…" : "Verify connection"}
+            {state === "checking"
+              ? "Checking posting capability…"
+              : "Verify capability"}
           </button>
           <p
             className="connector-result"

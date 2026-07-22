@@ -42,9 +42,9 @@ access to Qlob. The dedicated browser profile retains the local session until Go
 3. Select `Reject`, open `Edit` when needed, or `Accept`.
 4. Continue for as many options as desired; the next decision loads immediately.
 
-Approvals are assigned the first open 10:00 AM `America/Toronto` slot. There is no fixed horizon,
-and the allocator reserves at most one Runway-generated post per local day. Manual posts made
-outside Runway do not consume a Runway slot.
+Approvals are assigned the first open default 10:00 AM `America/Toronto` slot and remain editable
+in Lineup. Date and time may be changed per post; the allocator still reserves at most one
+Runway-generated post per local day. Accept, edit, move, and local removal perform no YouTube work.
 
 The review tray refills from already accepted candidates first. If none remain, visible bounded
 image discovery runs and then caption generation resumes. Model-usage exhaustion stops refill
@@ -63,18 +63,40 @@ Set up the dedicated publisher profile once:
 .\.venv\Scripts\runway.exe publisher status
 ```
 
-The command opens ordinary installed Google Chrome. Use the Google account
-YouTube identifies as an Editor for Qlob, confirm the Qlob Posts page, close
+The command opens ordinary installed Google Chrome. Use the Google account whose delegated role
+the channel owner configured for Qlob, confirm the Qlob Posts page, close
 that Chrome window, and then press Enter. The ignored isolated profile lives at
 `data/browser-profile/publisher`. Runway does not automate Google credentials
 or bypass account warnings.
 
-With `RUNWAY_PUBLISHING_ENABLED=true`, the `Accept` decision adds the exact accepted
-payload to a persisted FIFO outbox. One visible-browser worker schedules items serially while the
-UI advances immediately.
+Assisted preparation is the default and needs no saved session:
+
+```dotenv
+RUNWAY_PUBLISHING_MODE=assisted
+RUNWAY_PUBLISHING_ENABLED=false
+RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=false
+```
+
+From Lineup, review the exact channel, mode, images, captions, timestamps, and timezone, then
+confirm `Prepare ... for YouTube`. Runway returns an ordered session-local workspace; use its
+copy/download/open actions and complete the final schedule natively in YouTube.
+
+Authorized browser mode is disabled unless all interlocks are explicitly configured:
+
+```dotenv
+RUNWAY_PUBLISHING_MODE=authorized_browser
+RUNWAY_PUBLISHING_ENABLED=true
+RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=true
+```
+
+After manual login, run the read-only saved-session capability check in Settings. It observes the
+expected channel and Community controls; it does not prove the exact delegated role. Only the
+confirmed Lineup action creates FIFO outbox work, and the response reports queue creation rather
+than claiming external success.
 
 If Google requires sign-in, Runway stops before touching the composer and shows the queue as
-paused. Sign in through `publisher login`, then select `Resume scheduling` in Review. If a final
+paused. Sign in through `publisher login`, recheck the saved session, then resume from Lineup or
+Settings. If a final
 Schedule click produced an ambiguous result, verify the proposal instead of retrying it.
 
 The older `publisher prepare` / `publisher confirm` commands remain for diagnostics. They are not

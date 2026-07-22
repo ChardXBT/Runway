@@ -27,6 +27,9 @@ const fallback: Settings = {
   openai_configured: false,
   browser_search_enabled: false,
   publishing_enabled: false,
+  publishing_mode: "assisted",
+  youtube_automation_authorized: false,
+  authorized_browser_ready: false,
   caption_question_first: true,
   publisher_channel_id: "UCQ-nHijGwxNU3Go_wyLQ5Ng",
   publisher_browser_channel: "chrome",
@@ -65,13 +68,14 @@ export default async function SettingsPage() {
           <p className="eyebrow">Local configuration</p>
           <h1>Quiet rules behind the feed.</h1>
           <p className="lede">
-            Secret values never appear here. Every accepted look teaches Runway and takes
-            the next open daily slot through the visible Qlob publisher.
+            Secret values never appear here. Accept is editorial and local-only; external
+            handling starts from a deliberate Lineup action.
           </p>
         </div>
       </header>
       <PlatformConnection
-        publishingEnabled={settings.publishing_enabled}
+        publishingEnabled={settings.authorized_browser_ready}
+        publishingMode={settings.publishing_mode}
         channelId={settings.publisher_channel_id}
         connectorEmail={settings.connector_account_email}
         browserChannel={settings.publisher_browser_channel}

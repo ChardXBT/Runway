@@ -13,7 +13,6 @@ import {
 import {
   isEditorialEnvelope,
   isProposal,
-  isPublisherQueueStatus,
 } from "@/lib/guards";
 import type {
   EditorialEnvelope,
@@ -28,18 +27,8 @@ type Action =
   | "reject"
   | "similar"
   | "options"
-  | "resume"
   | "regenerate"
   | "replace";
-
-function emptyQueue(): PublisherQueueStatus {
-  return {
-    running: false,
-    queued: 0,
-    paused: false,
-    paused_reason: null,
-  };
-}
 
 function emptyGeneration(): GenerationActivity {
   return {
@@ -53,22 +42,17 @@ function emptyGeneration(): GenerationActivity {
 export function ReviewWorkspace({
   initialProposal,
   initialWorkflow,
-  initialPublisherQueue,
   initialGeneration,
-  publishingEnabled,
 }: {
   initialProposal: Proposal | null;
   initialWorkflow: WorkflowStatus;
-  initialPublisherQueue?: PublisherQueueStatus;
   initialGeneration?: GenerationActivity;
-  publishingEnabled: boolean;
+  publishingEnabled?: boolean;
+  initialPublisherQueue?: PublisherQueueStatus;
 }) {
   const [proposal, setProposal] = useState(initialProposal);
   const [caption, setCaption] = useState(initialProposal?.final_caption ?? "");
   const [workflow, setWorkflow] = useState(initialWorkflow);
-  const [publisherQueue, setPublisherQueue] = useState(
-    initialPublisherQueue ?? emptyQueue(),
-  );
   const [generation, setGeneration] = useState(
     initialGeneration ?? emptyGeneration(),
   );
@@ -111,7 +95,6 @@ export function ReviewWorkspace({
 
   function applyEditorialStatus(payload: EditorialEnvelope) {
     setWorkflow(payload.workflow);
-    if (payload.publisher_queue) setPublisherQueue(payload.publisher_queue);
     setGeneration(payload.generation ?? emptyGeneration());
   }
 
@@ -242,11 +225,11 @@ export function ReviewWorkspace({
       await finishDecision(
         payload,
         scheduledAt
-          ? `Accepted for ${
+          ? `Accepted and added to Lineup for ${
               slotFormatter?.format(new Date(scheduledAt)) ??
               "the configured Lineup slot"
-            }.`
-          : "Accepted and added to Lineup.",
+            }. Nothing was sent to YouTube.`
+          : "Accepted and added to Lineup. Nothing was sent to YouTube.",
       );
     } catch (error) {
       const uncertain = hasUncertainOutcome(error);
@@ -405,39 +388,6 @@ export function ReviewWorkspace({
     }
   }
 
-  async function resumePublisher() {
-    if (actionLock.current) return;
-    actionLock.current = true;
-    setBusy("resume");
-    setNotice("Requesting a safe queue recovery…");
-    try {
-      const response = await fetch(`${API_URL}/api/publisher/queue/resume`, {
-        method: "POST",
-      });
-      const payload = await readApiJson(response, {
-        validate: isPublisherQueueStatus,
-        failureMessage: "The publisher queue could not resume.",
-      });
-      setPublisherQueue(payload);
-      setNotice(
-        payload.paused
-          ? "The publisher queue is still paused. Check the saved YouTube session."
-          : payload.running
-            ? "YouTube scheduling resumed."
-            : "The publisher queue is ready.",
-        payload.paused,
-      );
-    } catch (error) {
-      setNotice(
-        actionError(error, "Could not resume scheduling. The queue remains unchanged here."),
-        true,
-      );
-    } finally {
-      actionLock.current = false;
-      setBusy(null);
-    }
-  }
-
   useEffect(() => {
     if (proposal || !generation.running || busy === "options") return;
     let cancelled = false;
@@ -526,24 +476,6 @@ export function ReviewWorkspace({
           </span>
         </div>
       </header>
-
-      {publisherQueue.paused && (
-        <section className="queue-pause" role="alert">
-          <div>
-            <strong>YouTube is waiting.</strong>
-            <span>{publisherQueue.paused_reason}</span>
-          </div>
-          <button
-            type="button"
-            className="button secondary"
-            disabled={busy !== null}
-            onClick={resumePublisher}
-            aria-busy={busy === "resume"}
-          >
-            {busy === "resume" ? "Resuming…" : "Resume after sign-in"}
-          </button>
-        </section>
-      )}
 
       {proposal ? (
         <>
@@ -637,9 +569,7 @@ export function ReviewWorkspace({
                 aria-live={messageIsError ? "assertive" : "polite"}
               >
                 {message ||
-                  (publishingEnabled
-                    ? "Accept schedules this exact image and caption on Qlob, then advances."
-                    : "Accept reserves the next daily slot; YouTube scheduling is off.")}
+                  "Accept records the editorial decision and adds this exact image and caption to Lineup. It never opens or queues YouTube."}
               </p>
               {decisionUncertain && (
                 <a className="decision-recovery" href="/review">

@@ -88,7 +88,7 @@ describe("PlatformConnection", () => {
       />,
     );
 
-    expect(screen.getByText("Confirm Editor access")).toBeInTheDocument();
+    expect(screen.getByText("Record the declared role")).toBeInTheDocument();
     expect(screen.getByText("Save the publisher login")).toBeInTheDocument();
     expect(
       screen.getByText(

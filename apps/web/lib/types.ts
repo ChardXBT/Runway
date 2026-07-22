@@ -95,7 +95,35 @@ export type PublisherQueueStatus = {
   queued: number;
   paused: boolean;
   paused_reason: string | null;
-  mode?: "youtube" | "internal_only";
+};
+
+export type PublishingMode = "assisted" | "authorized_browser";
+
+export type AssistedPublishingItem = {
+  proposal_id: number;
+  planned_publish_at: string;
+  caption: string;
+  image_url: string;
+  rights_status: string;
+  warnings: string[];
+};
+
+export type AssistedPublishingWorkspace = {
+  mode: "assisted";
+  channel_name: string;
+  channel_id: string;
+  timezone: string;
+  youtube_url: string;
+  items: AssistedPublishingItem[];
+};
+
+export type LineupPushResponse = {
+  mode: PublishingMode;
+  detail: string;
+  queued_proposal_ids: number[];
+  assisted_workspace?: AssistedPublishingWorkspace;
+  lineup: LineupSchedule;
+  publisher_queue: PublisherQueueStatus;
 };
 
 export type PublisherConnectionStatus = {

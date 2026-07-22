@@ -2,7 +2,7 @@
 
 This plan records the original milestone structure. The approval-queue portion was superseded on
 2026-07-17 by the continuous editorial conveyor described in `docs/PRODUCT.md`: no fixed scheduling
-horizon, at most one Runway post per day, automatic feedback, and accept-to-schedule publishing.
+horizon, at most one Runway post per day, automatic feedback, and explicit Lineup publishing.
 
 ## Milestone 0 — foundation
 
@@ -41,10 +41,11 @@ horizon, at most one Runway post per day, automatic feedback, and accept-to-sche
 - Generate review options independently of schedule slots, then reserve the first open 10:00 AM
   Toronto date only when the operator approves.
 - Present one image/caption decision at a time with inline editing, reject, image replacement,
-  accept-and-schedule, immediate next-option loading, and automatic learning signals.
+  local acceptance, immediate next-option loading, and automatic learning signals.
 - Enforce at most one Runway-generated post per local day with no fixed horizon.
-- Move approved payloads through `InternalPublisher` into a persisted serial outbox and guarded
-  visible-browser Qlob publisher.
+- Move approved payloads through `InternalPublisher` into the editable local Lineup. Only a
+  separately confirmed Lineup action may prepare assisted instructions or enter the guarded
+  visible-browser outbox.
 
 ## Completion proof
 

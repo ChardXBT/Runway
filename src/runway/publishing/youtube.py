@@ -16,6 +16,7 @@ from typing import Any, Protocol, cast
 from urllib.parse import urljoin, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 
@@ -34,6 +35,8 @@ from runway.db.repositories import audit, get_channel
 from runway.domain.enums import ProposalStatus
 from runway.domain.state_machine import require_transition
 from runway.publishing.base import (
+    AssistedPost,
+    AssistedPreparation,
     PreparedPost,
     PublisherSessionStatus,
     PublishPreparation,
@@ -56,6 +59,14 @@ class BrowserMutationReceipt(BaseModel):
     verified: bool
     screenshot_paths: list[str] = Field(default_factory=list)
     detail: str
+
+
+class PublishingPreflight(BaseModel):
+    post: PreparedPost
+    payload_hash: str
+    image_url: str
+    rights_status: str
+    warnings: list[str] = Field(default_factory=list)
 
 
 class StalePublishAttempt(ValueError):
@@ -144,7 +155,8 @@ class PlaywrightYouTubeAdapter:
         subprocess.Popen(command)
         input(
             "A normal Google Chrome window opened with Runway's isolated profile. "
-            f"Sign into the {self.settings.channel_name} Editor account, confirm the "
+            f"Sign into the owner-declared {self.settings.channel_name} publisher account, "
+            "confirm the "
             f"{self.settings.channel_name} Posts page is visible, "
             "then CLOSE that Chrome window and press Enter here..."
         )
@@ -190,6 +202,7 @@ class PlaywrightYouTubeAdapter:
             user_data_dir=str(self.settings.publisher_profile_dir),
             channel=self.settings.publisher_browser_channel,
             headless=False,
+            timezone_id=self.settings.timezone,
             viewport={"width": 1440, "height": 1000},
         )
 
@@ -220,13 +233,15 @@ class PlaywrightYouTubeAdapter:
                     publisher="youtube-visible-browser",
                     checks=checks,
                     detail=(
-                        f"{self.settings.channel_name} channel identity, posting access, "
-                        "and Community composer verified."
+                        f"{self.settings.channel_name} channel identity and Community posting "
+                        "capability verified. Runway observed the controls; it did not read an "
+                        "exact delegated role from an API."
                         if valid
                         else f"{self.settings.channel_name} publishing session is not "
                         "ready; missing "
                         + ", ".join(missing)
-                        + f". Reconnect the {self.settings.channel_name} Editor identity."
+                        + f". Reconnect the declared {self.settings.channel_name} "
+                        "publisher identity."
                     ),
                 )
             finally:
@@ -288,7 +303,7 @@ class PlaywrightYouTubeAdapter:
                 checks = {
                     "requested channel page": target_loaded,
                     "channel management controls": management_access,
-                    "Editor post controls": posting_access,
+                    "Community post controls": posting_access,
                 }
                 valid = all(checks.values())
                 missing = [label for label, matched in checks.items() if not matched]
@@ -302,13 +317,13 @@ class PlaywrightYouTubeAdapter:
                     publisher="youtube-visible-browser",
                     checks=checks,
                     detail=(
-                        "Editor access and Community publishing controls verified. "
-                        "No post was created."
+                        "Community posting capability verified. Runway observed the configured "
+                        "channel controls; it did not verify an exact delegated role. No post "
+                        "was created."
                         if valid
                         else "The invitation is not ready yet; missing "
                         + ", ".join(missing)
-                        + ". Confirm that tryrunwaytoday@gmail.com accepted an "
-                        "Editor (limited) invitation, then retry."
+                        + ". Confirm that the owner-declared invitation was accepted, then retry."
                     ),
                 )
             finally:
@@ -368,7 +383,7 @@ class PlaywrightYouTubeAdapter:
                 self._stop_on_challenge(page)
                 if not self._session_contract_valid(page):
                     raise RuntimeError(
-                        f"{self.settings.channel_name} Editor session validation failed"
+                        f"{self.settings.channel_name} publishing capability check failed"
                     )
 
                 composer = page.locator("ytd-backstage-post-dialog-renderer:visible")
@@ -517,7 +532,7 @@ class PlaywrightYouTubeAdapter:
                 self._stop_on_challenge(page)
                 if not self._session_contract_valid(page, open_composer=False):
                     raise RuntimeError(
-                        f"{self.settings.channel_name} Editor session validation failed"
+                        f"{self.settings.channel_name} publishing capability check failed"
                     )
 
                 card = self._scheduled_card(page, current)
@@ -644,7 +659,7 @@ class PlaywrightYouTubeAdapter:
                 self._stop_on_challenge(page)
                 if not self._session_contract_valid(page, open_composer=False):
                     raise RuntimeError(
-                        f"{self.settings.channel_name} Editor session validation failed"
+                        f"{self.settings.channel_name} publishing capability check failed"
                     )
 
                 card = self._scheduled_card(page, post)
@@ -1093,7 +1108,7 @@ class PlaywrightYouTubeAdapter:
 
 
 class YouTubeBrowserPublisher:
-    """Visible-browser publisher for explicit editorial scheduling actions."""
+    """Visible-browser publisher for explicit confirmed Lineup actions."""
 
     publisher_name = "youtube-visible-browser-v1"
 
@@ -1109,11 +1124,14 @@ class YouTubeBrowserPublisher:
         self._confirm_lock = threading.Lock()
 
     async def validate_session(self) -> PublisherSessionStatus:
-        if not self.settings.publishing_enabled:
+        if not self.settings.authorized_browser_ready:
             return PublisherSessionStatus(
                 valid=False,
                 publisher=self.publisher_name,
-                detail="Publishing is locked by RUNWAY_PUBLISHING_ENABLED=false.",
+                detail=(
+                    "Authorized browser publishing is disabled. Assisted preparation remains "
+                    "available and does not require a saved YouTube session."
+                ),
             )
         return await self._validated_adapter_session(source="manual_connection_check")
 
@@ -1121,6 +1139,7 @@ class YouTubeBrowserPublisher:
         self,
         channel_url: str,
     ) -> PublisherSessionStatus:
+        self._require_enabled()
         try:
             status = await self.adapter.validate_channel_access(channel_url)
         except Exception as exc:
@@ -1184,11 +1203,14 @@ class YouTubeBrowserPublisher:
     def connection_status(self) -> dict[str, object]:
         """Return the last durable read-only publisher check without opening Chrome."""
         stale_after = timedelta(hours=24)
-        if not self.settings.publishing_enabled:
+        if not self.settings.authorized_browser_ready:
             return {
                 "state": "disabled",
                 "valid": None,
-                "detail": "Enable publishing in the local environment before checking YouTube.",
+                "detail": (
+                    "Assisted publishing is ready without a browser connection. Switch to the "
+                    "separately authorized browser mode before checking a saved session."
+                ),
                 "publisher": self.publisher_name,
                 "checked_at": None,
                 "stale": False,
@@ -1261,6 +1283,43 @@ class YouTubeBrowserPublisher:
             "checks": checks,
             "last_verified_publish_at": last_verified_at,
         }
+
+    def prepare_assisted_batch(self, proposal_ids: list[int]) -> AssistedPreparation:
+        """Validate exact Lineup payloads without creating queue or browser work."""
+        unique_ids = list(dict.fromkeys(proposal_ids))
+        if not unique_ids:
+            raise ValueError("select at least one Lineup post to prepare")
+        preflights = [self._publishing_preflight(proposal_id) for proposal_id in unique_ids]
+        preflights.sort(key=lambda result: datetime.fromisoformat(result.post.planned_publish_at))
+        with self.database.session() as session:
+            audit(
+                session,
+                "assisted_workspace_prepared",
+                "publisher",
+                None,
+                {
+                    "proposal_ids": [result.post.proposal_id for result in preflights],
+                    "network_action": False,
+                    "queue_action": False,
+                },
+            )
+        return AssistedPreparation(
+            channel_name=self.settings.channel_name,
+            channel_id=self.settings.publisher_channel_id,
+            timezone=self.settings.timezone,
+            youtube_url=self.settings.publisher_channel_url,
+            items=[
+                AssistedPost(
+                    proposal_id=result.post.proposal_id,
+                    planned_publish_at=result.post.planned_publish_at,
+                    caption=result.post.caption,
+                    image_url=result.image_url,
+                    rights_status=result.rights_status,
+                    warnings=result.warnings,
+                )
+                for result in preflights
+            ],
+        )
 
     async def prepare_attempt(self, proposal_id: int) -> PublishPreparation:
         self._require_enabled()
@@ -1350,9 +1409,9 @@ class YouTubeBrowserPublisher:
         self,
         proposal_id: int,
         *,
-        trigger: str = "human_accept",
+        trigger: str = "explicit_lineup_action",
     ) -> dict[str, object]:
-        """Persist an accept-and-schedule request without waiting for the browser."""
+        """Persist an explicit Lineup scheduling request without waiting for the browser."""
         self._require_enabled()
         post, payload_hash = self._prepared_post(proposal_id)
         now = datetime.now(UTC)
@@ -1470,7 +1529,7 @@ class YouTubeBrowserPublisher:
         return requeued
 
     async def process_queued_attempt(self, attempt_id: int) -> PublishResult:
-        """Schedule one persisted editorial approval; callers serialize the queue."""
+        """Schedule one explicitly queued Lineup item; callers serialize the queue."""
         self._require_enabled()
         await asyncio.to_thread(self._confirm_lock.acquire)
         try:
@@ -1505,9 +1564,10 @@ class YouTubeBrowserPublisher:
         proposal_id: int,
         *,
         final_caption: str | None,
-        new_date: date | None,
+        new_scheduled_publish_at: datetime | None = None,
+        new_date: date | None = None,
     ) -> dict[str, object]:
-        """Edit or move a scheduled post, swapping occupied daily slots when needed."""
+        """Edit local desired state only, swapping occupied daily slots when needed."""
         if not self._confirm_lock.acquire(blocking=False):
             raise ValueError("another YouTube or Lineup operation is already running")
         try:
@@ -1517,7 +1577,9 @@ class YouTubeBrowserPublisher:
                     raise LookupError(f"proposal {proposal_id} not found")
                 self._require_lineup_mutable(
                     proposal,
-                    allow_overdue_internal=new_date is not None,
+                    allow_overdue_internal=(
+                        new_scheduled_publish_at is not None or new_date is not None
+                    ),
                 )
                 current = self._lineup_post(session, proposal)
                 old_caption = proposal.final_caption
@@ -1531,18 +1593,27 @@ class YouTubeBrowserPublisher:
                 channel = get_channel(session, self.settings.channel_handle)
                 timezone = ZoneInfo(channel.timezone)
                 target_slot = current_slot
-                if new_date is not None:
-                    hour, minute = (int(value) for value in channel.default_post_time.split(":"))
+                if new_scheduled_publish_at is not None and new_date is not None:
+                    raise ValueError("send either a full timestamp or legacy new_date, not both")
+                if new_scheduled_publish_at is not None:
+                    target_slot = self._validate_channel_timestamp(
+                        new_scheduled_publish_at,
+                        timezone,
+                    )
+                elif new_date is not None:
+                    current_local = current_slot.astimezone(timezone)
                     target_slot = datetime(
                         new_date.year,
                         new_date.month,
                         new_date.day,
-                        hour,
-                        minute,
+                        current_local.hour,
+                        current_local.minute,
+                        current_local.second,
                         tzinfo=timezone,
                     )
-                    if target_slot.astimezone(UTC) <= datetime.now(UTC) + timedelta(minutes=5):
-                        raise ValueError("Lineup dates must be at least five minutes in the future")
+                    target_slot = self._validate_channel_timestamp(target_slot, timezone)
+                if target_slot.astimezone(UTC) <= datetime.now(UTC) + timedelta(minutes=5):
+                    raise ValueError("Lineup times must be at least five minutes in the future")
 
                 occupant = None
                 if target_slot.isoformat() != current.planned_publish_at:
@@ -1607,64 +1678,7 @@ class YouTubeBrowserPublisher:
                         }
                     )
 
-            external_records = [
-                record
-                for record in records
-                if record["status"] == ProposalStatus.EXTERNALLY_SCHEDULED.value
-            ]
-            externally_synced = False
-            applied_external: list[tuple[PreparedPost, PreparedPost]] = []
-            if external_records:
-                self._require_enabled()
-                session_status = await self._validated_adapter_session(
-                    source="lineup_update_preflight"
-                )
-                if not session_status.valid:
-                    raise ValueError(session_status.detail)
-                for record in external_records:
-                    current_post = record["current"]
-                    updated_post = record["updated"]
-                    if not isinstance(current_post, PreparedPost) or not isinstance(
-                        updated_post, PreparedPost
-                    ):
-                        raise RuntimeError("Lineup mutation payload is invalid")
-                    receipt = await self.adapter.edit(current_post, updated_post)
-                    if receipt.verified:
-                        applied_external.append((updated_post, current_post))
-                        externally_synced = True
-                        continue
-
-                    rollback_targets = list(applied_external)
-                    if receipt.applied:
-                        rollback_targets.append((updated_post, current_post))
-                    rollback_verified = True
-                    for changed, original in reversed(rollback_targets):
-                        try:
-                            rollback = await self.adapter.edit(changed, original)
-                            rollback_verified = rollback_verified and rollback.verified
-                        except Exception:
-                            rollback_verified = False
-                    self._record_lineup_sync_issue(
-                        proposal_id,
-                        "youtube_lineup_edit_unverified",
-                        {
-                            "detail": receipt.detail,
-                            "rollback_verified": rollback_verified,
-                            "screenshots": receipt.screenshot_paths,
-                        },
-                    )
-                    raise RuntimeError(
-                        receipt.detail
-                        + (
-                            " The prior YouTube state was restored."
-                            if rollback_verified
-                            else " Automatic rollback could not be verified; inspect YouTube "
-                            "before making another Lineup change."
-                        )
-                    )
-
             now = datetime.now(UTC)
-            requeue_ids: list[int] = []
             with self.database.session() as session:
                 for record in records:
                     record_id = cast(int, record["id"])
@@ -1692,14 +1706,7 @@ class YouTubeBrowserPublisher:
                     }
                     loaded.final_caption = updated_post.caption
                     loaded.scheduled_publish_at = updated_post.planned_publish_at
-                    if loaded.status == ProposalStatus.EXTERNALLY_SCHEDULED.value:
-                        loaded.scheduled_verified_at = now
                     invalidated = self._invalidate_active_attempts(session, loaded.id, now)
-                    if loaded.status in {
-                        ProposalStatus.INTERNALLY_SCHEDULED.value,
-                        ProposalStatus.PUBLISH_FAILED.value,
-                    }:
-                        requeue_ids.append(loaded.id)
                     session.add(
                         ProposalEvent(
                             proposal_id=loaded.id,
@@ -1711,9 +1718,7 @@ class YouTubeBrowserPublisher:
                                 {
                                     "final_caption": loaded.final_caption,
                                     "scheduled_publish_at": loaded.scheduled_publish_at,
-                                    "externally_synced": (
-                                        loaded.status == ProposalStatus.EXTERNALLY_SCHEDULED.value
-                                    ),
+                                    "externally_synced": False,
                                 },
                                 sort_keys=True,
                             ),
@@ -1725,9 +1730,7 @@ class YouTubeBrowserPublisher:
                         "proposal",
                         loaded.id,
                         {
-                            "externally_synced": (
-                                loaded.status == ProposalStatus.EXTERNALLY_SCHEDULED.value
-                            ),
+                            "externally_synced": False,
                             "invalidated_attempts": invalidated,
                             "swapped": len(records) > 1,
                         },
@@ -1755,14 +1758,15 @@ class YouTubeBrowserPublisher:
                 "proposal_id": proposal_id,
                 "affected_proposal_ids": [cast(int, record["id"]) for record in records],
                 "swapped_with": cast(int, records[1]["id"]) if len(records) > 1 else None,
-                "externally_synced": externally_synced,
-                "requeue_proposal_ids": requeue_ids,
+                "externally_synced": False,
+                "ready_for_explicit_action": True,
+                "requeue_proposal_ids": [],
             }
         finally:
             self._confirm_lock.release()
 
     async def remove_from_lineup(self, proposal_id: int) -> dict[str, object]:
-        """Remove one future post from YouTube first, then cancel its local slot."""
+        """Cancel one unsubmitted local Lineup slot without touching YouTube."""
         if not self._confirm_lock.acquire(blocking=False):
             raise ValueError("another YouTube or Lineup operation is already running")
         try:
@@ -1773,30 +1777,6 @@ class YouTubeBrowserPublisher:
                 self._require_lineup_mutable(proposal, allow_overdue_internal=True)
                 current = self._lineup_post(session, proposal)
                 original_status = proposal.status
-
-            externally_synced = False
-            if original_status == ProposalStatus.EXTERNALLY_SCHEDULED.value:
-                self._require_enabled()
-                session_status = await self._validated_adapter_session(
-                    source="lineup_remove_preflight"
-                )
-                if not session_status.valid:
-                    raise ValueError(session_status.detail)
-                receipt = await self.adapter.remove(current)
-                if not receipt.verified:
-                    self._record_lineup_sync_issue(
-                        proposal_id,
-                        "youtube_lineup_remove_unverified",
-                        {
-                            "detail": receipt.detail,
-                            "screenshots": receipt.screenshot_paths,
-                        },
-                    )
-                    raise RuntimeError(
-                        receipt.detail
-                        + " Local Lineup was left unchanged; inspect YouTube before retrying."
-                    )
-                externally_synced = True
 
             now = datetime.now(UTC)
             with self.database.session() as session:
@@ -1829,7 +1809,7 @@ class YouTubeBrowserPublisher:
                             {
                                 "status": ProposalStatus.CANCELLED.value,
                                 "scheduled_publish_at": None,
-                                "externally_synced": externally_synced,
+                                "externally_synced": False,
                             },
                             sort_keys=True,
                         ),
@@ -1841,14 +1821,14 @@ class YouTubeBrowserPublisher:
                     "proposal",
                     proposal.id,
                     {
-                        "externally_synced": externally_synced,
+                        "externally_synced": False,
                         "invalidated_attempts": invalidated,
                     },
                 )
             return {
                 "proposal_id": proposal_id,
                 "status": ProposalStatus.CANCELLED.value,
-                "externally_synced": externally_synced,
+                "externally_synced": False,
             }
         finally:
             self._confirm_lock.release()
@@ -1938,9 +1918,13 @@ class YouTubeBrowserPublisher:
         allowed = {
             ProposalStatus.INTERNALLY_SCHEDULED.value,
             ProposalStatus.PUBLISH_FAILED.value,
-            ProposalStatus.EXTERNALLY_SCHEDULED.value,
         }
         if proposal.status not in allowed:
+            if proposal.status == ProposalStatus.EXTERNALLY_SCHEDULED.value:
+                raise ValueError(
+                    "this post is already confirmed on YouTube and is treated as immutable; "
+                    "a normal Lineup edit cannot change external content"
+                )
             if proposal.status in {
                 ProposalStatus.PUBLISHING.value,
                 ProposalStatus.PUBLISH_UNVERIFIED.value,
@@ -1949,9 +1933,7 @@ class YouTubeBrowserPublisher:
                     "this post has an in-flight or unverified YouTube action; verify it "
                     "before changing Lineup"
                 )
-            raise ValueError(
-                "only future internally or externally scheduled posts can be changed in Lineup"
-            )
+            raise ValueError("only future internally scheduled posts can be changed in Lineup")
         if not proposal.scheduled_publish_at:
             raise ValueError("scheduled proposal has no Lineup slot")
         planned = datetime.fromisoformat(proposal.scheduled_publish_at)
@@ -2019,6 +2001,18 @@ class YouTubeBrowserPublisher:
         *,
         allowed_statuses: set[str] | None = None,
     ) -> tuple[PreparedPost, str]:
+        result = self._publishing_preflight(
+            proposal_id,
+            allowed_statuses=allowed_statuses,
+        )
+        return result.post, result.payload_hash
+
+    def _publishing_preflight(
+        self,
+        proposal_id: int,
+        *,
+        allowed_statuses: set[str] | None = None,
+    ) -> PublishingPreflight:
         statuses = allowed_statuses or {
             ProposalStatus.INTERNALLY_SCHEDULED.value,
             ProposalStatus.PUBLISH_FAILED.value,
@@ -2033,11 +2027,44 @@ class YouTubeBrowserPublisher:
             media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
             if media is None:
                 raise ValueError("proposal has no local image")
-            if candidate and candidate.rights_status == "blocked":
+            if candidate is None:
+                raise ValueError("proposal has no image candidate")
+            if candidate.rights_status == "blocked" or proposal.rights_decision == "blocked":
                 raise ValueError("a blocked image cannot be scheduled")
-            path = self.settings.resolved_data_dir / media.local_path
+            if candidate.hard_rejection_reason:
+                raise ValueError(
+                    "the selected image is blocked: " + candidate.hard_rejection_reason
+                )
+            try:
+                relative_media = Path(media.local_path).relative_to("media")
+            except ValueError as exc:
+                raise ValueError("proposal image is outside the approved media directory") from exc
+            media_root = (self.settings.resolved_data_dir / "media").resolve()
+            path = (media_root / relative_media).resolve()
+            if not path.is_relative_to(media_root):
+                raise ValueError("proposal image is outside the approved media directory")
             if not path.is_file():
                 raise ValueError("proposal image is missing from local storage")
+            try:
+                size = path.stat().st_size
+            except OSError as exc:
+                raise ValueError("proposal image cannot be read from local storage") from exc
+            if size <= 0:
+                raise ValueError("proposal image is empty")
+            youtube_image_limit = 16 * 1024 * 1024
+            if size > youtube_image_limit:
+                raise ValueError("proposal image exceeds YouTube's 16 MB Community-post limit")
+            supported_suffixes = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+            if path.suffix.casefold() not in supported_suffixes:
+                raise ValueError("proposal image must be JPG, PNG, GIF, or WEBP")
+            try:
+                with Image.open(path) as image:
+                    image_format = (image.format or "").upper()
+                    image.verify()
+            except OSError as exc:
+                raise ValueError("proposal image cannot be opened as a valid image") from exc
+            if image_format not in {"JPEG", "PNG", "GIF", "WEBP"}:
+                raise ValueError("proposal image must be JPG, PNG, GIF, or WEBP")
             scheduled_at = proposal.scheduled_publish_at
             if not scheduled_at:
                 raise ValueError("proposal has no assigned daily schedule slot")
@@ -2048,19 +2075,39 @@ class YouTubeBrowserPublisher:
                 local_image_path=str(path),
             )
             planned = datetime.fromisoformat(post.planned_publish_at)
-            if planned.tzinfo is None:
-                raise ValueError("planned publish time must include a timezone")
             channel = get_channel(session, self.settings.channel_handle)
-            configured = planned.astimezone(ZoneInfo(channel.timezone))
-            if (
-                configured.replace(tzinfo=None) != planned.replace(tzinfo=None)
-                or configured.utcoffset() != planned.utcoffset()
-            ):
-                raise ValueError(f"planned publish time must be expressed in {channel.timezone}")
+            self._validate_channel_timestamp(planned, ZoneInfo(channel.timezone))
             if planned.astimezone(UTC) <= datetime.now(UTC) + timedelta(minutes=5):
                 raise ValueError("planned publish time must be at least five minutes in the future")
-            payload_hash = self._payload_hash(post, hashlib.sha256(path.read_bytes()).hexdigest())
-            return post, payload_hash
+            warnings: list[str] = []
+            if candidate.rights_status == "unknown":
+                warnings.append(
+                    "Rights status is unknown. Confirm you are authorized to publish "
+                    "this exact image."
+                )
+            for raw_warnings in (candidate.soft_warnings_json, proposal.warnings_json):
+                try:
+                    values = json.loads(raw_warnings or "[]")
+                except json.JSONDecodeError:
+                    values = []
+                if isinstance(values, list):
+                    warnings.extend(
+                        str(value).strip()
+                        for value in values
+                        if isinstance(value, str) and value.strip()
+                    )
+            warnings = list(dict.fromkeys(warnings))
+            try:
+                image_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise ValueError("proposal image cannot be read from local storage") from exc
+            return PublishingPreflight(
+                post=post,
+                payload_hash=self._payload_hash(post, image_sha256),
+                image_url=f"/media/{relative_media.as_posix()}",
+                rights_status=candidate.rights_status,
+                warnings=warnings,
+            )
 
     def _record_failure(self, attempt_id: int, detail: str) -> None:
         now = datetime.now(UTC)
@@ -2215,7 +2262,7 @@ class YouTubeBrowserPublisher:
                             {
                                 "status": ProposalStatus.PUBLISHING.value,
                                 "attempt_id": attempt.id,
-                                "trigger": "accept_and_schedule",
+                                "trigger": "explicit_lineup_action",
                             }
                         ),
                     )
@@ -2225,7 +2272,7 @@ class YouTubeBrowserPublisher:
                     "youtube_submission_started",
                     "proposal",
                     proposal.id,
-                    {"attempt_id": attempt.id, "trigger": "accept_and_schedule"},
+                    {"attempt_id": attempt.id, "trigger": "explicit_lineup_action"},
                 )
         if terminal_error:
             raise ValueError(terminal_error)
@@ -2306,8 +2353,12 @@ class YouTubeBrowserPublisher:
         )
 
     def _require_enabled(self) -> None:
-        if not self.settings.publishing_enabled:
-            raise ValueError("publishing is locked by RUNWAY_PUBLISHING_ENABLED=false")
+        if not self.settings.authorized_browser_ready:
+            raise ValueError(
+                "authorized browser publishing requires RUNWAY_PUBLISHING_MODE="
+                "authorized_browser, RUNWAY_PUBLISHING_ENABLED=true, and "
+                "RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=true"
+            )
 
     @staticmethod
     def confirmation_phrase(proposal_id: int) -> str:
@@ -2329,6 +2380,26 @@ class YouTubeBrowserPublisher:
             sort_keys=True,
         )
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _validate_channel_timestamp(value: datetime, timezone: ZoneInfo) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Lineup timestamp must include an explicit UTC offset")
+        configured = value.astimezone(timezone)
+        if (
+            configured.replace(tzinfo=None) != value.replace(tzinfo=None)
+            or configured.utcoffset() != value.utcoffset()
+        ):
+            raise ValueError(
+                f"Lineup timestamp must be expressed in {timezone.key} with the correct offset"
+            )
+        round_trip = configured.astimezone(UTC).astimezone(timezone)
+        if (
+            round_trip.replace(tzinfo=None) != configured.replace(tzinfo=None)
+            or round_trip.utcoffset() != configured.utcoffset()
+        ):
+            raise ValueError("Lineup timestamp is not a real local time in the channel timezone")
+        return configured
 
     @staticmethod
     def _aware(value: datetime) -> datetime:

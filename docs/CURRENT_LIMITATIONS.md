@@ -4,24 +4,31 @@ This document separates unfinished Runway work from constraints imposed by YouTu
 account state, or missing creator evidence. It is intentionally conservative: an unknown or
 unverified capability is not presented as working.
 
-## Publishing without a visible local browser
+## Community-post publishing boundary
 
-Runway currently schedules YouTube Community posts through a persistent Google Chrome profile.
 YouTube's Data API does not expose a Community-post resource, and invited channel users cannot
 operate YouTube APIs for the delegated channel. A normal OAuth integration therefore cannot replace
-the browser publisher.
+native posting or make browser automation an official API.
 
 What works now:
 
-- accepted posts enter a persisted, serialized outbox;
-- the worker processes one post at a time;
+- acceptance and normal Lineup editing remain local and create no external work;
+- default assisted mode validates and orders exact native posting instructions without a browser;
+- an explicitly authorized Lineup action can enter the persisted, serialized browser outbox;
+- the authorized worker processes one post at a time;
 - session, channel identity, composer access, submission, and scheduled-post presence are checked;
 - ambiguous submissions become verification-only and are never automatically retried;
 - the last connection check is persisted and can be read without opening Chrome.
 
+The current restart-safe coordinator still opens separate bounded browser contexts for an item's
+worker preflight and scheduling action. The explicit batch route avoids another immediate live
+validation launch, but safe context reuse would require a coordinator/adapter session contract and
+remains future work.
+
 What remains:
 
-- move the headed publisher into an isolated desktop or remote worker so it never steals focus;
+- obtain platform authorization and legal/security review before any broader browser deployment;
+- any future headed remote worker remains browser automation, not an official API;
 - provide a secure one-time interactive login surface for that worker;
 - add worker heartbeat, restart supervision, encrypted session storage, and per-customer isolation.
 
@@ -45,7 +52,7 @@ The passive status is last-known state:
 - `Check is stale` means a successful check is more than 24 hours old;
 - `Needs attention` means the latest check failed;
 - `Unchecked` means no durable result exists;
-- `Disabled` means the local publishing feature gate is off.
+- `Disabled` means authorized browser work is off; assisted mode remains usable.
 
 Only a fresh browser check can prove the current Google session. Reading the saved status never
 opens Chrome.
@@ -56,11 +63,13 @@ opens Chrome.
 revenue access. YouTube documents Community-post deletion as Manager-only. Runway therefore treats
 published posts as immutable.
 
-Scheduled-post editing and removal depend on the controls YouTube presents to the delegated account.
-The adapter performs each operation externally first and commits the local change only after
-verification. A selector or permission failure leaves the local Lineup unchanged. These capabilities
-must be rechecked against the real account whenever YouTube changes its interface; automated tests
-use a non-network adapter and never mutate Qlob.
+Runway treats externally confirmed posts as immutable in normal Lineup editing and removal. Any
+future explicit external mutation flow must separately confirm the exact action and observed native
+capability, then preserve uncertain-outcome safeguards. Automated tests use a non-network adapter
+and never mutate Qlob.
+
+Assisted completion checkboxes are intentionally session-local. Durable manual progress would
+require a persistence/schema decision that is outside this refactor.
 
 ## Intelligence and training
 

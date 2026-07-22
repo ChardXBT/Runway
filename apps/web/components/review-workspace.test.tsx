@@ -65,7 +65,7 @@ afterEach(() => {
 });
 
 describe("ReviewWorkspace", () => {
-  it("preserves punctuation, accepts, schedules, and immediately advances", async () => {
+  it("preserves punctuation, adds to Lineup, and immediately advances", async () => {
     const next = {
       ...proposal,
       id: 43,
@@ -82,13 +82,6 @@ describe("ReviewWorkspace", () => {
       },
       next_proposal: next,
       workflow: { ...workflow, needs_review: 1, queued: 1 },
-      publisher_queue: {
-        running: true,
-        queued: 1,
-        paused: false,
-        paused_reason: null,
-        mode: "youtube",
-      },
     };
     const fetchMock = vi
       .fn()
@@ -131,6 +124,13 @@ describe("ReviewWorkspace", () => {
     expect(screen.getByLabelText("Editorial session status")).toHaveTextContent(
       "1 decisions",
     );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Accepted and added to Lineup",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Nothing was sent to YouTube",
+    );
+    expect(screen.queryByText(/publishing|browser queue/i)).not.toBeInTheDocument();
     expect(fetchMock.mock.calls[1][0]).toContain("/api/editorial/options/ensure");
   });
 

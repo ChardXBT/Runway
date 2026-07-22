@@ -57,7 +57,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "product": active_settings.product_name,
             "version": __version__,
             "publishing_enabled": active_settings.publishing_enabled,
-            "publishing_trigger": "human_accept",
+            "publishing_trigger": "explicit_lineup_action",
+            "publishing_mode": active_settings.publishing_mode,
             "one_bot_post_per_day": True,
             "scheduling_horizon_days": None,
         }

@@ -18,10 +18,11 @@
 - Model jobs are serialized to avoid accidental parallel allowance consumption. Authentication,
   usage-limit, timeout, and malformed-output failures stop the batch; no paid API fallback exists.
 - Model output is schema validated, treated as data, and never executed as SQL or a command.
-- External publishing is feature-gated. The guarded publisher requires the operator's explicit
-  `Accept` action, internal scheduling, a future timezone-aware daily slot, a valid
-  Qlob Editor session, and an unchanged payload hash. The normal UI has no rights declaration or
-  typed-phrase step; an explicitly blocked candidate still cannot be scheduled.
+- Generator acceptance is local-only and cannot create queue or browser work. Default assisted
+  publishing validates media, current rights fields, caption, and future timezone-aware timestamp
+  without requiring a browser session. Authorized browser work requires an explicit confirmed
+  Lineup action plus mode, enablement, and authorization-acknowledgement interlocks. It also
+  requires an observed Qlob posting capability and an unchanged payload hash.
 - Google sign-in occurs manually in ordinary installed Chrome with an isolated
   Runway profile. Playwright is not active during credential entry. Runway does
   not bypass Google warnings, reduce account protections, export cookies, or
@@ -31,4 +32,7 @@
   dedicated browser profile.
 - A final Schedule click is marked possibly submitted before it is attempted. Ambiguous failures
   enter a verification-only state, preventing automatic duplicate retries.
-- Editorial mutation APIs reject image/caption/date/metadata changes after internal scheduling.
+- Unsubmitted Lineup items may be edited or removed locally; active payload attempts are
+  superseded. Externally confirmed posts are immutable in normal Lineup actions.
+- Assisted responses expose media URLs under `/media/`, never local filesystem paths, browser
+  profiles, cookies, or session material.

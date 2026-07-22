@@ -3,13 +3,11 @@ import { apiGet } from "@/lib/api";
 import {
   isEditorialEnvelope,
   isProposal,
-  isRecord,
 } from "@/lib/guards";
 import type {
   EditorialEnvelope,
   GenerationActivity,
   Proposal,
-  PublisherQueueStatus,
   WorkflowStatus,
 } from "@/lib/types";
 
@@ -21,13 +19,6 @@ const fallbackWorkflow: WorkflowStatus = {
   next_available_at: new Date(Date.now() + 86_400_000).toISOString(),
   posts_per_day: 1,
   timezone: "America/Toronto",
-};
-
-const fallbackQueue: PublisherQueueStatus = {
-  running: false,
-  queued: 0,
-  paused: false,
-  paused_reason: null,
 };
 
 const fallbackGeneration: GenerationActivity = {
@@ -43,18 +34,10 @@ export default async function ReviewPage({
   searchParams: Promise<{ id?: string }>;
 }) {
   const { id } = await searchParams;
-  const [settings, editorial] = await Promise.all([
-    apiGet<{ publishing_enabled: boolean }>("/api/settings", {
-      publishing_enabled: false,
-    }, (value): value is { publishing_enabled: boolean } =>
-      isRecord(value) && typeof value.publishing_enabled === "boolean",
-    ),
-    apiGet<EditorialEnvelope>("/api/editorial/next", {
+  const editorial = await apiGet<EditorialEnvelope>("/api/editorial/next", {
       next_proposal: null,
       workflow: fallbackWorkflow,
-      publisher_queue: fallbackQueue,
-    }, isEditorialEnvelope),
-  ]);
+    }, isEditorialEnvelope);
 
   let proposal = editorial.next_proposal;
   if (id) {
@@ -70,9 +53,7 @@ export default async function ReviewPage({
     <ReviewWorkspace
       initialProposal={proposal}
       initialWorkflow={editorial.workflow}
-      initialPublisherQueue={editorial.publisher_queue}
       initialGeneration={editorial.generation ?? fallbackGeneration}
-      publishingEnabled={settings.publishing_enabled}
     />
   );
 }

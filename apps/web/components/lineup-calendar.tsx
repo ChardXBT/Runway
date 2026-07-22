@@ -20,21 +20,28 @@ import {
 } from "@/lib/client-api";
 import {
   localDate,
+  localTime,
   scheduleIsPast,
   shiftIsoDate,
+  zonedScheduleIso,
 } from "@/lib/datetime";
 import {
   conflictingLineupDates,
   isLineupSchedule,
+  isLineupPushResponse,
   isPublisherQueueStatus,
   isProposal,
   isRecord,
 } from "@/lib/guards";
 import type {
+  AssistedPublishingWorkspace as AssistedWorkspace,
   LineupSchedule,
   Proposal,
+  PublishingMode,
   PublisherQueueStatus,
 } from "@/lib/types";
+
+import { AssistedPublishingWorkspace } from "./assisted-publishing-workspace";
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
   month: "long",
@@ -86,7 +93,7 @@ function displayTimezone(value: string) {
 function statusLabel(status: string) {
   const labels: Record<string, string> = {
     approved: "Approved",
-    internally_scheduled: "Waiting for YouTube",
+    internally_scheduled: "Waiting in Lineup",
     publishing: "Publishing now",
     externally_scheduled: "Scheduled on YouTube",
     publish_unverified: "Unverified · check required",
@@ -121,26 +128,6 @@ function isMutationResponse(
   );
 }
 
-type LineupPushResponse = {
-  detail: string;
-  queued_proposal_ids: number[];
-  lineup: LineupSchedule;
-  publisher_queue: PublisherQueueStatus;
-};
-
-function isLineupPushResponse(value: unknown): value is LineupPushResponse {
-  return (
-    isRecord(value) &&
-    typeof value.detail === "string" &&
-    Array.isArray(value.queued_proposal_ids) &&
-    value.queued_proposal_ids.every(
-      (proposalId) => typeof proposalId === "number" && Number.isInteger(proposalId),
-    ) &&
-    isLineupSchedule(value.lineup) &&
-    isPublisherQueueStatus(value.publisher_queue)
-  );
-}
-
 type RecoveryResponse = {
   lineup?: LineupSchedule;
   proposal?: Proposal;
@@ -155,7 +142,7 @@ function isRecoveryResponse(value: unknown): value is RecoveryResponse {
   return lineupValid && proposalValid && (value.lineup !== undefined || value.proposal !== undefined);
 }
 
-type DialogMode = "edit" | "remove" | null;
+type DialogMode = "edit" | "remove" | "publish" | null;
 type LineupAction = "edit" | "remove" | "retry" | "verify" | "push" | null;
 
 const idlePublisherQueue: PublisherQueueStatus = {
@@ -169,11 +156,15 @@ export function LineupCalendar({
   initialLineup,
   initialPublished = [],
   publishingEnabled,
+  publishingMode = "assisted",
+  channelName = "Qlob",
   initialPublisherQueue = idlePublisherQueue,
 }: {
   initialLineup: LineupSchedule;
   initialPublished?: Proposal[];
   publishingEnabled: boolean;
+  publishingMode?: PublishingMode;
+  channelName?: string;
   initialPublisherQueue?: PublisherQueueStatus;
 }) {
   const initialPublishedSorted = useMemo(
@@ -206,6 +197,7 @@ export function LineupCalendar({
   const [dialog, setDialog] = useState<DialogMode>(null);
   const [draftCaption, setDraftCaption] = useState("");
   const [draftDate, setDraftDate] = useState("");
+  const [draftTime, setDraftTime] = useState("");
   const [busy, setBusy] = useState<LineupAction>(null);
   const [message, setMessage] = useState("");
   const [messageIsError, setMessageIsError] = useState(false);
@@ -218,6 +210,9 @@ export function LineupCalendar({
   const [draggedId, setDraggedId] = useState<number | null>(null);
   const [dragTargetDate, setDragTargetDate] = useState<string | null>(null);
   const [recentlyChangedIds, setRecentlyChangedIds] = useState<number[]>([]);
+  const [assistedWorkspace, setAssistedWorkspace] =
+    useState<AssistedWorkspace | null>(null);
+  const [renderedAt] = useState(() => Date.now());
   const actionLock = useRef(false);
   const dialogRef = useRef<HTMLElement>(null);
   const dialogOpener = useRef<HTMLElement | null>(null);
@@ -309,7 +304,9 @@ export function LineupCalendar({
   const waitingForYouTube = useMemo(
     () =>
       lineup.scheduled.filter(
-        (proposal) => proposal.status === "internally_scheduled",
+        (proposal) =>
+          proposal.status === "internally_scheduled" ||
+          proposal.status === "publish_failed",
       ),
     [lineup.scheduled],
   );
@@ -320,27 +317,17 @@ export function LineupCalendar({
   }
 
   function proposalIsFuture(proposal: Proposal) {
-    const date = localDate(proposalSlot(proposal), lineup.timezone);
-    return (
-      date !== null &&
-      scheduleIsPast(
-        date,
-        lineup.default_time,
-        lineup.timezone,
-      ) === false
-    );
+    const instant = new Date(proposalSlot(proposal)).getTime();
+    return Number.isFinite(instant) && instant > renderedAt + 5 * 60_000;
   }
 
   function canEditProposal(proposal: Proposal | null) {
     if (!proposal || !lineupIntegritySafe) return false;
     if (
-      !["internally_scheduled", "publish_failed", "externally_scheduled"].includes(
+      !["internally_scheduled", "publish_failed"].includes(
         proposal.status,
       )
     ) {
-      return false;
-    }
-    if (proposal.status === "externally_scheduled" && !publishingEnabled) {
       return false;
     }
     return proposalIsFuture(proposal);
@@ -351,11 +338,7 @@ export function LineupCalendar({
     if (["internally_scheduled", "publish_failed"].includes(proposal.status)) {
       return true;
     }
-    return (
-      proposal.status === "externally_scheduled" &&
-      publishingEnabled &&
-      proposalIsFuture(proposal)
-    );
+    return false;
   }
 
   const selectedCanEdit = canEditProposal(selected);
@@ -377,8 +360,8 @@ export function LineupCalendar({
     if (!proposalIsFuture(proposal)) {
       return "This release time has passed and can no longer be edited or moved safely.";
     }
-    if (proposal.status === "externally_scheduled" && !publishingEnabled) {
-      return "YouTube actions are off, so this existing YouTube release cannot be changed here.";
+    if (proposal.status === "externally_scheduled") {
+      return "This post is already confirmed on YouTube and is treated as immutable. Normal Lineup edits and removal never change external content.";
     }
     return "This post is not in a state that can be changed safely.";
   }
@@ -411,6 +394,9 @@ export function LineupCalendar({
         localDate(proposalSlot(proposal), lineup.timezone) ??
         "",
     );
+    setDraftTime(
+      localTime(proposalSlot(proposal), lineup.timezone) ?? lineup.default_time,
+    );
     setDialogError("");
     setDialogOutcomeUncertain(false);
     setDialog("edit");
@@ -428,6 +414,15 @@ export function LineupCalendar({
     setDialogError("");
     setDialogOutcomeUncertain(false);
     setDialog("remove");
+    setNotice("");
+  }
+
+  function openPublish(opener?: HTMLElement) {
+    if (waitingForYouTube.length === 0 || busy !== null) return;
+    rememberOpener(opener);
+    setDialogError("");
+    setDialogOutcomeUncertain(false);
+    setDialog("publish");
     setNotice("");
   }
 
@@ -449,20 +444,24 @@ export function LineupCalendar({
     proposal: Proposal | null,
     date: string,
     caption: string,
+    time = proposal
+      ? localTime(proposalSlot(proposal), lineup.timezone) ?? lineup.default_time
+      : lineup.default_time,
   ): string | null {
     if (!proposal) return "Select a post first.";
     if (!caption.trim()) return "Caption cannot be empty.";
     if (!date) return "Choose a release date.";
+    if (!time) return "Choose a release time.";
     const isPast = scheduleIsPast(
       date,
-      lineup.default_time,
+      time,
       lineup.timezone,
     );
     if (isPast === null) {
       return "The configured date, time, or timezone is invalid. Check Settings before moving this post.";
     }
     if (isPast) {
-      return `Choose a future ${displayTime(lineup.default_time)} ${displayTimezone(lineup.timezone)} slot.`;
+      return `Choose a future ${displayTime(time)} ${displayTimezone(lineup.timezone)} slot.`;
     }
     const occupants = (scheduledByDate.get(date) ?? []).filter(
       (occupant) => occupant.id !== proposal.id,
@@ -480,8 +479,9 @@ export function LineupCalendar({
   function draftValidation(
     date = draftDate,
     caption = draftCaption,
+    time = draftTime,
   ): string | null {
-    return draftValidationFor(selected, date, caption);
+    return draftValidationFor(selected, date, caption, time);
   }
 
   function quickMoveDisabled(offset: number) {
@@ -489,7 +489,13 @@ export function LineupCalendar({
     return (
       !selectedCanEdit ||
       !target ||
-      draftValidation(target, selected?.final_caption ?? "") !== null
+      draftValidation(
+        target,
+        selected?.final_caption ?? "",
+        selected
+          ? localTime(proposalSlot(selected), lineup.timezone) ?? lineup.default_time
+          : lineup.default_time,
+      ) !== null
     );
   }
 
@@ -524,6 +530,19 @@ export function LineupCalendar({
 
     const originalDate =
       localDate(proposalSlot(selected), lineup.timezone) ?? "";
+    const originalTime =
+      localTime(proposalSlot(selected), lineup.timezone) ?? lineup.default_time;
+    const timestampChanged =
+      draftDate !== originalDate || draftTime !== originalTime;
+    const newTimestamp = timestampChanged
+      ? zonedScheduleIso(draftDate, draftTime, lineup.timezone)
+      : null;
+    if (timestampChanged && !newTimestamp) {
+      setDialogError(
+        "That local date and time does not exist in the configured timezone.",
+      );
+      return;
+    }
     const swapped = (scheduledByDate.get(draftDate) ?? []).find(
       (proposal) => proposal.id !== selected.id,
     );
@@ -536,7 +555,7 @@ export function LineupCalendar({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           final_caption: draftCaption,
-          new_date: draftDate === originalDate ? null : draftDate,
+          scheduled_publish_at: newTimestamp,
           confirmed: true,
         }),
       });
@@ -549,9 +568,9 @@ export function LineupCalendar({
       setNotice(
         swapped
           ? `Confirmed. “${selected.final_caption}” and “${swapped.final_caption}” swapped release dates.`
-          : draftDate === originalDate
-            ? "Confirmed. The caption was updated and synchronization was verified."
-            : "Confirmed. The post moved to the new release date.",
+          : !timestampChanged
+            ? "Confirmed. The caption was updated locally and is ready for the next explicit publishing action."
+            : "Confirmed. The post moved to the new local release time.",
       );
     } catch (error) {
       const uncertain = hasUncertainOutcome(error);
@@ -754,22 +773,28 @@ export function LineupCalendar({
       actionLock.current ||
       busy !== null ||
       pushOutcomeUncertain ||
-      !publishingEnabled ||
+      (publishingMode === "authorized_browser" && !publishingEnabled) ||
       waitingForYouTube.length === 0 ||
-      publisherQueue.paused
+      (publishingMode === "authorized_browser" && publisherQueue.paused)
     ) {
       return;
     }
     actionLock.current = true;
     setBusy("push");
     setNotice(
-      `Checking the Qlob publisher session before queuing ${waitingForYouTube.length} ${waitingForYouTube.length === 1 ? "post" : "posts"}…`,
+      publishingMode === "assisted"
+        ? `Validating ${waitingForYouTube.length} ${waitingForYouTube.length === 1 ? "post" : "posts"} for assisted preparation…`
+        : `Queuing ${waitingForYouTube.length} ${waitingForYouTube.length === 1 ? "post" : "posts"} for authorized browser handling…`,
     );
     try {
       const response = await fetch(`${API_URL}/api/lineup/push`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmed: true }),
+        body: JSON.stringify({
+          confirmed: true,
+          mode: publishingMode,
+          proposal_ids: waitingForYouTube.map((proposal) => proposal.id),
+        }),
       });
       const payload = await readApiJson(response, {
         validate: isLineupPushResponse,
@@ -785,25 +810,36 @@ export function LineupCalendar({
       }
       setLineup(payload.lineup);
       setPublisherQueue(payload.publisher_queue);
-      setWatchPublisher(payload.queued_proposal_ids.length > 0);
-      setNotice(
-        payload.queued_proposal_ids.length > 0
-          ? `${payload.detail} Runway will update each status as the visible browser confirms it.`
-          : payload.detail,
-      );
+      setDialog(null);
+      if (payload.mode === "assisted" && payload.assisted_workspace) {
+        setAssistedWorkspace(payload.assisted_workspace);
+        setWatchPublisher(false);
+        setNotice(
+          `${payload.detail} Nothing was queued and no browser was opened by Runway.`,
+        );
+      } else {
+        setWatchPublisher(payload.queued_proposal_ids.length > 0);
+        setNotice(
+          payload.queued_proposal_ids.length > 0
+            ? `${payload.detail} Runway will update each post as it is individually verified.`
+            : payload.detail,
+        );
+      }
     } catch (error) {
       const uncertain = hasUncertainOutcome(error);
       setPushOutcomeUncertain(uncertain);
-      setNotice(
+      const detail =
         error instanceof ApiError
           ? error.message
           : actionError(
               error,
-              "The Lineup was not queued. Check the publisher connection and try again.",
+              publishingMode === "assisted"
+                ? "The assisted workspace was not prepared. Review the validation error and try again."
+                : "The Lineup was not queued. Check the publisher connection and try again.",
               "The queue response could not be verified. Refresh Lineup before pushing again.",
-            ),
-        true,
-      );
+            );
+      setDialogError(detail);
+      setNotice(detail, true);
     } finally {
       actionLock.current = false;
       setBusy(null);
@@ -877,7 +913,12 @@ export function LineupCalendar({
   }, [recentlyChangedIds]);
 
   useEffect(() => {
-    if (!watchPublisher || !publishingEnabled) return;
+    if (
+      !watchPublisher ||
+      publishingMode !== "authorized_browser" ||
+      !publishingEnabled
+    )
+      return;
     let cancelled = false;
     let timer: number | undefined;
 
@@ -949,7 +990,7 @@ export function LineupCalendar({
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [publishingEnabled, watchPublisher]);
+  }, [publishingEnabled, publishingMode, watchPublisher]);
 
   const occupiedTarget = draftDate
     ? scheduledByDate.get(draftDate)
@@ -960,22 +1001,27 @@ export function LineupCalendar({
   const currentDraftError = dialog === "edit" ? draftValidation() : null;
   const displayedDialogError = dialogError || currentDraftError || "";
   const today = localDate(new Date(), lineup.timezone) ?? undefined;
-  const queueInMotion = publisherQueue.running || publisherQueue.queued > 0;
+  const browserMode = publishingMode === "authorized_browser";
+  const queueInMotion =
+    browserMode && (publisherQueue.running || publisherQueue.queued > 0);
   const pushDisabled =
-    !publishingEnabled ||
     busy !== null ||
     pushOutcomeUncertain ||
-    queueInMotion ||
-    publisherQueue.paused ||
+    (browserMode &&
+      (!publishingEnabled || queueInMotion || publisherQueue.paused)) ||
     waitingForYouTube.length === 0;
   const pushLabel =
     busy === "push"
-      ? "Checking session…"
+      ? browserMode
+        ? "Creating queue…"
+        : "Preparing workspace…"
       : queueInMotion
         ? `Scheduling ${publisherQueue.queued || "next"}…`
         : waitingForYouTube.length > 0
-          ? `Push ${waitingForYouTube.length} to YouTube`
-          : "YouTube is up to date";
+          ? browserMode
+            ? `Schedule ${waitingForYouTube.length} on YouTube`
+            : `Prepare ${waitingForYouTube.length} for YouTube`
+          : "No posts need external handling";
 
   return (
     <div ref={pageRef} className="lineup-page" tabIndex={-1}>
@@ -986,9 +1032,9 @@ export function LineupCalendar({
           <p className="lede">
             {lineup.coverage} upcoming{" "}
             {lineup.coverage === 1 ? "post" : "posts"} organized. One Runway post
-            per day at {displayTime(lineup.default_time)}{" "}
-            {displayTimezone(lineup.timezone)}. Published posts remain visible as
-            locked history.
+            per local day in {displayTimezone(lineup.timezone)}. New posts start at{" "}
+            {displayTime(lineup.default_time)}, and every post can use its own time.
+            Published posts remain visible as locked history.
           </p>
         </div>
         <Link href="/review" className="button lineup-return">
@@ -999,47 +1045,53 @@ export function LineupCalendar({
       <section
         className={[
           "lineup-youtube-bar",
-          !publishingEnabled ? "disabled" : "",
-          publisherQueue.paused ? "paused" : "",
+          browserMode && !publishingEnabled ? "disabled" : "",
+          browserMode && publisherQueue.paused ? "paused" : "",
           queueInMotion ? "working" : "",
         ]
           .filter(Boolean)
           .join(" ")}
-        aria-label="YouTube synchronization"
+        aria-label="External publishing"
       >
         <span className="lineup-youtube-mark" aria-hidden="true">
           ▶
         </span>
         <div>
           <strong>
-            {!publishingEnabled
-              ? "YouTube is off in this running session"
-              : publisherQueue.paused
+            {!browserMode
+              ? "Assisted publishing is ready"
+              : !publishingEnabled
+                ? "Authorized browser publishing is off"
+                : publisherQueue.paused
                 ? "YouTube needs attention"
                 : queueInMotion
                   ? "Scheduling through the visible browser"
-                  : waitingForYouTube.length > 0
-                    ? `${waitingForYouTube.length} ready for YouTube`
-                    : "Lineup and YouTube are synchronized"}
+                    : waitingForYouTube.length > 0
+                      ? `${waitingForYouTube.length} ready for YouTube`
+                      : "Lineup and YouTube are synchronized"}
           </strong>
           <span>
-            {!publishingEnabled
-              ? "Restart Runway with publishing enabled before making external changes."
-              : publisherQueue.paused
+            {!browserMode
+              ? waitingForYouTube.length > 0
+                ? `Prepare an ordered workspace with exact captions, images, dates, times, and ${lineup.timezone}. Runway will not queue work or open a browser.`
+                : "Accept in Generator adds posts here. Assisted preparation never marks external work verified."
+              : !publishingEnabled
+                ? "Restart Runway with all authorized-browser interlocks enabled before creating queue work."
+                : publisherQueue.paused
                 ? publisherQueue.paused_reason ??
                   "Check the publisher login before resuming."
                 : queueInMotion
                   ? `${publisherQueue.queued} remaining in the serialized queue. One post is handled at a time.`
-                  : waitingForYouTube.length > 0
-                    ? `Push every new post in date order. Runway preserves one post per day at ${displayTime(lineup.default_time)} ${displayTimezone(lineup.timezone)}.`
-                    : "Every upcoming post shown as scheduled has a verified YouTube result."}
+                    : waitingForYouTube.length > 0
+                      ? `The explicit action queues each selected post in date order. Runway preserves one post per local day in ${lineup.timezone}.`
+                      : "Every upcoming post shown as scheduled has a verified YouTube result."}
           </span>
         </div>
         <div className="lineup-youtube-actions">
           <button
             type="button"
             className="button lineup-push"
-            onClick={pushLineupToYouTube}
+            onClick={(event) => openPublish(event.currentTarget)}
             disabled={pushDisabled}
             aria-busy={busy === "push" || queueInMotion}
           >
@@ -1052,6 +1104,13 @@ export function LineupCalendar({
           )}
         </div>
       </section>
+
+      {assistedWorkspace && (
+        <AssistedPublishingWorkspace
+          workspace={assistedWorkspace}
+          onClose={() => setAssistedWorkspace(null)}
+        />
+      )}
 
       <section className="lineup-toolbar" aria-label="Calendar controls">
         <div>
@@ -1392,7 +1451,8 @@ export function LineupCalendar({
                         One day →
                       </button>
                     </div>
-                    {publishingEnabled &&
+                    {publishingMode === "authorized_browser" &&
+                      publishingEnabled &&
                       [
                         "internally_scheduled",
                         "publish_failed",
@@ -1443,9 +1503,7 @@ export function LineupCalendar({
                   </div>
                   <p className="lineup-sync-note">
                     {selectedCanEdit || selectedCanRemove
-                      ? publishingEnabled
-                        ? "Every confirmed change is applied to YouTube first and shown as successful only after a valid response."
-                        : "YouTube scheduling is off; confirmed changes affect the local Lineup only."
+                      ? "Confirmed changes update the local Lineup only, invalidate stale prepared work, and never open YouTube."
                       : immutableReason(selected)}
                   </p>
                 </>
@@ -1488,7 +1546,9 @@ export function LineupCalendar({
             aria-describedby={
               dialog === "edit"
                 ? "lineup-dialog-help lineup-dialog-error"
-                : "lineup-remove-copy lineup-dialog-error"
+                : dialog === "remove"
+                  ? "lineup-remove-copy lineup-dialog-error"
+                  : "lineup-publish-copy lineup-dialog-error"
             }
             onMouseDown={(event) => event.stopPropagation()}
           >
@@ -1497,7 +1557,8 @@ export function LineupCalendar({
                 <p className="eyebrow">Confirm a Lineup change</p>
                 <h2 id="lineup-dialog-title">Refine the release.</h2>
                 <p id="lineup-dialog-help" className="dialog-intro">
-                  Change the caption, choose a date, or use the one-day controls.
+                  Change the caption, date, or local time. The channel timezone is
+                  fixed to {lineup.timezone}.
                   Moving onto an occupied date swaps the two posts after confirmation.
                 </p>
                 <label htmlFor="lineup-caption">
@@ -1521,8 +1582,7 @@ export function LineupCalendar({
                 </label>
                 <label htmlFor="lineup-date">
                   <span>
-                    Release date · {displayTime(lineup.default_time)}{" "}
-                    {displayTimezone(lineup.timezone)}
+                    Release date
                   </span>
                   <input
                     id="lineup-date"
@@ -1537,6 +1597,24 @@ export function LineupCalendar({
                     aria-invalid={currentDraftError ? "true" : undefined}
                     disabled={busy !== null || dialogOutcomeUncertain}
                   />
+                </label>
+                <label htmlFor="lineup-time">
+                  <span>Release time · {lineup.timezone}</span>
+                  <input
+                    id="lineup-time"
+                    aria-label="Release time"
+                    type="time"
+                    value={draftTime}
+                    onChange={(event) => {
+                      setDraftTime(event.target.value);
+                      setDialogError("");
+                    }}
+                    aria-invalid={currentDraftError ? "true" : undefined}
+                    disabled={busy !== null || dialogOutcomeUncertain}
+                  />
+                  <small>
+                    {displayTime(lineup.default_time)} is only the initial suggestion.
+                  </small>
                 </label>
                 {occupiedOther && !currentDraftError && (
                   <p className="swap-notice">
@@ -1582,14 +1660,14 @@ export function LineupCalendar({
                   </button>
                 </div>
               </>
-            ) : (
+            ) : dialog === "remove" ? (
               <>
                 <p className="eyebrow danger">Remove from Lineup</p>
                 <h2 id="lineup-dialog-title">Pull this release?</h2>
                 <p id="lineup-remove-copy" className="dialog-copy">
-                  {publishingEnabled
-                    ? "This explicitly removes the scheduled post from YouTube and cancels its Runway slot. The decision remains in Activity."
-                    : "YouTube is off. This removes only the local Runway slot; it does not change anything on YouTube. The decision remains in Activity."}
+                  This removes only the local Runway slot, invalidates stale prepared
+                  work, and does not change anything on YouTube. The decision remains
+                  in Activity.
                 </p>
                 {dialogOutcomeUncertain && (
                   <a className="dialog-recovery" href="/lineup">
@@ -1620,7 +1698,122 @@ export function LineupCalendar({
                     disabled={busy !== null || dialogOutcomeUncertain}
                     aria-busy={busy === "remove"}
                   >
-                    {busy === "remove" ? "Verifying removal…" : "Confirm remove"}
+                    {busy === "remove" ? "Removing locally…" : "Confirm remove"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="eyebrow">Explicit external action</p>
+                <h2 id="lineup-dialog-title">
+                  {publishingMode === "assisted"
+                    ? "Prepare the native posting workspace?"
+                    : "Queue the authorized browser publisher?"}
+                </h2>
+                <p id="lineup-publish-copy" className="dialog-copy">
+                  Review the exact payloads below. This action uses{" "}
+                  <strong>
+                    {publishingMode === "assisted"
+                      ? "assisted preparation"
+                      : "authorized browser automation"}
+                  </strong>
+                  {publishingMode === "assisted"
+                    ? ". It creates no queue work and opens no browser."
+                    : ". Queue creation is not proof that YouTube scheduled every post."}
+                </p>
+                <dl className="lineup-publish-summary">
+                  <div>
+                    <dt>Target channel</dt>
+                    <dd>{channelName}</dd>
+                  </div>
+                  <div>
+                    <dt>Posts</dt>
+                    <dd>{waitingForYouTube.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Timezone</dt>
+                    <dd>{lineup.timezone}</dd>
+                  </div>
+                  <div>
+                    <dt>Range</dt>
+                    <dd>
+                      {waitingForYouTube.length ? (
+                        <>
+                          {slotFormatter.format(
+                            new Date(proposalSlot(waitingForYouTube[0])),
+                          )}
+                          {" – "}
+                          {slotFormatter.format(
+                            new Date(
+                              proposalSlot(
+                                waitingForYouTube[waitingForYouTube.length - 1],
+                              ),
+                            ),
+                          )}
+                        </>
+                      ) : (
+                        "No posts"
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+                <ol className="lineup-publish-items">
+                  {waitingForYouTube.map((proposal) => (
+                    <li key={proposal.id}>
+                      {proposal.candidate?.preview_url && (
+                        <img
+                          src={`${API_URL}${proposal.candidate.preview_url}`}
+                          alt=""
+                        />
+                      )}
+                      <span>
+                        <time>
+                          {slotFormatter.format(new Date(proposalSlot(proposal)))} ·{" "}
+                          {lineup.timezone}
+                        </time>
+                        <strong>{proposal.final_caption}</strong>
+                        <small>{proposal.candidate?.original_url}</small>
+                        {proposal.candidate?.rights_status === "unknown" && (
+                          <small className="lineup-publish-warning">
+                            Rights are unknown. Confirm that you are authorized to publish
+                            this exact image before continuing.
+                          </small>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+                <p
+                  id="lineup-dialog-error"
+                  className="dialog-error"
+                  role={dialogError ? "alert" : undefined}
+                >
+                  {dialogError}
+                </p>
+                <div className="dialog-actions">
+                  <button
+                    type="button"
+                    className="button secondary"
+                    onClick={closeDialog}
+                    disabled={busy !== null}
+                    autoFocus
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="button approve"
+                    onClick={pushLineupToYouTube}
+                    disabled={busy !== null || pushOutcomeUncertain}
+                    aria-busy={busy === "push"}
+                  >
+                    {busy === "push"
+                      ? publishingMode === "assisted"
+                        ? "Preparing…"
+                        : "Creating queue…"
+                      : publishingMode === "assisted"
+                        ? "Confirm and prepare"
+                        : "Confirm and queue"}
                   </button>
                 </div>
               </>

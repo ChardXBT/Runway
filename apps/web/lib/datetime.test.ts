@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   isValidTimeZone,
   localDate,
+  localTime,
   scheduleInstant,
   scheduleIsPast,
   shiftIsoDate,
+  zonedScheduleIso,
 } from "./datetime";
 
 describe("configured-timezone scheduling", () => {
@@ -45,6 +47,10 @@ describe("configured-timezone scheduling", () => {
         "America/Toronto",
       )?.toISOString(),
     ).toBe("2026-07-15T14:00:00.000Z");
+    expect(
+      zonedScheduleIso("2026-07-15", "10:00", "America/Toronto"),
+    ).toBe("2026-07-15T10:00:00-04:00");
+    expect(localTime("2026-07-15T14:45:00Z", "America/Toronto")).toBe("10:45");
   });
 
   it("rejects malformed dates, times, timezones, and nonexistent local times", () => {

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from runway.audit.service import AuditService
 from runway.config import Settings
@@ -73,8 +73,24 @@ class RescheduleRequest(BaseModel):
 
 class LineupUpdateRequest(BaseModel):
     final_caption: str | None = Field(default=None, min_length=1, max_length=1000)
+    scheduled_publish_at: datetime | None = None
+    new_scheduled_publish_at: datetime | None = None
     new_date: date | None = None
     confirmed: Literal[True]
+
+    @model_validator(mode="after")
+    def one_schedule_value(self) -> LineupUpdateRequest:
+        supplied = sum(
+            value is not None
+            for value in (
+                self.scheduled_publish_at,
+                self.new_scheduled_publish_at,
+                self.new_date,
+            )
+        )
+        if supplied > 1:
+            raise ValueError("send only one schedule timestamp or legacy date")
+        return self
 
 
 class LineupRemoveRequest(BaseModel):
@@ -83,6 +99,8 @@ class LineupRemoveRequest(BaseModel):
 
 class LineupPushRequest(BaseModel):
     confirmed: Literal[True]
+    mode: Literal["assisted", "authorized_browser"]
+    proposal_ids: list[int] | None = Field(default=None, max_length=5000)
 
 
 class MetadataCorrectionRequest(BaseModel):
@@ -113,7 +131,7 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     editorial = EditorialService(database, settings)
     youtube_publisher = YouTubeBrowserPublisher(database, settings)
     publisher_queue = PublisherQueueCoordinator(youtube_publisher)
-    if settings.publishing_enabled:
+    if settings.authorized_browser_ready:
         publisher_queue.start()
 
     @router.post("/generation-runs")
@@ -191,24 +209,12 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
                 )
             proposals.approve(proposal_id)
             asyncio.run(InternalPublisher(database, settings).schedule_post(proposal_id))
-            queue_result: dict[str, object] = {
-                "running": False,
-                "queued": 0,
-                "paused": False,
-                "paused_reason": None,
-                "mode": "internal_only",
-            }
-            if settings.publishing_enabled:
-                queue_result = {
-                    **publisher_queue.enqueue(proposal_id),
-                    "mode": "youtube",
-                }
             return {
                 "decision": "approved",
+                "detail": "Accepted and added to Lineup. Nothing was sent to YouTube.",
                 "proposal": proposals.detail(proposal_id),
                 "next_proposal": proposals.next_for_review(exclude_id=proposal_id),
                 "workflow": proposals.workflow_summary(),
-                "publisher_queue": queue_result,
             }
         except (LookupError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -485,38 +491,71 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
 
     @router.post("/lineup/push")
     async def push_lineup_to_youtube(
-        _payload: LineupPushRequest,
+        payload: LineupPushRequest,
     ) -> dict[str, object]:
         try:
+            if payload.mode != settings.publishing_mode:
+                raise ValueError(
+                    f"requested mode {payload.mode!r} does not match configured "
+                    f"RUNWAY_PUBLISHING_MODE={settings.publishing_mode}"
+                )
             lineup = proposals.queue_status()
             scheduled_value = lineup.get("scheduled")
             scheduled = scheduled_value if isinstance(scheduled_value, list) else []
-            proposal_ids = [
+            eligible_ids = [
                 int(item["id"])
                 for item in scheduled
                 if isinstance(item, dict)
-                and item.get("status") == "internally_scheduled"
+                and item.get("status") in {"internally_scheduled", "publish_failed"}
                 and isinstance(item.get("id"), int)
             ]
-            if not proposal_ids:
+            selected_ids = list(dict.fromkeys(payload.proposal_ids or eligible_ids))
+            ineligible = [
+                proposal_id for proposal_id in selected_ids if proposal_id not in eligible_ids
+            ]
+            if ineligible:
+                raise ValueError(
+                    "selected posts are no longer eligible for external handling: "
+                    + ", ".join(str(value) for value in ineligible)
+                )
+            if not selected_ids:
                 return {
-                    "detail": "YouTube is already up to date. No new Lineup posts were queued.",
+                    "mode": payload.mode,
+                    "detail": "No Lineup posts need external handling.",
                     "queued_proposal_ids": [],
                     "lineup": lineup,
                     "publisher_queue": publisher_queue.status(),
                 }
 
-            session_status = await youtube_publisher.validate_session()
-            if not session_status.valid:
-                raise ValueError(session_status.detail)
-            queued = publisher_queue.enqueue_many(proposal_ids)
+            if payload.mode == "assisted":
+                workspace = youtube_publisher.prepare_assisted_batch(selected_ids)
+                return {
+                    "mode": "assisted",
+                    "detail": (
+                        f"Prepared {len(workspace.items)} validated "
+                        f"{'post' if len(workspace.items) == 1 else 'posts'} for native YouTube."
+                    ),
+                    "queued_proposal_ids": [],
+                    "assisted_workspace": workspace.model_dump(mode="json"),
+                    "lineup": lineup,
+                    "publisher_queue": publisher_queue.status(),
+                }
+
+            connection = youtube_publisher.connection_status()
+            if connection.get("state") != "connected" or connection.get("valid") is not True:
+                raise ValueError(
+                    "authorized browser publishing requires a fresh successful capability check"
+                )
+            queued = publisher_queue.enqueue_many(selected_ids)
             return {
+                "mode": "authorized_browser",
                 "detail": (
-                    f"{len(proposal_ids)} new Lineup "
-                    f"{'post was' if len(proposal_ids) == 1 else 'posts were'} "
-                    "queued for YouTube."
+                    f"{len(selected_ids)} Lineup "
+                    f"{'post was' if len(selected_ids) == 1 else 'posts were'} "
+                    "queued for authorized browser handling. External scheduling is not yet "
+                    "confirmed."
                 ),
-                "queued_proposal_ids": proposal_ids,
+                "queued_proposal_ids": selected_ids,
                 "lineup": proposals.queue_status(),
                 "publisher_queue": queued,
             }
@@ -535,14 +574,12 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
                 youtube_publisher.update_lineup(
                     proposal_id,
                     final_caption=payload.final_caption,
+                    new_scheduled_publish_at=(
+                        payload.scheduled_publish_at or payload.new_scheduled_publish_at
+                    ),
                     new_date=payload.new_date,
                 )
             )
-            if settings.publishing_enabled:
-                requeue_ids = operation.get("requeue_proposal_ids", [])
-                if isinstance(requeue_ids, list):
-                    for value in requeue_ids:
-                        publisher_queue.enqueue(int(value))
             return {
                 "operation": operation,
                 "lineup": proposals.queue_status(),

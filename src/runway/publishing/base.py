@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,24 @@ class PublishPreparation(BaseModel):
     caption: str
     local_image_path: str
     channel_name: str
+
+
+class AssistedPost(BaseModel):
+    proposal_id: int
+    planned_publish_at: str
+    caption: str
+    image_url: str
+    rights_status: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AssistedPreparation(BaseModel):
+    mode: Literal["assisted"] = "assisted"
+    channel_name: str
+    channel_id: str
+    timezone: str
+    youtube_url: str
+    items: list[AssistedPost]
 
 
 class VerificationResult(BaseModel):

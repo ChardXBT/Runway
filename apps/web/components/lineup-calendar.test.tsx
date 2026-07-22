@@ -97,7 +97,7 @@ describe("LineupCalendar", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       final_caption: "Wait... what?!",
-      new_date: "2026-08-09",
+      scheduled_publish_at: "2026-08-09T10:00:00-04:00",
       confirmed: true,
     });
   });
@@ -123,9 +123,15 @@ describe("LineupCalendar", () => {
   });
 
   it("uses a warning state and local-only removal copy when YouTube is off", () => {
-    render(<LineupCalendar initialLineup={lineup} publishingEnabled={false} />);
+    render(
+      <LineupCalendar
+        initialLineup={lineup}
+        publishingEnabled={false}
+        publishingMode="authorized_browser"
+      />,
+    );
 
-    expect(screen.getByLabelText("YouTube synchronization")).toHaveClass(
+    expect(screen.getByLabelText("External publishing")).toHaveClass(
       "disabled",
     );
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
@@ -134,7 +140,7 @@ describe("LineupCalendar", () => {
     expect(dialog).toHaveTextContent(
       "This removes only the local Runway slot",
     );
-    expect(dialog).toHaveTextContent("it does not change anything on YouTube");
+    expect(dialog).toHaveTextContent("does not change anything on YouTube");
     expect(dialog).not.toHaveTextContent(
       "removes the scheduled post from YouTube",
     );
@@ -147,7 +153,13 @@ describe("LineupCalendar", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    render(
+      <LineupCalendar
+        initialLineup={lineup}
+        publishingEnabled
+        publishingMode="authorized_browser"
+      />,
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "Edit or choose date" }),
     );
@@ -159,7 +171,7 @@ describe("LineupCalendar", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       final_caption: "Why now?!",
-      new_date: null,
+      scheduled_publish_at: null,
       confirmed: true,
     });
   });
@@ -168,7 +180,13 @@ describe("LineupCalendar", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    render(
+      <LineupCalendar
+        initialLineup={lineup}
+        publishingEnabled
+        publishingMode="authorized_browser"
+      />,
+    );
     const opener = screen.getByRole("button", { name: "Edit or choose date" });
     fireEvent.click(opener);
     const dialog = await screen.findByRole("dialog");
@@ -180,7 +198,13 @@ describe("LineupCalendar", () => {
   });
 
   it("shows the calendar and upcoming-post list together", () => {
-    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    render(
+      <LineupCalendar
+        initialLineup={lineup}
+        publishingEnabled
+        publishingMode="authorized_browser"
+      />,
+    );
 
     expect(screen.getByLabelText("Runway release calendar")).toBeInTheDocument();
     expect(screen.getByLabelText("Runway release agenda")).toBeInTheDocument();
@@ -195,7 +219,13 @@ describe("LineupCalendar", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    render(
+      <LineupCalendar
+        initialLineup={lineup}
+        publishingEnabled
+        publishingMode="authorized_browser"
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Retry YouTube" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
@@ -209,27 +239,41 @@ describe("LineupCalendar", () => {
     });
     const fetchMock = vi.fn().mockReturnValue(pending);
     vi.stubGlobal("fetch", fetchMock);
-    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    render(
+      <LineupCalendar
+        initialLineup={lineup}
+        publishingEnabled
+        publishingMode="authorized_browser"
+      />,
+    );
 
     const push = screen.getByRole("button", {
-      name: "Push 2 to YouTube",
+      name: "Schedule 2 on YouTube",
     });
     fireEvent.click(push);
-    fireEvent.click(push);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("button", { name: "Confirm and queue" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toContain("/api/lineup/push");
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       confirmed: true,
+      mode: "authorized_browser",
+      proposal_ids: [12, 13],
     });
-    expect(
-      screen.getByRole("button", { name: "Checking session…" }),
-    ).toBeDisabled();
+    const queueButtons = screen.getAllByRole("button", {
+      name: "Creating queue…",
+    });
+    expect(queueButtons).toHaveLength(2);
+    queueButtons.forEach((button) => expect(button).toBeDisabled());
 
     resolveResponse({
       ok: true,
       json: async () => ({
         detail: "YouTube is already up to date.",
+        mode: "authorized_browser",
         queued_proposal_ids: [],
         lineup,
         publisher_queue: {
@@ -245,6 +289,76 @@ describe("LineupCalendar", () => {
     );
   });
 
+  it("prepares an assisted workspace without creating browser queue work", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        mode: "assisted",
+        detail: "Prepared 2 validated posts for native YouTube.",
+        queued_proposal_ids: [],
+        assisted_workspace: {
+          mode: "assisted",
+          channel_name: "Qlob",
+          channel_id: "UCQ-nHijGwxNU3Go_wyLQ5Ng",
+          timezone: "America/Toronto",
+          youtube_url:
+            "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts",
+          items: [first, second].map((proposal) => ({
+            proposal_id: proposal.id,
+            planned_publish_at:
+              proposal.scheduled_publish_at ?? proposal.planned_publish_at,
+            caption: proposal.final_caption,
+            image_url: "/media/first.jpg",
+            rights_status: "unknown",
+            warnings: ["Confirm rights before publishing."],
+          })),
+        },
+        lineup,
+        publisher_queue: {
+          running: false,
+          queued: 0,
+          paused: false,
+          paused_reason: null,
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LineupCalendar initialLineup={lineup} publishingEnabled={false} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Prepare 2 for YouTube" }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("assisted preparation");
+    expect(dialog).toHaveTextContent("Qlob");
+    expect(dialog).toHaveTextContent("America/Toronto");
+    expect(dialog).toHaveTextContent(
+      "Rights are unknown. Confirm that you are authorized",
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm and prepare" }),
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      confirmed: true,
+      mode: "assisted",
+      proposal_ids: [12, 13],
+    });
+    expect(
+      await screen.findByRole("heading", {
+        name: "Native YouTube posting workspace",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("0 of 2 marked done this session")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open exact image" })).toHaveAttribute(
+      "href",
+      "http://127.0.0.1:8000/media/first.jpg",
+    );
+    expect(screen.getByText(/not external verification/i)).toBeInTheDocument();
+  });
+
   it("never claims a malformed YouTube push succeeded and requires refresh", async () => {
     vi.stubGlobal(
       "fetch",
@@ -253,20 +367,29 @@ describe("LineupCalendar", () => {
         json: async () => ({ queued_proposal_ids: [12, 13] }),
       }),
     );
-    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Push 2 to YouTube" }),
+    render(
+      <LineupCalendar
+        initialLineup={lineup}
+        publishingEnabled
+        publishingMode="authorized_browser"
+      />,
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    fireEvent.click(
+      screen.getByRole("button", { name: "Schedule 2 on YouTube" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and queue" }));
+
+    expect(
+      await within(screen.getByRole("dialog")).findByRole("alert"),
+    ).toHaveTextContent(
       "could not verify the YouTube queue response",
     );
     expect(
       screen.getByRole("link", { name: "Verify in Settings" }),
     ).toHaveAttribute("href", "/settings#platform-connection");
     expect(
-      screen.getByRole("button", { name: "Push 2 to YouTube" }),
+      screen.getByRole("button", { name: "Schedule 2 on YouTube" }),
     ).toBeDisabled();
     expect(screen.queryByText(/sync complete/i)).not.toBeInTheDocument();
   });
@@ -338,6 +461,9 @@ describe("LineupCalendar", () => {
     fireEvent.change(screen.getByLabelText("Release date"), {
       target: { value: "2026-07-18" },
     });
+    fireEvent.change(screen.getByLabelText("Release time"), {
+      target: { value: "10:00" },
+    });
 
     expect(screen.getByLabelText("Release date")).toHaveAttribute(
       "min",
@@ -367,6 +493,9 @@ describe("LineupCalendar", () => {
     );
     fireEvent.change(screen.getByLabelText("Release date"), {
       target: { value: "2026-07-18" },
+    });
+    fireEvent.change(screen.getByLabelText("Release time"), {
+      target: { value: "10:00" },
     });
 
     expect(screen.getByRole("button", { name: "Confirm changes" })).toBeEnabled();

@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     duplicate_window_days: int = 180
     approval_required: bool = True
     publishing_enabled: bool = False
+    publishing_mode: Literal["assisted", "authorized_browser"] = "assisted"
+    youtube_automation_authorized: bool = False
     capture_scroll_delay_ms: int = 1800
     capture_idle_cycles_before_stop: int = Field(default=30, ge=3, le=300)
     capture_idle_seconds_before_stop: int = Field(default=90, ge=15, le=900)
@@ -107,6 +109,29 @@ class Settings(BaseSettings):
             raise ValueError("default_post_time must be a valid local time")
         return f"{hour:02d}:{minute:02d}"
 
+    @model_validator(mode="after")
+    def authorized_browser_requires_both_interlocks(self) -> Settings:
+        if self.publishing_mode != "authorized_browser":
+            return self
+        missing: list[str] = []
+        if not self.publishing_enabled:
+            missing.append("RUNWAY_PUBLISHING_ENABLED=true")
+        if not self.youtube_automation_authorized:
+            missing.append("RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=true")
+        if missing:
+            raise ValueError(
+                "RUNWAY_PUBLISHING_MODE=authorized_browser requires " + " and ".join(missing)
+            )
+        return self
+
+    @property
+    def authorized_browser_ready(self) -> bool:
+        return (
+            self.publishing_mode == "authorized_browser"
+            and self.publishing_enabled
+            and self.youtube_automation_authorized
+        )
+
     @property
     def project_root(self) -> Path:
         return Path(__file__).resolve().parents[3]
@@ -166,14 +191,18 @@ class Settings(BaseSettings):
             "default_post_time": self.default_post_time,
             "posts_per_day": self.posts_per_day,
             "scheduling_horizon_days": None,
-            "approval_schedules_automatically": True,
+            "approval_schedules_automatically": False,
             "duplicate_window_days": self.duplicate_window_days,
             "approval_required": self.approval_required,
             "publishing_enabled": self.publishing_enabled,
+            "publishing_mode": self.publishing_mode,
+            "youtube_automation_authorized": self.youtube_automation_authorized,
+            "authorized_browser_ready": self.authorized_browser_ready,
             "publisher_channel_id": self.publisher_channel_id,
             "publisher_confirmation_ttl_minutes": self.publisher_confirmation_ttl_minutes,
             "publisher_browser_channel": self.publisher_browser_channel,
-            "publisher_approval_is_confirmation": True,
+            "publisher_approval_is_confirmation": False,
+            "publisher_lineup_action_only": True,
             "publisher_visible_browser_only": True,
             "capture_scroll_delay_ms": self.capture_scroll_delay_ms,
             "capture_idle_cycles_before_stop": self.capture_idle_cycles_before_stop,

@@ -22,7 +22,7 @@ describe("ConnectorSetup", () => {
     expect(screen.getByText("Open channel permissions")).toBeInTheDocument();
     expect(screen.getByText("Choose Editor (limited)")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Verify connection" }),
+      screen.getByRole("button", { name: "Verify capability" }),
     ).toBeDisabled();
   });
 
@@ -31,7 +31,7 @@ describe("ConnectorSetup", () => {
       ok: true,
       json: async () => ({
         valid: true,
-        detail: "Editor access and Community publishing controls verified.",
+        detail: "Community publishing controls observed.",
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -48,7 +48,7 @@ describe("ConnectorSetup", () => {
       screen.getByLabelText("YouTube channel URL, handle, or channel ID"),
       { target: { value: "https://www.youtube.com/@creator" } },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Verify connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verify capability" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0][0]).toContain(
@@ -59,7 +59,7 @@ describe("ConnectorSetup", () => {
     });
     expect(await screen.findByText("Connected")).toBeInTheDocument();
     expect(
-      screen.getByText("Editor access and Community publishing controls verified."),
+      screen.getByText("Community publishing controls observed."),
     ).toBeInTheDocument();
   });
 });
