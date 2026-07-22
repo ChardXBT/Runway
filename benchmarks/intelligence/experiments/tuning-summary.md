@@ -1,4 +1,4 @@
-# RunWay Bounded Tuning
+# Runway Bounded Tuning
 
 - **Artifact Version:** bounded-tuning-summary-v2
 

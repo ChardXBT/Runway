@@ -1,4 +1,4 @@
-# RunWay Locked Holdout
+# Runway Locked Holdout
 
 - **Artifact Version:** locked-holdout-result-v1
 

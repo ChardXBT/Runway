@@ -17,7 +17,7 @@ class FakeResponse:
         return None
 
     def read(self) -> bytes:
-        return b'{"product":"RunWay"}'
+        return b'{"product":"Runway"}'
 
 
 def test_running_runway_api_is_a_healthy_port_state(

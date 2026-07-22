@@ -1,4 +1,4 @@
-# RunWay Intelligence Ablation
+# Runway Intelligence Ablation
 
 - **Artifact Version:** canonical-ablation-v1
 

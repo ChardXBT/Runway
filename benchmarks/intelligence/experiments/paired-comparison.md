@@ -1,4 +1,4 @@
-# RunWay Paired Baseline Comparison
+# Runway Paired Baseline Comparison
 
 - **Artifact Version:** paired-baseline-comparison-v1
 

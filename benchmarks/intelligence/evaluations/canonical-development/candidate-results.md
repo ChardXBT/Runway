@@ -1,4 +1,4 @@
-# RunWay Canonical Intelligence Evaluation
+# Runway Canonical Intelligence Evaluation
 
 - **Artifact Version:** canonical-candidate-evaluation-v1
 

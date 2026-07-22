@@ -112,7 +112,7 @@ export function ConnectorSetup({
         </div>
         <section className="connector-pass" aria-label="Runway invitation account">
           <div>
-            <RunwayLogo className="connector-pass-mark" dark />
+            <RunwayLogo className="connector-pass-mark" />
             <span>
               <small>Runway connector account</small>
               <strong>{connectorEmail}</strong>

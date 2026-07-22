@@ -1,6 +1,6 @@
 # Canonical replacement gates
 
-Decision: **canonical replacement approved** for the deterministic, local RunWay
+Decision: **canonical replacement approved** for the deterministic, local Runway
 intelligence contract.
 
 This decision does not claim human-preference superiority. The sealed two-case

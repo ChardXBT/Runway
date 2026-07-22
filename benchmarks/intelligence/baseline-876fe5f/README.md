@@ -1,4 +1,4 @@
-# Frozen RunWay intelligence baseline
+# Frozen Runway intelligence baseline
 
 - Baseline commit: `876fe5f814b1a58f0d11b9eaf29f4c508f20595d`
 - Schema revision: `0006_uncapped_lineup`
