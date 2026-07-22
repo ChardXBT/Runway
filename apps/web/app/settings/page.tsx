@@ -66,10 +66,10 @@ export default async function SettingsPage() {
       <header className="header-row">
         <div>
           <p className="eyebrow">Local configuration</p>
-          <h1>Quiet rules behind the feed.</h1>
+          <h1>Runway settings.</h1>
           <p className="lede">
-            Secret values never appear here. Accept is editorial and local-only; external
-            handling starts from a deliberate Lineup action.
+            Configure the channel and daily schedule. Secret values stay hidden, and
+            external handling still requires a deliberate Lineup action.
           </p>
         </div>
       </header>

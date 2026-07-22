@@ -63,11 +63,11 @@ export default async function ActivityPage({
     <>
       <header className="page-header">
         <div>
-          <p className="eyebrow">Activity / immutable audit</p>
-          <h1>Every consequential change.</h1>
+          <p className="eyebrow">Immutable audit</p>
+          <h1>Activity log.</h1>
           <p className="lede">
-            Capture, analysis, generation, decisions, and scheduling remain inspectable
-            without exposing credentials.
+            Inspect capture, analysis, generation, decisions, and scheduling without
+            exposing credentials.
           </p>
         </div>
         <div className="header-counter">

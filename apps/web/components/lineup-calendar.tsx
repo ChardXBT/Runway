@@ -1027,8 +1027,8 @@ export function LineupCalendar({
     <div ref={pageRef} className="lineup-page" tabIndex={-1}>
       <header className="lineup-header">
         <div>
-          <p className="eyebrow">Scheduler / Qlob Lineup</p>
-          <h1>Your release lineup.</h1>
+          <p className="eyebrow">Qlob scheduler</p>
+          <h1>Release calendar.</h1>
           <p className="lede">
             {lineup.coverage} upcoming{" "}
             {lineup.coverage === 1 ? "post" : "posts"} organized. One Runway post
@@ -1054,7 +1054,9 @@ export function LineupCalendar({
         aria-label="External publishing"
       >
         <span className="lineup-youtube-mark" aria-hidden="true">
-          ▶
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M9.2 7.5 16 12l-6.8 4.5v-9Z" />
+          </svg>
         </span>
         <div>
           <strong>

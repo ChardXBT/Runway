@@ -18,14 +18,15 @@ describe("Nav", () => {
     );
     expect(screen.getByRole("link", { name: "Lineup" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Connector" })).toBeInTheDocument();
-    expect(screen.getByText("Your fans can't wait")).toBeInTheDocument();
-    expect(screen.getByText("YouTube scheduling off")).toBeInTheDocument();
+    expect(screen.getByText("Qlob editorial desk")).toBeInTheDocument();
+    expect(screen.getByText("Assisted publishing")).toBeInTheDocument();
+    expect(screen.getByText("No browser actions are queued")).toBeInTheDocument();
   });
 
   it("shows the one-post-per-day automation state", () => {
-    render(<Nav publishingEnabled />);
-    expect(screen.getByText("YouTube actions enabled")).toBeInTheDocument();
-    expect(screen.getByText("Account sign-in is checked on use")).toBeInTheDocument();
+    render(<Nav publishingEnabled publishingMode="authorized_browser" />);
+    expect(screen.getByText("Browser publishing ready")).toBeInTheDocument();
+    expect(screen.getByText("Actions start from Lineup")).toBeInTheDocument();
   });
 
   it("closes the backstage menu with Escape and restores focus", async () => {

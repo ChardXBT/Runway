@@ -13,6 +13,9 @@ import type {
   PublisherQueueStatus,
 } from "@/lib/types";
 
+import { StatusGlyph } from "./status-glyph";
+import type { StatusTone } from "./status-glyph";
+
 function connectionTime(value: string | null) {
   if (!value) return "Not recorded";
   const date = new Date(value);
@@ -146,6 +149,15 @@ export function PlatformConnection({
       : connection.state === "needs_attention"
         ? "invalid"
         : connection.state;
+  const stateTone: StatusTone = publishingMode === "assisted" || !publishingEnabled
+    ? "info"
+    : connection.state === "connected"
+      ? "success"
+      : connection.state === "needs_attention"
+        ? "danger"
+        : connection.state === "stale"
+          ? "warning"
+          : "neutral";
   const connectionChecks = Object.entries(connection.checks);
 
   return (
@@ -160,7 +172,7 @@ export function PlatformConnection({
           <h2 id="connection-title">YouTube · Qlob</h2>
         </div>
         <span className={`connection-state ${stateClass}`}>
-          <i aria-hidden="true" />
+          <StatusGlyph tone={stateTone} />
           {stateLabel}
         </span>
       </div>

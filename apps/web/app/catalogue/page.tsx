@@ -110,11 +110,11 @@ export default async function CataloguePage({
     <>
       <header className="page-header">
         <div>
-          <p className="eyebrow">Archive / page {page}</p>
-          <h1>Qlob’s visual memory.</h1>
+          <p className="eyebrow">Archive · page {page}</p>
+          <h1>Qlob archive.</h1>
           <p className="lede">
-            Search every captured caption and inspect the image, source record, model annotation,
-            and closest historical matches.
+            Search captured captions, then inspect the image, source record, annotation,
+            and closest local matches.
           </p>
         </div>
         <div className="header-counter">
@@ -127,7 +127,7 @@ export default async function CataloguePage({
           <div className="archive-section-heading">
             <div>
               <p className="eyebrow">Rejected by you</p>
-              <h2 id="rejected-heading">Looks that did not make the Lineup.</h2>
+              <h2 id="rejected-heading">Rejected Generator options.</h2>
             </div>
             <span>{rejected.length} learning signals</span>
           </div>
@@ -162,7 +162,7 @@ export default async function CataloguePage({
       <div className="archive-section-heading published-heading">
         <div>
           <p className="eyebrow">Published history</p>
-          <h2>Every captured Qlob post.</h2>
+          <h2>Captured Qlob posts.</h2>
         </div>
         <span>{status.total_posts} records</span>
       </div>

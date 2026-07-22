@@ -7,6 +7,8 @@ import { actionError, readApiJson } from "@/lib/client-api";
 import { isRecord } from "@/lib/guards";
 
 import { RunwayLogo } from "./runway-logo";
+import { StatusGlyph } from "./status-glyph";
+import type { StatusTone } from "./status-glyph";
 
 type ConnectionState = "ready" | "checking" | "connected" | "attention";
 
@@ -97,13 +99,21 @@ export function ConnectorSetup({
         : state === "checking"
           ? "Checking access"
           : "Ready to verify";
+  const stateTone: StatusTone =
+    state === "connected"
+      ? "success"
+      : state === "attention"
+        ? "danger"
+        : state === "checking"
+          ? "info"
+          : "neutral";
 
   return (
     <div className="connector-page">
       <header className="connector-hero">
         <div className="connector-hero-copy">
-          <p className="eyebrow">Connector / YouTube</p>
-          <h1>Invite Runway backstage.</h1>
+          <p className="eyebrow">YouTube connector</p>
+          <h1>Connect Qlob to Runway.</h1>
           <p className="lede">
             The channel owner chooses a declared role without sharing a password.
             Runway can observe posting controls in a read-only browser check, but it
@@ -197,12 +207,12 @@ export function ConnectorSetup({
         >
           <div className="connector-check-topline">
             <span className="connector-status">
-              <i aria-hidden="true" />
+              <StatusGlyph tone={stateTone} />
               {stateLabel}
             </span>
             <span>Read-only check</span>
           </div>
-          <p className="eyebrow">Observed capability</p>
+          <p className="eyebrow">Capability check</p>
           <h2 id="connector-check-title">Are Community post controls available?</h2>
           <p>
             Runway checks that the saved account can open this channel and see its

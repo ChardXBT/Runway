@@ -456,15 +456,15 @@ export function ReviewWorkspace({
     <div className="editorial-conveyor">
       <header className="conveyor-header">
         <div>
-          <p className="eyebrow">Generator / Qlob</p>
+          <p className="eyebrow">Qlob Generator</p>
           <h1>
             {proposal
-              ? "Choose the next post."
+                ? "Choose the next post"
               : generation.running
-                ? "Generator is working."
+                ? "Generator is working"
                 : generation.detail
-                  ? "Ready for another search."
-                  : "Generator ready."}
+                  ? "Ready for another search"
+                  : "Generator ready"}
           </h1>
         </div>
         <div className="conveyor-stats" aria-label="Editorial session status">

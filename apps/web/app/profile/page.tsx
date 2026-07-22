@@ -185,7 +185,7 @@ export default async function ProfilePage() {
   return (
     <>
       <header className="page-header">
-        <div><p className="eyebrow">Profile / Qlob v{profile.version}</p><h1>Patterns, with receipts.</h1><p className="lede">A reproducible retrieval profile built from local statistics and cited examples—not model-weight fine-tuning.</p></div>
+        <div><p className="eyebrow">Qlob profile · v{profile.version}</p><h1>What Runway has learned.</h1><p className="lede">This retrieval profile comes from local statistics and cited examples. It is separate from model-weight training.</p></div>
         <div className="header-counter"><strong>{profile.training_post_ids.length}</strong><span>training records</span></div>
       </header>
       <section className="profile-hero panel"><p>{profile.summary}</p></section>
