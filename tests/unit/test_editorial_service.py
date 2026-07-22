@@ -67,6 +67,34 @@ async def test_editorial_generation_is_deduplicated_and_reports_progress(
 
 
 @pytest.mark.asyncio
+async def test_editorial_failure_preserves_a_safe_retry_status(
+    database: Database,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = EditorialService(database, settings)
+
+    async def fail_generation(_count: int) -> list[int]:
+        raise RuntimeError("private sqlite implementation detail")
+
+    monkeypatch.setattr(service, "_review_count", lambda: 0)
+    monkeypatch.setattr(service, "_unused_candidate_count", lambda: 1)
+    monkeypatch.setattr(service, "_generate", fail_generation)
+
+    with pytest.raises(RuntimeError, match="private sqlite"):
+        await service.ensure_options(target=1, live_discovery=False)
+
+    status = service.generation_status()
+    assert status["running"] is False
+    assert status["completed_at"] is not None
+    assert status["detail"] == (
+        "Generation paused before a new option was ready. Your review decisions are "
+        "saved; press Generate more to start another search."
+    )
+    assert "sqlite" not in str(status["detail"]).casefold()
+
+
+@pytest.mark.asyncio
 async def test_editorial_searches_when_existing_candidates_are_not_distinct(
     database: Database,
     settings: Settings,

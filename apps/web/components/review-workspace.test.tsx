@@ -275,8 +275,16 @@ describe("ReviewWorkspace", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Generate more" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[0][0]).toContain("/api/editorial/options/ensure");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      target: 1,
+      live_discovery: true,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      target: 5,
+      live_discovery: true,
+    });
     expect(await screen.findByDisplayValue("Recommended caption.")).toBeInTheDocument();
   });
 

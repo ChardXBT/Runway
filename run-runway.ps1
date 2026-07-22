@@ -49,6 +49,38 @@ function Get-PortProcessId([int]$Port) {
     return $listener.OwningProcess
 }
 
+function Get-RunwayApiProcesses {
+    return @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq "python.exe" -and
+                $_.ExecutablePath -eq $python -and
+                $_.CommandLine -like "*runway.api.app:app*"
+            }
+    )
+}
+
+function Test-RunwayApiProcessCurrent {
+    return $null -ne (
+        Get-RunwayApiProcesses |
+            Where-Object { $_.CommandLine -like "*--reload*" } |
+            Select-Object -First 1
+    )
+}
+
+function Stop-RunwayApiProcesses {
+    Get-RunwayApiProcesses | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (-not (Test-PortInUse 8000)) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "The stale Runway API process did not release port 8000."
+}
+
 function Test-RunwayWebProcess([int]$ProcessId) {
     if (-not $ProcessId) {
         return $false
@@ -68,13 +100,19 @@ function Test-RunwayWebProcess([int]$ProcessId) {
 
 if (-not $WebOnly) {
     if (Test-RunwayApi) {
-        Write-Host "Runway API is already running at http://127.0.0.1:8000"
+        if (Test-RunwayApiProcessCurrent) {
+            Write-Host "Runway API is already running at http://127.0.0.1:8000"
+        }
+        else {
+            Write-Host "Runway API is using an older non-reloading process; restarting it."
+            Stop-RunwayApiProcesses
+        }
     }
-    elseif (Test-PortInUse 8000) {
+    if (-not (Test-RunwayApi) -and (Test-PortInUse 8000)) {
         throw "Port 8000 is occupied by another program. Stop that program, then try again."
     }
-    else {
-        Start-Process -FilePath $python -ArgumentList "-m", "uvicorn", "runway.api.app:app", "--host", "127.0.0.1", "--port", "8000" -WorkingDirectory $root -WindowStyle Hidden
+    elseif (-not (Test-RunwayApi)) {
+        Start-Process -FilePath $python -ArgumentList "-m", "uvicorn", "runway.api.app:app", "--host", "127.0.0.1", "--port", "8000", "--reload", "--reload-dir", "src/runway" -WorkingDirectory $root -WindowStyle Hidden
         for ($attempt = 0; $attempt -lt 30; $attempt++) {
             if (Test-RunwayApi) {
                 break

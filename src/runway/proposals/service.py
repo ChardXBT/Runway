@@ -126,6 +126,7 @@ class ProposalService:
                 start_date=local_start,
                 days=days,
                 status=RunStatus.RUNNING.value,
+                selection_diagnostics_json="{}",
             )
             session.add(run)
             session.flush()

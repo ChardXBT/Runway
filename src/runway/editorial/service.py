@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from datetime import UTC, datetime
 from typing import cast
@@ -14,6 +15,8 @@ from runway.db.models import CandidateImage, Proposal, SearchRun, StyleProfile
 from runway.db.repositories import get_channel
 from runway.discovery.service import DiscoveryService
 from runway.proposals.service import NoDistinctCandidateError, ProposalService
+
+logger = logging.getLogger(__name__)
 
 
 class EditorialService:
@@ -171,9 +174,10 @@ class EditorialService:
             result["generation"] = self.generation_status()
             return result
         except Exception as exc:
+            logger.exception("editorial option generation failed")
             self._set_generation_status(
                 running=False,
-                detail=f"Generation stopped: {exc}",
+                detail=self._public_failure_detail(exc),
                 completed_at=datetime.now(UTC).isoformat(),
             )
             raise
@@ -252,6 +256,15 @@ class EditorialService:
             isinstance(first, (list, tuple))
             and bool(first)
             and "simpson" in str(first[0]).casefold()
+        )
+
+    @staticmethod
+    def _public_failure_detail(exc: Exception) -> str:
+        if isinstance(exc, AgentTerminalError):
+            return f"Generation paused: {exc}"
+        return (
+            "Generation paused before a new option was ready. Your review decisions are "
+            "saved; press Generate more to start another search."
         )
 
     def _result(

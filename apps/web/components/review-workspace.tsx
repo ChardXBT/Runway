@@ -123,7 +123,7 @@ export function ReviewWorkspace({
     const response = await fetch(`${API_URL}/api/editorial/options/ensure`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target: 5, live_discovery: true }),
+      body: JSON.stringify({ target: 1, live_discovery: true }),
     });
     const payload = await parseResponse(response);
     applyEditorialStatus(payload);
@@ -138,6 +138,9 @@ export function ReviewWorkspace({
             payload.detail ||
             "No usable options were found.",
     );
+    if (payload.next_proposal && payload.workflow.needs_review <= 2) {
+      void warmTray();
+    }
   }
 
   async function ensureOptions() {
@@ -460,7 +463,7 @@ export function ReviewWorkspace({
               : generation.running
                 ? "Generator is working."
                 : generation.detail
-                  ? "No fresh options."
+                  ? "Ready for another search."
                   : "Generator ready."}
           </h1>
         </div>
@@ -668,7 +671,7 @@ export function ReviewWorkspace({
             {generation.running
               ? "Runway is searching for a usable image, checking it, and asking Codex for captions. You can visit another section and come back."
               : generation.detail
-                ? "Try a new discovery pass, or review the archive before changing source and duplicate safeguards."
+                ? "The previous pass finished or paused. Generate more starts a fresh search while preserving every decision you already made."
                 : "Runway uses unused ranked images first, then opens a visible discovery pass for fresh material."}
           </p>
           <div className="empty-actions">
