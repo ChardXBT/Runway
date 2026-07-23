@@ -11,6 +11,7 @@ from runway.analysis import runtime as runtime_module
 from runway.analysis.runtime import (
     AgentUsageLimitReached,
     CodexAgentRuntime,
+    MockAgentRuntime,
     PaidApiAuthenticationBlocked,
     runtime_for,
 )
@@ -259,3 +260,18 @@ def test_runtime_factory_selects_codex_without_fallback(
 
     assert isinstance(runtime, CodexAgentRuntime)
     assert runtime.provider == "codex-chatgpt"
+
+
+@pytest.mark.asyncio
+async def test_mock_runtime_supports_primary_quota_and_secondary_variety() -> None:
+    runtime = MockAgentRuntime()
+
+    analyses = [
+        await runtime.analyze_candidate_image({"candidate_id": candidate_id})
+        for candidate_id in range(1, 11)
+    ]
+
+    assert [row.franchise for row in analyses].count("Synthetic Ensemble") == 8
+    assert [row.franchise for row in analyses].count("Synthetic Adventure") == 1
+    assert [row.franchise for row in analyses].count("Synthetic Comedy") == 1
+    assert len({row.scene_archetype for row in analyses}) == 10

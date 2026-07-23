@@ -90,6 +90,13 @@ def _mock_emotion_label(value: str) -> str:
     return compact if 0 < len(compact.split()) <= 2 else "curious"
 
 
+def _mock_franchise(ordinal: int) -> str:
+    """Keep fixtures primary-led while preserving deterministic secondary variety."""
+    franchises = ("Synthetic Ensemble", "Synthetic Adventure", "Synthetic Comedy")
+    slot = (max(1, ordinal) - 1) % 10
+    return franchises[0] if slot < 8 else franchises[slot - 7]
+
+
 class AgentRuntimeError(RuntimeError):
     """A model runtime failed without allowing an implicit provider fallback."""
 
@@ -150,14 +157,13 @@ class MockAgentRuntime:
     async def annotate_historical_post(self, payload: Mapping[str, Any]) -> HistoricalAnnotation:
         post_id = int(payload.get("post_id", 0))
         caption = str(payload.get("caption") or "")
-        families = ["Synthetic Ensemble", "Synthetic Adventure", "Synthetic Comedy"]
         structures = ["observational statement", "short question", "reaction punchline"]
         intent = "discussion" if "?" in caption else "reaction"
         entity_name = f"Fixture subject {(post_id % 5) + 1}"
         action = "reacting" if post_id % 2 else "comparing options"
         return HistoricalAnnotation(
-            franchise=families[post_id % len(families)],
-            show_name=families[post_id % len(families)],
+            franchise=_mock_franchise(post_id),
+            show_name=_mock_franchise(post_id),
             visible_characters=[entity_name],
             visible_character_count=1,
             scene_description=f"Synthetic character-focused scene for catalogue post {post_id}.",
@@ -284,11 +290,8 @@ class MockAgentRuntime:
             ("music rehearsal", "ensemble medium shot", "delight", "studio", "playing music"),
         ]
         scene, composition, emotion, setting, action = concepts[candidate_id % len(concepts)]
-        franchise_index = (candidate_id + candidate_id // len(concepts)) % 3
         return CandidateAnalysis(
-            franchise=["Synthetic Ensemble", "Synthetic Adventure", "Synthetic Comedy"][
-                franchise_index
-            ],
+            franchise=_mock_franchise(candidate_id),
             characters=[subject],
             scene_archetype=scene,
             composition=composition,
