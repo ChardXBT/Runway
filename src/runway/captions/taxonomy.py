@@ -31,7 +31,7 @@ OPEN_QUESTION_RE = re.compile(
 FACT_LOOKUP_QUESTION_RE = re.compile(
     (
         r"^\s*(?:(?:(?:what|which) (?:is|are|was|were)|what[’']s) .{1,60}\b"
-        r"(?:holding|carrying|wearing|reading|eating|drinking)\b|"
+        r"(?:holding|carrying|wearing|reading|eating|drinking|doing)\b|"
         r"what (?:do|does|did) .{1,60}\b"
         r"(?:carry|drink|eat|have|hold|read|wear)\b|"
         r"(?:what (?:is|are|was|were)|what[’']s) "

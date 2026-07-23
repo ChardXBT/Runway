@@ -31,6 +31,7 @@ def test_contracted_visible_lookup_is_a_quiz_not_an_open_question() -> None:
         "What’s Homer holding?",
         "Who's on the glowing screen?",
         "What does Homer hold?",
+        "What’s Peter doing at this doorway?",
     ):
         result = analyze_caption(text)
 

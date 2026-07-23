@@ -37,10 +37,11 @@ about the action creates a real premise.
 Avoid the flat template "Why is [character] holding [object]?" even when the object is unusual.
 Ask about its possible purpose, consequence, next action, or an audience choice instead.
 A factual lookup with one visible answer is a quiz, not an open-ended question. "What is Wiggum
-holding?", "What is on the chalkboard?", "Who is standing there?", and similar identification
-questions must use the quiz structure and cannot fill the open-question lane. "How many..." and
-"How much..." counting questions are quizzes too. For the open-question lane, ask a grounded
-question whose cause, purpose, prediction, interpretation, or audience choice remains open.
+holding?", "What is Peter doing?", "What is on the chalkboard?", "Who is standing there?", and
+similar identification questions must use the quiz structure and cannot fill the open-question
+lane. "How many..." and "How much..." counting questions are quizzes too. For the open-question
+lane, ask a grounded question whose cause, purpose, prediction, interpretation, or audience choice
+remains open.
 Keep visually necessary object modifiers. Do not shorten an ambiguous compound label into a
 different everyday meaning: write "champagne flute" or "glass", never bare "flute"; apply the same
 care to other ambiguous object names.
