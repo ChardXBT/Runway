@@ -199,8 +199,8 @@ class CaptionOptions(StrictModel):
             if self.recommended or self.alternatives:
                 raise ValueError("an abstained caption slate cannot expose captions")
             return self
-        if len(self.alternatives) != 2:
-            raise ValueError("a completed caption slate requires two alternatives")
+        if len(self.alternatives) < 1:
+            raise ValueError("a completed caption slate requires at least one alternative")
         return self
 
 

@@ -149,6 +149,49 @@ async def test_codex_runtime_uses_chatgpt_guardrails_and_real_image(
     assert "CODEX_ACCESS_TOKEN" not in exec_kwargs["env"]
 
 
+@pytest.mark.asyncio
+async def test_codex_runtime_retries_temporary_model_capacity_without_api_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "data", agent_runtime="codex")
+    image = tmp_path / "candidate.png"
+    image.write_bytes(b"fixture-image")
+    exec_attempts = 0
+    delays: list[float] = []
+
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal exec_attempts
+        if command[-2:] == ["login", "status"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="Logged in using ChatGPT\n",
+                stderr="",
+            )
+        exec_attempts += 1
+        if exec_attempts == 1:
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr="Selected model is at capacity. Please try a different model.",
+            )
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(_candidate_output()), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(runtime_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(runtime_module.time, "sleep", delays.append)
+    runtime = CodexAgentRuntime(settings, command_prefix=["codex-test"])
+
+    result = await runtime.analyze_candidate_image({"candidate_id": 7, "_image_path": str(image)})
+
+    assert result.caption_potential == 0.82
+    assert exec_attempts == 2
+    assert delays == [5.0]
+
+
 def test_codex_runtime_blocks_api_key_authentication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

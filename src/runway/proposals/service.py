@@ -32,6 +32,7 @@ from runway.domain.state_machine import require_transition
 from runway.intelligence.exposure_bias import CandidateExposureService
 from runway.intelligence.retrieval import RetrievalService
 from runway.intelligence.slate_optimization import CandidateSlateOptimizer
+from runway.ranking.diversity import fingerprint_from_candidate
 
 
 class NoDistinctCandidateError(ValueError):
@@ -53,8 +54,9 @@ class ProposalService:
     async def generate_batch(
         self, *, days: int = 10, start_date: date | None = None
     ) -> dict[str, object]:
-        if days < 1 or days > 100:
-            raise ValueError("option count must be between 1 and 100")
+        if days < 1 or days > 500:
+            raise ValueError("option count must be between 1 and 500")
+        self._recover_stale_generation_runs()
         timezone_name, default_time = self._schedule_config()
         timezone = ZoneInfo(timezone_name)
         local_start = start_date or (datetime.now(timezone).date() + timedelta(days=1))
@@ -91,6 +93,13 @@ class ProposalService:
                 .order_by(Proposal.created_at.desc(), Proposal.id.desc())
                 .limit(20)
             ).all()
+            recent_franchise_candidates = session.scalars(
+                select(CandidateImage)
+                .join(Proposal, Proposal.candidate_image_id == CandidateImage.id)
+                .where(Proposal.channel_id == channel.id)
+                .order_by(Proposal.created_at.desc(), Proposal.id.desc())
+                .limit(120)
+            ).all()
             accepted_by_id = {candidate.id: candidate for candidate in accepted}
             available_candidates = [
                 candidate for candidate in accepted if candidate.id not in used_ids
@@ -99,6 +108,11 @@ class ProposalService:
                 accepted_by_id[candidate_id]
                 for candidate_id in recent_anchor_ids
                 if candidate_id in accepted_by_id
+            ]
+            primary_franchise = self._primary_franchise(profile.profile_json)
+            franchise_history = [
+                fingerprint_from_candidate(candidate).franchise
+                for candidate in reversed(recent_franchise_candidates)
             ]
             target_times = [
                 self._planned_datetime(
@@ -147,6 +161,9 @@ class ProposalService:
                 available_candidates,
                 anchors=anchor_candidates,
                 session_key=f"generation:{run_id}",
+                primary_franchise=primary_franchise,
+                minimum_primary_share=self.settings.discovery_primary_topic_query_share,
+                franchise_history=franchise_history,
             )
             candidates = list(selection_slate.candidates)
             if not candidates and missing_count:
@@ -160,7 +177,7 @@ class ProposalService:
                 selected_ids=[candidate.id for candidate in candidates],
                 session_key=f"generation:{run_id}",
                 diagnostics=selection_slate.diagnostics,
-                exploration_policy="deterministic_slate_v2",
+                exploration_policy="deterministic_slate_v5",
                 randomized=False,
             )
             with self.database.session() as session:
@@ -257,17 +274,33 @@ class ProposalService:
                         session, proposal, ProposalStatus.NEEDS_REVIEW, "generation_completed"
                     )
                     created_ids.append(proposal.id)
+            target_met = len(created_ids) == days
             with self.database.session() as session:
                 loaded_run = session.get(GenerationRun, run_id)
                 if loaded_run:
-                    loaded_run.status = RunStatus.COMPLETED.value
+                    loaded_run.status = (
+                        RunStatus.COMPLETED.value if target_met else RunStatus.FAILED.value
+                    )
                     loaded_run.completed_at = datetime.now(UTC)
+                    loaded_run.error_summary = (
+                        None
+                        if target_met
+                        else (
+                            f"Generated {len(created_ids)} of {days} requested proposal dates; "
+                            "the remaining safe slate was exhausted or abstained."
+                        )
+                    )
                     audit(
                         session,
-                        "generation_completed",
+                        "generation_completed" if target_met else "generation_partial",
                         "generation_run",
                         loaded_run.id,
-                        {"proposal_ids": created_ids},
+                        {
+                            "proposal_ids": created_ids,
+                            "requested_count": days,
+                            "fulfilled_count": len(created_ids),
+                            "target_met": target_met,
+                        },
                     )
         except Exception as exc:
             with self.database.session() as session:
@@ -279,13 +312,65 @@ class ProposalService:
             raise
         return {
             "generation_run_id": run_id,
-            "status": "completed",
+            "status": "completed" if target_met else "partial",
             "proposal_ids": created_ids,
             "start_date": local_start.isoformat(),
             "days": days,
+            "requested_count": days,
+            "fulfilled_count": len(created_ids),
+            "unfilled_count": max(0, days - len(created_ids)),
             "timezone": timezone_name,
             "local_time": default_time,
         }
+
+    def _recover_stale_generation_runs(self) -> int:
+        """Close abandoned generation runs without touching an active long batch."""
+
+        now = datetime.now(UTC)
+        recovered = 0
+        with self.database.session() as session:
+            channel_id = self._channel_id(session)
+            rows = session.scalars(
+                select(GenerationRun).where(
+                    GenerationRun.channel_id == channel_id,
+                    GenerationRun.status == RunStatus.RUNNING.value,
+                )
+            ).all()
+            for row in rows:
+                # Large batches can legitimately take many hours because every proposal
+                # passes through discovery, multimodal verification, and caption review.
+                # Keep the six-hour floor for short jobs, then budget three minutes per
+                # requested option so a new request cannot kill a healthy long batch.
+                abandonment_window = timedelta(
+                    hours=6,
+                    minutes=min(max(row.days, 1), 500) * 3,
+                )
+                started_at = row.started_at
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=UTC)
+                else:
+                    started_at = started_at.astimezone(UTC)
+                if now - started_at <= abandonment_window:
+                    continue
+                row.status = RunStatus.FAILED.value
+                row.completed_at = now
+                row.error_summary = (
+                    "Recovered abandoned generation run after its size-adjusted "
+                    "completion window elapsed."
+                )
+                audit(
+                    session,
+                    "generation_stale_run_recovered",
+                    "generation_run",
+                    row.id,
+                    {
+                        "started_at": row.started_at.isoformat(),
+                        "requested_count": row.days,
+                        "abandonment_window_seconds": int(abandonment_window.total_seconds()),
+                    },
+                )
+                recovered += 1
+        return recovered
 
     def list_proposals(
         self,
@@ -722,6 +807,15 @@ class ProposalService:
         reason_codes: list[str] | None = None,
         image_verdict: str | None = None,
     ) -> dict[str, object]:
+        inferred_reasons = reason_codes or self._reason_codes(reason)
+        # A validation failure must not commit the rejection without its
+        # corresponding learning signal.
+        self.feedback.validate_fields(
+            verdict="rejected",
+            reason_codes=inferred_reasons,
+            image_verdict=image_verdict,
+            note=reason,
+        )
         decision_event_id: int | None = None
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
@@ -742,7 +836,6 @@ class ProposalService:
             decision_event_id = event.id
             audit(session, "proposal_rejected", "proposal", proposal.id, {"reason": reason})
             rejected_caption = proposal.final_caption
-        inferred_reasons = reason_codes or self._reason_codes(reason)
         self.exposures.record_decision(
             proposal_id,
             decision_type="rejected",
@@ -1130,6 +1223,26 @@ class ProposalService:
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
             return channel.timezone, channel.default_post_time
+
+    @staticmethod
+    def _primary_franchise(profile_json: str) -> str | None:
+        try:
+            profile = json.loads(profile_json)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        distribution = profile.get(
+            "topic_distribution",
+            profile.get("franchise_distribution", []),
+        )
+        if not isinstance(distribution, list):
+            return None
+        for entry in distribution:
+            if not isinstance(entry, (list, tuple)) or not entry:
+                continue
+            franchise = str(entry[0] or "").strip()
+            if franchise.casefold() not in {"", "unknown", "none", "null"}:
+                return franchise
+        return None
 
     @staticmethod
     def _reason_codes(reason: str) -> list[str]:

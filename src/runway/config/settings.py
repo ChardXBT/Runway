@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     browser_search_max_queries: int = Field(default=6, ge=1, le=10)
     browser_search_results_per_query: int = Field(default=3, ge=1, le=20)
     browser_search_max_results: int = Field(default=18, ge=1, le=100)
+    discovery_primary_topic_query_share: float = Field(default=0.8, ge=0.5, le=1.0)
+    discovery_secondary_topics: str = ""
 
     codex_cli_path: Path | None = None
     codex_model: str = "gpt-5.6-luna"
@@ -155,6 +157,17 @@ class Settings(BaseSettings):
         return self.resolved_data_dir / "browser-profile"
 
     @property
+    def discovery_secondary_topic_list(self) -> list[str]:
+        """Explicit creator-approved rotation topics, in configured order."""
+        return list(
+            dict.fromkeys(
+                value.strip()
+                for value in self.discovery_secondary_topics.split(",")
+                if value.strip()
+            )
+        )
+
+    @property
     def publisher_profile_dir(self) -> Path:
         return self.browser_profile_dir / "publisher"
 
@@ -221,6 +234,10 @@ class Settings(BaseSettings):
                 "max_queries": self.browser_search_max_queries,
                 "results_per_query": self.browser_search_results_per_query,
                 "max_results": self.browser_search_max_results,
+            },
+            "discovery_topic_mix": {
+                "primary_query_share": self.discovery_primary_topic_query_share,
+                "secondary_topics": self.discovery_secondary_topic_list,
             },
             "search_api_configured": bool(self.search_api_url and self.search_api_key),
             "representation_providers": {

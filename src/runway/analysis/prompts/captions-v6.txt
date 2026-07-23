@@ -15,8 +15,64 @@ in the image or explicitly included as verified facts. Do not invent identities,
 events, causes, relationships, product claims, scores, episode names, or off-screen context. When
 a field is uncertain, omit the claim or state uncertainty naturally.
 
-Produce materially different candidates rather than paraphrases. Do not copy supplied examples.
-Do not use generic engagement bait. Cite only evidence IDs supplied in the request. When
+Produce 8 to 12 materially different candidates rather than the schema minimum or paraphrases.
+This first-pass breadth is required so independent factual verification can remove weak candidates
+without forcing a second model call. Do not copy supplied examples.
+Do not use generic engagement bait. Every open question must anchor itself to a distinctive visible
+object, action, expression, contrast, or relationship in this exact frame. Never use free-floating
+mind-reading prompts such as "What is [character] thinking about?", and never fall back to "What is
+happening here?" when a more concrete visible detail exists. "What stands out first here?",
+"Which detail catches your eye first?", and "What did you notice first?" are also generic and
+forbidden because they name no visible detail. The question itself must name the concrete anchor.
+Likewise, never ask which unspecified detail "feels," "looks," or "seems" mysterious, unusual,
+interesting, important, odd, strange, or surprising.
+An open question must also be a complete, grammatical WH question beginning with why, how, what,
+who, where, when, or which. A noun phrase with a question mark, such as "Bart and Lisa holding
+hands?", is not open-ended and is forbidden as an open-question candidate. Prefer a real invitation
+to respond, such as "Why are Bart and Lisa holding hands?"
+Do not omit the subject and finite verb in a "why" or "how" question: "Why keep one hand on the
+receiver?" is a fragment, while "Why is Moe still holding the receiver?" is complete. Do not ask
+why a character is using an ordinary object in its ordinary way unless something visibly unusual
+about the action creates a real premise.
+Avoid the flat template "Why is [character] holding [object]?" even when the object is unusual.
+Ask about its possible purpose, consequence, next action, or an audience choice instead.
+A factual lookup with one visible answer is a quiz, not an open-ended question. "What is Wiggum
+holding?", "What is on the chalkboard?", "Who is standing there?", and similar identification
+questions must use the quiz structure and cannot fill the open-question lane. "How many..." and
+"How much..." counting questions are quizzes too. For the open-question lane, ask a grounded
+question whose cause, purpose, prediction, interpretation, or audience choice remains open.
+Keep visually necessary object modifiers. Do not shorten an ambiguous compound label into a
+different everyday meaning: write "champagne flute" or "glass", never bare "flute"; apply the same
+care to other ambiguous object names.
+Write like a human community editor, not an image-analysis rubric. Avoid analytical constructions
+such as "Which face contrasts most with raised fists?" Prefer a direct, conversational question
+about the visible action, expression, or contrast.
+Do not ask viewers to locate an unspecified feature with questions such as "Which detail makes
+Homer look unusual?" or "What part makes her seem different?" Name the distinctive visible anchor
+inside the question instead, such as "Why is Homer dressed in pink fur?"
+Avoid clinical generic subject labels such as "some figures," "the figures," "standing figures,"
+or "animated figures" when referring to people, characters, or visible creatures. Use the most
+natural visually supported noun available, or ask about a distinctive object/action without forcing
+an uncertain identity. This does not prohibit literal action figures or collectible figures.
+Do not identify subjects by screen position with phrases such as "the left character," "the person
+on the right," "the foreground figure," or "the background character." If identity is uncertain,
+use a natural pronoun tied to a distinctive visible action or ask about the visible object itself.
+Do not write composition-analysis jargon such as "foregrounded," "backgrounded," "two-shot," or
+"centered in the frame." Do not describe an everyday prop as a "spherical object," "circular
+object," or another clinical geometry-object phrase. Use natural audience language tied to what the
+prop appears to be or ask a grounded question about its visible role.
+Do not use empty adjective filler such as "A very unusual control room," "An interesting scene,"
+or equivalent statements that neither name a distinctive visible detail nor invite a response.
+Do not use vague composition filler such as "This frame has serious contrast," "The frame shows
+strong contrast," or equivalent statements. Name the actual visible contrast in natural language
+or ask the audience to choose between the concrete visible options.
+Do not turn screen direction into the premise. "Why is Homer looking right?" and equivalent
+left/up/down/away questions are under-specific; anchor the question to a distinctive visible
+expression, object, interaction, or setting instead.
+Adding a generic location does not rescue a generic template. "What is happening at that podium?"
+and "What's going on near the table?" are forbidden; ask about a concrete visible action, choice,
+contrast, or plausible unknown instead.
+Cite only evidence IDs supplied in the request. When
 angle_lanes are supplied, produce at least one materially distinct candidate for every lane and
 preserve that lane in editorial_angle before adding any extra candidates. Do not collapse multiple
 lanes into paraphrases of the same premise. Return only the requested schema.

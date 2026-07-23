@@ -41,14 +41,144 @@ GENERIC_PATTERNS = {
     "like and subscribe",
     "thoughts?",
 }
+GENERIC_QUESTION_PATTERNS = (
+    re.compile(r"^what (?:is|was) .{1,48} thinking about\??$", re.IGNORECASE),
+    re.compile(r"^what(?:'s| is) (?:going on|happening)(?: here)?\??$", re.IGNORECASE),
+    re.compile(
+        (
+            r"^what(?:'s| is) (?:going on|happening) "
+            r"(?:at|by|near|around) (?:that|this|the) .{1,48}\??$"
+        ),
+        re.IGNORECASE,
+    ),
+    re.compile(r"^what do you make of this\??$", re.IGNORECASE),
+    re.compile(
+        r"^what (?:detail )?(?:stands out|catches your eye)(?: first)?(?: here)?\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:what|which) detail did you (?:notice|spot)(?: first)?\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^what did you (?:notice|spot)(?: first)?\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^which detail catches your eye(?: first)?\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"^(?:what|which) detail (?:feels|looks|seems) "
+            r"(?:the )?(?:most )?"
+            r"(?:interesting|important|mysterious|odd|strange|surprising|unusual)"
+            r"(?: here)?\??$"
+        ),
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"^(?:why|how) (?:is|was) "
+            r"(?:he|she|it|the (?:person|character|figure)) "
+            r"(?:standing|sitting|looking|waiting)(?: here| there)?\??$"
+        ),
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"^(?:why|how) (?:are|were) "
+            r"(?:they|the (?:people|characters|figures)) "
+            r"(?:standing|sitting|looking|waiting)(?: here| there)?\??$"
+        ),
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"^what (?:is|was) (?:he|she|it|the (?:person|character|figure)) "
+            r"doing(?: here| there)?\??$"
+        ),
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^what (?:are|were) (?:they|the (?:people|characters|figures)) doing"
+        r"(?: here| there)?\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^which (?:face|expression|reaction) contrasts (?:the )?most with\b.*\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"^(?:what|which) (?:visible )?(?:detail|part|thing) makes "
+            r".{1,48} (?:look|seem|feel) (?:unusual|strange|different|odd)\??$"
+        ),
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"^why is (?:[a-z][a-z0-9'-]*(?: [a-z][a-z0-9'-]*){0,2}|he|she|it) "
+            r"looking (?:left|right|up|down|away|here|there|over there)\??$"
+        ),
+        re.IGNORECASE,
+    ),
+    re.compile(
+        (
+            r"^why (?:is|are|was|were) "
+            r"(?:[a-z][a-z0-9'-]*(?: [a-z][a-z0-9'-]*){0,2}|he|she|it|they) "
+            r"(?:still )?holding (?:a|an|his|her|their|that|the|this) "
+            r"[a-z0-9'-]+(?: [a-z0-9'-]+)?\??$"
+        ),
+        re.IGNORECASE,
+    ),
+)
+CLINICAL_SUBJECT_RE = re.compile(
+    r"\b(?:some|several|these|those|the|other|animated|cartoon|standing|seated) figures?\b",
+    re.IGNORECASE,
+)
+SPATIAL_SUBJECT_RE = re.compile(
+    (
+        r"\b(?:(?:left|right|foreground|background) (?:character|person|figure)|"
+        r"(?:character|person|figure) (?:on|at|in) (?:the )?"
+        r"(?:left|right|foreground|background))\b"
+    ),
+    re.IGNORECASE,
+)
+COMPOSITION_JARGON_RE = re.compile(
+    r"\b(?:foregrounded|backgrounded|two[- ]shot|centered in (?:the )?frame)\b",
+    re.IGNORECASE,
+)
+CLINICAL_SHAPE_OBJECT_RE = re.compile(
+    r"\b(?:spherical|circular|rectangular|cylindrical) objects?\b",
+    re.IGNORECASE,
+)
+GENERIC_ADJECTIVE_FILLER_RE = re.compile(
+    r"^(?:a|an) (?:very )?(?:unusual|strange|odd|interesting) .{1,60}[.!]?$",
+    re.IGNORECASE,
+)
+GENERIC_CONTRAST_FILLER_RE = re.compile(
+    (
+        r"^(?:this|the) frame (?:has|shows|uses) "
+        r"(?:(?:a|some) )?(?:serious|strong|clear|high|visual)?\s*contrast[.!]?$"
+    ),
+    re.IGNORECASE,
+)
+INCOMPLETE_WHY_HOW_QUESTION_RE = re.compile(
+    (
+        r"^(?:why|how) (?:carry|hold|keep|leave|look|put|sit|stand|use|wait|wear)"
+        r"\b.*\?$"
+    ),
+    re.IGNORECASE,
+)
 EMOTION_GROUPS = {
-    "excited": {"excited", "excitement", "eager", "thrilled", "delighted"},
+    "excited": {"excited", "excitement", "eager", "thrilled"},
     "surprised": {"surprised", "shocked", "astonished", "startled", "surprise"},
     "angry": {"angry", "furious", "annoyed", "irritated"},
     "sad": {"sad", "upset", "unhappy", "dejected"},
     "worried": {"worried", "anxious", "nervous", "afraid"},
     "confused": {"confused", "puzzled", "bewildered"},
-    "happy": {"happy", "joyful", "delighted"},
+    "happy": {"happy", "happiness", "joyful", "delight", "delighted"},
     "confident": {"confidence", "confident", "determination", "determined"},
 }
 COMMON_SENTENCE_STARTS = {
@@ -56,6 +186,10 @@ COMMON_SENTENCE_STARTS = {
     "an",
     "can",
     "choose",
+    "could",
+    "did",
+    "do",
+    "does",
     "every",
     "everyone",
     "how",
@@ -67,7 +201,11 @@ COMMON_SENTENCE_STARTS = {
     "this",
     "what",
     "when",
+    "which",
+    "who",
     "why",
+    "would",
+    "should",
 }
 ACTION_MARKERS = {
     "arguing": {"argue", "argues", "arguing", "argument"},
@@ -219,6 +357,22 @@ class CaptionVerifier:
             ):
                 unsupported.append(f"unsupported_action:{action}")
 
+        object_facts = [
+            self._normalized(fact.value)
+            for fact in [*brief.visible_facts, *brief.uncertain_facts]
+            if fact.field == "object"
+        ]
+        if (
+            any("champagne flute" in value for value in object_facts)
+            and re.search(r"\bflutes?\b", lowered)
+            and not re.search(
+                r"\b(?:champagne|drinking|sparkling(?: wine)?|wine)\s+flutes?\b"
+                r"|\bflute(?:d)?\s+glasses?\b",
+                lowered,
+            )
+        ):
+            unsupported.append("policy:ambiguous_object_label:flute")
+
         caption_tokens = self._evidence_tokens(text)
         visible_tokens_by_field: dict[str, list[set[str]]] = {}
         for fact in brief.visible_facts:
@@ -238,8 +392,26 @@ class CaptionVerifier:
                 continue
             unsupported.append(f"unsupported_disputed_fact:{fact.field}:{fact.value}")
 
-        if any(pattern in lowered for pattern in GENERIC_PATTERNS):
+        if is_generic_engagement_bait(text):
             unsupported.append("policy:generic_engagement_bait")
+        if CLINICAL_SUBJECT_RE.search(text) and not re.search(
+            r"\b(?:action|collectible) figures?\b",
+            text,
+            re.IGNORECASE,
+        ):
+            unsupported.append("policy:clinical_subject_label:figure")
+        if SPATIAL_SUBJECT_RE.search(text):
+            unsupported.append("policy:clinical_subject_label:spatial")
+        if COMPOSITION_JARGON_RE.search(text):
+            unsupported.append("policy:composition_jargon")
+        if CLINICAL_SHAPE_OBJECT_RE.search(text):
+            unsupported.append("policy:clinical_object_label:shape")
+        if GENERIC_ADJECTIVE_FILLER_RE.match(text):
+            unsupported.append("policy:generic_adjective_filler")
+        if GENERIC_CONTRAST_FILLER_RE.match(text):
+            unsupported.append("policy:generic_contrast_filler")
+        if INCOMPLETE_WHY_HOW_QUESTION_RE.match(text):
+            unsupported.append("policy:incomplete_question")
         word_count = len(re.findall(r"[\w']+", text, flags=re.UNICODE))
         minimum = brief.target_length["minimum_words"]
         maximum = brief.target_length["maximum_words"]
@@ -355,6 +527,14 @@ class CaptionVerifier:
                 token = token[:-1]
             tokens.add(token)
         return tokens
+
+
+def is_generic_engagement_bait(text: str) -> bool:
+    normalized = " ".join(text.strip().split())
+    lowered = normalized.casefold()
+    return any(pattern in lowered for pattern in GENERIC_PATTERNS) or any(
+        pattern.fullmatch(normalized) for pattern in GENERIC_QUESTION_PATTERNS
+    )
 
 
 def verification_pass_rate(rows: Iterable[VerificationResult]) -> float:

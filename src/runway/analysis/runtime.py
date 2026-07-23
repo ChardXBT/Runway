@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
@@ -76,6 +77,11 @@ def _mock_emotion_label(value: str) -> str:
         ({"happy", "happiness", "joy", "joyful", "delighted"}, "happy"),
         ({"confused", "confusion", "puzzled", "bewildered"}, "confused"),
         ({"determination", "determined", "confident", "confidence"}, "determined"),
+        ({"curiosity", "curious"}, "curious"),
+        ({"concentration", "focus", "focused"}, "focused"),
+        ({"anticipation", "expectant"}, "expectant"),
+        ({"concern", "concerned"}, "concerned"),
+        ({"delight"}, "delighted"),
     )
     for markers, label in mappings:
         if words & markers:
@@ -269,11 +275,19 @@ class MockAgentRuntime:
             ("shared meal", "wide group shot", "happiness", "kitchen", "eating"),
             ("outdoor activity", "dynamic full shot", "excitement", "park", "running"),
             ("performance", "stage medium shot", "confidence", "theatre", "performing"),
+            ("workshop repair", "over-shoulder view", "curiosity", "workshop", "repairing"),
+            ("public celebration", "crowd wide shot", "joy", "plaza", "celebrating"),
+            ("quiet study", "desk close up", "concentration", "library", "writing"),
+            ("travel departure", "doorway medium shot", "anticipation", "station", "boarding"),
+            ("sideline strategy", "layered group shot", "focus", "sports field", "coaching"),
+            ("dark search", "flashlight point of view", "concern", "basement", "searching"),
+            ("music rehearsal", "ensemble medium shot", "delight", "studio", "playing music"),
         ]
         scene, composition, emotion, setting, action = concepts[candidate_id % len(concepts)]
+        franchise_index = (candidate_id + candidate_id // len(concepts)) % 3
         return CandidateAnalysis(
             franchise=["Synthetic Ensemble", "Synthetic Adventure", "Synthetic Comedy"][
-                candidate_id % 3
+                franchise_index
             ],
             characters=[subject],
             scene_archetype=scene,
@@ -351,8 +365,8 @@ class MockAgentRuntime:
         templates: dict[str, list[str]] = {
             "open_question": [
                 f"Why is {subject} so {emotion}?",
-                f"What has {subject} {action} like this?",
-                f"How would you explain {subject}'s {emotion} reaction?",
+                f"What could explain {possessive} {emotion} reaction?",
+                f"How would you caption {possessive} {emotion} reaction?",
             ],
             "yes_no_question": [f"Is {subject} ready for this?"],
             "observation": [
@@ -669,6 +683,13 @@ class CodexAgentRuntime:
         "refresh token",
         "please run codex login",
     )
+    _capacity_markers = (
+        "model is at capacity",
+        "selected model is at capacity",
+        "service is overloaded",
+        "temporarily overloaded",
+    )
+    _capacity_retry_delays = (5.0, 15.0, 30.0)
 
     def __init__(
         self,
@@ -852,29 +873,42 @@ class CodexAgentRuntime:
                 for image_path in image_paths:
                     command.extend(["--image", str(image_path)])
                 command.append("-")
-                try:
-                    result = subprocess.run(
-                        command,
-                        cwd=temporary_path,
-                        env=self._safe_environment(),
-                        input=prompt,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        check=False,
-                        timeout=self.timeout_seconds,
-                    )
-                except subprocess.TimeoutExpired as exc:
-                    raise AgentTerminalError(
-                        f"Codex exceeded the {self.timeout_seconds}-second timeout; batch stopped"
-                    ) from exc
-                self.last_token_usage = self._extract_usage(result.stdout)
-                combined = "\n".join(
-                    value for value in (result.stdout, result.stderr) if value
-                ).strip()
-                if result.returncode != 0:
+                result: subprocess.CompletedProcess[str] | None = None
+                combined = ""
+                for attempt in range(len(self._capacity_retry_delays) + 1):
+                    output_path.unlink(missing_ok=True)
+                    try:
+                        result = subprocess.run(
+                            command,
+                            cwd=temporary_path,
+                            env=self._safe_environment(),
+                            input=prompt,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            check=False,
+                            timeout=self.timeout_seconds,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        raise AgentTerminalError(
+                            f"Codex exceeded the {self.timeout_seconds}-second timeout; "
+                            "batch stopped"
+                        ) from exc
+                    self.last_token_usage = self._extract_usage(result.stdout)
+                    combined = "\n".join(
+                        value for value in (result.stdout, result.stderr) if value
+                    ).strip()
+                    if result.returncode == 0:
+                        break
+                    if self._is_capacity_error(combined) and attempt < len(
+                        self._capacity_retry_delays
+                    ):
+                        time.sleep(self._capacity_retry_delays[attempt])
+                        continue
                     self._raise_classified_error(combined)
+                if result is None:
+                    raise AgentTerminalError("Codex did not start; batch stopped")
                 if not output_path.is_file():
                     raise AgentTerminalError("Codex returned no structured output; batch stopped")
                 try:
@@ -910,8 +944,18 @@ class CodexAgentRuntime:
             raise PaidApiAuthenticationBlocked(
                 "Codex requested paid API authentication; Runway stopped"
             )
+        if self._is_capacity_error(detail):
+            raise AgentTerminalError(
+                "Codex model capacity remained unavailable after bounded retries; "
+                "batch stopped without API fallback"
+            )
         summary = detail[-2000:] if detail else "unknown Codex CLI failure"
         raise AgentTerminalError(f"Codex failed and the batch was stopped: {summary}")
+
+    @classmethod
+    def _is_capacity_error(cls, detail: str) -> bool:
+        lowered = detail.casefold()
+        return any(marker in lowered for marker in cls._capacity_markers)
 
     async def annotate_historical_post(self, payload: Mapping[str, Any]) -> HistoricalAnnotation:
         return await self._parse(

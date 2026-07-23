@@ -71,6 +71,16 @@ class TopicEligibilityService:
             ).all()
 
         supported = self._profile_topics(profile.profile_json if profile is not None else "{}")
+        if supported:
+            supported = sorted(
+                {
+                    *supported,
+                    *(
+                        self._normalize(value)
+                        for value in self.settings.discovery_secondary_topic_list
+                    ),
+                }
+            )
         candidates, aliases = self._candidate_topics(analysis)
         blocked_topics: set[str] = set()
         exploration_enabled = True

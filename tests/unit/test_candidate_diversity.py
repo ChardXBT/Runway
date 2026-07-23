@@ -5,6 +5,7 @@ import json
 from runway.analysis.schemas import CandidateAnalysis
 from runway.db.models import CandidateImage
 from runway.intelligence.candidate_diversity import CandidateDiversityService
+from runway.intelligence.slate_optimization import CandidateSlateOptimizer
 from runway.ranking.diversity import (
     CandidateDiversitySelector,
     assign_diversity_fields,
@@ -193,3 +194,133 @@ def test_rights_warnings_are_removed_without_erasing_other_quality_warnings() ->
             "historical date precision cannot prove the 180-day boundary",
         ]
     ) == ["historical date precision cannot prove the 180-day boundary"]
+
+
+def test_slate_optimizer_treats_two_frames_from_one_archive_episode_as_repetitive() -> None:
+    analysis = _analysis(
+        scene="two distinct moments",
+        setting="different rooms",
+        emotion="calm",
+        composition="wide",
+        characters=["Homer"],
+        actions=["standing"],
+    )
+    first = _candidate(21, 0.9, "first", analysis)
+    second = _candidate(22, 0.8, "second", analysis)
+    first.provider_result_json = json.dumps(
+        {
+            "provider_metadata": {
+                "source_adapter": "frinkiac-public-search",
+                "episode": "S18E11",
+                "timestamp": 1000,
+            }
+        }
+    )
+    second.provider_result_json = json.dumps(
+        {
+            "provider_metadata": {
+                "source_adapter": "frinkiac-public-search",
+                "episode": "S18E11",
+                "timestamp": 90_000,
+            }
+        }
+    )
+
+    assert CandidateSlateOptimizer._shares_archive_episode(second, [first])
+
+
+def test_slate_optimizer_suppresses_repeated_joined_hand_actions_within_slate() -> None:
+    clasped = _candidate(
+        31,
+        0.9,
+        "Simpsons stage gesture",
+        _analysis(
+            scene="stage presentation",
+            setting="theatre",
+            emotion="excited",
+            composition="close up",
+            characters=["cartoon woman"],
+            actions=["clasping hands"],
+        ),
+    )
+    holding = _candidate(
+        32,
+        0.88,
+        "Futurama outdoor group",
+        _analysis(
+            scene="outdoor group interaction",
+            setting="grassy park",
+            emotion="cheerful",
+            composition="wide",
+            characters=["cartoon children"],
+            actions=["holding hands"],
+        ),
+    )
+    raised = _candidate(
+        33,
+        0.86,
+        "Bender in a forest",
+        _analysis(
+            scene="forest reaction",
+            setting="forest",
+            emotion="curious",
+            composition="close up",
+            characters=["Bender"],
+            actions=["raising one hand"],
+        ),
+    )
+    fingerprints = {row.id: fingerprint_from_candidate(row) for row in (clasped, holding, raised)}
+
+    assert CandidateSlateOptimizer._shares_action_family(
+        fingerprints[holding.id],
+        [clasped],
+        fingerprints,
+    )
+    assert not CandidateSlateOptimizer._shares_action_family(
+        fingerprints[raised.id],
+        [clasped],
+        fingerprints,
+    )
+
+
+def test_primary_franchise_quota_recovers_recent_mix_deficit_before_rotation() -> None:
+    primary_analysis = _analysis(
+        scene="varied scene",
+        setting="varied setting",
+        emotion="calm",
+        composition="wide",
+        characters=["Homer"],
+        actions=["standing"],
+    )
+    selected = [
+        _candidate(index, 0.9, f"Simpsons option {index}", primary_analysis)
+        for index in range(100, 119)
+    ]
+    fingerprints = {row.id: fingerprint_from_candidate(row) for row in selected}
+    history = ["the simpsons"] * 38 + ["futurama"] * 12 + ["family guy"] * 8 + ["unknown"] * 7
+
+    assert CandidateSlateOptimizer._primary_quota_required(
+        primary_franchise="the simpsons",
+        minimum_share=0.67,
+        history=history,
+        selected=selected[:18],
+        fingerprints=fingerprints,
+    )
+    assert not CandidateSlateOptimizer._primary_quota_required(
+        primary_franchise="the simpsons",
+        minimum_share=0.67,
+        history=history,
+        selected=selected,
+        fingerprints=fingerprints,
+    )
+
+
+def test_primary_franchise_matching_is_case_and_whitespace_insensitive() -> None:
+    assert CandidateSlateOptimizer._is_primary_franchise(
+        "  The   Simpsons ",
+        "the simpsons",
+    )
+    assert not CandidateSlateOptimizer._is_primary_franchise(
+        "Futurama",
+        "the simpsons",
+    )

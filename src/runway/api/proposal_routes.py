@@ -20,7 +20,7 @@ from runway.services.settings import SettingsService
 
 
 class GenerationRequest(BaseModel):
-    days: int = Field(default=5, ge=1, le=100)
+    days: int = Field(default=5, ge=1, le=500)
     start_date: date | None = None
 
 

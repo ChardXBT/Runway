@@ -1,4 +1,5 @@
-from datetime import date, datetime
+import json
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -8,11 +9,87 @@ from runway.analysis.service import AnalysisService
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import AuditEvent, CandidateImage, ProposalEvent
+from runway.db.models import (
+    AuditEvent,
+    CandidateImage,
+    GenerationRun,
+    ProposalEvent,
+)
+from runway.db.repositories import get_channel
 from runway.discovery.service import DiscoveryService
 from runway.intelligence.profile import StyleProfileService
 from runway.proposals.service import ProposalService
 from runway.publishing.internal import InternalPublisher
+
+
+def test_primary_franchise_supports_current_and_legacy_profile_keys() -> None:
+    assert (
+        ProposalService._primary_franchise(
+            json.dumps({"topic_distribution": [["The Simpsons", 200]]})
+        )
+        == "The Simpsons"
+    )
+    assert (
+        ProposalService._primary_franchise(
+            json.dumps({"franchise_distribution": [["Futurama", 20]]})
+        )
+        == "Futurama"
+    )
+
+
+def test_proposal_service_recovers_only_abandoned_generation_runs(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+        stale = GenerationRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            start_date=date(2026, 1, 1),
+            days=1,
+            status="running",
+            started_at=datetime.now(UTC) - timedelta(hours=7),
+        )
+        active = GenerationRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            start_date=date(2026, 1, 2),
+            days=1,
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+        long_batch = GenerationRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            start_date=date(2026, 1, 3),
+            days=500,
+            status="running",
+            started_at=datetime.now(UTC) - timedelta(hours=7),
+        )
+        session.add_all([stale, active, long_batch])
+        session.flush()
+        stale_id = stale.id
+        active_id = active.id
+        long_batch_id = long_batch.id
+
+    service = ProposalService(database, settings)
+    assert service._recover_stale_generation_runs() == 1
+
+    with database.session() as session:
+        stale = session.get(GenerationRun, stale_id)
+        active = session.get(GenerationRun, active_id)
+        long_batch = session.get(GenerationRun, long_batch_id)
+        assert stale is not None
+        assert stale.status == "failed"
+        assert stale.completed_at is not None
+        assert "Recovered abandoned" in str(stale.error_summary)
+        assert active is not None
+        assert active.status == "running"
+        assert active.completed_at is None
+        assert long_batch is not None
+        assert long_batch.status == "running"
+        assert long_batch.completed_at is None
 
 
 @pytest.mark.asyncio
@@ -52,6 +129,15 @@ async def test_continuous_workflow_actions_and_restart_persistence(
     proposals.edit_caption(first_id, "Human-edited final caption?!")
     regenerated = await proposals.regenerate_captions(first_id)
     assert regenerated["final_caption"] == "Human-edited final caption?!"
+
+    with pytest.raises(ValueError, match="unsupported feedback reasons"):
+        proposals.reject(
+            second_id,
+            "invalid QA reason",
+            reason_codes=["not_in_the_taxonomy"],
+            image_verdict="good",
+        )
+    assert proposals.detail(second_id)["status"] == "needs_review"
 
     rejected = proposals.reject(
         second_id,

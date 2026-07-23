@@ -2156,10 +2156,13 @@ def shadow_report() -> None:
 
 @discover_app.command("images")
 def discover_images(
-    days: int = typer.Option(10, min=1, max=30),
+    days: int = typer.Option(10, min=1, max=500),
     provider: str = typer.Option(
         "fixture",
-        help="fixture, manual, browser, frinkiac, or api",
+        help=(
+            "fixture, manual, archives, duckduckgo, browser, frinkiac, "
+            "morbotron, family-guy-wiki, ensemble, or api"
+        ),
     ),
     manual_url: list[str] | None = typer.Option(None, "--manual-url"),
     dry_run: bool = typer.Option(False),
@@ -2184,7 +2187,7 @@ def discover_images(
 
 @generate_app.command("batch")
 def generate_batch(
-    days: int = typer.Option(10, min=1, max=30),
+    days: int = typer.Option(10, min=1, max=500),
     start_date: str | None = typer.Option(None, help="First local date as YYYY-MM-DD."),
 ) -> None:
     settings = get_settings()

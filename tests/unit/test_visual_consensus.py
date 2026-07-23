@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from runway.analysis.schemas import CandidateAnalysis
+from runway.captions.service import CaptionService
 from runway.captions.visual_consensus import (
     candidate_analysis_from_mapping,
     reconcile_visual_analyses,
@@ -101,6 +102,20 @@ def test_later_blind_audit_breaks_correlated_first_pass_error() -> None:
         "newspaper",
         "holding a newspaper",
     }
+    assert CaptionService._requires_visual_tiebreak(result)
+
+
+def test_visual_tiebreak_is_not_repeated_when_independent_audit_agrees() -> None:
+    primary = _analysis(
+        objects=["steering wheel", "car seat"],
+        actions=["holding a steering wheel", "sitting"],
+    )
+
+    result = reconcile_visual_audit_sequence(primary, [primary.model_copy(deep=True)])
+
+    assert result.consensus_coverage >= 0.8
+    assert result.disputed_facts == []
+    assert not CaptionService._requires_visual_tiebreak(result)
 
 
 def test_only_frame_aligned_source_metadata_is_promoted() -> None:

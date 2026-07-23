@@ -94,13 +94,13 @@ class EditorialService:
             missing = max(0, target - self._review_count())
             if missing and live_discovery:
                 if not self.settings.enable_browser_search:
-                    detail = "No unused candidates remain and browser discovery is disabled."
+                    detail = "No unused candidates remain and public-web discovery is disabled."
                 else:
                     discovery_attempts: list[dict[str, object]] = []
                     try:
-                        browser_result = await DiscoveryService(
+                        public_result = await DiscoveryService(
                             self.database, self.settings
-                        ).discover(days=missing, provider_name="browser", live=True)
+                        ).discover(days=missing, provider_name="archives")
                     except AgentTerminalError:
                         # Authentication and included-usage limits must stop the run;
                         # Runway never falls through to a paid model provider.
@@ -109,32 +109,32 @@ class EditorialService:
                         # Search engines can challenge or time out independently of the
                         # model runtime. Preserve the failure and continue to the safe,
                         # topic-specific fallback instead of emptying the Generator.
-                        browser_result = {
-                            "provider": "browser",
+                        public_result = {
+                            "provider": "archives",
                             "status": "failed",
                             "error": f"{type(exc).__name__}: {exc}",
                             "accepted": 0,
                         }
-                    discovery_attempts.append(browser_result)
+                    discovery_attempts.append(public_result)
                     available = self._unused_candidate_count()
                     if available:
                         generated_ids.extend(await self._try_generate(min(missing, available)))
 
                     missing = max(0, target - self._review_count())
-                    if missing and self._supports_frinkiac_fallback():
-                        # A browser run can produce technically accepted images that are
-                        # nevertheless too similar to recent posts. Keep replenishing from
-                        # the reliable frame source instead of treating that stale pool as
-                        # proof that no fresh images exist.
-                        for _attempt in range(2):
+                    archive_providers = self._frame_archive_providers()
+                    if missing and archive_providers:
+                        # Public search can return unavailable or near-duplicate files.
+                        # Keep replenishing from topic-specific frame archives instead of
+                        # treating one exhausted result window as the end of the internet.
+                        for provider_name in archive_providers:
                             fallback = await DiscoveryService(
                                 self.database,
                                 self.settings,
                             ).discover(
                                 days=missing,
-                                provider_name="frinkiac",
+                                provider_name=provider_name,
                             )
-                            fallback["fallback_from"] = "browser"
+                            fallback["fallback_from"] = "archives"
                             discovery_attempts.append(fallback)
                             available = self._unused_candidate_count()
                             if available:
@@ -230,7 +230,7 @@ class EditorialService:
                 or 0
             )
 
-    def _supports_frinkiac_fallback(self) -> bool:
+    def _frame_archive_providers(self) -> list[str]:
         with self.database.session() as session:
             channel_id = get_channel(session, self.settings.channel_handle).id
             profile = session.scalar(
@@ -243,20 +243,27 @@ class EditorialService:
                 .limit(1)
             )
         if profile is None:
-            return False
+            return []
         payload = json.loads(profile.profile_json)
         distribution = payload.get(
             "topic_distribution",
             payload.get("franchise_distribution", []),
         )
         if not isinstance(distribution, list) or not distribution:
-            return False
+            return []
         first = distribution[0]
-        return (
+        providers: list[str] = []
+        if (
             isinstance(first, (list, tuple))
             and bool(first)
             and "simpson" in str(first[0]).casefold()
-        )
+        ):
+            providers.append("frinkiac")
+        if any(
+            "futurama" in topic.casefold() for topic in self.settings.discovery_secondary_topic_list
+        ):
+            providers.append("morbotron")
+        return providers
 
     @staticmethod
     def _public_failure_detail(exc: Exception) -> str:

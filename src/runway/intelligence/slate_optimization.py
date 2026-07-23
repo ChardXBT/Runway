@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -29,7 +31,7 @@ class CandidateSlateResult:
 class CandidateSlateOptimizer:
     """Whole-slate active-representation optimizer with deterministic guardrails."""
 
-    version = "active-representation-slate-v2"
+    version = "active-representation-slate-v5"
     neural_cluster_threshold = 0.82
     semantic_suppression_threshold = 0.93
     deterministic_suppression_threshold = 0.88
@@ -51,9 +53,22 @@ class CandidateSlateOptimizer:
         anchors: Sequence[CandidateImage] = (),
         limit: int | None = None,
         session_key: str,
+        primary_franchise: str | None = None,
+        minimum_primary_share: float | None = None,
+        franchise_history: Sequence[str] = (),
     ) -> CandidateSlateResult:
         if not session_key.strip():
             raise ValueError("slate optimization session key is required")
+        normalized_primary = self._normalized_franchise(primary_franchise)
+        if minimum_primary_share is not None and not 0.0 <= minimum_primary_share <= 1.0:
+            raise ValueError("minimum primary franchise share must be between 0 and 1")
+        if minimum_primary_share is not None and normalized_primary is None:
+            raise ValueError("a primary franchise is required when a minimum share is configured")
+        normalized_history = tuple(
+            normalized
+            for value in franchise_history
+            if (normalized := self._normalized_franchise(value)) is not None
+        )
         unique = {candidate.id: candidate for candidate in candidates}
         ordered_pool = sorted(
             unique.values(),
@@ -94,6 +109,7 @@ class CandidateSlateOptimizer:
         }
         selected: list[CandidateImage] = []
         selected_utility: list[float] = []
+        quota_required_positions: list[int] = []
         remaining = list(eligible)
         candidate_diagnostics: dict[str, dict[str, object]] = {
             str(candidate.id): {
@@ -125,6 +141,29 @@ class CandidateSlateOptimizer:
                 for candidate in remaining
             ]
             eligible_evaluations = [row for row in evaluations if not row[1]]
+            primary_required = self._primary_quota_required(
+                primary_franchise=normalized_primary,
+                minimum_share=minimum_primary_share,
+                history=normalized_history,
+                selected=selected,
+                fingerprints=fingerprints,
+            )
+            if primary_required:
+                quota_required_positions.append(len(selected) + 1)
+                primary_evaluations = [
+                    row
+                    for row in eligible_evaluations
+                    if self._is_primary_franchise(
+                        fingerprints[row[0].id].franchise,
+                        normalized_primary,
+                    )
+                ]
+                if primary_evaluations:
+                    eligible_evaluations = primary_evaluations
+                else:
+                    for _candidate, reasons, _penalties, _utility in eligible_evaluations:
+                        reasons.append("primary_franchise_quota_required")
+                    eligible_evaluations = []
             if not eligible_evaluations:
                 for candidate, reasons, penalties, utility in evaluations:
                     candidate_diagnostics[str(candidate.id)].update(
@@ -194,6 +233,9 @@ class CandidateSlateOptimizer:
             "neural_active": neural_guardrail_active,
             "deterministic_guardrails": {
                 "concept_key_repeat": "hard_suppression",
+                "action_family_repeat": "hard_suppression_within_slate",
+                "source_episode_repeat": "hard_suppression",
+                "primary_franchise_share": "hard_minimum_with_recent_deficit_recovery",
                 "fingerprint_similarity_threshold": self.deterministic_suppression_threshold,
                 "semantic_similarity_threshold": (
                     self.semantic_suppression_threshold if neural_guardrail_active else None
@@ -203,10 +245,93 @@ class CandidateSlateOptimizer:
                 ),
             },
             "vector_failures": vector_failures,
+            "primary_franchise_quota": self._primary_quota_diagnostics(
+                primary_franchise=normalized_primary,
+                minimum_share=minimum_primary_share,
+                history=normalized_history,
+                selected=selected,
+                fingerprints=fingerprints,
+                required_positions=quota_required_positions,
+            ),
             "randomized": False,
-            "exploration_policy": "deterministic_slate_v2",
+            "exploration_policy": "deterministic_slate_v5",
         }
         return CandidateSlateResult(candidates=tuple(selected), diagnostics=diagnostics)
+
+    @classmethod
+    def _primary_quota_required(
+        cls,
+        *,
+        primary_franchise: str | None,
+        minimum_share: float | None,
+        history: Sequence[str],
+        selected: Sequence[CandidateImage],
+        fingerprints: dict[int, DiversityFingerprint],
+    ) -> bool:
+        if primary_franchise is None or minimum_share is None or minimum_share <= 0:
+            return False
+        current_primary = sum(
+            cls._is_primary_franchise(value, primary_franchise) for value in history
+        ) + sum(
+            cls._is_primary_franchise(
+                fingerprints[row.id].franchise,
+                primary_franchise,
+            )
+            for row in selected
+            if row.id in fingerprints
+        )
+        required_after_next = math.ceil(minimum_share * (len(history) + len(selected) + 1) - 1e-12)
+        return current_primary < required_after_next
+
+    @classmethod
+    def _primary_quota_diagnostics(
+        cls,
+        *,
+        primary_franchise: str | None,
+        minimum_share: float | None,
+        history: Sequence[str],
+        selected: Sequence[CandidateImage],
+        fingerprints: dict[int, DiversityFingerprint],
+        required_positions: Sequence[int],
+    ) -> dict[str, object]:
+        history_primary = sum(
+            cls._is_primary_franchise(value, primary_franchise) for value in history
+        )
+        selected_primary = sum(
+            cls._is_primary_franchise(
+                fingerprints[row.id].franchise,
+                primary_franchise,
+            )
+            for row in selected
+            if row.id in fingerprints
+        )
+        combined_count = len(history) + len(selected)
+        return {
+            "enabled": primary_franchise is not None and minimum_share is not None,
+            "primary_franchise": primary_franchise,
+            "minimum_share": minimum_share,
+            "history_count": len(history),
+            "history_primary_count": history_primary,
+            "selected_count": len(selected),
+            "selected_primary_count": selected_primary,
+            "combined_primary_share": (
+                round((history_primary + selected_primary) / combined_count, 6)
+                if combined_count
+                else None
+            ),
+            "quota_required_positions": list(required_positions),
+        }
+
+    @staticmethod
+    def _normalized_franchise(value: str | None) -> str | None:
+        normalized = " ".join(str(value or "").casefold().split())
+        return normalized if normalized and normalized not in {"unknown", "none", "null"} else None
+
+    @classmethod
+    def _is_primary_franchise(cls, value: str | None, primary_franchise: str | None) -> bool:
+        return (
+            primary_franchise is not None and cls._normalized_franchise(value) == primary_franchise
+        )
 
     def _evaluate(
         self,
@@ -246,6 +371,10 @@ class CandidateSlateOptimizer:
         reasons: list[str] = []
         if same_concept:
             reasons.append("deterministic_concept_repeat")
+        if self._shares_action_family(fingerprint, selected, fingerprints):
+            reasons.append("action_family_repeat")
+        if self._shares_archive_episode(candidate, references):
+            reasons.append("source_episode_repeat")
         if deterministic_similarity >= self.deterministic_suppression_threshold:
             reasons.append("deterministic_near_repeat")
         if (
@@ -273,6 +402,71 @@ class CandidateSlateOptimizer:
             - sum(penalties.values())
         )
         return candidate, reasons, penalties, utility
+
+    @classmethod
+    def _shares_action_family(
+        cls,
+        fingerprint: DiversityFingerprint,
+        selected: Sequence[CandidateImage],
+        fingerprints: dict[int, DiversityFingerprint],
+    ) -> bool:
+        families = cls._action_families(fingerprint)
+        return bool(families) and any(
+            families.intersection(cls._action_families(fingerprints[row.id]))
+            for row in selected
+            if row.id in fingerprints
+        )
+
+    @staticmethod
+    def _action_families(fingerprint: DiversityFingerprint) -> set[str]:
+        families: set[str] = set()
+        for action in fingerprint.actions:
+            normalized = " ".join(action.casefold().split())
+            if any(
+                marker in normalized
+                for marker in (
+                    "clasped hands",
+                    "clasping hands",
+                    "hands clasped",
+                    "hands together",
+                    "holding hands",
+                    "holds hands",
+                    "hand in hand",
+                )
+            ):
+                families.add("joined_hands")
+        return families
+
+    @classmethod
+    def _shares_archive_episode(
+        cls,
+        candidate: CandidateImage,
+        references: Sequence[CandidateImage],
+    ) -> bool:
+        episode = cls._archive_episode_key(candidate)
+        return episode is not None and any(
+            cls._archive_episode_key(reference) == episode for reference in references
+        )
+
+    @staticmethod
+    def _archive_episode_key(candidate: CandidateImage) -> tuple[str, str] | None:
+        try:
+            payload = json.loads(candidate.provider_result_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        metadata = payload.get("provider_metadata")
+        if not isinstance(metadata, dict):
+            return None
+        adapter = str(metadata.get("source_adapter") or "")
+        if adapter not in {
+            "frinkiac-public-search",
+            "morbotron-public-search",
+        }:
+            return None
+        episode = str(metadata.get("episode") or "").strip()
+        return (adapter, episode) if episode else None
 
     @staticmethod
     def _rolling_budget_penalty(
@@ -412,5 +606,5 @@ class CandidateSlateOptimizer:
             "representation": {},
             "neural_active": False,
             "randomized": False,
-            "exploration_policy": "deterministic_slate_v2",
+            "exploration_policy": "deterministic_slate_v5",
         }

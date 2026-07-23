@@ -79,10 +79,11 @@ class CandidateRanker:
         source_domain: str,
         rights_status: str,
         image_path: Path | None = None,
+        preflight_rejection: str | None = None,
     ) -> RankingResult:
         del rights_status
         eligibility = self.topic_eligibility.evaluate(analysis)
-        hard_reason = self._hard_filter(
+        hard_reason = preflight_rejection or self._hard_filter(
             features,
             analysis,
             duplicate,
@@ -170,6 +171,12 @@ class CandidateRanker:
             return "unusable_aspect_ratio"
         if analysis.unsafe_probability >= 0.5:
             return "nsfw_content"
+        if self._is_non_frame_merchandise(analysis):
+            return "non_frame_merchandise"
+        if self._has_intrusive_production_credit(analysis):
+            return "intrusive_production_credit"
+        if self._is_production_credit_title_card(analysis):
+            return "production_credit_title_card"
         if duplicate.hard_block:
             return "duplicate"
         with self.database.session() as session:
@@ -183,6 +190,60 @@ class CandidateRanker:
         if eligibility.hard_reject:
             return "blocked_topic" if eligibility.classification == "blocked" else "off_topic"
         return None
+
+    @staticmethod
+    def _is_non_frame_merchandise(analysis: CandidateAnalysis) -> bool:
+        """Reject obvious product snapshots while continuing to allow artwork and fan art."""
+
+        scene = " ".join(
+            (
+                analysis.scene_archetype,
+                analysis.composition,
+                analysis.setting,
+            )
+        ).casefold()
+        objects = " ".join(analysis.objects).casefold()
+        photographic_display = "photograph" in scene and any(
+            marker in scene for marker in ("collection", "display", "product")
+        )
+        merchandise_subject = any(
+            marker in objects
+            for marker in (
+                "action figure",
+                "doll",
+                "merchandise",
+                "plush",
+                "toy",
+            )
+        )
+        return photographic_display and merchandise_subject
+
+    @staticmethod
+    def _has_intrusive_production_credit(analysis: CandidateAnalysis) -> bool:
+        if not analysis.text_overlay or not analysis.ocr_text:
+            return False
+        text = " ".join(analysis.ocr_text).casefold()
+        return any(
+            marker in text
+            for marker in (
+                "co-executive producer",
+                "created by",
+                "directed by",
+                "executive producer",
+                "producer",
+                "produced by",
+                "written by",
+            )
+        )
+
+    @staticmethod
+    def _is_production_credit_title_card(analysis: CandidateAnalysis) -> bool:
+        scene = analysis.scene_archetype.casefold()
+        return (
+            not analysis.characters
+            and analysis.text_overlay
+            and ("credit" in scene or "title card" in scene)
+        )
 
     def _supported_topics(self) -> set[str]:
         with self.database.session() as session:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -12,6 +12,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from runway.analysis.runtime import AgentRuntime, AgentTerminalError, runtime_for
+from runway.analysis.schemas import CandidateAnalysis, SearchPlan
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -28,11 +29,15 @@ from runway.db.repositories import audit, get_channel
 from runway.discovery.providers import (
     ApiSearchProvider,
     BrowserSearchProvider,
+    DuckDuckGoSearchProvider,
     EnsembleSearchProvider,
+    FamilyGuyWikiSearchProvider,
     FixtureSearchProvider,
     FrinkiacSearchProvider,
     ManualUrlProvider,
+    MorbotronSearchProvider,
     SearchProvider,
+    TopicMixArchiveSearchProvider,
 )
 from runway.discovery.safety import is_known_adult_result
 from runway.discovery.schemas import ImageSearchResult
@@ -70,11 +75,16 @@ class DiscoveryService:
         dry_run: bool = False,
         live: bool = False,
     ) -> dict[str, object]:
+        self._recover_stale_runs()
         profile_record, profile = self._active_profile()
+        recent_search_queries = self._recent_search_queries()
         plan_payload = self._plan_payload(
             profile,
             days,
             recent_clusters=self._recent_cluster_exclusions(),
+            recent_search_queries=recent_search_queries,
+            primary_topic_query_share=self.settings.discovery_primary_topic_query_share,
+            explicit_secondary_topics=self.settings.discovery_secondary_topic_list,
         )
         plan_started = utcnow()
         plan = await self.runtime.create_search_plan(plan_payload)
@@ -86,6 +96,43 @@ class DiscoveryService:
             plan.model_dump(),
             plan_started,
         )
+        repeated_queries = self._repeated_search_queries(plan, recent_search_queries)
+        archive_rotation_repairs: list[dict[str, str]] = []
+        if repeated_queries:
+            retry_payload = {
+                **plan_payload,
+                "rejected_search_plan": plan.model_dump(),
+                "repeated_queries": repeated_queries,
+                "forbidden_archive_queries": sorted(
+                    {self._effective_archive_query(query) for query in recent_search_queries}
+                ),
+                "retry_instruction": (
+                    "Replace every repeated direction. Each replacement must also resolve to a "
+                    "new archive request after character/action query compaction."
+                ),
+            }
+            retry_started = utcnow()
+            plan = await self.runtime.create_search_plan(retry_payload)
+            self._record_model_run(
+                "create_search_plan",
+                "search-plan-v2-novelty-retry",
+                [profile_record.id],
+                retry_payload,
+                plan.model_dump(),
+                retry_started,
+            )
+            repeated_queries = self._repeated_search_queries(plan, recent_search_queries)
+            if repeated_queries:
+                plan, archive_rotation_repairs = self._repair_repeated_archive_queries(
+                    plan,
+                    recent_search_queries,
+                )
+                repeated_queries = self._repeated_search_queries(plan, recent_search_queries)
+                if repeated_queries:
+                    raise AgentTerminalError(
+                        "search planning stopped because no unused archive query direction "
+                        "remained: " + "; ".join(repeated_queries)
+                    )
         provider = self._provider(provider_name, manual_urls or [], live=live)
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
@@ -98,6 +145,7 @@ class DiscoveryService:
                         "days": days,
                         "dry_run": dry_run,
                         "ranking_weights": json.loads(ranking_weights_json()),
+                        "archive_rotation_repairs": archive_rotation_repairs,
                     },
                     sort_keys=True,
                 ),
@@ -200,9 +248,11 @@ class DiscoveryService:
         with self.database.session() as session:
             loaded_run = session.get(SearchRun, run_id)
             if loaded_run:
-                loaded_run.status = (
-                    RunStatus.COMPLETED.value if not errors else RunStatus.FAILED.value
-                )
+                # A failed provider request or terminal model error fails the run
+                # earlier. Individual unavailable result URLs are recoverable row
+                # errors: preserve them, but do not misreport an otherwise useful
+                # discovery run as wholly failed.
+                loaded_run.status = RunStatus.COMPLETED.value
                 loaded_run.completed_at = datetime.now(UTC)
                 loaded_run.result_count = created
                 loaded_run.error_summary = "\n".join(errors) or None
@@ -229,6 +279,36 @@ class DiscoveryService:
             "nsfw_source_blocked": nsfw_source_blocked,
             "errors": errors,
         }
+
+    def _recover_stale_runs(self) -> int:
+        """Close abandoned runs left behind by a killed process or machine restart."""
+
+        stale_before = datetime.now(UTC) - timedelta(hours=6)
+        recovered = 0
+        with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            rows = session.scalars(
+                select(SearchRun).where(
+                    SearchRun.channel_id == channel_id,
+                    SearchRun.status == RunStatus.RUNNING.value,
+                    SearchRun.started_at < stale_before,
+                )
+            ).all()
+            for row in rows:
+                row.status = RunStatus.FAILED.value
+                row.completed_at = datetime.now(UTC)
+                row.error_summary = (
+                    "Recovered abandoned discovery run after six hours without completion."
+                )
+                audit(
+                    session,
+                    "search_stale_run_recovered",
+                    "search_run",
+                    row.id,
+                    {"started_at": row.started_at.isoformat()},
+                )
+                recovered += 1
+        return recovered
 
     def list_candidates(
         self, *, run_id: int | None = None, accepted_only: bool = False, limit: int = 100
@@ -338,26 +418,37 @@ class DiscoveryService:
         source = await self._resolve_result(result)
         features = inspect_image(source)
         duplicate = self.detector.inspect(features, source_url=result.direct_image_url)
-        analysis_started = utcnow()
-        analysis = await self.runtime.analyze_candidate_image(
-            {
-                "candidate_id": result.result_rank,
-                "search_query": result.search_query,
-                "source_domain": result.source_domain,
-                "width": features.width,
-                "height": features.height,
-                "quality_metrics": features.quality_metrics,
-                "_image_path": str(source),
-            }
+        preflight_rejection = self._preflight_rejection(
+            features,
+            duplicate.hard_block,
+            archive_adjacent=self._is_archive_adjacent_frame(result),
         )
-        self._record_model_run(
-            "analyze_candidate_image",
-            "candidate-analysis-v3",
-            [run_id, result.result_rank],
-            result.model_dump(),
-            analysis.model_dump(),
-            analysis_started,
-        )
+        if preflight_rejection is None:
+            analysis_started = utcnow()
+            model_analysis = await self.runtime.analyze_candidate_image(
+                {
+                    "candidate_id": result.result_rank,
+                    "search_query": result.search_query,
+                    "source_domain": result.source_domain,
+                    "width": features.width,
+                    "height": features.height,
+                    "quality_metrics": features.quality_metrics,
+                    "_image_path": str(source),
+                }
+            )
+            self._record_model_run(
+                "analyze_candidate_image",
+                "candidate-analysis-v3",
+                [run_id, result.result_rank],
+                result.model_dump(),
+                model_analysis.model_dump(),
+                analysis_started,
+            )
+            analysis = self._apply_trusted_source_franchise(model_analysis, result)
+        else:
+            # Duplicate, tiny, severely blurred, or unusably shaped files can never
+            # reach review. Avoid spending creator-authenticated model usage on them.
+            analysis = self._preflight_analysis(preflight_rejection)
         ranking = self.ranker.rank(
             features,
             analysis,
@@ -365,6 +456,7 @@ class DiscoveryService:
             source_domain=result.source_domain,
             rights_status=result.rights_status,
             image_path=source,
+            preflight_rejection=preflight_rejection,
         )
 
         with self.database.session() as session:
@@ -496,6 +588,167 @@ class DiscoveryService:
             )
         return ranking.hard_rejection_reason is not None
 
+    @staticmethod
+    def _apply_trusted_source_franchise(
+        analysis: CandidateAnalysis,
+        result: ImageSearchResult,
+    ) -> CandidateAnalysis:
+        """Use exact, provider-owned archives to fill only a missing franchise label."""
+
+        if analysis.franchise:
+            return analysis
+        metadata = result.provider_metadata
+        adapter = str(metadata.get("source_adapter") or "")
+        domain = result.source_domain.casefold().removeprefix("www.")
+        trusted_archives = {
+            ("frinkiac.com", "frinkiac-public-search"): "The Simpsons",
+            ("morbotron.com", "morbotron-public-search"): "Futurama",
+            (
+                "familyguy.fandom.com",
+                "family-guy-fandom-mediawiki",
+            ): "Family Guy",
+        }
+        franchise = trusted_archives.get((domain, adapter))
+        if franchise is None:
+            return analysis
+        return analysis.model_copy(update={"franchise": franchise})
+
+    def _preflight_rejection(
+        self,
+        features: object,
+        duplicate: bool,
+        *,
+        archive_adjacent: bool = False,
+    ) -> str | None:
+        mime_type = str(getattr(features, "mime_type", ""))
+        width = int(getattr(features, "width", 0))
+        height = int(getattr(features, "height", 0))
+        file_size = int(getattr(features, "file_size", 0))
+        blur_score = float(getattr(features, "blur_score", 0.0))
+        if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+            return "unsupported_mime_type"
+        if file_size > self.settings.maximum_image_bytes:
+            return "file_too_large"
+        if min(width, height) < self.settings.minimum_image_dimension:
+            return "resolution_below_threshold"
+        if blur_score < 10:
+            return "severe_blur"
+        if min(width, height) and max(width / height, height / width) > 2.2:
+            return "unusable_aspect_ratio"
+        if duplicate:
+            return "duplicate"
+        if archive_adjacent:
+            return "adjacent_archive_frame"
+        return None
+
+    def _is_archive_adjacent_frame(
+        self,
+        result: ImageSearchResult,
+        *,
+        window_ms: int = 15_000,
+    ) -> bool:
+        identity = self._archive_frame_identity(result)
+        if identity is None:
+            return False
+        adapter, episode, timestamp = identity
+        with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            rows = session.scalars(
+                select(CandidateImage.provider_result_json)
+                .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                .where(SearchRun.channel_id == channel_id)
+            ).all()
+        for raw in rows:
+            try:
+                payload = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            metadata = payload.get("provider_metadata")
+            if not isinstance(metadata, dict):
+                continue
+            if (
+                str(metadata.get("source_adapter") or "") != adapter
+                or str(metadata.get("episode") or "") != episode
+            ):
+                continue
+            prior_timestamp = metadata.get("timestamp")
+            if (
+                isinstance(prior_timestamp, int)
+                and not isinstance(prior_timestamp, bool)
+                and self._timestamps_share_archive_scene(
+                    prior_timestamp,
+                    timestamp,
+                    window_ms=window_ms,
+                )
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _timestamps_share_archive_scene(
+        first: int,
+        second: int,
+        *,
+        window_ms: int = 15_000,
+    ) -> bool:
+        return abs(first - second) <= window_ms
+
+    @staticmethod
+    def _archive_frame_identity(
+        result: ImageSearchResult,
+    ) -> tuple[str, str, int] | None:
+        metadata = result.provider_metadata
+        adapter = str(metadata.get("source_adapter") or "")
+        if adapter not in {
+            "frinkiac-public-search",
+            "morbotron-public-search",
+        }:
+            return None
+        episode = str(metadata.get("episode") or "")
+        timestamp = metadata.get("timestamp")
+        if (
+            not episode
+            or isinstance(timestamp, bool)
+            or not isinstance(timestamp, int)
+            or timestamp < 0
+        ):
+            return None
+        return adapter, episode, timestamp
+
+    @staticmethod
+    def _preflight_analysis(_reason: str) -> CandidateAnalysis:
+        return CandidateAnalysis.model_validate(
+            {
+                "franchise": None,
+                "characters": [],
+                "scene_archetype": "unassessed",
+                "composition": "unassessed",
+                "emotion": "unassessed",
+                "text_overlay": False,
+                "watermark_probability": 0.0,
+                "unsafe_probability": 0.0,
+                "personal_artwork_probability": 0.0,
+                "fan_art_probability": 0.0,
+                "caption_potential": 0.0,
+                "confidence": 0.0,
+                "entities": [],
+                "objects": [],
+                "actions": [],
+                "relationships": [],
+                "setting": "unassessed",
+                "ocr_text": [],
+                "field_confidence": {
+                    "entities": 0.0,
+                    "emotion": 0.0,
+                    "actions": 0.0,
+                    "scene": 0.0,
+                    "ocr": 0.0,
+                },
+            }
+        )
+
     async def _resolve_result(self, result: ImageSearchResult) -> Path:
         if result.direct_image_url.startswith("fixture://"):
             assets = ensure_fixture_images(self.settings)
@@ -542,6 +795,9 @@ class DiscoveryService:
         days: int,
         *,
         recent_clusters: list[str] | None = None,
+        recent_search_queries: list[str] | None = None,
+        primary_topic_query_share: float | None = None,
+        explicit_secondary_topics: list[str] | None = None,
     ) -> dict[str, object]:
         using_compatibility_franchise_distribution = (
             "topic_distribution" not in profile and "entity_distribution" not in profile
@@ -571,8 +827,25 @@ class DiscoveryService:
         primary_share = primary_count / known_total if known_total else 0.0
         supported = [item for item in known_topics if item[1] >= minimum_support]
         focus_topics = [name for name, _count in supported]
-        if primary_topic and primary_share >= 0.7:
+        secondary_topics = list(
+            dict.fromkeys(
+                value.strip()
+                for value in explicit_secondary_topics or []
+                if value.strip()
+                and (primary_topic is None or value.casefold() != primary_topic.casefold())
+            )
+        )
+        if secondary_topics:
+            focus_topics = secondary_topics
+        elif primary_topic and primary_share >= 0.7:
             focus_topics = [primary_topic]
+        minimum_primary_share = (
+            max(0.5, min(1.0, primary_topic_query_share))
+            if primary_topic_query_share is not None and secondary_topics
+            else (0.8 if primary_share >= 0.7 else 0.6)
+        )
+        primary_query_count = min(6, max(1, round(6 * minimum_primary_share)))
+        secondary_query_count = 6 - primary_query_count
         policy = cast(
             dict[str, object],
             profile.get("explicit_channel_policy", {}),
@@ -582,7 +855,13 @@ class DiscoveryService:
             "days": days,
             "primary_topic": primary_topic,
             "primary_topic_share": round(primary_share, 6),
-            "minimum_primary_topic_query_share": 0.8 if primary_share >= 0.7 else 0.6,
+            "minimum_primary_topic_query_share": minimum_primary_share,
+            "explicit_secondary_topics": secondary_topics,
+            "topic_query_targets": {
+                "total_queries": 6,
+                "primary_topic_queries": primary_query_count,
+                "secondary_topic_queries": secondary_query_count,
+            },
             "topic_distribution": [
                 {"topic": name, "count": count} for name, count in known_topics[:10]
             ],
@@ -599,12 +878,210 @@ class DiscoveryService:
                 "copyright_not_a_ranking_constraint",
             ),
             "recent_exclusions": recent_clusters or [],
+            "recent_search_queries": recent_search_queries or [],
             "current_queue_distribution": [],
         }
         if using_compatibility_franchise_distribution:
             result["primary_franchise"] = primary_topic
             result["underused_franchises"] = focus_topics[:5]
         return result
+
+    def _recent_search_queries(self, limit: int = 24) -> list[str]:
+        """Return recent query wording so the planner searches a genuinely new window."""
+
+        with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            raw_plans = session.scalars(
+                select(SearchRun.query_plan_json)
+                .where(
+                    SearchRun.channel_id == channel_id,
+                    SearchRun.provider.not_in(("fixture", "manual")),
+                )
+                .order_by(SearchRun.id.desc())
+                .limit(12)
+            ).all()
+        queries: list[str] = []
+        for raw in raw_plans:
+            try:
+                payload = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            plan = payload.get("plan")
+            if not isinstance(plan, dict):
+                continue
+            families = plan.get("query_families")
+            if not isinstance(families, list):
+                continue
+            for family in families:
+                if not isinstance(family, dict):
+                    continue
+                values = family.get("queries")
+                if not isinstance(values, list):
+                    continue
+                for value in values:
+                    query = str(value).strip()
+                    if query and query not in queries:
+                        queries.append(query)
+                        if len(queries) >= limit:
+                            return queries
+        return queries
+
+    @classmethod
+    def _repeated_search_queries(
+        cls,
+        plan: object,
+        recent_queries: list[str],
+    ) -> list[str]:
+        query_families = getattr(plan, "query_families", [])
+        current = [
+            str(query).strip()
+            for family in query_families
+            for query in getattr(family, "queries", [])
+            if str(query).strip()
+        ]
+        recent_effective = {
+            cls._effective_archive_query(query) for query in recent_queries if query.strip()
+        }
+        repeated: list[str] = []
+        for query in current:
+            if cls._effective_archive_query(query) in recent_effective:
+                repeated.append(query)
+        return repeated
+
+    @staticmethod
+    def _effective_archive_query(query: str) -> str:
+        normalized = " ".join(query.casefold().split())
+        if "family guy" in normalized:
+            compact = FamilyGuyWikiSearchProvider._compact_query(query)
+        elif "futurama" in normalized:
+            compact = MorbotronSearchProvider._compact_query(query)
+        elif "simpson" in normalized:
+            compact = FrinkiacSearchProvider._compact_query(query)
+        else:
+            compact = query
+        return " ".join(compact.casefold().split())
+
+    @classmethod
+    def _repair_repeated_archive_queries(
+        cls,
+        plan: SearchPlan,
+        recent_queries: list[str],
+    ) -> tuple[SearchPlan, list[dict[str, str]]]:
+        """Repair natural-language novelty that collapses at an archive adapter."""
+
+        forbidden = {
+            cls._effective_archive_query(query) for query in recent_queries if query.strip()
+        }
+        repaired = plan.model_copy(deep=True)
+        repairs: list[dict[str, str]] = []
+        current_effective: set[str] = set()
+        for family in repaired.query_families:
+            for index, query in enumerate(family.queries):
+                effective = cls._effective_archive_query(query)
+                if effective not in forbidden and effective not in current_effective:
+                    current_effective.add(effective)
+                    continue
+                replacement = next(
+                    (
+                        candidate
+                        for candidate in cls._archive_rotation_candidates(query)
+                        if cls._effective_archive_query(candidate) not in forbidden
+                        and cls._effective_archive_query(candidate) not in current_effective
+                    ),
+                    None,
+                )
+                if replacement is None:
+                    current_effective.add(effective)
+                    continue
+                family.queries[index] = replacement
+                replacement_effective = cls._effective_archive_query(replacement)
+                current_effective.add(replacement_effective)
+                repairs.append(
+                    {
+                        "original": query,
+                        "original_effective": effective,
+                        "replacement": replacement,
+                        "replacement_effective": replacement_effective,
+                    }
+                )
+        return repaired, repairs
+
+    @staticmethod
+    def _archive_rotation_candidates(query: str) -> list[str]:
+        normalized = " ".join(query.casefold().split())
+        actions = [
+            "arguing",
+            "barbecue",
+            "dancing",
+            "eating",
+            "fishing",
+            "grocery",
+            "laughing",
+            "reading",
+            "running",
+            "saxophone",
+            "shopping",
+            "skateboard",
+            "television",
+        ]
+        if "family guy" in normalized:
+            characters = [
+                "Peter Griffin",
+                "Lois Griffin",
+                "Stewie Griffin",
+                "Brian Griffin",
+                "Meg Griffin",
+                "Chris Griffin",
+                "Glenn Quagmire",
+                "Cleveland Brown",
+            ]
+            simple = [f"Family Guy {character} animated frame" for character in characters]
+            paired = [
+                f"Family Guy {character} {action} animated frame"
+                for character in characters
+                for action in actions
+            ]
+            return [*simple, *paired]
+        if "futurama" in normalized:
+            characters = [
+                "Fry",
+                "Leela",
+                "Bender",
+                "Zoidberg",
+                "Farnsworth",
+                "Hermes",
+                "Amy",
+                "Nibbler",
+                "Kif",
+                "Zapp",
+            ]
+            franchise = "Futurama"
+        else:
+            characters = [
+                "Homer",
+                "Marge",
+                "Bart",
+                "Lisa",
+                "Maggie",
+                "Krusty",
+                "Burns",
+                "Smithers",
+                "Flanders",
+                "Milhouse",
+                "Nelson",
+                "Moe",
+            ]
+            franchise = "The Simpsons"
+        simple = [f"{franchise} {character} animated frame" for character in characters]
+        action_only = [f"{franchise} characters {action} animated frame" for action in actions]
+        paired = [
+            f"{franchise} {character} {action} animated frame"
+            for character in characters
+            for action in actions
+        ]
+        return [*simple, *action_only, *paired]
 
     def _recent_cluster_exclusions(self, limit: int = 12) -> list[str]:
         with self.database.session() as session:
@@ -661,10 +1138,30 @@ class DiscoveryService:
         }
         if name == "browser":
             return BrowserSearchProvider(self.settings, live=live)
+        if name == "duckduckgo":
+            return DuckDuckGoSearchProvider(
+                self.settings,
+                sample_offset=self._provider_run_count("duckduckgo"),
+            )
+        if name == "family-guy-wiki":
+            return FamilyGuyWikiSearchProvider(
+                self.settings,
+                sample_offset=self._provider_run_count("family-guy-wiki"),
+            )
         if name == "frinkiac":
             return FrinkiacSearchProvider(
                 self.settings,
                 sample_offset=self._provider_run_count("frinkiac"),
+            )
+        if name == "morbotron":
+            return MorbotronSearchProvider(
+                self.settings,
+                sample_offset=self._provider_run_count("morbotron"),
+            )
+        if name == "archives":
+            return TopicMixArchiveSearchProvider(
+                self.settings,
+                sample_offset=self._provider_run_count("archives"),
             )
         if name == "api":
             return ApiSearchProvider(self.settings)
@@ -673,7 +1170,11 @@ class DiscoveryService:
                 FrinkiacSearchProvider(
                     self.settings,
                     sample_offset=self._provider_run_count("ensemble"),
-                )
+                ),
+                MorbotronSearchProvider(
+                    self.settings,
+                    sample_offset=self._provider_run_count("ensemble"),
+                ),
             ]
             if manual_urls:
                 members.append(ManualUrlProvider(manual_urls))
@@ -681,6 +1182,13 @@ class DiscoveryService:
                 members.append(ApiSearchProvider(self.settings))
             if self.settings.enable_browser_search and live:
                 members.append(BrowserSearchProvider(self.settings, live=True))
+            elif self.settings.enable_browser_search:
+                members.append(
+                    DuckDuckGoSearchProvider(
+                        self.settings,
+                        sample_offset=self._provider_run_count("ensemble"),
+                    )
+                )
             return EnsembleSearchProvider(
                 members,
                 max_results=self.settings.browser_search_max_results,

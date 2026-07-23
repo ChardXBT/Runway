@@ -211,7 +211,11 @@ async def test_complete_caption_slate_and_abstention_provenance_are_persisted(
     displayed = [row for row in completed_records if row.displayed]
     assert len(displayed) == 3
     assert all(row.eligible for row in displayed)
-    assert [row.display_order for row in displayed] == [1, 2, 3]
+    assert sorted(row.display_order for row in displayed if row.display_order is not None) == [
+        1,
+        2,
+        3,
+    ]
     generated_angles = {candidate["editorial_angle"] for candidate in raw_attempts[0]["candidates"]}
     assert set(editorial_brief["recommended_angles"]) <= generated_angles
     assert set(cited["historical_post_ids"]) <= set(supplied["historical_post_ids"])

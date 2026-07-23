@@ -11,24 +11,49 @@ from runway.captions.planning import EditorialBrief
 from runway.captions.verification import VerificationResult
 
 OPEN_QUESTION_RE = re.compile(
-    r"^\s*(?:what|which|who|where|when|why|how\s+(?:many|much|long|far))\b",
+    r"^\s*(?:what|which|who|where|when|why|how)\b",
     flags=re.IGNORECASE,
 )
 ANSWER_UNCERTAINTY_SUBJECTS = (
     "answer",
+    "cause",
+    "caused",
     "contents",
     "food",
+    "follows",
     "identity",
+    "intent",
+    "intention",
     "item",
     "location",
+    "meaning",
+    "motivation",
     "number",
     "object",
     "person",
+    "prompted",
+    "purpose",
     "quantity",
     "reason",
+    "sparked",
     "snack",
+    "statement",
     "time",
     "type",
+)
+SUBJECTIVE_QUESTION_MARKER_GROUPS = (
+    ("better",),
+    ("best",),
+    ("bigger",),
+    ("choose", "choice"),
+    ("notice first", "noticed first"),
+    ("play first", "played first"),
+    ("screenshot",),
+    ("steal", "steals"),
+    ("strongest-looking", "strongest looking"),
+    ("trust", "trustworthy"),
+    ("wildest",),
+    ("worth",),
 )
 
 ClaimClass = Literal[
@@ -306,9 +331,16 @@ def normalize_open_question_answer_uncertainty(
 ) -> CaptionGroundingAssessment:
     """Do not penalize a grounded open question merely because its answer is unknown."""
 
+    normalized_caption = " ".join(caption.casefold().split())
+    subjective_groups = [
+        group
+        for group in SUBJECTIVE_QUESTION_MARKER_GROUPS
+        if any(marker in normalized_caption for marker in group)
+    ]
+    subjective_invitation = caption.rstrip().endswith("?") and bool(subjective_groups)
     if (
         assessment.verdict != "uncertain"
-        or not OPEN_QUESTION_RE.search(caption)
+        or not (OPEN_QUESTION_RE.search(caption) or subjective_invitation)
         or not assessment.supported_claims
         or assessment.unsupported_claims
         or assessment.contradictions
@@ -319,6 +351,18 @@ def normalize_open_question_answer_uncertainty(
     def is_answer_only(value: str) -> bool:
         normalized = " ".join(value.casefold().split())
         if "left open by the question" in normalized:
+            return True
+        if subjective_invitation and (
+            any(
+                marker in normalized
+                for marker in (
+                    "matter of opinion",
+                    "personal preference",
+                    "subjective",
+                )
+            )
+            or any(marker in normalized for group in subjective_groups for marker in group)
+        ):
             return True
         identifies_answer_domain = any(
             re.search(rf"\b{re.escape(subject)}\b", normalized)
@@ -332,10 +376,23 @@ def normalize_open_question_answer_uncertainty(
                 "not fully identifiable",
                 "not identifiable",
                 "not confirmed",
+                "not directly observable",
+                "not known",
+                "not shown",
+                "not visible",
                 "unknown answer",
             )
         )
-        return identifies_answer_domain and answer_is_unspecified
+        answer_domain_phrase = bool(
+            re.match(
+                (
+                    r"^(?:the )?(?:answer|cause|intent|intention|meaning|motivation|"
+                    r"purpose|reason)\b"
+                ),
+                normalized,
+            )
+        )
+        return identifies_answer_domain and (answer_is_unspecified or answer_domain_phrase)
 
     if not all(is_answer_only(value) for value in assessment.uncertain_claims):
         return assessment

@@ -1,16 +1,28 @@
-Create six narrow and meaningfully different image-search queries from the supplied local style
-profile and rotation state. Return only the requested schema. Do not claim to crawl the whole
-internet.
+Create exactly six narrow and meaningfully different image-search queries from the supplied local
+style profile, explicit topic mix, and rotation state. Return only the requested schema. Do not
+claim to crawl the whole internet.
 
-Keep at least the supplied minimum share of queries on the primary topic. Every literal search
-query must be concise (5-9 words), put the named character in quotation marks, and use concrete
-search terms such as screencap, screenshot, frame, action, or setting. Do not write prose-like
-queries or stack adjectives. Example shape: "Homer Simpson" fishing lake screencap.
-When one topic dominates
-the historical catalogue, diversify within that topic instead of drifting to weakly represented
-franchises. Vary named characters, visible actions, settings, emotional beats, camera distance, and
-group size. Each query should target a different scene concept. Do not repeat generic "reaction
-scene", "shocked", or "close up" concepts with only cosmetic wording changes.
+Keep at least the supplied minimum share of queries on the primary topic. Write literal search
+queries instead of stacked adjectives. Include the franchise or show name literally in every query, even
+when a named character is also present. Example shape: The Simpsons "Homer Simpson" fishing
+screencap.
+
+When explicit secondary topics are supplied, they are creator-approved and must be represented
+within the remaining query share even if the historical catalogue is dominated by the primary
+topic. Spread those secondary slots as evenly as six total queries allow. When no explicit
+secondary topics are supplied, follow the learned historical distribution. Vary named characters,
+visible actions, settings, emotional beats, camera distance, and group size. Each query should
+target a different scene concept. Do not repeat generic "reaction scene", "shocked", or "close up"
+concepts with only cosmetic wording changes.
+
+Treat recent_search_queries as exhausted search directions. Do not repeat them or make a near-copy
+that changes only a character name, location adjective, or image-format word. Rotate to materially
+different characters, actions, settings, emotional beats, group sizes, and camera distances so
+successive searches do not rediscover the same episode-frame clusters.
+On a novelty retry, repeated_queries are rejected and forbidden_archive_queries are the compacted
+requests the source adapters would actually send. None of the six replacements may resolve to one
+of those compacted requests. Change the named character and/or use a materially different visible
+action that survives compaction; cosmetic sentence rewrites do not count.
 
 Copyright, licensing status, fan art, personal artwork, watermarks, and source type are not search
 exclusions. Preserve source-page and direct-image provenance for every result. Never seek or return

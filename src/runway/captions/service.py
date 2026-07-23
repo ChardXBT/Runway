@@ -39,7 +39,11 @@ from runway.captions.preferences import (
     PreferenceScore,
 )
 from runway.captions.taxonomy import analyze_caption, normalize_caption
-from runway.captions.verification import CaptionVerifier, VerificationResult
+from runway.captions.verification import (
+    CaptionVerifier,
+    VerificationResult,
+    is_generic_engagement_bait,
+)
 from runway.captions.visual_consensus import (
     VisualConsensusReport,
     candidate_analysis_from_mapping,
@@ -80,15 +84,6 @@ from runway.intelligence.policies import PolicySnapshot
 from runway.intelligence.reranking import JointMultimodalReranker
 from runway.intelligence.retrieval import RetrievalService
 from runway.media.service import prepare_model_detail_views
-
-GENERIC_PATTERNS = (
-    "what do you think",
-    "comment below",
-    "like and subscribe",
-    "is very ",
-    "looks very ",
-    "seems very ",
-)
 
 
 def _required_int(value: object, field: str) -> int:
@@ -140,9 +135,12 @@ class CaptionService:
         "version": "canonical-caption-pipeline-4-ensemble-grounding",
         "candidate_limit": 12,
         "display_limit": 3,
+        "minimum_eligible_candidates": 2,
         "retry_limit": 1,
         "grounding_threshold": 0.85,
         "diversity_similarity_threshold": 0.82,
+        "detail_crop_ratio": 0.6,
+        "detail_grid_size": 2,
         "weights": {
             "preference": 0.20,
             "grounding": 0.28,
@@ -215,6 +213,8 @@ class CaptionService:
             for path in prepare_model_detail_views(
                 image_path,
                 self.settings,
+                crop_ratio=float(self.generation_configuration["detail_crop_ratio"]),
+                grid_size=int(self.generation_configuration["detail_grid_size"]),
             )
         ]
         audit_analysis, visual_audit_run_id, visual_audit_usage = await self._audit_visual_analysis(
@@ -324,11 +324,12 @@ class CaptionService:
         )
         pipeline_usage = _accumulate_usage(pipeline_usage, first_grounding_usage)
         grounding_audit_run_ids = [first_grounding_run_id] if first_grounding_run_id else []
-        if len(self._eligible_rows(ranked)) < 3:
+        slate_shortfall = self._slate_shortfall_reason(ranked, policy)
+        if slate_shortfall is not None:
             retry_payload = {
                 **payload,
                 "retry": {
-                    "reason": "fewer than three grounded, policy-compliant candidates survived",
+                    "reason": slate_shortfall,
                     "failed_candidates": [
                         {
                             "text": row["candidate"].text,
@@ -339,7 +340,8 @@ class CaptionService:
                         if not row["eligible"]
                     ],
                     "instruction": (
-                        "Use only the brief's highest-confidence visible facts and vary structure."
+                        "Use only the brief's highest-confidence visible facts, vary structure, "
+                        "and include concrete open-ended questions anchored to visible premises."
                     ),
                 },
             }
@@ -384,7 +386,8 @@ class CaptionService:
 
         latency_ms = round((time.perf_counter() - started_perf) * 1000, 3)
         eligible = self._eligible_rows(ranked)
-        if len(eligible) < 3:
+        abstention_reason = self._slate_shortfall_reason(eligible, policy)
+        if abstention_reason is not None:
             evidence_provenance = self._evidence_provenance(
                 channel_id=channel_id,
                 context=context,
@@ -407,7 +410,7 @@ class CaptionService:
                 payload=payload,
                 started_at=started_at,
                 latency_ms=latency_ms,
-                reason="no three grounded, policy-compliant, distinct captions survived",
+                reason=abstention_reason,
                 agent_run_ids=agent_run_ids,
                 evidence_provenance=evidence_provenance,
                 usage=pipeline_usage,
@@ -429,7 +432,7 @@ class CaptionService:
                 agent_run_ids=agent_run_ids,
                 slate_id=slate_id,
                 terminal_status="abstained",
-                terminal_reason=("no three grounded, policy-compliant, distinct captions survived"),
+                terminal_reason=abstention_reason,
                 usage=pipeline_usage,
             )
             return CaptionOptions(
@@ -445,9 +448,7 @@ class CaptionService:
                     "retrieval_run_id",
                 ),
                 abstained=True,
-                abstention_reason=(
-                    "no three grounded, policy-compliant, distinct captions survived"
-                ),
+                abstention_reason=abstention_reason,
             )
 
         displayed = self._select_display_slate(eligible, policy, channel_id=channel_id)
@@ -749,23 +750,7 @@ class CaptionService:
 
     @staticmethod
     def _requires_visual_tiebreak(consensus: VisualConsensusReport) -> bool:
-        risky_action_markers = (
-            "argu",
-            "driv",
-            "eat",
-            "hold",
-            "kiss",
-            "read",
-            "sleep",
-            "watch",
-            "writ",
-        )
-        actions = " ".join(consensus.analysis.actions).casefold()
-        return (
-            consensus.consensus_coverage < 0.8
-            or bool(consensus.disputed_facts)
-            or any(marker in actions for marker in risky_action_markers)
-        )
+        return consensus.consensus_coverage < 0.8 or bool(consensus.disputed_facts)
 
     async def _audit_caption_grounding(
         self,
@@ -1064,9 +1049,7 @@ class CaptionService:
                 components=components,
             )
             components["preference"] = preference.score
-            generic_penalty = float(
-                any(marker in candidate.text.casefold() for marker in GENERIC_PATTERNS)
-            )
+            generic_penalty = float(is_generic_engagement_bait(candidate.text))
             weights = cast(
                 dict[str, float],
                 self.generation_configuration["weights"],
@@ -1132,6 +1115,26 @@ class CaptionService:
     @staticmethod
     def _eligible_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [row for row in rows if bool(row["eligible"])]
+
+    def _has_minimum_eligible_slate(self, rows: list[dict[str, Any]]) -> bool:
+        minimum = int(self.generation_configuration["minimum_eligible_candidates"])
+        return len(self._eligible_rows(rows)) >= minimum
+
+    def _slate_shortfall_reason(
+        self,
+        rows: list[dict[str, Any]],
+        policy: PolicySnapshot,
+    ) -> str | None:
+        eligible = self._eligible_rows(rows)
+        minimum = int(self.generation_configuration["minimum_eligible_candidates"])
+        if len(eligible) < minimum:
+            return f"fewer than {minimum} grounded, policy-compliant, distinct captions survived"
+        if policy.question_first and not any(
+            cast(CaptionCandidate, row["candidate"]).structure == "open_question"
+            for row in eligible
+        ):
+            return "no grounded open-ended question survived for a question-first channel"
+        return None
 
     def _select_display_slate(
         self,

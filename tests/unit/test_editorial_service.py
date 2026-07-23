@@ -120,7 +120,7 @@ async def test_editorial_searches_when_existing_candidates_are_not_distinct(
             live: bool = False,
         ) -> dict[str, object]:
             assert days == 1
-            assert live is (provider_name == "browser")
+            assert live is False
             discovery_providers.append(provider_name)
             return {
                 "provider": provider_name,
@@ -137,7 +137,7 @@ async def test_editorial_searches_when_existing_candidates_are_not_distinct(
 
     monkeypatch.setattr(service, "_review_count", lambda: review_count)
     monkeypatch.setattr(service, "_unused_candidate_count", lambda: 1)
-    monkeypatch.setattr(service, "_supports_frinkiac_fallback", lambda: True)
+    monkeypatch.setattr(service, "_frame_archive_providers", lambda: ["frinkiac"])
     monkeypatch.setattr(service, "_generate", generate)
     monkeypatch.setattr(
         service,
@@ -156,7 +156,7 @@ async def test_editorial_searches_when_existing_candidates_are_not_distinct(
     result = await service.ensure_options(target=1)
 
     assert result["generated_proposal_ids"] == [88]
-    assert discovery_providers == ["browser", "frinkiac"]
+    assert discovery_providers == ["archives", "frinkiac"]
     assert generate_calls == 3
     assert result["generation"]["running"] is False
 
@@ -188,9 +188,9 @@ async def test_editorial_uses_fallback_when_browser_search_fails(
         ) -> dict[str, object]:
             nonlocal candidate_available
             assert days == 1
+            assert live is False
             discovery_providers.append(provider_name)
-            if provider_name == "browser":
-                assert live is True
+            if provider_name == "archives":
                 raise RuntimeError("search challenge")
             candidate_available = True
             return {"provider": provider_name, "accepted": 1}
@@ -206,7 +206,7 @@ async def test_editorial_uses_fallback_when_browser_search_fails(
         "_unused_candidate_count",
         lambda: int(candidate_available),
     )
-    monkeypatch.setattr(service, "_supports_frinkiac_fallback", lambda: True)
+    monkeypatch.setattr(service, "_frame_archive_providers", lambda: ["frinkiac"])
     monkeypatch.setattr(service, "_generate", generate)
     monkeypatch.setattr(
         service,
@@ -225,7 +225,7 @@ async def test_editorial_uses_fallback_when_browser_search_fails(
     result = await service.ensure_options(target=1)
 
     assert result["generated_proposal_ids"] == [99]
-    assert discovery_providers == ["browser", "frinkiac"]
+    assert discovery_providers == ["archives", "frinkiac"]
     attempts = result["discovery"]["attempts"]
     assert attempts[0]["status"] == "failed"
     assert attempts[1]["provider"] == "frinkiac"

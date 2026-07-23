@@ -90,6 +90,102 @@ def test_artist_portfolio_domain_is_allowed_unless_creator_explicitly_blocks_it(
     assert result.final_rank_score > 0.0
 
 
+def test_obvious_merchandise_photo_is_not_treated_as_a_cartoon_frame(
+    database,
+    settings,
+) -> None:
+    features, analysis, duplicate = _rank_inputs(franchise="Family Guy")
+    analysis = analysis.model_copy(
+        update={
+            "scene_archetype": "product or collection photograph",
+            "composition": "top-down photograph of a display",
+            "objects": ["six plush dolls", "product tags", "carpet"],
+            "setting": "indoor carpeted floor",
+        }
+    )
+
+    result = CandidateRanker(database, settings).rank(
+        features,
+        analysis,
+        duplicate,
+        source_domain="familyguy.fandom.com",
+        rights_status="unknown",
+    )
+
+    assert result.hard_rejection_reason == "non_frame_merchandise"
+    assert result.final_rank_score == 0.0
+
+
+def test_intrusive_production_credit_overlay_is_rejected(
+    database,
+    settings,
+) -> None:
+    features, analysis, duplicate = _rank_inputs(franchise="The Simpsons")
+    analysis = analysis.model_copy(
+        update={
+            "text_overlay": True,
+            "ocr_text": ["CO-EXECUTIVE PRODUCER ROB LAZEBNIK"],
+        }
+    )
+
+    result = CandidateRanker(database, settings).rank(
+        features,
+        analysis,
+        duplicate,
+        source_domain="frinkiac.com",
+        rights_status="unknown",
+    )
+
+    assert result.hard_rejection_reason == "intrusive_production_credit"
+    assert result.final_rank_score == 0.0
+
+
+def test_standalone_production_credit_title_card_is_rejected(
+    database,
+    settings,
+) -> None:
+    features, analysis, duplicate = _rank_inputs(franchise="The Simpsons")
+    analysis = analysis.model_copy(
+        update={
+            "characters": [],
+            "scene_archetype": "Credit/title card",
+            "text_overlay": True,
+            "ocr_text": ["JULIE KAVNER"],
+            "caption_potential": 0.12,
+        }
+    )
+
+    result = CandidateRanker(database, settings).rank(
+        features,
+        analysis,
+        duplicate,
+        source_domain="frinkiac.com",
+        rights_status="unknown",
+    )
+
+    assert result.hard_rejection_reason == "production_credit_title_card"
+    assert result.final_rank_score == 0.0
+
+
+def test_preflight_rejection_cannot_be_lost_during_ranking(
+    database,
+    settings,
+) -> None:
+    features, analysis, duplicate = _rank_inputs(franchise="The Simpsons")
+
+    result = CandidateRanker(database, settings).rank(
+        features,
+        analysis,
+        duplicate,
+        source_domain="frinkiac.com",
+        rights_status="unknown",
+        preflight_rejection="adjacent_archive_frame",
+    )
+
+    assert result.hard_rejection_reason == "adjacent_archive_frame"
+    assert result.final_rank_score == 0.0
+
+
 def test_nsfw_candidate_is_always_hard_rejected(database, settings) -> None:
     features, analysis, duplicate = _rank_inputs(franchise="The Simpsons")
     analysis = analysis.model_copy(update={"unsafe_probability": 0.91})
@@ -142,6 +238,45 @@ def test_unrelated_candidate_is_rejected_against_active_franchise_profile(
 
     assert result.hard_rejection_reason == "off_topic"
     assert result.final_rank_score == 0.0
+
+
+def test_creator_approved_secondary_franchise_is_supported(
+    database,
+    settings,
+) -> None:
+    with database.session() as session:
+        channel = get_channel(session, settings.channel_handle)
+        session.add(
+            StyleProfile(
+                channel_id=channel.id,
+                version=1,
+                catalogue_cutoff=datetime.now(UTC),
+                profile_json=json.dumps(
+                    {
+                        "caption_statistics": {"sample_size": 200},
+                        "franchise_distribution": [["The Simpsons", 200]],
+                    }
+                ),
+                representative_post_ids_json="[]",
+                excluded_post_ids_json="[]",
+                is_active=True,
+            )
+        )
+    mixed_settings = settings.model_copy(
+        update={"discovery_secondary_topics": "Family Guy,Futurama"}
+    )
+    features, analysis, duplicate = _rank_inputs(franchise="Family Guy")
+
+    result = CandidateRanker(database, mixed_settings).rank(
+        features,
+        analysis,
+        duplicate,
+        source_domain="familyguy.fandom.com",
+        rights_status="unknown",
+    )
+
+    assert result.hard_rejection_reason is None
+    assert result.topic_eligibility_class == "supported"
 
 
 def _rank_inputs(

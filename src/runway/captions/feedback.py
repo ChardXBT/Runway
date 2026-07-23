@@ -48,6 +48,8 @@ ALLOWED_REASON_CODES = {
     "prefer_open_question",
     "wrong_emotion",
     "wrong_character",
+    "wrong_action",
+    "unsupported_claim",
     "invented_context",
     "not_engaging",
     "not_funny",
@@ -60,6 +62,7 @@ ALLOWED_REASON_CODES = {
     "human_edit",
     "human_lineup_edit",
     "selected_alternative",
+    "fewer_like_this",
     "approved",
 }
 
@@ -88,22 +91,13 @@ class CaptionFeedbackService:
         note: str | None = None,
         source_event_id: int | None = None,
     ) -> dict[str, object]:
-        normalized_verdict = verdict.strip().lower()
-        if normalized_verdict not in ALLOWED_VERDICTS:
-            raise ValueError(f"unsupported caption verdict: {verdict}")
-        normalized_reasons = sorted(
-            {value.strip() for value in reason_codes or [] if value.strip()}
+        normalized_verdict, normalized_reasons, clean_note = self.validate_fields(
+            verdict=verdict,
+            reason_codes=reason_codes,
+            image_verdict=image_verdict,
+            pairing_verdict=pairing_verdict,
+            note=note,
         )
-        unexpected = set(normalized_reasons) - ALLOWED_REASON_CODES
-        if unexpected:
-            raise ValueError(f"unsupported feedback reasons: {', '.join(sorted(unexpected))}")
-        if image_verdict is not None and image_verdict not in ALLOWED_IMAGE_VERDICTS:
-            raise ValueError(f"unsupported image verdict: {image_verdict}")
-        if pairing_verdict is not None and pairing_verdict not in ALLOWED_IMAGE_VERDICTS:
-            raise ValueError(f"unsupported pairing verdict: {pairing_verdict}")
-        clean_note = note.strip() if note else None
-        if clean_note and len(clean_note) > 1000:
-            raise ValueError("feedback note must be 1000 characters or fewer")
 
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
@@ -194,6 +188,34 @@ class CaptionFeedbackService:
             )
             feedback_id = existing.id
         return self.detail(feedback_id)
+
+    @staticmethod
+    def validate_fields(
+        *,
+        verdict: str,
+        reason_codes: list[str] | None = None,
+        image_verdict: str | None = None,
+        pairing_verdict: str | None = None,
+        note: str | None = None,
+    ) -> tuple[str, list[str], str | None]:
+        """Validate a learning payload before callers commit proposal mutations."""
+        normalized_verdict = verdict.strip().lower()
+        if normalized_verdict not in ALLOWED_VERDICTS:
+            raise ValueError(f"unsupported caption verdict: {verdict}")
+        normalized_reasons = sorted(
+            {value.strip() for value in reason_codes or [] if value.strip()}
+        )
+        unexpected = set(normalized_reasons) - ALLOWED_REASON_CODES
+        if unexpected:
+            raise ValueError(f"unsupported feedback reasons: {', '.join(sorted(unexpected))}")
+        if image_verdict is not None and image_verdict not in ALLOWED_IMAGE_VERDICTS:
+            raise ValueError(f"unsupported image verdict: {image_verdict}")
+        if pairing_verdict is not None and pairing_verdict not in ALLOWED_IMAGE_VERDICTS:
+            raise ValueError(f"unsupported pairing verdict: {pairing_verdict}")
+        clean_note = note.strip() if note else None
+        if clean_note and len(clean_note) > 1000:
+            raise ValueError("feedback note must be 1000 characters or fewer")
+        return normalized_verdict, normalized_reasons, clean_note
 
     def reconcile_legacy(self) -> dict[str, int]:
         """Idempotently enrich or derive canonical signals from legacy rows."""

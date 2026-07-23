@@ -28,9 +28,17 @@ OPEN_QUESTION_RE = re.compile(
     r"pourquoi|comment|quoi|qui|où|quand)\b",
     re.IGNORECASE,
 )
-YES_NO_QUESTION_RE = re.compile(
-    r"^\s*(is|are|was|were|do|does|did|can|could|would|will|has|have|"
-    r"should|did|isn't|aren't)\b",
+FACT_LOOKUP_QUESTION_RE = re.compile(
+    (
+        r"^\s*(?:(?:(?:what|which) (?:is|are|was|were)|what[’']s) .{1,60}\b"
+        r"(?:holding|carrying|wearing|reading|eating|drinking)\b|"
+        r"what (?:do|does|did) .{1,60}\b"
+        r"(?:carry|drink|eat|have|hold|read|wear)\b|"
+        r"(?:what (?:is|are|was|were)|what[’']s) "
+        r"(?:on|in|inside|behind|under|above)\b|"
+        r"how (?:many|much)\b|"
+        r"(?:who|where|when)(?: (?:is|are|was|were)|[’']s)\b)"
+    ),
     re.IGNORECASE,
 )
 
@@ -52,11 +60,19 @@ def analyze_caption(text: str, *, language: str = "und") -> CaptionTaxonomyResul
     stripped = text.strip()
     lowered = stripped.casefold()
     is_question = stripped.endswith("?")
-    open_question = bool(is_question and OPEN_QUESTION_RE.match(stripped))
-    if open_question:
-        structure: CaptionStructure = "open_question"
+    factual_lookup = bool(is_question and FACT_LOOKUP_QUESTION_RE.match(stripped))
+    open_question = bool(is_question and OPEN_QUESTION_RE.match(stripped) and not factual_lookup)
+    structure: CaptionStructure
+    if factual_lookup:
+        structure = "quiz"
+    elif open_question:
+        structure = "open_question"
     elif is_question:
-        structure = "yes_no_question" if YES_NO_QUESTION_RE.match(stripped) else "open_question"
+        # A question mark alone does not make a caption open-ended. Declarative or noun-phrase
+        # fragments such as "Bart and Lisa holding hands?" must not satisfy a question-first
+        # policy merely because they are neither a recognized WH question nor an auxiliary-led
+        # yes/no question.
+        structure = "yes_no_question"
     elif "___" in stripped or "____" in stripped:
         structure = "fill_in_blank"
     elif any(marker in lowered for marker in ("vote ", "poll:", "pick one")):
