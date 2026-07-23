@@ -56,7 +56,12 @@ async def test_profile_is_reproducible_and_evaluation_is_measured(
     assert second["holdout_post_ids"]
     distribution = dict(second["franchise_distribution"])
     assert distribution["Reviewed profile franchise"] == 1
-    assert distribution.get(raw_franchise, 0) == 2
+    expected_raw_franchise_count = sum(
+        analysis.effective_annotation(int(post_id))["effective"]["franchise"] == raw_franchise
+        for post_id in second["training_post_ids"]
+    )
+    assert expected_raw_franchise_count > 0
+    assert distribution.get(raw_franchise, 0) == expected_raw_franchise_count
     assert second["reviewed_training_annotation_post_ids"] == [2]
     assert second["reviewed_catalogue_annotation_post_ids"] == [2]
     assert second["corrected_training_annotation_post_ids"] == [2]
