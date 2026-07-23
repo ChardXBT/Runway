@@ -1259,7 +1259,10 @@ class IntelligenceDoctor:
         legacy_without_split_provenance = 0
         for slate in slates:
             model_run = model_runs.get(slate.model_run_id) if slate.model_run_id else None
-            is_current = model_run is not None and model_run.prompt_version == "captions-v5"
+            is_current = model_run is not None and model_run.prompt_version in {
+                "captions-v5",
+                "captions-v6",
+            }
             if not is_current and slate.model_supplied_evidence_json in {"", "[]"}:
                 legacy_without_split_provenance += 1
                 continue

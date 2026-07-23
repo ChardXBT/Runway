@@ -12,9 +12,19 @@ from runway.analysis.features import (
     caption_features,
     channel_style_score,
 )
-from runway.analysis.runtime import AgentRuntime, runtime_for
-from runway.analysis.schemas import CaptionCandidate, CaptionCandidateSet, CaptionOptions
-from runway.captions.claim_grounding import ClaimLevelGroundingVerifier
+from runway.analysis.runtime import AgentRuntime, AgentRuntimeError, runtime_for
+from runway.analysis.schemas import (
+    CandidateAnalysis,
+    CaptionCandidate,
+    CaptionCandidateSet,
+    CaptionGroundingAssessment,
+    CaptionGroundingAudit,
+    CaptionOptions,
+)
+from runway.captions.claim_grounding import (
+    ClaimLevelGroundingVerifier,
+    normalize_open_question_answer_uncertainty,
+)
 from runway.captions.feature_snapshots import (
     FEATURE_SCHEMA_VERSION,
     TAXONOMY_VERSION,
@@ -30,6 +40,12 @@ from runway.captions.preferences import (
 )
 from runway.captions.taxonomy import analyze_caption, normalize_caption
 from runway.captions.verification import CaptionVerifier, VerificationResult
+from runway.captions.visual_consensus import (
+    VisualConsensusReport,
+    candidate_analysis_from_mapping,
+    reconcile_visual_audit_sequence,
+    trusted_source_evidence,
+)
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -63,6 +79,7 @@ from runway.intelligence.embeddings import (
 from runway.intelligence.policies import PolicySnapshot
 from runway.intelligence.reranking import JointMultimodalReranker
 from runway.intelligence.retrieval import RetrievalService
+from runway.media.service import prepare_model_detail_views
 
 GENERIC_PATTERNS = (
     "what do you think",
@@ -83,14 +100,48 @@ def _required_int(value: object, field: str) -> int:
         raise ValueError(f"{field} must be an integer") from exc
 
 
+def _accumulate_usage(
+    total: dict[str, object],
+    addition: dict[str, object],
+) -> dict[str, object]:
+    """Add one model call to a nested usage summary without losing provider fields."""
+
+    def merge(first: object, second: object) -> object:
+        if (
+            isinstance(first, (int, float))
+            and not isinstance(first, bool)
+            and isinstance(second, (int, float))
+            and not isinstance(second, bool)
+        ):
+            return first + second
+        if isinstance(first, dict) and isinstance(second, dict):
+            combined: dict[str, object] = {str(key): value for key, value in first.items()}
+            for key, value in second.items():
+                normalized_key = str(key)
+                combined[normalized_key] = (
+                    merge(combined[normalized_key], value) if normalized_key in combined else value
+                )
+            return combined
+        return second
+
+    merged = cast(dict[str, object], merge(total, addition))
+    prior_calls = total.get("model_calls", 0)
+    merged["model_calls"] = (
+        int(prior_calls)
+        if isinstance(prior_calls, (int, float)) and not isinstance(prior_calls, bool)
+        else 0
+    ) + 1
+    return merged
+
+
 class CaptionService:
-    prompt_version = "captions-v5"
+    prompt_version = "captions-v6"
     generation_configuration: dict[str, Any] = {
-        "version": "canonical-caption-pipeline-2-angle-lanes",
+        "version": "canonical-caption-pipeline-4-ensemble-grounding",
         "candidate_limit": 12,
         "display_limit": 3,
         "retry_limit": 1,
-        "grounding_threshold": 0.72,
+        "grounding_threshold": 0.85,
         "diversity_similarity_threshold": 0.82,
         "weights": {
             "preference": 0.20,
@@ -141,15 +192,69 @@ class CaptionService:
                 raise LookupError(f"candidate {candidate_id} not found")
             channel_id = search_run.channel_id
             image_path = self.settings.resolved_data_dir / media.local_path
-            analysis = self._json_dict(candidate.detected_topic_json)
+            primary_analysis = candidate_analysis_from_mapping(
+                self._json_dict(candidate.detected_topic_json)
+            )
+            source_evidence = trusted_source_evidence(
+                source_domain=candidate.source_domain,
+                provider_result_json=candidate.provider_result_json,
+            )
             source_context: dict[str, object] = {
                 "candidate_id": candidate.id,
                 "media_asset_id": media.id,
                 "source_page_url": candidate.source_page_url,
                 "source_domain": candidate.source_domain,
                 "rights_status": candidate.rights_status,
+                "trusted_source_evidence": source_evidence,
             }
             image_score = candidate.final_rank_score
+
+        pipeline_usage: dict[str, object] = {}
+        detail_image_paths = [
+            str(path)
+            for path in prepare_model_detail_views(
+                image_path,
+                self.settings,
+            )
+        ]
+        audit_analysis, visual_audit_run_id, visual_audit_usage = await self._audit_visual_analysis(
+            channel_id=channel_id,
+            candidate_id=candidate_id,
+            image_path=str(image_path),
+            source_domain=candidate.source_domain,
+            source_evidence=source_evidence,
+            primary=primary_analysis,
+            detail_image_paths=detail_image_paths,
+        )
+        pipeline_usage = _accumulate_usage(pipeline_usage, visual_audit_usage)
+        visual_audits = [audit_analysis]
+        visual_audit_run_ids = [visual_audit_run_id] if visual_audit_run_id is not None else []
+        initial_consensus = reconcile_visual_audit_sequence(
+            primary_analysis,
+            visual_audits,
+            source_evidence=source_evidence,
+        )
+        if self._requires_visual_tiebreak(initial_consensus):
+            tiebreak_analysis, tiebreak_run_id, tiebreak_usage = await self._audit_visual_analysis(
+                channel_id=channel_id,
+                candidate_id=candidate_id,
+                image_path=str(image_path),
+                source_domain=candidate.source_domain,
+                source_evidence=source_evidence,
+                primary=primary_analysis,
+                detail_image_paths=detail_image_paths,
+            )
+            visual_audits.append(tiebreak_analysis)
+            if tiebreak_run_id is not None:
+                visual_audit_run_ids.append(tiebreak_run_id)
+            pipeline_usage = _accumulate_usage(pipeline_usage, tiebreak_usage)
+        visual_consensus = reconcile_visual_audit_sequence(
+            primary_analysis,
+            visual_audits,
+            source_evidence=source_evidence,
+        )
+        analysis = visual_consensus.analysis.model_dump()
+        source_context["visual_consensus"] = visual_consensus.model_dump()
 
         context = self.retrieval.context_for_candidate(
             media.id,
@@ -161,6 +266,7 @@ class CaptionService:
             retrieval_context=context,
             policy=policy,
             source_context=source_context,
+            visual_consensus=visual_consensus,
         )
         caption_examples = cast(
             list[dict[str, Any]],
@@ -170,6 +276,11 @@ class CaptionService:
         payload: dict[str, object] = {
             "candidate_id": candidate_id,
             "candidate_analysis": analysis,
+            "visual_consensus": {
+                "confirmed_facts": [fact.model_dump() for fact in visual_consensus.confirmed_facts],
+                "disputed_facts": [fact.model_dump() for fact in visual_consensus.disputed_facts],
+                "trusted_source_evidence": source_evidence,
+            },
             "historical_post_ids": historical_ids,
             "retrieval_context": context,
             "editorial_brief": brief.model_dump(),
@@ -183,19 +294,21 @@ class CaptionService:
                 for angle in brief.recommended_angles
             ],
             "_image_path": str(image_path),
+            "_image_paths": detail_image_paths,
         }
         started_at = utcnow()
         started_perf = time.perf_counter()
         attempts: list[CaptionCandidateSet] = []
         agent_run_ids: list[int] = []
-        generated, agent_run_id = await self._generate_with_agent(
+        generated, agent_run_id, generation_usage = await self._generate_with_agent(
             channel_id=channel_id,
             candidate_id=candidate_id,
             payload=payload,
         )
+        pipeline_usage = _accumulate_usage(pipeline_usage, generation_usage)
         agent_run_ids.append(agent_run_id)
         attempts.append(generated)
-        ranked = self._ranked_candidates(
+        ranked, first_grounding_run_id, first_grounding_usage = await self._ranked_candidates(
             channel_id=channel_id,
             candidate_id=candidate_id,
             generated=generated,
@@ -206,7 +319,11 @@ class CaptionService:
             image_score=image_score,
             attempt_number=1,
             image_path=str(image_path),
+            trusted_source_evidence=source_evidence,
+            detail_image_paths=detail_image_paths,
         )
+        pipeline_usage = _accumulate_usage(pipeline_usage, first_grounding_usage)
+        grounding_audit_run_ids = [first_grounding_run_id] if first_grounding_run_id else []
         if len(self._eligible_rows(ranked)) < 3:
             retry_payload = {
                 **payload,
@@ -216,6 +333,7 @@ class CaptionService:
                         {
                             "text": row["candidate"].text,
                             "verifier": row["verification"].model_dump(),
+                            "independent_grounding": row["grounding_assessment"].model_dump(),
                         }
                         for row in ranked
                         if not row["eligible"]
@@ -225,14 +343,23 @@ class CaptionService:
                     ),
                 },
             }
-            generated_retry, retry_agent_run_id = await self._generate_with_agent(
+            (
+                generated_retry,
+                retry_agent_run_id,
+                retry_generation_usage,
+            ) = await self._generate_with_agent(
                 channel_id=channel_id,
                 candidate_id=candidate_id,
                 payload=retry_payload,
             )
+            pipeline_usage = _accumulate_usage(pipeline_usage, retry_generation_usage)
             agent_run_ids.append(retry_agent_run_id)
             attempts.append(generated_retry)
-            retry_ranked = self._ranked_candidates(
+            (
+                retry_ranked,
+                retry_grounding_run_id,
+                retry_grounding_usage,
+            ) = await self._ranked_candidates(
                 channel_id=channel_id,
                 candidate_id=candidate_id,
                 generated=generated_retry,
@@ -246,7 +373,12 @@ class CaptionService:
                     cast(CaptionCandidate, row["candidate"]).text for row in ranked
                 ],
                 image_path=str(image_path),
+                trusted_source_evidence=source_evidence,
+                detail_image_paths=detail_image_paths,
             )
+            pipeline_usage = _accumulate_usage(pipeline_usage, retry_grounding_usage)
+            if retry_grounding_run_id is not None:
+                grounding_audit_run_ids.append(retry_grounding_run_id)
             ranked.extend(retry_ranked)
             ranked = self._sort_ranked(ranked)
 
@@ -259,6 +391,12 @@ class CaptionService:
                 attempts=attempts,
                 ranked=ranked,
             )
+            evidence_provenance["independent_verification"] = {
+                "visual_audit_model_run_ids": visual_audit_run_ids,
+                "caption_grounding_model_run_ids": grounding_audit_run_ids,
+                "consensus_coverage": visual_consensus.consensus_coverage,
+                "disputed_facts": [fact.model_dump() for fact in visual_consensus.disputed_facts],
+            }
             slate_id = self._persist_abstention(
                 channel_id=channel_id,
                 candidate_id=candidate_id,
@@ -272,6 +410,7 @@ class CaptionService:
                 reason="no three grounded, policy-compliant, distinct captions survived",
                 agent_run_ids=agent_run_ids,
                 evidence_provenance=evidence_provenance,
+                usage=pipeline_usage,
             )
             for run_id in agent_run_ids:
                 self.agent_harness.link_artifact(
@@ -291,6 +430,7 @@ class CaptionService:
                 slate_id=slate_id,
                 terminal_status="abstained",
                 terminal_reason=("no three grounded, policy-compliant, distinct captions survived"),
+                usage=pipeline_usage,
             )
             return CaptionOptions(
                 recommended="",
@@ -322,6 +462,12 @@ class CaptionService:
             attempts=attempts,
             ranked=ranked,
         )
+        evidence_provenance["independent_verification"] = {
+            "visual_audit_model_run_ids": visual_audit_run_ids,
+            "caption_grounding_model_run_ids": grounding_audit_run_ids,
+            "consensus_coverage": visual_consensus.consensus_coverage,
+            "disputed_facts": [fact.model_dump() for fact in visual_consensus.disputed_facts],
+        }
         result, slate_id = self._persist_success(
             channel_id=channel_id,
             candidate_id=candidate_id,
@@ -336,6 +482,7 @@ class CaptionService:
             cited_references=cited_references,
             agent_run_ids=agent_run_ids,
             evidence_provenance=evidence_provenance,
+            usage=pipeline_usage,
         )
         for run_id in agent_run_ids:
             self.agent_harness.link_artifact(
@@ -354,6 +501,7 @@ class CaptionService:
             agent_run_ids=agent_run_ids,
             slate_id=slate_id,
             terminal_status="completed",
+            usage=pipeline_usage,
         )
         result.slate_id = slate_id
         return result
@@ -372,6 +520,7 @@ class CaptionService:
         slate_id: int,
         terminal_status: str,
         terminal_reason: str | None = None,
+        usage: dict[str, object],
     ) -> int:
         retrieval_run_id = _required_int(
             context["retrieval_run_id"],
@@ -512,7 +661,7 @@ class CaptionService:
             terminal_status=terminal_status,
             artifact_type="caption_slate",
             artifact_id=slate_id,
-            usage=dict(self.runtime.last_token_usage),
+            usage=usage,
             terminal_reason=terminal_reason,
         )
 
@@ -522,15 +671,19 @@ class CaptionService:
         channel_id: int,
         candidate_id: int,
         payload: dict[str, object],
-    ) -> tuple[CaptionCandidateSet, int]:
+    ) -> tuple[CaptionCandidateSet, int, dict[str, object]]:
+        observed_usage: dict[str, object] = {}
+
         async def handler(
             envelope: AgentInputEnvelope,
             _attempt: int,
         ) -> AgentStepResult:
+            nonlocal observed_usage
             generated = await self.runtime.generate_caption_options(envelope.payload)
+            observed_usage = dict(self.runtime.last_token_usage)
             return AgentStepResult(
                 output=AgentOutputEnvelope(payload=generated.model_dump()),
-                usage=dict(self.runtime.last_token_usage),
+                usage=observed_usage,
             )
 
         run_id, output = await self.agent_harness.execute(
@@ -552,9 +705,198 @@ class CaptionService:
                 timeout_seconds=float(self.settings.codex_timeout_seconds),
             ),
         )
-        return CaptionCandidateSet.model_validate(output.payload), run_id
+        return CaptionCandidateSet.model_validate(output.payload), run_id, observed_usage
 
-    def _ranked_candidates(
+    async def _audit_visual_analysis(
+        self,
+        *,
+        channel_id: int,
+        candidate_id: int,
+        image_path: str,
+        source_domain: str | None,
+        source_evidence: dict[str, object],
+        primary: CandidateAnalysis,
+        detail_image_paths: list[str],
+    ) -> tuple[CandidateAnalysis, int | None, dict[str, object]]:
+        method = getattr(self.runtime, "audit_candidate_image", None)
+        if not callable(method):
+            if self.settings.agent_runtime != "mock":
+                raise AgentRuntimeError(
+                    "the configured runtime cannot perform independent visual audits"
+                )
+            return primary.model_copy(deep=True), None, {}
+        payload: dict[str, object] = {
+            "candidate_id": candidate_id,
+            "source_domain": source_domain,
+            "trusted_source_evidence": source_evidence,
+            "_image_path": image_path,
+            "_image_paths": detail_image_paths,
+        }
+        started_at = utcnow()
+        audit_analysis = await method(payload)
+        usage = dict(self.runtime.last_token_usage)
+        model_run_id = self._persist_runtime_model_run(
+            channel_id=channel_id,
+            candidate_id=candidate_id,
+            task_type="audit_candidate_image",
+            prompt_version="candidate-analysis-blind-v1",
+            request={key: value for key, value in payload.items() if not key.startswith("_")},
+            output=audit_analysis.model_dump(),
+            token_usage=usage,
+            started_at=started_at,
+        )
+        return audit_analysis, model_run_id, usage
+
+    @staticmethod
+    def _requires_visual_tiebreak(consensus: VisualConsensusReport) -> bool:
+        risky_action_markers = (
+            "argu",
+            "driv",
+            "eat",
+            "hold",
+            "kiss",
+            "read",
+            "sleep",
+            "watch",
+            "writ",
+        )
+        actions = " ".join(consensus.analysis.actions).casefold()
+        return (
+            consensus.consensus_coverage < 0.8
+            or bool(consensus.disputed_facts)
+            or any(marker in actions for marker in risky_action_markers)
+        )
+
+    async def _audit_caption_grounding(
+        self,
+        *,
+        channel_id: int,
+        candidate_id: int,
+        image_path: str,
+        prepared: list[tuple[int, CaptionCandidate, list[str]]],
+        trusted_source_evidence: dict[str, object],
+        detail_image_paths: list[str],
+    ) -> tuple[CaptionGroundingAudit, int | None, dict[str, object]]:
+        candidates = [
+            {"candidate_id": generation_index, "text": candidate.text}
+            for generation_index, candidate, _reasons in prepared
+        ]
+        if not candidates:
+            raise ValueError("caption grounding requires at least one prepared candidate")
+        payload: dict[str, object] = {
+            "candidates": candidates,
+            "trusted_source_evidence": trusted_source_evidence,
+            "_image_path": image_path,
+            "_image_paths": detail_image_paths,
+        }
+        method = getattr(self.runtime, "verify_caption_grounding", None)
+        if not callable(method):
+            if self.settings.agent_runtime != "mock":
+                raise AgentRuntimeError(
+                    "the configured runtime cannot perform independent caption grounding"
+                )
+            audit_result = self._fixture_grounding_audit(candidates)
+            return audit_result, None, {}
+        started_at = utcnow()
+        audit_result = await method(payload)
+        expected_ids = {
+            _required_int(row["candidate_id"], "caption grounding candidate_id")
+            for row in candidates
+        }
+        returned_ids = {assessment.candidate_id for assessment in audit_result.assessments}
+        if returned_ids != expected_ids or len(audit_result.assessments) != len(candidates):
+            raise AgentRuntimeError(
+                "independent caption grounding returned an incomplete or mismatched candidate set"
+            )
+        usage = dict(self.runtime.last_token_usage)
+        model_run_id = self._persist_runtime_model_run(
+            channel_id=channel_id,
+            candidate_id=candidate_id,
+            task_type="verify_caption_grounding",
+            prompt_version="caption-grounding-v1",
+            request={key: value for key, value in payload.items() if not key.startswith("_")},
+            output=audit_result.model_dump(),
+            token_usage=usage,
+            started_at=started_at,
+        )
+        return audit_result, model_run_id, usage
+
+    def _persist_runtime_model_run(
+        self,
+        *,
+        channel_id: int,
+        candidate_id: int,
+        task_type: str,
+        prompt_version: str,
+        request: dict[str, object],
+        output: dict[str, object],
+        token_usage: dict[str, object],
+        started_at: datetime,
+    ) -> int:
+        with self.database.session() as session:
+            row = ModelRun(
+                task_type=task_type,
+                provider=self.runtime.provider,
+                model=self.runtime.model_name,
+                prompt_version=prompt_version,
+                input_record_ids_json=json.dumps([candidate_id]),
+                request_summary_json=json.dumps(request, sort_keys=True, default=str),
+                structured_output_json=json.dumps(output, sort_keys=True, default=str),
+                token_usage_json=json.dumps(token_usage, sort_keys=True),
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+                status="completed",
+            )
+            session.add(row)
+            session.flush()
+            model_run_id = row.id
+            audit(
+                session,
+                f"{task_type}_completed",
+                "candidate_image",
+                candidate_id,
+                {
+                    "channel_id": channel_id,
+                    "model_run_id": model_run_id,
+                    "provider": self.runtime.provider,
+                    "model": self.runtime.model_name,
+                    "prompt_version": prompt_version,
+                },
+            )
+        return model_run_id
+
+    @staticmethod
+    def _fixture_grounding_audit(
+        candidates: list[dict[str, object]],
+    ) -> CaptionGroundingAudit:
+        assessments = [
+            CaptionGroundingAssessment(
+                candidate_id=_required_int(
+                    row["candidate_id"],
+                    "caption grounding candidate_id",
+                ),
+                verdict="supported",
+                grounding_score=0.95,
+                factual_claims=[str(row["text"])],
+                supported_claims=[str(row["text"])],
+                uncertain_claims=[],
+                unsupported_claims=[],
+                visual_evidence=["offline fixture evidence"],
+                source_evidence=[],
+                contradictions=[],
+                corrected_caption=None,
+                confidence=0.95,
+            )
+            for row in candidates
+        ]
+        return CaptionGroundingAudit(
+            assessments=assessments,
+            image_summary="Offline fixture grounding audit.",
+            source_context_used=[],
+            audit_confidence=0.95,
+        )
+
+    async def _ranked_candidates(
         self,
         *,
         channel_id: int,
@@ -568,7 +910,9 @@ class CaptionService:
         attempt_number: int,
         prior_candidate_texts: list[str] | None = None,
         image_path: str,
-    ) -> list[dict[str, Any]]:
+        trusted_source_evidence: dict[str, object],
+        detail_image_paths: list[str],
+    ) -> tuple[list[dict[str, Any]], int | None, dict[str, object]]:
         with self.database.session() as session:
             existing = [
                 value
@@ -614,6 +958,22 @@ class CaptionService:
                 exclusion_reasons.append("too_similar_to_existing_caption")
             prepared.append((generation_index, candidate, exclusion_reasons))
 
+        (
+            grounding_audit,
+            grounding_model_run_id,
+            grounding_usage,
+        ) = await self._audit_caption_grounding(
+            channel_id=channel_id,
+            candidate_id=candidate_id,
+            image_path=image_path,
+            prepared=prepared,
+            trusted_source_evidence=trusted_source_evidence,
+            detail_image_paths=detail_image_paths,
+        )
+        grounding_by_id = {
+            assessment.candidate_id: assessment for assessment in grounding_audit.assessments
+        }
+
         stats = cast(
             dict[str, Any],
             cast(dict[str, object], context["style_profile"]).get(
@@ -637,12 +997,32 @@ class CaptionService:
         ]
         rows: list[dict[str, Any]] = []
         for generation_index, candidate, exclusion_reasons in prepared:
+            grounding_assessment = normalize_open_question_answer_uncertainty(
+                candidate.text,
+                grounding_by_id[generation_index],
+            )
             verification = self.verifier.verify(candidate, brief)
             claim_verification = self.claim_verifier.verify(
                 caption=candidate.text,
                 brief=brief,
                 first_layer=verification,
                 image_path=image_path,
+                semantic_assessment=grounding_assessment,
+            )
+            if not verification.passed:
+                exclusion_reasons.append("fast_verification_failed")
+            if (
+                grounding_assessment.verdict != "supported"
+                or grounding_assessment.grounding_score
+                < self.generation_configuration["grounding_threshold"]
+            ):
+                exclusion_reasons.append(f"independent_grounding_{grounding_assessment.verdict}")
+            if claim_verification.critical_failures:
+                exclusion_reasons.append("critical_claim_failure")
+            exclusion_reasons = list(dict.fromkeys(exclusion_reasons))
+            effective_grounding = min(
+                verification.grounding_score,
+                grounding_assessment.grounding_score,
             )
             style = channel_style_score(candidate.text, stats)
             novelty = self._novelty(
@@ -664,10 +1044,10 @@ class CaptionService:
             pairing = self.pair_ranker.score_pair(
                 image_score=image_score,
                 caption_score=(style + structure_fit + length_fit) / 3,
-                grounding_score=verification.grounding_score,
+                grounding_score=effective_grounding,
             )
             components = {
-                "grounding": verification.grounding_score,
+                "grounding": effective_grounding,
                 "policy": verification.policy_score,
                 "style": style,
                 "novelty": novelty,
@@ -693,7 +1073,7 @@ class CaptionService:
             )
             final = (
                 weights["preference"] * preference.score
-                + weights["grounding"] * verification.grounding_score
+                + weights["grounding"] * effective_grounding
                 + weights["policy"] * verification.policy_score
                 + weights["style"] * style
                 + weights["novelty"] * novelty
@@ -711,6 +1091,7 @@ class CaptionService:
                     "candidate": candidate,
                     "verification": verification,
                     "claim_verification": claim_verification,
+                    "grounding_assessment": grounding_assessment,
                     "components": components,
                     "preference": preference,
                     "pairing": pairing,
@@ -732,7 +1113,7 @@ class CaptionService:
                     ],
                 }
             )
-        return self._sort_ranked(rows)
+        return self._sort_ranked(rows), grounding_model_run_id, grounding_usage
 
     @staticmethod
     def _sort_ranked(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -917,11 +1298,12 @@ class CaptionService:
         cited_references: list[int],
         agent_run_ids: list[int],
         evidence_provenance: dict[str, object],
+        usage: dict[str, object],
     ) -> tuple[CaptionOptions, int]:
         display_texts = [row["candidate"].text for row in displayed]
         confidence = min(
             attempts[-1].confidence,
-            sum(float(row["verification"].grounding_score) for row in displayed) / len(displayed),
+            sum(float(row["components"]["grounding"]) for row in displayed) / len(displayed),
         )
         rationale = (
             "Runway planned channel-specific angles, verified visible claims, applied explicit "
@@ -957,7 +1339,7 @@ class CaptionService:
                     },
                     sort_keys=True,
                 ),
-                token_usage_json=json.dumps(self.runtime.last_token_usage, sort_keys=True),
+                token_usage_json=json.dumps(usage, sort_keys=True),
                 started_at=started_at,
                 completed_at=datetime.now(UTC),
                 status="completed",
@@ -986,7 +1368,7 @@ class CaptionService:
                 status="completed",
                 latency_ms=latency_ms,
                 token_usage_json=json.dumps(
-                    self.runtime.last_token_usage,
+                    usage,
                     sort_keys=True,
                 ),
                 retrieval_selected_evidence_json=json.dumps(
@@ -1097,6 +1479,7 @@ class CaptionService:
         reason: str,
         agent_run_ids: list[int],
         evidence_provenance: dict[str, object],
+        usage: dict[str, object],
     ) -> int:
         with self.database.session() as session:
             model_run = ModelRun(
@@ -1115,7 +1498,7 @@ class CaptionService:
                     },
                     sort_keys=True,
                 ),
-                token_usage_json=json.dumps(self.runtime.last_token_usage, sort_keys=True),
+                token_usage_json=json.dumps(usage, sort_keys=True),
                 started_at=started_at,
                 completed_at=datetime.now(UTC),
                 status="completed",
@@ -1143,7 +1526,7 @@ class CaptionService:
                 status="abstained",
                 latency_ms=latency_ms,
                 token_usage_json=json.dumps(
-                    self.runtime.last_token_usage,
+                    usage,
                     sort_keys=True,
                 ),
                 failure_summary=reason,
@@ -1243,7 +1626,7 @@ class CaptionService:
                 exclusion_reasons_json=json.dumps(exclusion_reasons),
                 attempt_number=int(row["attempt_number"]),
                 generation_index=int(row["generation_index"]),
-                grounding_score=verification.grounding_score,
+                grounding_score=components["grounding"],
                 policy_score=verification.policy_score,
                 style_score=components["style"],
                 novelty_score=components["novelty"],
@@ -1325,6 +1708,7 @@ class CaptionService:
             "uncertainty": candidate.uncertainty,
             "generator_confidence": candidate.confidence,
             "verification": verification.model_dump(),
+            "independent_grounding": row["grounding_assessment"].model_dump(),
             "claim_verification": row["claim_verification"].as_dict(),
             "components": row["components"],
             "preference": {

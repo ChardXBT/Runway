@@ -59,8 +59,12 @@ async def test_grounded_question_first_caption_and_feedback_memory(
         )
 
     captions = await CaptionService(database, settings).generate(candidate_id)
-    assert captions.recommended == "Why is Homer so excited?"
-    assert all(caption.endswith((".", "?", "!")) for caption in captions.alternatives)
+    # A manually corrupted identity must never override the pixels. If enough identity-free
+    # facts remain, Runway may safely produce a generic slate instead of needlessly abstaining.
+    assert captions.abstained is False
+    direct_options = [captions.recommended, *captions.alternatives]
+    assert all(caption.strip() for caption in direct_options)
+    assert all("homer" not in caption.casefold() for caption in direct_options)
 
     proposals = ProposalService(database, settings)
     generated = await proposals.generate_batch(days=1, start_date=date(2030, 3, 5))

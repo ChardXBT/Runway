@@ -418,7 +418,7 @@ Three-arm arena lifecycle:
   `retrieval.py`, `topic_eligibility.py`, and `ranking/service.py`.
 - Captions/provenance: `captions/service.py`, `planning.py`, `feedback.py`,
   `exposures.py`, `preference_models.py`, `claim_grounding.py`, and
-  `analysis/prompts/captions-v5.txt`.
+  `analysis/prompts/captions-v6.txt`.
 - Evaluation: `evaluation/neural_challengers.py`, `frontier_arena.py`,
   `reranking.py`, `hard_negatives.py`, `composed_retrieval.py`, and
   `evaluation/experiments.py`.

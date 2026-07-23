@@ -20,6 +20,8 @@ from runway.analysis.schemas import (
     CandidateAnalysis,
     CaptionCandidate,
     CaptionCandidateSet,
+    CaptionGroundingAssessment,
+    CaptionGroundingAudit,
     HistoricalAnnotation,
     HistoricalAnnotationBatch,
     HistoricalAnnotationResult,
@@ -121,7 +123,13 @@ class AgentRuntime(Protocol):
 
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis: ...
 
+    async def audit_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis: ...
+
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet: ...
+
+    async def verify_caption_grounding(
+        self, payload: Mapping[str, Any]
+    ) -> CaptionGroundingAudit: ...
 
     async def simulate_editorial_decision(
         self, payload: Mapping[str, Any]
@@ -300,6 +308,9 @@ class MockAgentRuntime:
             },
         )
 
+    async def audit_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
+        return await self.analyze_candidate_image(payload)
+
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         candidate_id = int(payload.get("candidate_id", 0))
         references = [int(value) for value in payload.get("historical_post_ids", [])][:4]
@@ -436,6 +447,43 @@ class MockAgentRuntime:
             confidence=0.86,
             referenced_historical_post_ids=references,
             factual_uncertainty_warning=None,
+        )
+
+    async def verify_caption_grounding(self, payload: Mapping[str, Any]) -> CaptionGroundingAudit:
+        source_text = json.dumps(payload.get("trusted_source_evidence", {})).casefold()
+        assessments: list[CaptionGroundingAssessment] = []
+        for raw in payload.get("candidates", []):
+            if not isinstance(raw, Mapping):
+                continue
+            candidate_id = int(raw.get("candidate_id", 0))
+            text = str(raw.get("text") or "").strip()
+            lowered = text.casefold()
+            contradicted = "cracker" in source_text and any(
+                marker in lowered for marker in ("newspaper", "reading", "read ")
+            )
+            assessments.append(
+                CaptionGroundingAssessment(
+                    candidate_id=candidate_id,
+                    verdict="unsupported" if contradicted else "supported",
+                    grounding_score=0.0 if contradicted else 0.95,
+                    factual_claims=[text] if text else [],
+                    supported_claims=[] if contradicted else ([text] if text else []),
+                    uncertain_claims=[],
+                    unsupported_claims=[text] if contradicted else [],
+                    visual_evidence=[] if contradicted else ["deterministic fixture evidence"],
+                    source_evidence=["cracker source context"] if contradicted else [],
+                    contradictions=["caption conflicts with trusted source context"]
+                    if contradicted
+                    else [],
+                    corrected_caption=None,
+                    confidence=0.95,
+                )
+            )
+        return CaptionGroundingAudit(
+            assessments=assessments,
+            image_summary="Deterministic fixture image audit.",
+            source_context_used=["trusted_source_evidence"] if source_text != "{}" else [],
+            audit_confidence=0.95,
         )
 
     async def simulate_editorial_decision(
@@ -580,8 +628,14 @@ class OpenAIAgentRuntime:
     async def analyze_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
         return await self._parse(CandidateAnalysis, "candidate-analysis-v3.txt", payload)
 
+    async def audit_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
+        return await self._parse(CandidateAnalysis, "candidate-analysis-blind-v1.txt", payload)
+
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
-        return await self._parse(CaptionCandidateSet, "captions-v5.txt", payload)
+        return await self._parse(CaptionCandidateSet, "captions-v6.txt", payload)
+
+    async def verify_caption_grounding(self, payload: Mapping[str, Any]) -> CaptionGroundingAudit:
+        return await self._parse(CaptionGroundingAudit, "caption-grounding-v1.txt", payload)
 
     async def simulate_editorial_decision(
         self, payload: Mapping[str, Any]
@@ -891,10 +945,26 @@ class CodexAgentRuntime:
             require_image=True,
         )
 
+    async def audit_candidate_image(self, payload: Mapping[str, Any]) -> CandidateAnalysis:
+        return await self._parse(
+            CandidateAnalysis,
+            "candidate-analysis-blind-v1.txt",
+            payload,
+            require_image=True,
+        )
+
     async def generate_caption_options(self, payload: Mapping[str, Any]) -> CaptionCandidateSet:
         return await self._parse(
             CaptionCandidateSet,
-            "captions-v5.txt",
+            "captions-v6.txt",
+            payload,
+            require_image=True,
+        )
+
+    async def verify_caption_grounding(self, payload: Mapping[str, Any]) -> CaptionGroundingAudit:
+        return await self._parse(
+            CaptionGroundingAudit,
+            "caption-grounding-v1.txt",
             payload,
             require_image=True,
         )

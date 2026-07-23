@@ -268,6 +268,51 @@ def prepare_model_image(
     return destination
 
 
+def prepare_model_detail_views(
+    source: Path,
+    settings: Settings,
+    *,
+    crop_ratio: float = 0.5,
+    grid_size: int = 3,
+) -> list[Path]:
+    """Create deterministic overlapping crops so small props remain inspectable by a VLM."""
+
+    if not 0.4 <= crop_ratio <= 0.75:
+        raise ValueError("model detail crop ratio must be between 0.4 and 0.75")
+    if not 2 <= grid_size <= 3:
+        raise ValueError("model detail grid size must be 2 or 3")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    destination_dir = settings.resolved_data_dir / "media" / "previews" / "model-details" / digest
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    with Image.open(source) as opened:
+        image = opened.convert("RGB")
+        width, height = image.size
+        tile_width = max(1, min(width, math.ceil(width * crop_ratio)))
+        tile_height = max(1, min(height, math.ceil(height * crop_ratio)))
+        paths: list[Path] = []
+        seen_boxes: set[tuple[int, int, int, int]] = set()
+        horizontal_span = width - tile_width
+        vertical_span = height - tile_height
+        for row in range(grid_size):
+            top = round(row * vertical_span / (grid_size - 1))
+            for column in range(grid_size):
+                left = round(column * horizontal_span / (grid_size - 1))
+                box = (left, top, left + tile_width, top + tile_height)
+                if box in seen_boxes:
+                    continue
+                seen_boxes.add(box)
+                destination = destination_dir / f"detail-r{row + 1}-c{column + 1}.jpg"
+                if not destination.exists():
+                    image.crop(box).save(
+                        destination,
+                        format="JPEG",
+                        quality=94,
+                        optimize=True,
+                    )
+                paths.append(destination)
+    return paths
+
+
 def _fixture_image(path: Path, index: int, candidate: bool) -> None:
     width = 720 + (index % 3) * 80
     height = 540 + (index % 4) * 40

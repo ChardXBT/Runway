@@ -69,6 +69,61 @@ COMMON_SENTENCE_STARTS = {
     "when",
     "why",
 }
+ACTION_MARKERS = {
+    "arguing": {"argue", "argues", "arguing", "argument"},
+    "driving": {"drive", "drives", "driving", "drove"},
+    "eating": {"eat", "eats", "eating", "ate"},
+    "holding": {"hold", "holds", "holding", "held"},
+    "kissing": {"kiss", "kisses", "kissing", "kissed"},
+    "reading": {"read", "reads", "reading"},
+    "running": {"run", "runs", "running", "ran"},
+    "sleeping": {"sleep", "sleeps", "sleeping", "slept"},
+    "talking": {"talk", "talks", "talking", "spoke", "speaking"},
+    "watching": {"watch", "watches", "watching", "watched"},
+    "writing": {"write", "writes", "writing", "wrote"},
+}
+EVIDENCE_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "appears",
+    "are",
+    "at",
+    "in",
+    "is",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "visible",
+    "while",
+    "with",
+}
+EVIDENCE_ALIASES = {
+    "annoyance": "annoyed",
+    "boredom": "bored",
+    "confidence": "confident",
+    "crackers": "cracker",
+    "determination": "confident",
+    "determined": "confident",
+    "eating": "eat",
+    "eats": "eat",
+    "held": "hold",
+    "holding": "hold",
+    "holds": "hold",
+    "indoors": "indoor",
+    "excitement": "excited",
+    "happiness": "happy",
+    "newspaper": "paper",
+    "newspapers": "paper",
+    "reading": "read",
+    "reads": "read",
+    "seated": "sit",
+    "sitting": "sit",
+    "sofa": "couch",
+    "surprise": "surprised",
+}
 
 
 class VerificationResult(BaseModel):
@@ -93,7 +148,6 @@ class CaptionVerifier:
         lowered = text.casefold()
         visible_values = {self._normalized(fact.value): fact for fact in brief.visible_facts}
         visible_text = " ".join(visible_values)
-        uncertain_text = " ".join(self._normalized(fact.value) for fact in brief.uncertain_facts)
         unsupported: list[str] = []
         warnings: list[str] = []
         supported: list[str] = []
@@ -154,6 +208,36 @@ class CaptionVerifier:
             else:
                 unsupported.append(f"unsupported_emotion:{emotion}")
 
+        visible_actions = " ".join(
+            self._normalized(fact.value) for fact in brief.visible_facts if fact.field == "action"
+        )
+        for action, markers in ACTION_MARKERS.items():
+            if not any(re.search(rf"\b{re.escape(marker)}\b", lowered) for marker in markers):
+                continue
+            if not any(
+                re.search(rf"\b{re.escape(marker)}\b", visible_actions) for marker in markers
+            ):
+                unsupported.append(f"unsupported_action:{action}")
+
+        caption_tokens = self._evidence_tokens(text)
+        visible_tokens_by_field: dict[str, list[set[str]]] = {}
+        for fact in brief.visible_facts:
+            visible_tokens_by_field.setdefault(fact.field, []).append(
+                self._evidence_tokens(fact.value)
+            )
+        for fact in brief.uncertain_facts:
+            if fact.field == "entity":
+                continue
+            disputed_tokens = self._evidence_tokens(fact.value)
+            if not disputed_tokens or not disputed_tokens <= caption_tokens:
+                continue
+            if any(
+                disputed_tokens <= visible_tokens
+                for visible_tokens in visible_tokens_by_field.get(fact.field, [])
+            ):
+                continue
+            unsupported.append(f"unsupported_disputed_fact:{fact.field}:{fact.value}")
+
         if any(pattern in lowered for pattern in GENERIC_PATTERNS):
             unsupported.append("policy:generic_engagement_bait")
         word_count = len(re.findall(r"[\w']+", text, flags=re.UNICODE))
@@ -169,8 +253,11 @@ class CaptionVerifier:
             invalid_evidence = [
                 value
                 for value in candidate.visible_evidence
-                if self._normalized(value) not in visible_text
-                and self._normalized(value) not in uncertain_text
+                if not self._evidence_supported(
+                    value,
+                    [fact.value for fact in brief.visible_facts],
+                    [fact.value for fact in brief.uncertain_facts],
+                )
             ]
             if invalid_evidence:
                 warnings.append("unverified_candidate_evidence:" + ",".join(invalid_evidence))
@@ -192,6 +279,8 @@ class CaptionVerifier:
                     "unsupported_entity:",
                     "low_confidence_emotion:",
                     "unsupported_relationship:",
+                    "unsupported_action:",
+                    "unsupported_disputed_fact:",
                 )
             )
             for value in unsupported
@@ -232,6 +321,40 @@ class CaptionVerifier:
             if words & markers:
                 return canonical
         return normalized
+
+    @classmethod
+    def _evidence_supported(
+        cls,
+        evidence: str,
+        visible_facts: list[str],
+        uncertain_facts: list[str],
+    ) -> bool:
+        evidence_tokens = cls._evidence_tokens(evidence)
+        if not evidence_tokens:
+            return False
+        visible_tokens = set().union(*(cls._evidence_tokens(value) for value in visible_facts))
+        uncertain_tokens = set().union(*(cls._evidence_tokens(value) for value in uncertain_facts))
+        coverage = len(evidence_tokens & visible_tokens) / len(evidence_tokens)
+        # A disputed *specific* claim must not erase a separately confirmed
+        # generic fact.  For example, independent passes can agree that Homer
+        # is holding something while disagreeing over whether it is a wrapper
+        # or a newspaper.  Only tokens that exist exclusively in the disputed
+        # evidence should veto a candidate-provided grounding claim.
+        uncertain_only_tokens = uncertain_tokens - visible_tokens
+        uncertain_overlap = evidence_tokens & uncertain_only_tokens
+        return coverage >= 0.72 and not uncertain_overlap
+
+    @staticmethod
+    def _evidence_tokens(value: str) -> set[str]:
+        tokens: set[str] = set()
+        for raw in re.findall(r"[a-z0-9']+", value.casefold()):
+            if raw in EVIDENCE_STOP_WORDS:
+                continue
+            token = EVIDENCE_ALIASES.get(raw, raw)
+            if token.endswith("s") and len(token) > 4:
+                token = token[:-1]
+            tokens.add(token)
+        return tokens
 
 
 def verification_pass_rate(rows: Iterable[VerificationResult]) -> float:

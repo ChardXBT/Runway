@@ -58,13 +58,23 @@ The canonical production path works as follows:
 7. **Retrieve bounded evidence.** For each selected candidate, Runway retrieves the most relevant
    historical posts, corrections, preferences, visual examples, and channel rules. Every item used
    in a generation is persisted, which makes the result explainable and reproducible.
-8. **Generate a caption slate.** The caption engine proposes a primary caption and alternatives
-   using deliberately different editorial angles. Qlob's preferred direction is an open-ended
-   question when the image supports one, not a forced question that invents context.
-9. **Verify and rerank.** A separate grounding pass checks names, actions, emotions, and claims
-   against the image evidence. Preference scoring and diversity logic then choose what should be
-   displayed. If nothing survives, the engine abstains instead of fabricating a confident answer.
-10. **Learn from review.** Accepts, edits, alternative selections, image replacements, rejections,
+8. **Build visual consensus before writing.** The stored annotation is treated as a hypothesis,
+   not truth. A blind multimodal audit examines the complete frame and nine deterministic,
+   overlapping detail crops. Ambiguous or risky actions trigger a second independent audit. Runway
+   keeps facts the analyses independently agree on, reduces partially agreed actions to a safe
+   generic fact, and places every disagreement behind a hard uncertainty firewall. Exact-frame
+   source metadata may corroborate a fact; an image-search query never can.
+9. **Generate a caption slate.** The caption engine receives the channel evidence plus the
+   reconciled visual facts and proposes a primary caption and alternatives using deliberately
+   different editorial angles. Qlob's preferred direction is an open-ended question when the image
+   supports its premise, not a forced question that invents context.
+10. **Audit every final caption and rerank.** A fresh multimodal judge sees the full frame and detail
+    crops, decomposes each caption into factual premises, and must score it at least 0.85. A question
+    may leave its answer unknown—“What is Homer holding?”—but its premise must still be visible.
+    Disputed objects or actions, such as calling a wrapper a newspaper or holding something
+    “reading,” fail closed. Preference scoring and diversity logic then choose what should be
+    displayed. If nothing survives, the engine abstains instead of fabricating a confident answer.
+11. **Learn from review.** Accepts, edits, alternative selections, image replacements, rejections,
     and “fewer like this” signals become normalized evidence for future retrieval and training.
 
 ### The production intelligence database
@@ -157,6 +167,11 @@ package and validated image inputs. Calls are ephemeral and serialized. Separate
 credentials are removed from the Codex subprocess, and there is no automatic paid-API fallback.
 Invalid output, authentication failure, timeout, or included-usage exhaustion stops the current
 batch safely.
+
+The production caption path now records each blind visual audit, the consensus coverage and
+disputes, each final-caption grounding audit, aggregate token usage, immutable prompt versions, and
+candidate-level rejection reasons. This makes a confident visual mistake inspectable and prevents
+one model response from approving its own unsupported premise.
 
 ### How Runway can outperform a general AI model
 
@@ -279,7 +294,7 @@ The production UI pass includes focused protections for:
 - Confirmation before destructive actions.
 - Immutable controls for externally sensitive post states.
 
-The current automated frontend gate covers 63 tests, ESLint, TypeScript, and a complete Next.js
+The current automated frontend gate covers 64 tests, ESLint, TypeScript, and a complete Next.js
 production build.
 
 ### Frontend issues and aspirations
@@ -340,10 +355,10 @@ decision, and immediately receive the next one without administrative clutter.
 5. **Evaluate neural representations.** Optional trained adapters exist, but their dependencies and
    weights are not installed or authorized. A candidate must demonstrate better semantic diversity
    and retrieval without increasing false suppression.
-6. **Resolve preserved historical warnings.** Three invalid vectors remain in inactive representation
-   sets, and 21 older displayed caption candidates predate complete exposure logging. They do not
-   affect the active engine, but should remain explicitly excluded or repaired before broader
-   historical training.
+6. **Resolve preserved historical warnings.** Three invalid vectors remain in inactive
+   representation sets, and a small set of older displayed caption candidates predate complete
+   exposure logging. They do not affect the active engine, but should remain explicitly excluded or
+   repaired before broader historical training.
 7. **Expand evaluation depth.** The current test suite proves correctness and safety; it does not
    prove that creator preference quality has reached its ceiling. Future reports need confidence
    intervals, mode-by-mode results, diversity metrics, factual-error rates, and longitudinal drift.

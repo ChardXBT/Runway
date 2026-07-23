@@ -7,6 +7,7 @@ from runway.media.service import (
     ensure_fixture_images,
     hamming_similarity,
     inspect_image,
+    prepare_model_detail_views,
     prepare_model_image,
 )
 
@@ -47,3 +48,29 @@ def test_animated_gif_becomes_deterministic_model_contact_sheet(tmp_path: Path) 
     with Image.open(prepared) as contact_sheet:
         assert contact_sheet.size == (360, 160)
         assert getattr(contact_sheet, "n_frames", 1) == 1
+
+
+def test_model_detail_views_are_deterministic_overlapping_frame_crops(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "data")
+    source = settings.resolved_data_dir / "raw" / "wide-scene.png"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (800, 400), "black")
+    for x, color in ((0, "red"), (400, "blue")):
+        for y, lower_color in ((0, color), (200, "green" if x == 0 else "yellow")):
+            block = Image.new("RGB", (400, 200), lower_color)
+            image.paste(block, (x, y))
+    image.save(source)
+
+    first = prepare_model_detail_views(source, settings)
+    repeated = prepare_model_detail_views(source, settings)
+
+    assert first == repeated
+    assert [path.name for path in first] == [
+        f"detail-r{row}-c{column}.jpg" for row in range(1, 4) for column in range(1, 4)
+    ]
+    with Image.open(first[-1]) as bottom_right:
+        assert bottom_right.size == (400, 200)
+        red, green, blue = bottom_right.getpixel((399, 199))
+        assert red > 200 and green > 180 and blue < 80

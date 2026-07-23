@@ -123,6 +123,53 @@ class CandidateAnalysis(StrictModel):
     field_confidence: CandidateFieldConfidence
 
 
+class CaptionGroundingAssessment(StrictModel):
+    candidate_id: int = Field(ge=1)
+    verdict: Literal["supported", "uncertain", "unsupported"]
+    grounding_score: float = Field(ge=0, le=1)
+    factual_claims: list[str] = Field(min_length=1)
+    supported_claims: list[str]
+    uncertain_claims: list[str]
+    unsupported_claims: list[str]
+    visual_evidence: list[str]
+    source_evidence: list[str]
+    contradictions: list[str]
+    corrected_caption: str | None
+    confidence: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_verdict(self) -> CaptionGroundingAssessment:
+        if any(not value.strip() for value in self.factual_claims):
+            raise ValueError("caption grounding factual claims cannot be blank")
+        if self.unsupported_claims or self.contradictions:
+            self.verdict = "unsupported"
+            self.grounding_score = min(self.grounding_score, 0.2)
+        elif self.uncertain_claims:
+            self.verdict = "uncertain"
+            self.grounding_score = min(self.grounding_score, 0.6)
+        if self.verdict == "uncertain" and not self.uncertain_claims:
+            raise ValueError("an uncertain caption must identify the uncertain claim")
+        if self.verdict == "unsupported" and not (self.unsupported_claims or self.contradictions):
+            raise ValueError("an unsupported caption must identify the failed claim")
+        if self.verdict == "supported" and not self.supported_claims:
+            raise ValueError("a supported caption must identify at least one supported claim")
+        return self
+
+
+class CaptionGroundingAudit(StrictModel):
+    assessments: list[CaptionGroundingAssessment] = Field(min_length=1, max_length=12)
+    image_summary: str
+    source_context_used: list[str]
+    audit_confidence: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_candidate_ids(self) -> CaptionGroundingAudit:
+        candidate_ids = [assessment.candidate_id for assessment in self.assessments]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("caption grounding candidate IDs must be unique")
+        return self
+
+
 class ShadowEditorialRecommendation(StrictModel):
     decision: Literal["accept", "edit", "reject", "abstain"]
     edited_caption: str | None

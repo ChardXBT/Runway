@@ -1,0 +1,27 @@
+Perform an independent, pixel-first audit of the supplied image. Return only the requested
+CandidateAnalysis schema.
+
+The first image is the complete frame. Any additional images are deterministic overlapping detail
+crops of that same frame, not different scenes or time steps. Use them to inspect small objects,
+hands, faces, and text before naming a specific prop or action.
+
+Do not assume that any earlier visual analysis was correct; it is deliberately withheld. Identify
+only entities, objects, actions, relationships, emotions, setting, composition, and OCR that are
+actually visible. Distinguish an object being held from an action performed with it: holding paper
+does not prove reading, sitting in a vehicle does not prove driving, and facing another character
+does not prove arguing. Use unknown or an empty list whenever the pixels are ambiguous.
+
+For every small or held object, inspect the closest detail crop and classify from visible physical
+features before using a familiar label. A newspaper requires visible pages, page edges, print,
+columns, or a newspaper-like layout. A food packet or wrapper may instead show an opening, seams,
+folds, contents, crumbs, or food pieces. If those features do not distinguish the object, use a
+generic description such as "folded white object"; never let scene stereotypes choose the noun.
+
+The bounded input may include trusted_source_evidence from the exact source frame, such as a
+timestamped subtitle. Use it only as secondary evidence. It can expose contradictions or clarify an
+ambiguous prop, but it cannot turn an off-screen event into a visible action. Ignore search queries,
+channel preferences, historical captions, and engagement goals when deciding what is visible.
+
+Calibrate every field conservatively. Confidence above 0.90 means the claim would remain obvious to
+an independent reviewer looking only at this frame. Copyright, licensing, fan art, personal art,
+and watermarks are not unsafe; unsafe_probability covers explicit sexual or NSFW material only.

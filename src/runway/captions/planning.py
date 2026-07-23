@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from runway.intelligence.policies import PolicySnapshot
 
+from .visual_consensus import VisualConsensusReport
+
 
 def _required_int(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, str)):
@@ -59,6 +61,7 @@ class EditorialPlanner:
         retrieval_context: dict[str, object],
         policy: PolicySnapshot,
         source_context: dict[str, object],
+        visual_consensus: VisualConsensusReport | None = None,
     ) -> EditorialBrief:
         confidence_map = candidate_analysis.get("field_confidence", {})
         if not isinstance(confidence_map, dict):
@@ -114,6 +117,22 @@ class EditorialPlanner:
         append_fact("scene", candidate_analysis.get("scene_archetype"), "scene")
         append_fact("setting", candidate_analysis.get("setting"), "scene")
         append_fact("composition", candidate_analysis.get("composition"), "composition")
+
+        if visual_consensus is not None:
+            existing_uncertain = {(fact.field, fact.value.casefold()) for fact in uncertain}
+            for disputed in visual_consensus.disputed_facts:
+                key = (disputed.field, disputed.value.casefold())
+                if disputed.value.casefold() == "unknown" or key in existing_uncertain:
+                    continue
+                uncertain.append(
+                    EditorialFact(
+                        field=disputed.field,
+                        value=disputed.value,
+                        confidence=0.0,
+                        evidence="independent_visual_audit_disagreement",
+                    )
+                )
+                existing_uncertain.add(key)
 
         supported_entities = sorted({fact.value for fact in facts if fact.field == "entity"})
         profile = cast(

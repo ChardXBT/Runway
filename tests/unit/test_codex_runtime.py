@@ -17,6 +17,7 @@ from runway.analysis.runtime import (
 from runway.analysis.schemas import (
     CandidateAnalysis,
     CaptionCandidateSet,
+    CaptionGroundingAudit,
     HistoricalAnnotation,
     SearchPlan,
     ShadowEditorialRecommendation,
@@ -78,6 +79,7 @@ def _assert_strict_object_schemas(value: object) -> None:
         SearchPlan,
         CandidateAnalysis,
         CaptionCandidateSet,
+        CaptionGroundingAudit,
         ShadowEditorialRecommendation,
     ],
 )

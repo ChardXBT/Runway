@@ -71,7 +71,9 @@ async def evaluate_generalization_fixtures(
                 "actions": 0.9,
                 "relationships": 0.82,
                 "scene": 0.9,
-                "emotion": 0.72,
+                # This fixture evaluates cross-channel adaptation, not ambiguity handling.
+                # Keep its asserted shared-image emotion above the grounded-fact threshold.
+                "emotion": 0.82,
                 "composition": 0.9,
             },
         }
