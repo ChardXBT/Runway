@@ -62,6 +62,21 @@ class CaptionExposureService:
                 raise LookupError(f"proposal {proposal_id} not found")
             if proposal.caption_slate_id is None:
                 return None
+            candidates = session.scalars(
+                select(CaptionCandidateRecord)
+                .where(
+                    CaptionCandidateRecord.caption_slate_id == proposal.caption_slate_id,
+                    CaptionCandidateRecord.display_order.is_not(None),
+                )
+                .order_by(
+                    CaptionCandidateRecord.display_order,
+                    CaptionCandidateRecord.rank,
+                )
+            ).all()
+            # Generation chooses a prepared display slate, but exposure begins only
+            # when the review interface actually requests the proposal.
+            for candidate in candidates:
+                candidate.displayed = True
             existing = session.scalar(
                 select(CaptionExposure)
                 .where(
@@ -72,17 +87,6 @@ class CaptionExposureService:
             )
             if existing is not None:
                 return existing
-            candidates = session.scalars(
-                select(CaptionCandidateRecord)
-                .where(
-                    CaptionCandidateRecord.caption_slate_id == proposal.caption_slate_id,
-                    CaptionCandidateRecord.displayed.is_(True),
-                )
-                .order_by(
-                    CaptionCandidateRecord.display_order,
-                    CaptionCandidateRecord.rank,
-                )
-            ).all()
             exposure = CaptionExposure(
                 channel_id=proposal.channel_id,
                 proposal_id=proposal.id,

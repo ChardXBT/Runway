@@ -208,10 +208,11 @@ async def test_complete_caption_slate_and_abstention_provenance_are_persisted(
             .order_by(IntelligenceAgentStep.sequence)
         ).all()
     assert len(completed_records) == sum(len(attempt["candidates"]) for attempt in raw_attempts)
-    displayed = [row for row in completed_records if row.displayed]
-    assert len(displayed) == 3
-    assert all(row.eligible for row in displayed)
-    assert sorted(row.display_order for row in displayed if row.display_order is not None) == [
+    prepared = [row for row in completed_records if row.display_order is not None]
+    assert len(prepared) == 3
+    assert all(row.eligible for row in prepared)
+    assert all(not row.displayed for row in prepared)
+    assert sorted(row.display_order for row in prepared) == [
         1,
         2,
         3,

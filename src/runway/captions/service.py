@@ -1640,7 +1640,7 @@ class CaptionService:
                 preference_score=components["preference"],
                 final_score=float(row["final_score"]),
                 rank=rank,
-                displayed=candidate_key in display_order,
+                displayed=False,
                 display_order=display_order.get(candidate_key),
                 origin="generated",
                 created_by="intelligence_agent",

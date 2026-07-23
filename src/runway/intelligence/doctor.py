@@ -524,11 +524,13 @@ class IntelligenceDoctor:
             )
         if invalid_inactive_vectors:
             self.report.add(
-                "warning",
-                "representations.invalid_inactive_vectors",
-                "Invalid vectors remain only in preserved inactive sets.",
+                "information",
+                "representations.preserved_invalid_inactive_vectors",
+                "Invalid vectors are quarantined in preserved inactive sets.",
                 count=len(invalid_inactive_vectors),
                 examples=invalid_inactive_vectors[:20],
+                active_read_impact=False,
+                remediation="none; preserve immutable superseded evidence",
             )
         with self.database.session() as session:
             orphan_records = int(

@@ -21,6 +21,7 @@ from runway.db.models import (
     FeedbackSignal,
     GenerationRun,
     PairwisePreference,
+    Proposal,
 )
 from runway.discovery.service import DiscoveryService
 from runway.intelligence.profile import StyleProfileService
@@ -91,14 +92,46 @@ async def test_grounded_question_first_caption_and_feedback_memory(
         "eligible_withheld",
     }
     assert all(0.0 <= row.final_display_probability <= 1.0 for row in candidate_exposures)
+    with database.session() as session:
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        proposal_slate_id = proposal.caption_slate_id
+        prepared_caption_rows = session.scalars(
+            select(CaptionCandidateRecord)
+            .where(
+                CaptionCandidateRecord.caption_slate_id == proposal_slate_id,
+                CaptionCandidateRecord.display_order.is_not(None),
+            )
+            .order_by(CaptionCandidateRecord.display_order)
+        ).all()
+        pre_display_exposure = session.scalar(
+            select(CaptionExposure).where(CaptionExposure.proposal_id == proposal_id)
+        )
+    assert prepared_caption_rows
+    assert all(not row.displayed for row in prepared_caption_rows)
+    assert pre_display_exposure is None
+
     selected = proposals.select_alternative(proposal_id, 0)
     assert selected["status"] == "needs_review"
     with database.session() as session:
+        exposed_caption_rows = session.scalars(
+            select(CaptionCandidateRecord)
+            .where(
+                CaptionCandidateRecord.caption_slate_id == proposal_slate_id,
+                CaptionCandidateRecord.display_order.is_not(None),
+            )
+            .order_by(CaptionCandidateRecord.display_order)
+        ).all()
+        initial_exposure = session.scalar(
+            select(CaptionExposure).where(CaptionExposure.proposal_id == proposal_id)
+        )
         selected_pair_count = len(
             session.scalars(
                 select(PairwisePreference).where(PairwisePreference.proposal_id == proposal_id)
             ).all()
         )
+    assert initial_exposure is not None
+    assert all(row.displayed for row in exposed_caption_rows)
     approved = proposals.approve(proposal_id)
     assert approved["status"] == "approved"
     with database.session() as session:

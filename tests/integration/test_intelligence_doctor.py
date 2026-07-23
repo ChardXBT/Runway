@@ -13,6 +13,7 @@ from runway.db.models import (
     Channel,
     IntelligenceExperiment,
     PairwisePreference,
+    RepresentationRecord,
     RepresentationSet,
     RepresentationSetItem,
 )
@@ -79,6 +80,49 @@ def test_doctor_detects_conflicting_active_sets_and_stale_vectors(
     assert "representations.conflicting_active_sets" in codes
     assert "representations.stale_or_mismatched_items" in codes
     assert report.as_dict()["status"] == "failed"
+
+
+def test_doctor_preserves_invalid_vectors_confined_to_inactive_sets(
+    database: Database,
+    settings: Settings,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = RepresentationSetService(database, settings)
+    planned = service.plan_history("text")
+    set_id = int(planned["representation_set_id"])
+    _finish(service, set_id)
+    with database.session() as session:
+        representation_set = session.get(RepresentationSet, set_id)
+        assert representation_set is not None
+        assert representation_set.active is False
+        item = session.scalar(
+            select(RepresentationSetItem)
+            .where(RepresentationSetItem.representation_set_id == set_id)
+            .order_by(RepresentationSetItem.id)
+            .limit(1)
+        )
+        assert item is not None
+        assert item.representation_record_id is not None
+        record = session.get(RepresentationRecord, item.representation_record_id)
+        assert record is not None
+        record.serialized_data = bytes(record.dimensions * record.vector_count * 4)
+
+    report = IntelligenceDoctor(
+        database,
+        settings,
+        verify_media_files=False,
+    ).run()
+    finding = next(
+        finding
+        for finding in report.findings
+        if finding.code == "representations.preserved_invalid_inactive_vectors"
+    )
+    assert finding.severity == "information"
+    assert finding.details["active_read_impact"] is False
+    assert finding.details["remediation"] == "none; preserve immutable superseded evidence"
+    assert not any(
+        finding.code == "representations.invalid_inactive_vectors" for finding in report.findings
+    )
 
 
 def test_doctor_detects_duplicate_derived_labels(
