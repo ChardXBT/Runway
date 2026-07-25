@@ -70,12 +70,26 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Validate backend
+      - name: Validate backend static checks
         run: |
           ruff check .
           ruff format --check .
           mypy src/runway
-          pytest
+
+      - name: Validate backend tests
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest --tb=short | tee /tmp/runway-pytest.log
+
+      - name: Upload backend test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runway-pytest-diagnostics-${{ github.run_id }}
+          path: /tmp/runway-pytest.log
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Install frontend dependencies
         run: npm ci
