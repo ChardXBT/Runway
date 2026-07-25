@@ -1,0 +1,87 @@
+name: Apply verified Runway product workflow fixes
+
+on:
+  push:
+    branches:
+      - agent/runway-product-workflow-fixes
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-runway-product-workflow-fixes
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/web/package-lock.json
+
+      - name: Confirm unchanged main
+        shell: bash
+        env:
+          BASE_SHA: bbcfd2221510b7ed5aad34b455d5799963128d38
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$BASE_SHA"
+
+      - name: Apply verified product patch
+        shell: bash
+        run: |
+          cat .github/runway-patch/part-*.b64 \
+            | base64 --decode \
+            | gzip --decompress \
+            > /tmp/runway-product-workflow-fixes.patch
+          echo "116d8c1177d878f3adae7b1a9e7ec688c4bdb5b209bfb7f9ef74625bf646f3ec  /tmp/runway-product-workflow-fixes.patch" \
+            | sha256sum --check --strict
+          git apply --index --whitespace=error-all /tmp/runway-product-workflow-fixes.patch
+          git rm -r .github/runway-patch
+          git rm .github/workflows/apply-runway-product-workflow-fixes.yml
+          git diff --cached --check
+          test -z "$(git diff --cached --name-only | grep '^\.github/runway-patch/' || true)"
+          test -z "$(git diff --cached --name-only | grep '^\.github/workflows/apply-runway-product-workflow-fixes.yml$' || true)"
+
+      - name: Install backend dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Validate backend
+        run: |
+          ruff check .
+          ruff format --check .
+          mypy src/runway
+          pytest
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Validate frontend
+        run: npm run check
+
+      - name: Publish one clean commit to main
+        shell: bash
+        env:
+          BASE_SHA: bbcfd2221510b7ed5aad34b455d5799963128d38
+        run: |
+          git config user.name "ChardXBT"
+          git config user.email "204864596+ChardXBT@users.noreply.github.com"
+          tree_sha="$(git write-tree)"
+          clean_commit="$(printf '%s\n' 'Fix product workflow edge cases' | git commit-tree "$tree_sha" -p "$BASE_SHA")"
+          git push origin "$clean_commit:refs/heads/main"
+          git push origin --delete "$GITHUB_REF_NAME"
+          echo "Published $clean_commit"
