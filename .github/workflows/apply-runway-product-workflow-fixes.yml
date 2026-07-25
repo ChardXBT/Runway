@@ -71,7 +71,19 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: Validate Ruff lint
-        run: ruff check .
+        shell: bash
+        run: |
+          set -o pipefail
+          ruff check . --output-format concise | tee /tmp/runway-ruff.log
+
+      - name: Upload Ruff diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runway-ruff-diagnostics-${{ github.run_id }}
+          path: /tmp/runway-ruff.log
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Validate Ruff formatting
         run: ruff format --check .
