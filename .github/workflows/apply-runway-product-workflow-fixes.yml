@@ -1,19 +1,21 @@
 name: Apply verified Runway product workflow fixes
 
 on:
-  push:
+  pull_request:
+    types: [opened, reopened, synchronize]
     branches:
-      - agent/runway-product-workflow-fixes
+      - main
 
 permissions:
   contents: write
 
 concurrency:
   group: apply-runway-product-workflow-fixes
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate-and-publish:
+    if: github.head_ref == 'agent/runway-product-workflow-fixes'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -77,11 +79,12 @@ jobs:
         shell: bash
         env:
           BASE_SHA: bbcfd2221510b7ed5aad34b455d5799963128d38
+          HEAD_BRANCH: ${{ github.head_ref }}
         run: |
           git config user.name "ChardXBT"
           git config user.email "204864596+ChardXBT@users.noreply.github.com"
           tree_sha="$(git write-tree)"
           clean_commit="$(printf '%s\n' 'Fix product workflow edge cases' | git commit-tree "$tree_sha" -p "$BASE_SHA")"
           git push origin "$clean_commit:refs/heads/main"
-          git push origin --delete "$GITHUB_REF_NAME"
+          git push origin --delete "$HEAD_BRANCH"
           echo "Published $clean_commit"
