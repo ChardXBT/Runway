@@ -1,9 +1,11 @@
 import Link from "next/link";
 
-import { API_URL, apiGet } from "@/lib/api";
+import { API_URL, apiGetOptional, apiGetRequired } from "@/lib/api";
 import { AnnotationEditor } from "@/components/annotation-editor";
 import { EligibilityToggle } from "@/components/eligibility-toggle";
 import { isRecord } from "@/lib/guards";
+
+export const dynamic = "force-dynamic";
 
 type Detail = {
   id: number;
@@ -75,19 +77,14 @@ function splitCaption(caption: string | null) {
 
 export default async function CatalogueDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const post = await apiGet<Detail | null>(
-    `/api/catalog/${id}`,
-    null,
-    (value): value is Detail | null => value === null || isDetail(value),
-  );
-  const similar = await apiGet<Similar[]>(
-    `/api/catalog/${id}/similar`,
-    [],
-    isSimilarList,
-  );
+  const post = await apiGetOptional<Detail>(`/api/catalog/${id}`, isDetail);
   if (!post) {
     return <section className="panel empty"><div><strong>Post not found.</strong><Link href="/catalogue">Back to catalogue</Link></div></section>;
   }
+  const similar = await apiGetRequired<Similar[]>(
+    `/api/catalog/${id}/similar`,
+    isSimilarList,
+  );
   const caption = splitCaption(post.caption);
   return (
     <>

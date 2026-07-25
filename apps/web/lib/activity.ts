@@ -5,6 +5,7 @@ export const activityCategories = [
   ["intelligence", "Intelligence"],
   ["data", "Data collection"],
   ["settings", "Settings"],
+  ["other", "Other / system"],
 ] as const;
 
 export type ActivityCategory = (typeof activityCategories)[number][0];
@@ -54,7 +55,7 @@ export function activityCategory(eventType: string): ActivityCategory {
   if (value.includes("settings") || value.includes("policy")) {
     return "settings";
   }
-  return "intelligence";
+  return "other";
 }
 
 export function activityTitle(eventType: string) {
@@ -72,6 +73,8 @@ export function activityTitle(eventType: string) {
     youtube_queue_blocked: "YouTube queue paused",
     youtube_session_validated: "Publisher connection verified",
     youtube_session_validation_failed: "Publisher connection failed",
+    youtube_connector_validated: "Connector capability observed",
+    youtube_connector_validation_failed: "Connector capability check failed",
     lineup_post_updated: "Lineup post updated",
     lineup_post_removed: "Lineup post removed",
     settings_updated: "Settings updated",
@@ -124,11 +127,11 @@ export function activitySummary(
   }
   if (eventType === "lineup_post_updated") {
     return details.swapped
-      ? "Two occupied daily slots were swapped and synchronized."
-      : "The scheduled caption or release date was updated.";
+      ? "Two local Lineup slots were swapped. YouTube was unchanged."
+      : "The local scheduled caption or release date was updated. YouTube was unchanged.";
   }
   if (eventType === "lineup_post_removed") {
-    return "The future post was removed only after the external state was handled safely.";
+    return "The post was removed from the local Lineup. YouTube was unchanged.";
   }
   if (eventType === "settings_updated") {
     return "Local channel rules changed; the previous and new values remain in the technical record.";

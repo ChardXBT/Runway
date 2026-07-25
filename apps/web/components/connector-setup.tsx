@@ -29,10 +29,14 @@ export function ConnectorSetup({
   connectorEmail,
   configuredChannelId,
   browserName,
+  publishingMode,
+  publishingEnabled,
 }: {
   connectorEmail: string;
   configuredChannelId: string;
   browserName: string;
+  publishingMode: "assisted" | "authorized_browser";
+  publishingEnabled: boolean;
 }) {
   const defaultChannel = configuredChannelId
     ? `https://www.youtube.com/channel/${configuredChannelId}`
@@ -42,7 +46,9 @@ export function ConnectorSetup({
   const [state, setState] = useState<ConnectionState>("ready");
   const [detail, setDetail] = useState(
     configuredChannelId
-      ? "Saved channel loaded. Run the read-only check after the invitation has been accepted."
+      ? publishingEnabled
+        ? "Saved channel loaded. Run the read-only check after the invitation has been accepted."
+        : "Saved channel loaded. You can check capability now; publishing remains off until authorized-browser mode is enabled locally."
       : "Paste your channel URL after the invitation has been accepted.",
   );
   const requestLock = useRef(false);
@@ -77,7 +83,11 @@ export function ConnectorSetup({
         failureMessage: "Runway could not verify Community posting capability.",
       });
       setState(payload.valid ? "connected" : "attention");
-      setDetail(payload.detail);
+      setDetail(
+        payload.valid && !publishingEnabled
+          ? `${payload.detail} Publishing remains disabled.`
+          : payload.detail,
+      );
     } catch (error) {
       setState("attention");
       setDetail(
@@ -93,7 +103,7 @@ export function ConnectorSetup({
 
   const stateLabel =
     state === "connected"
-      ? "Connected"
+      ? "Capability observed"
       : state === "attention"
         ? "Needs attention"
         : state === "checking"
@@ -212,6 +222,16 @@ export function ConnectorSetup({
             </span>
             <span>Read-only check</span>
           </div>
+          <p className="connector-mode-state">
+            <strong>
+              {publishingMode === "assisted"
+                ? "Assisted mode is active."
+                : publishingEnabled
+                  ? "Authorized browser publishing is enabled."
+                  : "Authorized browser publishing is locked."}
+            </strong>{" "}
+            This read-only check never enables publishing or creates queue work.
+          </p>
           <p className="eyebrow">Capability check</p>
           <h2 id="connector-check-title">Are Community post controls available?</h2>
           <p>

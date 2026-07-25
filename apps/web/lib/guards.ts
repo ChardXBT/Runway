@@ -27,6 +27,34 @@ function isDateString(value: unknown): value is string {
   );
 }
 
+const proposalStatuses = new Set([
+  "generating",
+  "needs_review",
+  "approved",
+  "rejected",
+  "internally_scheduled",
+  "publishing",
+  "externally_scheduled",
+  "publish_unverified",
+  "publish_failed",
+  "published",
+  "cancelled",
+]);
+
+function isLatestPublishAttempt(value: unknown) {
+  return (
+    value === null ||
+    (isRecord(value) &&
+      isFiniteNumber(value.id) &&
+      Number.isInteger(value.id) &&
+      typeof value.status === "string" &&
+      (value.error_summary === null || typeof value.error_summary === "string") &&
+      isDateString(value.prepared_at) &&
+      (value.submitted_at === null || isDateString(value.submitted_at)) &&
+      (value.completed_at === null || isDateString(value.completed_at)))
+  );
+}
+
 export function isProposal(value: unknown): value is Proposal {
   if (!isRecord(value)) return false;
   const candidateValid =
@@ -50,11 +78,23 @@ export function isProposal(value: unknown): value is Proposal {
     (value.scheduled_publish_at === null ||
       isDateString(value.scheduled_publish_at)) &&
     typeof value.status === "string" &&
+    proposalStatuses.has(value.status) &&
     isFiniteNumber(value.candidate_image_id) &&
+    Array.isArray(value.backup_candidate_ids) &&
+    value.backup_candidate_ids.every(
+      (item) => isFiniteNumber(item) && Number.isInteger(item),
+    ) &&
     typeof value.final_caption === "string" &&
     typeof value.recommended_caption === "string" &&
     Array.isArray(value.alternative_captions) &&
     value.alternative_captions.every((item) => typeof item === "string") &&
+    Array.isArray(value.warnings) &&
+    value.warnings.every((item) => typeof item === "string") &&
+    (value.external_post_id === null || typeof value.external_post_id === "string") &&
+    (value.external_post_url === null || typeof value.external_post_url === "string") &&
+    (value.scheduled_verified_at === null ||
+      isDateString(value.scheduled_verified_at)) &&
+    isLatestPublishAttempt(value.latest_publish_attempt) &&
     candidateValid
   );
 }
@@ -84,7 +124,11 @@ export function isPublisherQueueStatus(
     value.queued >= 0 &&
     typeof value.paused === "boolean" &&
     !(value.running && value.paused) &&
-    (value.paused_reason === null || typeof value.paused_reason === "string")
+    (value.paused_reason === null || typeof value.paused_reason === "string") &&
+    Array.isArray(value.proposal_ids) &&
+    value.proposal_ids.every(
+      (proposalId) => isFiniteNumber(proposalId) && Number.isInteger(proposalId),
+    )
   );
 }
 

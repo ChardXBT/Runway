@@ -139,4 +139,47 @@ describe("backstage forms", () => {
     );
     expect(screen.getByText("Eligibility saved.")).toBeInTheDocument();
   });
+
+  it("locks annotation edits after an ambiguous save until the page is reconciled", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => annotation })
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AnnotationEditor postId={12} />);
+
+    await screen.findByLabelText("Scene description");
+    fireEvent.click(screen.getByRole("button", { name: "Save review" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "response could not be verified",
+    );
+    expect(screen.getByRole("button", { name: "Save review" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Reload to verify" }),
+    ).toBeInTheDocument();
+  });
+
+  it("locks eligibility after an ambiguous response until the page is reconciled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ is_training_eligible: "maybe" }),
+      }),
+    );
+    render(<EligibilityToggle postId={13} initial />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Exclude from profile" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "response could not be verified",
+    );
+    expect(
+      screen.getByRole("button", { name: "Exclude from profile" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Reload to verify" }),
+    ).toBeInTheDocument();
+  });
 });

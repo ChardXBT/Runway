@@ -83,6 +83,8 @@ export function PlatformConnection({
         state: "needs_attention",
         valid: false,
         stale: false,
+        checked_at: null,
+        checks: {},
         detail: failure,
       }));
       setDetailIsError(true);
@@ -159,6 +161,12 @@ export function PlatformConnection({
           ? "warning"
           : "neutral";
   const connectionChecks = Object.entries(connection.checks);
+  const canResume =
+    publishingEnabled &&
+    queue.paused &&
+    connection.state === "connected" &&
+    connection.valid === true &&
+    !connection.stale;
 
   return (
     <section
@@ -277,7 +285,7 @@ export function PlatformConnection({
         >
           {busy === "check" ? "Checking saved session…" : "Check saved session"}
         </button>
-        {(queue.paused || connection.state === "needs_attention") && (
+        {canResume && (
           <button
             type="button"
             className="button secondary"
@@ -289,6 +297,11 @@ export function PlatformConnection({
           </button>
         )}
       </div>
+      {queue.paused && !canResume && publishingEnabled && (
+        <p className="connection-detail">
+          Run a fresh successful saved-session check before resuming the blocked queue.
+        </p>
+      )}
       {publishingMode === "assisted" && (
         <p className="connection-detail">
           Assisted preparation remains usable without a working publisher session.

@@ -18,6 +18,7 @@ export function AssistedPublishingWorkspace({
   const [index, setIndex] = useState(0);
   const [completed, setCompleted] = useState<Set<number>>(() => new Set());
   const [copyState, setCopyState] = useState("Copy caption");
+  const [downloadState, setDownloadState] = useState("Download exact image");
   const item = workspace.items[index];
   const imageUrl = `${API_URL}${item.image_url}`;
   const date = localDate(item.planned_publish_at, workspace.timezone) ?? "Invalid date";
@@ -41,6 +42,28 @@ export function AssistedPublishingWorkspace({
   function move(nextIndex: number) {
     setIndex(nextIndex);
     setCopyState("Copy caption");
+    setDownloadState("Download exact image");
+  }
+
+  async function downloadImage() {
+    setDownloadState("Downloading…");
+    try {
+      const response = await fetch(imageUrl, { cache: "no-store" });
+      if (!response.ok) throw new Error("image download failed");
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const extension = item.image_url.split(".").pop()?.split(/[?#]/)[0] || "jpg";
+      link.href = objectUrl;
+      link.download = `runway-post-${item.proposal_id}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      setDownloadState("Image downloaded");
+    } catch {
+      setDownloadState("Download failed — open image");
+    }
   }
 
   function toggleCompleted() {
@@ -85,9 +108,9 @@ export function AssistedPublishingWorkspace({
             <a href={imageUrl} target="_blank" rel="noreferrer">
               Open exact image
             </a>
-            <a href={imageUrl} download>
-              Download exact image
-            </a>
+            <button type="button" onClick={downloadImage}>
+              {downloadState}
+            </button>
           </figcaption>
         </figure>
 
@@ -127,7 +150,7 @@ export function AssistedPublishingWorkspace({
               rel="noreferrer"
               title="Opens the configured channel's native YouTube Posts page"
             >
-              Open YouTube Studio ↗
+              Open channel Posts ↗
             </a>
           </div>
 

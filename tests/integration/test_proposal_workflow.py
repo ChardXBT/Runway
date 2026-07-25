@@ -20,6 +20,7 @@ from runway.discovery.service import DiscoveryService
 from runway.intelligence.profile import StyleProfileService
 from runway.proposals.service import ProposalService
 from runway.publishing.internal import InternalPublisher
+from runway.services.settings import SettingsService
 
 
 def test_primary_franchise_supports_current_and_legacy_profile_keys() -> None:
@@ -207,3 +208,94 @@ async def test_continuous_workflow_actions_and_restart_persistence(
         "proposal_internally_scheduled",
     } <= audit_types
     restarted.engine.dispose()
+
+
+async def _generated_proposal_service(
+    database: Database,
+    settings: Settings,
+    *,
+    days: int,
+) -> tuple[ProposalService, list[dict[str, object]]]:
+    CaptureService(database, settings).run_fixture()
+    await AnalysisService(database, settings).analyze_history()
+    await StyleProfileService(database, settings).build()
+    await DiscoveryService(database, settings).discover(provider_name="fixture", dry_run=True)
+    proposals = ProposalService(database, settings)
+    local_today = datetime.now(ZoneInfo(settings.timezone)).date()
+    await proposals.generate_batch(days=days, start_date=local_today + timedelta(days=2))
+    return proposals, proposals.list_proposals()
+
+
+@pytest.mark.asyncio
+async def test_atomic_editorial_accept_survives_secondary_learning_failure(
+    database: Database,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposals, rows = await _generated_proposal_service(database, settings, days=1)
+    proposal_id = int(rows[0]["id"])
+
+    def fail_feedback(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("secondary feedback unavailable")
+
+    monkeypatch.setattr(proposals.feedback, "record", fail_feedback)
+    accepted = proposals.accept_to_lineup(proposal_id, "Human final caption?!")
+
+    assert accepted["status"] == "internally_scheduled"
+    assert accepted["final_caption"] == "Human final caption?!"
+    assert accepted["scheduled_publish_at"] is not None
+    assert ProposalService(database, settings).detail(proposal_id)["status"] == (
+        "internally_scheduled"
+    )
+
+
+@pytest.mark.asyncio
+async def test_proposal_history_can_request_newest_records_first(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposals, rows = await _generated_proposal_service(database, settings, days=2)
+
+    ascending = [int(row["id"]) for row in rows]
+    descending = [int(row["id"]) for row in proposals.list_proposals(order="desc")]
+
+    assert descending == list(reversed(ascending))
+
+
+@pytest.mark.asyncio
+async def test_secondary_display_evidence_cannot_hide_a_review_option(
+    database: Database,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposals, rows = await _generated_proposal_service(database, settings, days=1)
+
+    def fail_display(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("display evidence unavailable")
+
+    monkeypatch.setattr(proposals.exposures, "record_display", fail_display)
+    result = proposals.next_for_review()
+
+    assert result is not None
+    assert result["id"] == rows[0]["id"]
+    assert result["status"] == "needs_review"
+
+
+@pytest.mark.asyncio
+async def test_timezone_change_is_blocked_while_lineup_work_is_active(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposals, rows = await _generated_proposal_service(database, settings, days=1)
+    proposals.accept_to_lineup(int(rows[0]["id"]), str(rows[0]["final_caption"]))
+
+    with pytest.raises(ValueError, match="timezone cannot change"):
+        SettingsService(database, settings).update({"timezone": "America/Vancouver"})
+
+
+def test_channel_handle_is_not_a_general_editable_setting(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with pytest.raises(ValueError, match="unsupported settings: handle"):
+        SettingsService(database, settings).update({"handle": "AnotherChannel"})

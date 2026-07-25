@@ -21,7 +21,7 @@ import {
 import {
   localDate,
   localTime,
-  scheduleIsPast,
+  scheduleHasMinimumLead,
   shiftIsoDate,
   zonedScheduleIso,
 } from "@/lib/datetime";
@@ -131,6 +131,7 @@ function isMutationResponse(
 type RecoveryResponse = {
   lineup?: LineupSchedule;
   proposal?: Proposal;
+  publisher_queue?: PublisherQueueStatus;
 };
 
 function isRecoveryResponse(value: unknown): value is RecoveryResponse {
@@ -139,7 +140,17 @@ function isRecoveryResponse(value: unknown): value is RecoveryResponse {
     value.lineup === undefined || isLineupSchedule(value.lineup);
   const proposalValid =
     value.proposal === undefined || isProposal(value.proposal);
-  return lineupValid && proposalValid && (value.lineup !== undefined || value.proposal !== undefined);
+  const queueValid =
+    value.publisher_queue === undefined ||
+    isPublisherQueueStatus(value.publisher_queue);
+  return (
+    lineupValid &&
+    proposalValid &&
+    queueValid &&
+    (value.lineup !== undefined ||
+      value.proposal !== undefined ||
+      value.publisher_queue !== undefined)
+  );
 }
 
 type DialogMode = "edit" | "remove" | "publish" | null;
@@ -150,6 +161,7 @@ const idlePublisherQueue: PublisherQueueStatus = {
   queued: 0,
   paused: false,
   paused_reason: null,
+  proposal_ids: [],
 };
 
 export function LineupCalendar({
@@ -183,6 +195,9 @@ export function LineupCalendar({
   const [watchPublisher, setWatchPublisher] = useState(
     initialPublisherQueue.running || initialPublisherQueue.queued > 0,
   );
+  const [publisherTargetIds, setPublisherTargetIds] = useState<number[]>(
+    initialPublisherQueue.proposal_ids,
+  );
   const initialSelection =
     initialLineup.scheduled[0] ?? initialPublishedSorted[0] ?? null;
   const initialMonthValue = initialSelection
@@ -212,7 +227,7 @@ export function LineupCalendar({
   const [recentlyChangedIds, setRecentlyChangedIds] = useState<number[]>([]);
   const [assistedWorkspace, setAssistedWorkspace] =
     useState<AssistedWorkspace | null>(null);
-  const [renderedAt] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const actionLock = useRef(false);
   const dialogRef = useRef<HTMLElement>(null);
   const dialogOpener = useRef<HTMLElement | null>(null);
@@ -310,6 +325,15 @@ export function LineupCalendar({
       ),
     [lineup.scheduled],
   );
+  const unresolvedYouTube = useMemo(
+    () =>
+      lineup.scheduled.filter((proposal) =>
+        ["publishing", "publish_unverified", "publish_failed"].includes(
+          proposal.status,
+        ),
+      ),
+    [lineup.scheduled],
+  );
 
   function setNotice(text: string, error = false) {
     setMessage(text);
@@ -318,7 +342,7 @@ export function LineupCalendar({
 
   function proposalIsFuture(proposal: Proposal) {
     const instant = new Date(proposalSlot(proposal)).getTime();
-    return Number.isFinite(instant) && instant > renderedAt + 5 * 60_000;
+    return Number.isFinite(instant) && instant > nowMs + 5 * 60_000;
   }
 
   function canEditProposal(proposal: Proposal | null) {
@@ -330,7 +354,7 @@ export function LineupCalendar({
     ) {
       return false;
     }
-    return proposalIsFuture(proposal);
+    return true;
   }
 
   function canRemoveProposal(proposal: Proposal | null) {
@@ -447,21 +471,23 @@ export function LineupCalendar({
     time = proposal
       ? localTime(proposalSlot(proposal), lineup.timezone) ?? lineup.default_time
       : lineup.default_time,
+    referenceTime = new Date(nowMs),
   ): string | null {
     if (!proposal) return "Select a post first.";
     if (!caption.trim()) return "Caption cannot be empty.";
     if (!date) return "Choose a release date.";
     if (!time) return "Choose a release time.";
-    const isPast = scheduleIsPast(
+    const hasMinimumLead = scheduleHasMinimumLead(
       date,
       time,
       lineup.timezone,
+      referenceTime,
     );
-    if (isPast === null) {
+    if (hasMinimumLead === null) {
       return "The configured date, time, or timezone is invalid. Check Settings before moving this post.";
     }
-    if (isPast) {
-      return `Choose a future ${displayTime(time)} ${displayTimezone(lineup.timezone)} slot.`;
+    if (!hasMinimumLead) {
+      return `Choose a ${displayTime(time)} ${displayTimezone(lineup.timezone)} slot at least five minutes from now.`;
     }
     const occupants = (scheduledByDate.get(date) ?? []).filter(
       (occupant) => occupant.id !== proposal.id,
@@ -470,7 +496,10 @@ export function LineupCalendar({
       return "That date already has conflicting Runway posts. Refresh and verify Lineup before making changes.";
     }
     const occupant = occupants[0];
-    if (occupant && !canEditProposal(occupant)) {
+    if (occupant && !proposalIsFuture(proposal)) {
+      return "An overdue post can only be moved to an empty future date.";
+    }
+    if (occupant && (!canEditProposal(occupant) || !proposalIsFuture(occupant))) {
       return `${date} is occupied by “${occupant.final_caption},” which is ${statusLabel(occupant.status).toLowerCase()} and cannot be swapped safely.`;
     }
     return null;
@@ -522,7 +551,13 @@ export function LineupCalendar({
     ) {
       return;
     }
-    const validation = draftValidation();
+    const validation = draftValidationFor(
+      selected,
+      draftDate,
+      draftCaption,
+      draftTime,
+      new Date(),
+    );
     if (validation) {
       setDialogError(validation);
       return;
@@ -561,16 +596,21 @@ export function LineupCalendar({
       });
       const payload = await parseMutation(response);
       setLineup(payload.lineup);
+      const workspaceInvalidated = assistedWorkspace !== null;
+      if (workspaceInvalidated) setAssistedWorkspace(null);
       setRecentlyChangedIds(
         swapped ? [selected.id, swapped.id] : [selected.id],
       );
       setDialog(null);
-      setNotice(
-        swapped
+      const baseNotice = swapped
           ? `Confirmed. “${selected.final_caption}” and “${swapped.final_caption}” swapped release dates.`
           : !timestampChanged
             ? "Confirmed. The caption was updated locally and is ready for the next explicit publishing action."
-            : "Confirmed. The post moved to the new local release time.",
+            : "Confirmed. The post moved to the new local release time.";
+      setNotice(
+        workspaceInvalidated
+          ? `${baseNotice} The assisted workspace was closed; prepare it again from the updated Lineup.`
+          : baseNotice,
       );
     } catch (error) {
       const uncertain = hasUncertainOutcome(error);
@@ -675,11 +715,17 @@ export function LineupCalendar({
       );
       const payload = await parseMutation(response);
       setLineup(payload.lineup);
+      const workspaceInvalidated = assistedWorkspace !== null;
+      if (workspaceInvalidated) setAssistedWorkspace(null);
       setSelectedId(
         payload.lineup.scheduled[0]?.id ?? published[0]?.id ?? null,
       );
       setDialog(null);
-      setNotice("Confirmed. The post was removed from Lineup.");
+      setNotice(
+        workspaceInvalidated
+          ? "Confirmed. The post was removed from Lineup. The assisted workspace was closed; prepare it again if needed."
+          : "Confirmed. The post was removed from Lineup.",
+      );
     } catch (error) {
       const uncertain = hasUncertainOutcome(error);
       setDialogOutcomeUncertain(uncertain);
@@ -704,9 +750,12 @@ export function LineupCalendar({
       return;
     }
     const verifying = selected.status === "publish_unverified";
+    const retryable =
+      selected.status === "publish_failed" &&
+      selected.latest_publish_attempt?.status === "failed_before_submission";
     if (
       !verifying &&
-      !["internally_scheduled", "publish_failed"].includes(selected.status)
+      !retryable
     ) {
       return;
     }
@@ -743,6 +792,16 @@ export function LineupCalendar({
             item.id === payload.proposal?.id ? payload.proposal : item,
           ),
         }));
+      }
+      if (payload.publisher_queue) {
+        setPublisherQueue(payload.publisher_queue);
+        if (!verifying) {
+          setPublisherTargetIds([selected.id]);
+          setWatchPublisher(
+            payload.publisher_queue.running ||
+              payload.publisher_queue.queued > 0,
+          );
+        }
       }
       setNotice(
         verifying
@@ -814,11 +873,13 @@ export function LineupCalendar({
       if (payload.mode === "assisted" && payload.assisted_workspace) {
         setAssistedWorkspace(payload.assisted_workspace);
         setWatchPublisher(false);
+        setPublisherTargetIds([]);
         setNotice(
           `${payload.detail} Nothing was queued and no browser was opened by Runway.`,
         );
       } else {
         setWatchPublisher(payload.queued_proposal_ids.length > 0);
+        setPublisherTargetIds(payload.queued_proposal_ids);
         setNotice(
           payload.queued_proposal_ids.length > 0
             ? `${payload.detail} Runway will update each post as it is individually verified.`
@@ -877,6 +938,11 @@ export function LineupCalendar({
       first.focus();
     }
   }
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!dialog) return;
@@ -947,6 +1013,13 @@ export function LineupCalendar({
         }
         setLineup(freshLineup);
         setPublisherQueue(freshQueue);
+        const targetIds =
+          publisherTargetIds.length > 0
+            ? publisherTargetIds
+            : freshQueue.proposal_ids;
+        if (publisherTargetIds.length === 0 && freshQueue.proposal_ids.length > 0) {
+          setPublisherTargetIds(freshQueue.proposal_ids);
+        }
         if (freshQueue.paused) {
           setWatchPublisher(false);
           setNotice(
@@ -958,14 +1031,34 @@ export function LineupCalendar({
         }
         if (!freshQueue.running && freshQueue.queued === 0) {
           setWatchPublisher(false);
-          const remaining = freshLineup.scheduled.filter(
-            (proposal) => proposal.status === "internally_scheduled",
+          const targetStates = targetIds.map((proposalId) =>
+            freshLineup.scheduled.find((proposal) => proposal.id === proposalId),
+          );
+          const verified = targetStates.filter((proposal) =>
+            proposal
+              ? ["externally_scheduled", "published"].includes(proposal.status)
+              : false,
           ).length;
+          const failed = targetStates.filter(
+            (proposal) => proposal?.status === "publish_failed",
+          ).length;
+          const unverified = targetStates.filter(
+            (proposal) => proposal?.status === "publish_unverified",
+          ).length;
+          const waiting = targetStates.filter(
+            (proposal) => proposal?.status === "internally_scheduled",
+          ).length;
+          const inFlight = targetStates.filter(
+            (proposal) => proposal?.status === "publishing",
+          ).length;
+          const missing = targetStates.filter((proposal) => !proposal).length;
+          const complete = targetIds.length > 0 && verified === targetIds.length;
+          setPublisherTargetIds([]);
           setNotice(
-            remaining === 0
-              ? "YouTube sync complete. Every queued Lineup post is verified."
-              : `YouTube sync stopped with ${remaining} ${remaining === 1 ? "post" : "posts"} still waiting. Review the red or amber statuses before retrying.`,
-            remaining > 0,
+            complete
+              ? `YouTube sync complete. All ${verified} queued ${verified === 1 ? "post is" : "posts are"} verified.`
+              : `YouTube sync stopped: ${verified} verified, ${failed} failed, ${unverified} need verification, ${waiting} waiting, ${inFlight} still in flight, and ${missing} missing from the refreshed Lineup.`,
+            !complete,
           );
           return;
         }
@@ -990,7 +1083,7 @@ export function LineupCalendar({
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [publishingEnabled, publishingMode, watchPublisher]);
+  }, [publishingEnabled, publishingMode, publisherTargetIds, watchPublisher]);
 
   const occupiedTarget = draftDate
     ? scheduledByDate.get(draftDate)
@@ -1000,7 +1093,7 @@ export function LineupCalendar({
   );
   const currentDraftError = dialog === "edit" ? draftValidation() : null;
   const displayedDialogError = dialogError || currentDraftError || "";
-  const today = localDate(new Date(), lineup.timezone) ?? undefined;
+  const today = localDate(new Date(nowMs), lineup.timezone) ?? undefined;
   const browserMode = publishingMode === "authorized_browser";
   const queueInMotion =
     browserMode && (publisherQueue.running || publisherQueue.queued > 0);
@@ -1070,7 +1163,9 @@ export function LineupCalendar({
                   ? "Scheduling through the visible browser"
                     : waitingForYouTube.length > 0
                       ? `${waitingForYouTube.length} ready for YouTube`
-                      : "Lineup and YouTube are synchronized"}
+                      : unresolvedYouTube.length > 0
+                        ? "YouTube status needs attention"
+                        : "Lineup and YouTube are synchronized"}
           </strong>
           <span>
             {!browserMode
@@ -1086,7 +1181,9 @@ export function LineupCalendar({
                   ? `${publisherQueue.queued} remaining in the serialized queue. One post is handled at a time.`
                     : waitingForYouTube.length > 0
                       ? `The explicit action queues each selected post in date order. Runway preserves one post per local day in ${lineup.timezone}.`
-                      : "Every upcoming post shown as scheduled has a verified YouTube result."}
+                      : unresolvedYouTube.length > 0
+                        ? `${unresolvedYouTube.length} post${unresolvedYouTube.length === 1 ? "" : "s"} still has a failed, in-flight, or unverified YouTube state.`
+                        : "Every upcoming post shown as scheduled has a verified YouTube result."}
           </span>
         </div>
         <div className="lineup-youtube-actions">
@@ -1419,7 +1516,9 @@ export function LineupCalendar({
                         uncertainProposalId === selected.id
                       }
                     >
-                      Edit or choose date
+                      {proposalIsFuture(selected)
+                        ? "Edit or choose date"
+                        : "Reschedule overdue post"}
                     </button>
                     <div className="quick-move" aria-label="Quick move">
                       <button
@@ -1455,11 +1554,10 @@ export function LineupCalendar({
                     </div>
                     {publishingMode === "authorized_browser" &&
                       publishingEnabled &&
-                      [
-                        "internally_scheduled",
-                        "publish_failed",
-                        "publish_unverified",
-                      ].includes(selected.status) && (
+                      (selected.status === "publish_unverified" ||
+                        (selected.status === "publish_failed" &&
+                          selected.latest_publish_attempt?.status ===
+                            "failed_before_submission")) && (
                         <button
                           type="button"
                           className="button sync"

@@ -15,6 +15,8 @@ describe("ConnectorSetup", () => {
         connectorEmail="tryrunwaytoday@gmail.com"
         configuredChannelId=""
         browserName="Google Chrome"
+        publishingMode="assisted"
+        publishingEnabled={false}
       />,
     );
 
@@ -41,6 +43,8 @@ describe("ConnectorSetup", () => {
         connectorEmail="tryrunwaytoday@gmail.com"
         configuredChannelId=""
         browserName="Google Chrome"
+        publishingMode="assisted"
+        publishingEnabled={false}
       />,
     );
 
@@ -57,9 +61,27 @@ describe("ConnectorSetup", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       channel_url: "https://www.youtube.com/@creator",
     });
-    expect(await screen.findByText("Connected")).toBeInTheDocument();
+    expect(await screen.findByText("Capability observed")).toBeInTheDocument();
     expect(
-      screen.getByText("Community publishing controls observed."),
+      screen.getByText("Community publishing controls observed. Publishing remains disabled."),
     ).toBeInTheDocument();
+  });
+
+  it("keeps read-only capability verification available while publishing is off", () => {
+    render(
+      <ConnectorSetup
+        connectorEmail="tryrunwaytoday@gmail.com"
+        configuredChannelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        browserName="Google Chrome"
+        publishingMode="assisted"
+        publishingEnabled={false}
+      />,
+    );
+
+    expect(screen.getByText("Assisted mode is active.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Verify capability" }),
+    ).toBeEnabled();
+    expect(screen.getByText(/never enables publishing/i)).toBeInTheDocument();
   });
 });

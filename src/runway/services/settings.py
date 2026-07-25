@@ -7,14 +7,13 @@ from sqlalchemy import select
 
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import BlockedSource
+from runway.db.models import BlockedSource, Proposal, PublishAttempt
 from runway.db.repositories import audit, get_channel
+from runway.domain.enums import ProposalStatus
 
 
 class SettingsService:
     editable = {
-        "name",
-        "handle",
         "timezone",
         "default_post_time",
         "duplicate_window_days",
@@ -69,6 +68,40 @@ class SettingsService:
                 raise ValueError(f"{key} must be positive")
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
+            requested_timezone = str(fields.get("timezone", channel.timezone))
+            if requested_timezone != channel.timezone:
+                active_statuses = {
+                    ProposalStatus.APPROVED.value,
+                    ProposalStatus.INTERNALLY_SCHEDULED.value,
+                    ProposalStatus.PUBLISHING.value,
+                    ProposalStatus.EXTERNALLY_SCHEDULED.value,
+                    ProposalStatus.PUBLISH_UNVERIFIED.value,
+                    ProposalStatus.PUBLISH_FAILED.value,
+                }
+                active_proposal = session.scalar(
+                    select(Proposal.id)
+                    .where(
+                        Proposal.channel_id == channel.id,
+                        Proposal.status.in_(active_statuses),
+                    )
+                    .limit(1)
+                )
+                active_attempt = session.scalar(
+                    select(PublishAttempt.id)
+                    .join(Proposal, Proposal.id == PublishAttempt.proposal_id)
+                    .where(
+                        Proposal.channel_id == channel.id,
+                        PublishAttempt.status.in_(
+                            ["prepared", "queued", "blocked_session", "submitting"]
+                        ),
+                    )
+                    .limit(1)
+                )
+                if active_proposal is not None or active_attempt is not None:
+                    raise ValueError(
+                        "timezone cannot change while Lineup or publisher work is active; "
+                        "complete or remove those posts first"
+                    )
             before = {key: getattr(channel, key) for key in fields}
             for key, value in fields.items():
                 setattr(channel, key, value)

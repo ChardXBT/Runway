@@ -3,7 +3,11 @@
 import { useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
-import { actionError, readApiJson } from "@/lib/client-api";
+import {
+  actionError,
+  hasUncertainOutcome,
+  readApiJson,
+} from "@/lib/client-api";
 import { isRecord } from "@/lib/guards";
 
 export function EligibilityToggle({ postId, initial }: { postId: number; initial: boolean }) {
@@ -11,6 +15,7 @@ export function EligibilityToggle({ postId, initial }: { postId: number; initial
   const [message, setMessage] = useState("");
   const [messageIsError, setMessageIsError] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
   const actionLock = useRef(false);
 
   async function toggle() {
@@ -34,6 +39,7 @@ export function EligibilityToggle({ postId, initial }: { postId: number; initial
       setEligible(next);
       setMessage("Eligibility saved.");
     } catch (error) {
+      setUncertain(hasUncertainOutcome(error));
       setMessage(
         actionError(
           error,
@@ -53,7 +59,7 @@ export function EligibilityToggle({ postId, initial }: { postId: number; initial
         type="button"
         className="button secondary"
         onClick={toggle}
-        disabled={busy}
+        disabled={busy || uncertain}
         aria-busy={busy}
       >
         {busy
@@ -62,6 +68,15 @@ export function EligibilityToggle({ postId, initial }: { postId: number; initial
             ? "Exclude from profile"
             : "Include in profile"}
       </button>
+      {uncertain && (
+        <button
+          type="button"
+          className="text-link"
+          onClick={() => window.location.reload()}
+        >
+          Reload to verify
+        </button>
+      )}
       <small role={messageIsError ? "alert" : "status"}>{message}</small>
     </div>
   );

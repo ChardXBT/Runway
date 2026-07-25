@@ -2,9 +2,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from runway.api.app import create_app
+from runway.audit.service import AuditService
 from runway.config import Settings
 from runway.db import Database
-from runway.db.models import PairwisePreference
+from runway.db.models import AuditEvent, PairwisePreference
 from runway.db.repositories import get_channel
 
 
@@ -145,3 +146,44 @@ def test_intelligence_readiness_excludes_nonhuman_engineering_fixtures(
     assert collecting["state"] == "collecting_creator_labels"
     assert collecting["engineering_minimum_labels_by_target"]["caption"] == 8
     assert collecting["product_challenger_minimum_labels_by_target"]["caption"] == 100
+
+
+def test_activity_categories_follow_frontend_priority_and_support_pagination(
+    database: Database,
+) -> None:
+    with database.session() as session:
+        session.add_all(
+            [
+                AuditEvent(
+                    event_type="youtube_caption_published",
+                    entity_type="proposal",
+                    entity_id=1,
+                    details_json="{}",
+                ),
+                AuditEvent(
+                    event_type="caption_feedback_recorded",
+                    entity_type="proposal",
+                    entity_id=2,
+                    details_json="{}",
+                ),
+                AuditEvent(
+                    event_type="database_backup_completed",
+                    entity_type="system",
+                    entity_id=None,
+                    details_json="{}",
+                ),
+            ]
+        )
+
+    activity = AuditService(database)
+    publishing = activity.list_events(category="publishing")
+    decisions = activity.list_events(category="decisions")
+    other = activity.list_events(category="other")
+
+    assert [event["event_type"] for event in publishing] == ["youtube_caption_published"]
+    assert [event["event_type"] for event in decisions] == ["caption_feedback_recorded"]
+    assert [event["event_type"] for event in other] == ["database_backup_completed"]
+    assert (
+        activity.list_events(category="all", limit=1, offset=1)[0]["event_type"]
+        == "caption_feedback_recorded"
+    )

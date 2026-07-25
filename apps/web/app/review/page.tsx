@@ -1,5 +1,5 @@
 import { ReviewWorkspace } from "@/components/review-workspace";
-import { apiGet } from "@/lib/api";
+import { apiGetOptional, apiGetRequired } from "@/lib/api";
 import {
   isEditorialEnvelope,
   isProposal,
@@ -7,19 +7,10 @@ import {
 import type {
   EditorialEnvelope,
   GenerationActivity,
-  Proposal,
-  WorkflowStatus,
+  Proposal
 } from "@/lib/types";
 
-const fallbackWorkflow: WorkflowStatus = {
-  needs_review: 0,
-  queued: 0,
-  scheduled: 0,
-  rejected: 0,
-  next_available_at: new Date(Date.now() + 86_400_000).toISOString(),
-  posts_per_day: 1,
-  timezone: "America/Toronto",
-};
+export const dynamic = "force-dynamic";
 
 const fallbackGeneration: GenerationActivity = {
   running: false,
@@ -34,19 +25,42 @@ export default async function ReviewPage({
   searchParams: Promise<{ id?: string }>;
 }) {
   const { id } = await searchParams;
-  const editorial = await apiGet<EditorialEnvelope>("/api/editorial/next", {
-      next_proposal: null,
-      workflow: fallbackWorkflow,
-    }, isEditorialEnvelope);
+  const editorial = await apiGetRequired<EditorialEnvelope>(
+    "/api/editorial/next",
+    isEditorialEnvelope,
+  );
 
   let proposal = editorial.next_proposal;
-  if (id) {
-    const requested = await apiGet<Proposal | null>(
-      `/api/proposals/${id}`,
-      null,
-      (value): value is Proposal | null => value === null || isProposal(value),
+  if (id !== undefined) {
+    const requestedId = Number(id);
+    if (!Number.isInteger(requestedId) || requestedId < 1) {
+      return (
+        <section className="panel empty">
+          <div>
+            <strong>Requested Generator option is invalid.</strong>
+            <a href="/review">Return to the current Generator option</a>
+          </div>
+        </section>
+      );
+    }
+    const requested = await apiGetOptional<Proposal>(
+      `/api/proposals/${requestedId}`,
+      isProposal,
     );
-    if (requested?.status === "needs_review") proposal = requested;
+    if (!requested || requested.status !== "needs_review") {
+      return (
+        <section className="panel empty">
+          <div>
+            <strong>Requested Generator option is unavailable.</strong>
+            <span>
+              It may already have been accepted, rejected, or removed from review.
+            </span>
+            <a href="/review">Return to the current Generator option</a>
+          </div>
+        </section>
+      );
+    }
+    proposal = requested;
   }
 
   return (

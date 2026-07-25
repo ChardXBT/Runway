@@ -35,6 +35,7 @@ const first: Proposal = {
   external_post_id: null,
   external_post_url: null,
   scheduled_verified_at: null,
+  latest_publish_attempt: null,
   candidate: {
     original_url: "/media/first.jpg",
     preview_url: "/media/first.jpg",
@@ -81,7 +82,7 @@ describe("LineupCalendar", () => {
 
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     );
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Caption"), {
@@ -161,7 +162,7 @@ describe("LineupCalendar", () => {
       />,
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     );
     fireEvent.change(screen.getByLabelText("Caption"), {
       target: { value: "Why now?!" },
@@ -187,7 +188,7 @@ describe("LineupCalendar", () => {
         publishingMode="authorized_browser"
       />,
     );
-    const opener = screen.getByRole("button", { name: "Edit or choose date" });
+    const opener = screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ });
     fireEvent.click(opener);
     const dialog = await screen.findByRole("dialog");
     fireEvent.keyDown(dialog, { key: "Escape" });
@@ -212,16 +213,41 @@ describe("LineupCalendar", () => {
     expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("Second line");
   });
 
-  it("retries a waiting YouTube action from the selected post", async () => {
+  it("retries only a confirmed pre-submission failure", async () => {
+    const failedBeforeSubmission: Proposal = {
+      ...first,
+      status: "publish_failed",
+      latest_publish_attempt: {
+        id: 99,
+        status: "failed_before_submission",
+        error_summary: "Composer did not open.",
+        prepared_at: "2026-08-07T11:59:00Z",
+        submitted_at: null,
+        completed_at: "2026-08-07T12:00:00Z",
+      },
+    };
+    const failedLineup: LineupSchedule = {
+      ...lineup,
+      scheduled: [failedBeforeSubmission, second],
+    };
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ lineup }),
+      json: async () => ({
+        lineup: failedLineup,
+        publisher_queue: {
+          running: false,
+          queued: 0,
+          paused: false,
+          paused_reason: null,
+          proposal_ids: [],
+        },
+      }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(
       <LineupCalendar
-        initialLineup={lineup}
+        initialLineup={failedLineup}
         publishingEnabled
         publishingMode="authorized_browser"
       />,
@@ -281,6 +307,7 @@ describe("LineupCalendar", () => {
           queued: 0,
           paused: false,
           paused_reason: null,
+          proposal_ids: [],
         },
       }),
     });
@@ -319,6 +346,7 @@ describe("LineupCalendar", () => {
           queued: 0,
           paused: false,
           paused_reason: null,
+          proposal_ids: [],
         },
       }),
     });
@@ -456,7 +484,7 @@ describe("LineupCalendar", () => {
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     );
     fireEvent.change(screen.getByLabelText("Release date"), {
       target: { value: "2026-07-18" },
@@ -475,7 +503,7 @@ describe("LineupCalendar", () => {
     );
     expect(screen.getByRole("button", { name: "Confirm changes" })).toBeDisabled();
     expect(within(screen.getByRole("dialog")).getByRole("alert")).toHaveTextContent(
-      "Choose a future 10:00 AM Eastern slot",
+      "Choose a 10:00 AM Eastern slot at least five minutes from now.",
     );
   });
 
@@ -489,7 +517,7 @@ describe("LineupCalendar", () => {
     render(<LineupCalendar initialLineup={pacific} publishingEnabled />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     );
     fireEvent.change(screen.getByLabelText("Release date"), {
       target: { value: "2026-07-18" },
@@ -514,7 +542,7 @@ describe("LineupCalendar", () => {
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     );
     const confirm = screen.getByRole("button", { name: "Confirm changes" });
     fireEvent.click(confirm);
@@ -544,7 +572,7 @@ describe("LineupCalendar", () => {
     );
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     );
     fireEvent.change(screen.getByLabelText("Caption"), {
       target: { value: "Wait... keep this?!" },
@@ -566,7 +594,7 @@ describe("LineupCalendar", () => {
   });
 
   it("uses labeled green, red, and amber states and locks unsafe posts", () => {
-    const failed = {
+    const failed: Proposal = {
       ...first,
       id: 21,
       status: "publish_failed",
@@ -574,7 +602,7 @@ describe("LineupCalendar", () => {
       scheduled_publish_at: "2026-08-10T10:00:00-04:00",
       final_caption: "Failed post",
     };
-    const unverified = {
+    const unverified: Proposal = {
       ...first,
       id: 22,
       status: "publish_unverified",
@@ -582,7 +610,7 @@ describe("LineupCalendar", () => {
       scheduled_publish_at: "2026-08-11T10:00:00-04:00",
       final_caption: "Unverified post",
     };
-    const publishing = {
+    const publishing: Proposal = {
       ...first,
       id: 23,
       status: "publishing",
@@ -590,7 +618,7 @@ describe("LineupCalendar", () => {
       scheduled_publish_at: "2026-08-12T10:00:00-04:00",
       final_caption: "Publishing post",
     };
-    const published = {
+    const published: Proposal = {
       ...first,
       id: 24,
       status: "published",
@@ -625,7 +653,7 @@ describe("LineupCalendar", () => {
       within(inspector).getByText("Unverified · check required"),
     ).toHaveClass("status-tone-warning");
     expect(
-      within(inspector).getByRole("button", { name: "Edit or choose date" }),
+      within(inspector).getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     ).toBeDisabled();
     expect(within(inspector).getByRole("button", { name: "Remove" })).toBeDisabled();
 
@@ -638,7 +666,7 @@ describe("LineupCalendar", () => {
       "status-tone-warning",
     );
     expect(
-      within(inspector).getByRole("button", { name: "Edit or choose date" }),
+      within(inspector).getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     ).toBeDisabled();
     expect(within(inspector).getByRole("button", { name: "Remove" })).toBeDisabled();
 
@@ -651,7 +679,7 @@ describe("LineupCalendar", () => {
       "status-tone-success",
     );
     expect(
-      within(inspector).getByRole("button", { name: "Edit or choose date" }),
+      within(inspector).getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     ).toBeDisabled();
     expect(within(inspector).getByRole("button", { name: "Remove" })).toBeDisabled();
     expect(inspector).toHaveTextContent("locked history");
@@ -674,7 +702,7 @@ describe("LineupCalendar", () => {
       "Daily-slot conflict detected",
     );
     expect(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
   });
@@ -696,7 +724,7 @@ describe("LineupCalendar", () => {
     );
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     );
     fireEvent.change(screen.getByLabelText("Caption"), {
       target: { value: "Keep this unique?!" },
@@ -716,7 +744,7 @@ describe("LineupCalendar", () => {
   it("traps Tab inside the dialog", () => {
     render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit or choose date" }),
+      screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
     );
     const dialog = screen.getByRole("dialog");
     const confirm = within(dialog).getByRole("button", {

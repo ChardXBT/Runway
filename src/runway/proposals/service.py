@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import threading
 from datetime import UTC, date, datetime, time, timedelta
@@ -23,6 +24,7 @@ from runway.db.models import (
     MediaAsset,
     Proposal,
     ProposalEvent,
+    PublishAttempt,
     SearchRun,
     StyleProfile,
 )
@@ -33,6 +35,8 @@ from runway.intelligence.exposure_bias import CandidateExposureService
 from runway.intelligence.retrieval import RetrievalService
 from runway.intelligence.slate_optimization import CandidateSlateOptimizer
 from runway.ranking.diversity import fingerprint_from_candidate
+
+logger = logging.getLogger(__name__)
 
 
 class NoDistinctCandidateError(ValueError):
@@ -377,13 +381,19 @@ class ProposalService:
         *,
         status: str | None = None,
         limit: int = 100,
+        order: str = "asc",
     ) -> list[dict[str, object]]:
+        if order not in {"asc", "desc"}:
+            raise ValueError("proposal order must be 'asc' or 'desc'")
         with self.database.session() as session:
             channel_id = self._channel_id(session)
+            ordering = (
+                (desc(Proposal.created_at), desc(Proposal.id))
+                if order == "desc"
+                else (Proposal.created_at, Proposal.id)
+            )
             statement = (
-                select(Proposal)
-                .where(Proposal.channel_id == channel_id)
-                .order_by(Proposal.created_at, Proposal.id)
+                select(Proposal).where(Proposal.channel_id == channel_id).order_by(*ordering)
             )
             if status:
                 statement = statement.where(Proposal.status == status)
@@ -408,12 +418,18 @@ class ProposalService:
             result = self._proposal_dict(session, proposal) if proposal else None
             proposal_id = proposal.id if proposal else None
         if proposal_id is not None:
-            self.exposures.record_display(proposal_id)
-            self.candidate_exposures.record_proposal_event(
-                proposal_id,
-                event_type="shown",
-                reason="presented in the creator review interface",
-            )
+            try:
+                self.exposures.record_display(proposal_id)
+                self.candidate_exposures.record_proposal_event(
+                    proposal_id,
+                    event_type="shown",
+                    reason="presented in the creator review interface",
+                )
+            except Exception:
+                logger.exception(
+                    "secondary display evidence failed for proposal %s",
+                    proposal_id,
+                )
         return result
 
     def next_generation_date(self) -> date:
@@ -797,6 +813,167 @@ class ProposalService:
             event_type="accepted",
             reason="creator approved the image-caption proposal",
         )
+        return self.detail(proposal_id)
+
+    def accept_to_lineup(self, proposal_id: int, final_caption: str) -> dict[str, object]:
+        """Atomically accept one review proposal and place it in the local Lineup.
+
+        The user-facing decision, assigned slot, approved media copy, and local Lineup state
+        commit together. Preference/exposure bookkeeping is intentionally best-effort after that
+        core transaction so a secondary learning failure can never make a completed acceptance
+        look unsuccessful to the operator.
+        """
+
+        cleaned = final_caption.strip()
+        if not cleaned:
+            raise ValueError("proposal cannot be accepted without a final caption")
+
+        edit_event_id: int | None = None
+        approval_event_id: int | None = None
+        original_caption = ""
+        generated_caption = ""
+        caption_changed = False
+
+        with self._schedule_lock:
+            scheduled_for = self.next_available_slot(exclude_proposal_id=proposal_id)
+            with self.database.session() as session:
+                proposal = self._get(session, proposal_id)
+                self._require_status(
+                    proposal,
+                    {ProposalStatus.NEEDS_REVIEW},
+                    "editorial acceptance",
+                )
+                candidate = session.get(CandidateImage, proposal.candidate_image_id)
+                media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
+                if candidate is None or media is None:
+                    raise ValueError("proposal cannot be accepted without a local candidate image")
+                source = self.settings.resolved_data_dir / media.local_path
+                if not source.is_file():
+                    raise ValueError(
+                        "proposal cannot be accepted because its local image is missing"
+                    )
+
+                original_caption = proposal.final_caption
+                generated_caption = proposal.recommended_caption
+                caption_changed = cleaned != original_caption
+                if caption_changed:
+                    proposal.final_caption = cleaned
+                    edit_event = self._event(
+                        session,
+                        proposal.id,
+                        "caption_edited",
+                        {"final_caption": original_caption},
+                        {"final_caption": cleaned},
+                    )
+                    edit_event_id = edit_event.id
+                    audit(
+                        session,
+                        "caption_edited",
+                        "proposal",
+                        proposal.id,
+                        {"source": "editorial_accept"},
+                    )
+
+                old_slot = proposal.scheduled_publish_at
+                proposal.scheduled_publish_at = scheduled_for.isoformat()
+                self._event(
+                    session,
+                    proposal.id,
+                    "schedule_slot_assigned",
+                    {"scheduled_publish_at": old_slot},
+                    {"scheduled_publish_at": proposal.scheduled_publish_at},
+                )
+                approval_event = self._transition(
+                    session,
+                    proposal,
+                    ProposalStatus.APPROVED,
+                    "approved",
+                )
+                approval_event_id = approval_event.id
+                proposal.approved_at = datetime.now(UTC)
+                proposal.rejected_at = None
+
+                extension = Path(media.local_path).suffix
+                relative = Path("media") / "approved" / f"{media.sha256}{extension}"
+                destination = self.settings.resolved_data_dir / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if not destination.exists():
+                    shutil.copy2(source, destination)
+                media.kind = "approved"
+                media.local_path = relative.as_posix()
+
+                self._transition(
+                    session,
+                    proposal,
+                    ProposalStatus.INTERNALLY_SCHEDULED,
+                    "internally_scheduled",
+                )
+                audit(
+                    session,
+                    "proposal_approved",
+                    "proposal",
+                    proposal.id,
+                    {
+                        "final_caption": proposal.final_caption,
+                        "scheduled_publish_at": proposal.scheduled_publish_at,
+                        "bot_posts_for_day": 1,
+                    },
+                )
+                audit(
+                    session,
+                    "proposal_internally_scheduled",
+                    "proposal",
+                    proposal.id,
+                    {"network_action": False, "source": "editorial_accept"},
+                )
+
+        try:
+            if caption_changed:
+                self.exposures.record_decision(
+                    proposal_id,
+                    decision_type="edited",
+                    final_caption=cleaned,
+                    original_caption=original_caption,
+                    reason_codes=["human_edit"],
+                    source_event_id=edit_event_id,
+                )
+                self.feedback.record(
+                    proposal_id,
+                    verdict="edited",
+                    generated_caption=original_caption,
+                    preferred_caption=cleaned,
+                    reason_codes=["human_edit"],
+                    image_verdict="good",
+                    source_event_id=edit_event_id,
+                )
+            self.exposures.record_decision(
+                proposal_id,
+                decision_type="accepted",
+                final_caption=cleaned,
+                original_caption=generated_caption,
+                reason_codes=["approved"],
+                source_event_id=approval_event_id,
+            )
+            self.feedback.record(
+                proposal_id,
+                verdict="accepted",
+                generated_caption=generated_caption,
+                preferred_caption=cleaned,
+                reason_codes=["approved"],
+                image_verdict="good",
+                source_event_id=approval_event_id,
+            )
+            self.candidate_exposures.record_proposal_event(
+                proposal_id,
+                event_type="accepted",
+                reason="creator approved the image-caption proposal",
+            )
+        except Exception:
+            logger.exception(
+                "secondary acceptance evidence failed after proposal %s entered Lineup",
+                proposal_id,
+            )
+
         return self.detail(proposal_id)
 
     def reject(
@@ -1359,6 +1536,12 @@ class ProposalService:
             else None
         )
         display_media = preview or media
+        latest_publish_attempt = session.scalar(
+            select(PublishAttempt)
+            .where(PublishAttempt.proposal_id == proposal.id)
+            .order_by(desc(PublishAttempt.id))
+            .limit(1)
+        )
         slate = (
             session.get(CaptionSlate, proposal.caption_slate_id)
             if proposal.caption_slate_id
@@ -1401,6 +1584,26 @@ class ProposalService:
             "scheduled_verified_at": (
                 proposal.scheduled_verified_at.isoformat()
                 if proposal.scheduled_verified_at
+                else None
+            ),
+            "latest_publish_attempt": (
+                {
+                    "id": latest_publish_attempt.id,
+                    "status": latest_publish_attempt.status,
+                    "error_summary": latest_publish_attempt.error_summary,
+                    "prepared_at": latest_publish_attempt.prepared_at.isoformat(),
+                    "submitted_at": (
+                        latest_publish_attempt.submitted_at.isoformat()
+                        if latest_publish_attempt.submitted_at
+                        else None
+                    ),
+                    "completed_at": (
+                        latest_publish_attempt.completed_at.isoformat()
+                        if latest_publish_attempt.completed_at
+                        else None
+                    ),
+                }
+                if latest_publish_attempt is not None
                 else None
             ),
             "candidate": (

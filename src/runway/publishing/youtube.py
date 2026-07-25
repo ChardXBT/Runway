@@ -45,6 +45,41 @@ from runway.publishing.base import (
 )
 
 
+def normalize_connector_channel_url(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("channel URL is required")
+    if candidate.startswith("@"):
+        candidate = f"https://www.youtube.com/{candidate}"
+    elif candidate.startswith("UC") and "/" not in candidate:
+        candidate = f"https://www.youtube.com/channel/{candidate}"
+    elif "://" not in candidate:
+        candidate = f"https://{candidate}"
+
+    parsed = urlparse(candidate)
+    hostname = (parsed.hostname or "").casefold()
+    if parsed.scheme != "https" or hostname not in {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+    }:
+        raise ValueError("Use a secure youtube.com channel URL, @handle, or channel ID.")
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts:
+        raise ValueError("YouTube channel path is missing")
+    if parts[0] == "channel":
+        if len(parts) < 2 or not parts[1].startswith("UC"):
+            raise ValueError("YouTube channel ID is invalid")
+        channel_path = f"/channel/{parts[1]}"
+    elif parts[0].startswith("@") and len(parts[0]) > 1:
+        channel_path = f"/{parts[0]}"
+    else:
+        raise ValueError("Use a youtube.com/@handle URL or a youtube.com/channel/UC… URL.")
+
+    return urlunparse(("https", "www.youtube.com", f"{channel_path}/posts", "", "", ""))
+
+
 class BrowserScheduleReceipt(BaseModel):
     submitted: bool
     verified: bool
@@ -97,6 +132,9 @@ class YouTubeBrowserAdapter(Protocol):
 class PlaywrightYouTubeAdapter:
     """Visible, persistent-profile YouTube adapter with no challenge bypass."""
 
+    # Retain the previous private entry point for tests and diagnostic callers while
+    # sharing one normalized implementation across connector and publisher checks.
+    _normalize_connector_channel_url = staticmethod(normalize_connector_channel_url)
     _browser_lock = threading.Lock()
     _challenge_markers = (
         "captcha",
@@ -117,7 +155,7 @@ class PlaywrightYouTubeAdapter:
         self,
         channel_url: str,
     ) -> PublisherSessionStatus:
-        normalized = self._normalize_connector_channel_url(channel_url)
+        normalized = normalize_connector_channel_url(channel_url)
         return await asyncio.to_thread(
             self._validate_channel_access_sync,
             normalized,
@@ -265,46 +303,7 @@ class PlaywrightYouTubeAdapter:
                 page.wait_for_timeout(1500)
                 self._stop_on_challenge(page)
 
-                expected_path = urlparse(channel_url).path.removesuffix("/posts").casefold()
-                current = urlparse(page.url)
-                target_loaded = (
-                    current.hostname in {"youtube.com", "www.youtube.com", "m.youtube.com"}
-                    and expected_path in current.path.casefold()
-                )
-                management_access = False
-                posting_access = False
-                with suppress(Exception):
-                    manage_videos = page.get_by_text("Manage videos", exact=True)
-                    manage_videos.wait_for(state="visible", timeout=10_000)
-                    management_access = manage_videos.count() == 1 and manage_videos.is_visible()
-                if management_access:
-                    try:
-                        create_button = page.get_by_role(
-                            "button",
-                            name="Create",
-                            exact=True,
-                        )
-                        self._require_one_visible(
-                            create_button,
-                            "YouTube Create button",
-                        )
-                        create_button.click()
-                        create_post = page.get_by_text("Create post", exact=True)
-                        self._require_one_visible(
-                            create_post,
-                            "Create post action",
-                        )
-                        posting_access = True
-                    except Exception:
-                        posting_access = False
-                    finally:
-                        page.keyboard.press("Escape")
-
-                checks = {
-                    "requested channel page": target_loaded,
-                    "channel management controls": management_access,
-                    "Community post controls": posting_access,
-                }
+                checks = self._session_contract_checks(page)
                 valid = all(checks.values())
                 missing = [label for label, matched in checks.items() if not matched]
                 if not valid:
@@ -328,41 +327,6 @@ class PlaywrightYouTubeAdapter:
                 )
             finally:
                 context.close()
-
-    @staticmethod
-    def _normalize_connector_channel_url(value: str) -> str:
-        candidate = value.strip()
-        if not candidate:
-            raise ValueError("channel URL is required")
-        if candidate.startswith("@"):
-            candidate = f"https://www.youtube.com/{candidate}"
-        elif candidate.startswith("UC") and "/" not in candidate:
-            candidate = f"https://www.youtube.com/channel/{candidate}"
-        elif "://" not in candidate:
-            candidate = f"https://{candidate}"
-
-        parsed = urlparse(candidate)
-        hostname = (parsed.hostname or "").casefold()
-        if parsed.scheme != "https" or hostname not in {
-            "youtube.com",
-            "www.youtube.com",
-            "m.youtube.com",
-        }:
-            raise ValueError("Use a secure youtube.com channel URL, @handle, or channel ID.")
-
-        parts = [part for part in parsed.path.split("/") if part]
-        if not parts:
-            raise ValueError("YouTube channel path is missing")
-        if parts[0] == "channel":
-            if len(parts) < 2 or not parts[1].startswith("UC"):
-                raise ValueError("YouTube channel ID is invalid")
-            channel_path = f"/channel/{parts[1]}"
-        elif parts[0].startswith("@") and len(parts[0]) > 1:
-            channel_path = f"/{parts[0]}"
-        else:
-            raise ValueError("Use a youtube.com/@handle URL or a youtube.com/channel/UC… URL.")
-
-        return urlunparse(("https", "www.youtube.com", f"{channel_path}/posts", "", "", ""))
 
     def _schedule_sync(self, post: PreparedPost) -> BrowserScheduleReceipt:
         from playwright.sync_api import sync_playwright
@@ -998,16 +962,11 @@ class PlaywrightYouTubeAdapter:
         *,
         open_composer: bool = True,
     ) -> dict[str, bool]:
-        channel_name = self.settings.channel_name
-        heading = page.get_by_role(
-            "heading",
-            name=f"{channel_name}, Verified",
-            exact=True,
-        )
-        identity_verified = self._active_channel_identity(page)
+        channel_loaded = self._configured_channel_loaded(page)
+        management_access = self._management_controls_visible(page)
         posting_access = False
         composer_ready = False
-        if identity_verified:
+        if channel_loaded and management_access:
             composer = page.locator("ytd-backstage-post-dialog-renderer:visible")
             with suppress(Exception):
                 composer.wait_for(state="visible", timeout=10_000)
@@ -1039,30 +998,33 @@ class PlaywrightYouTubeAdapter:
                 except Exception:
                     page.keyboard.press("Escape")
         checks = {
-            "configured channel URL": self.settings.publisher_channel_id in page.url,
-            f"{channel_name} heading": heading.count() == 1 and heading.is_visible(),
-            f"active {channel_name} identity": identity_verified,
-            f"{channel_name} posting access": posting_access,
+            "configured channel": channel_loaded,
+            "channel management controls": management_access,
+            "Community post controls": posting_access,
         }
         if open_composer:
             checks["Community composer"] = composer_ready
         return checks
 
-    def _active_channel_identity(self, page: Any) -> bool:
+    def _configured_channel_loaded(self, page: Any) -> bool:
+        current = urlparse(page.url)
+        if (current.hostname or "").casefold() not in {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+        }:
+            return False
+        path = current.path.casefold()
+        channel_id = self.settings.publisher_channel_id.casefold()
+        handle = self.settings.channel_handle.strip().lstrip("@").casefold()
+        return channel_id in path or (bool(handle) and f"/@{handle}" in path)
+
+    @staticmethod
+    def _management_controls_visible(page: Any) -> bool:
         try:
-            channel_marker = page.get_by_text(
-                f"{self.settings.channel_name}'s channel",
-                exact=True,
-            )
             manage_videos = page.get_by_text("Manage videos", exact=True)
-            channel_marker.wait_for(state="visible", timeout=10_000)
             manage_videos.wait_for(state="visible", timeout=10_000)
-            return bool(
-                channel_marker.count() == 1
-                and channel_marker.is_visible()
-                and manage_videos.count() == 1
-                and manage_videos.is_visible()
-            )
+            return bool(manage_videos.count() == 1 and manage_videos.is_visible())
         except Exception:
             return False
 
@@ -1139,11 +1101,26 @@ class YouTubeBrowserPublisher:
         self,
         channel_url: str,
     ) -> PublisherSessionStatus:
-        self._require_enabled()
+        normalized = normalize_connector_channel_url(channel_url)
+        target = urlparse(normalized)
+        parts = [part for part in target.path.split("/") if part]
+        expected_handle = self.settings.channel_handle.strip().lstrip("@").casefold()
+        matches_configured = False
+        if len(parts) >= 2 and parts[0] == "channel":
+            matches_configured = (
+                parts[1].casefold() == self.settings.publisher_channel_id.casefold()
+            )
+        elif parts and parts[0].startswith("@"):
+            matches_configured = parts[0][1:].casefold() == expected_handle
+        if not matches_configured:
+            raise ValueError(
+                f"Runway is pinned to {self.settings.channel_name}; verify the configured "
+                "channel ID or handle rather than another managed channel"
+            )
         try:
-            status = await self.adapter.validate_channel_access(channel_url)
+            status = await self.adapter.validate_channel_access(self.settings.publisher_channel_url)
         except Exception as exc:
-            self._record_session_status(
+            self._record_connector_status(
                 PublisherSessionStatus(
                     valid=False,
                     publisher=self.publisher_name,
@@ -1153,8 +1130,36 @@ class YouTubeBrowserPublisher:
                 error_type=type(exc).__name__,
             )
             raise
-        self._record_session_status(status, source="connector_access_check")
+        self._record_connector_status(status, source="connector_access_check")
         return status
+
+    def _record_connector_status(
+        self,
+        status: PublisherSessionStatus,
+        *,
+        source: str,
+        error_type: str | None = None,
+    ) -> None:
+        with self.database.session() as session:
+            audit(
+                session,
+                (
+                    "youtube_connector_validated"
+                    if status.valid
+                    else "youtube_connector_validation_failed"
+                ),
+                "publisher",
+                None,
+                {
+                    "valid": status.valid,
+                    "publisher": status.publisher,
+                    "detail": status.detail,
+                    "checks": status.checks,
+                    "source": source,
+                    "error_type": error_type,
+                    "checked_channel_id": self.settings.publisher_channel_id,
+                },
+            )
 
     async def _validated_adapter_session(self, *, source: str) -> PublisherSessionStatus:
         try:
@@ -1197,6 +1202,7 @@ class YouTubeBrowserPublisher:
                     "checks": status.checks,
                     "source": source,
                     "error_type": error_type,
+                    "checked_channel_id": self.settings.publisher_channel_id,
                 },
             )
 
@@ -1644,6 +1650,10 @@ class YouTubeBrowserPublisher:
                         None,
                     )
                 if occupant is not None:
+                    if current_slot.astimezone(UTC) <= datetime.now(UTC) + timedelta(minutes=5):
+                        raise ValueError(
+                            "an overdue Lineup post can only move to an empty future date"
+                        )
                     self._require_lineup_mutable(occupant)
 
                 if (

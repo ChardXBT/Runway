@@ -3,7 +3,11 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
-import { actionError, readApiJson } from "@/lib/client-api";
+import {
+  actionError,
+  hasUncertainOutcome,
+  readApiJson,
+} from "@/lib/client-api";
 import { isRecord } from "@/lib/guards";
 
 type Annotation = {
@@ -43,6 +47,7 @@ export function AnnotationEditor({ postId }: { postId: number }) {
   const [status, setStatus] = useState("Loading annotation…");
   const [statusIsError, setStatusIsError] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
   const actionLock = useRef(false);
 
   useEffect(() => {
@@ -113,6 +118,7 @@ export function AnnotationEditor({ postId }: { postId: number }) {
         "Review saved. Any correction overlays preserve the original model output.",
       );
     } catch (error) {
+      setUncertain(hasUncertainOutcome(error));
       setStatus(
         actionError(
           error,
@@ -154,9 +160,18 @@ export function AnnotationEditor({ postId }: { postId: number }) {
         <label><span>Tone</span><input className="field" name="tone" defaultValue={current.tone ?? ""} /></label>
       </div>
       <div className="form-actions">
-        <button className="button" type="submit" disabled={saving}>
+        <button className="button" type="submit" disabled={saving || uncertain}>
           {saving ? "Saving review…" : "Save review"}
         </button>
+        {uncertain && (
+          <button
+            type="button"
+            className="text-link"
+            onClick={() => window.location.reload()}
+          >
+            Reload to verify
+          </button>
+        )}
         <small role={statusIsError ? "alert" : "status"}>{status}</small>
       </div>
     </form>

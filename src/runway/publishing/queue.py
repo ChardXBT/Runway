@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from runway.db.models import Proposal, PublishAttempt
 from runway.domain.enums import ProposalStatus
@@ -36,13 +36,34 @@ class PublisherQueueCoordinator:
             **self.status(),
         }
 
+    def retry_failed(self, proposal_id: int) -> dict[str, object]:
+        """Queue one confirmed pre-submission failure and clear only its worker pause."""
+        attempt = self.publisher.queue_attempt(
+            proposal_id,
+            trigger="human_retry_after_failed_before_submission",
+        )
+        with self._guard:
+            self._paused_reason = None
+        self._start_if_ready()
+        return {
+            "attempt": attempt,
+            **self.status(),
+        }
+
     def start(self) -> dict[str, object]:
         """Resume persisted queued work after an application restart."""
         self._start_if_ready()
         return self.status()
 
     def resume(self) -> dict[str, object]:
+        connection = self.publisher.connection_status()
+        if connection.get("state") != "connected" or connection.get("valid") is not True:
+            raise ValueError(
+                "run a fresh successful saved-session check before resuming blocked actions"
+            )
         requeued = self.publisher.requeue_blocked_session_attempts()
+        if requeued == 0:
+            raise ValueError("no session-blocked YouTube actions are available to resume")
         with self._guard:
             self._paused_reason = None
         self._start_if_ready()
@@ -55,13 +76,14 @@ class PublisherQueueCoordinator:
         with self._guard:
             running = self._worker is not None and self._worker.is_alive()
             paused_reason = self._paused_reason
-        queued, blocked_reason = self._persisted_queue_state()
+        queued, blocked_reason, proposal_ids = self._persisted_queue_state()
         effective_reason = paused_reason or blocked_reason
         return {
             "running": running,
             "queued": queued,
             "paused": effective_reason is not None,
             "paused_reason": effective_reason,
+            "proposal_ids": proposal_ids,
         }
 
     def _start_if_ready(self) -> None:
@@ -100,14 +122,18 @@ class PublisherQueueCoordinator:
             if may_restart:
                 self._start_if_ready()
 
-    def _persisted_queue_state(self) -> tuple[int, str | None]:
+    def _persisted_queue_state(self) -> tuple[int, str | None, list[int]]:
         with self.publisher.database.session() as session:
-            value = session.scalar(
-                select(func.count(PublishAttempt.id)).where(
+            active_attempts = session.scalars(
+                select(PublishAttempt)
+                .where(
                     PublishAttempt.publisher == self.publisher.publisher_name,
-                    PublishAttempt.status == "queued",
+                    PublishAttempt.status.in_(["queued", "submitting", "blocked_session"]),
                 )
-            )
+                .order_by(PublishAttempt.id)
+            ).all()
+            proposal_ids = list(dict.fromkeys(attempt.proposal_id for attempt in active_attempts))
+            value = sum(attempt.status == "queued" for attempt in active_attempts)
             blocked = session.scalars(
                 select(PublishAttempt)
                 .where(
@@ -132,8 +158,12 @@ class PublisherQueueCoordinator:
                     and proposal is not None
                     and proposal.status == ProposalStatus.INTERNALLY_SCHEDULED.value
                 ):
-                    return int(value or 0), (
-                        attempt.error_summary
-                        or "The publisher session needs attention before scheduling can continue."
+                    return (
+                        int(value or 0),
+                        (
+                            attempt.error_summary
+                            or "The publisher session needs attention before scheduling can continue."
+                        ),
+                        proposal_ids,
                     )
-            return int(value or 0), None
+            return int(value or 0), None, proposal_ids

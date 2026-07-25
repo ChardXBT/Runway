@@ -1,5 +1,5 @@
 import { LineupCalendar } from "@/components/lineup-calendar";
-import { apiGet } from "@/lib/api";
+import { apiGetRequired } from "@/lib/api";
 import {
   isLineupSchedule,
   isPublisherQueueStatus,
@@ -11,39 +11,20 @@ import type {
   PublisherQueueStatus,
 } from "@/lib/types";
 
-const fallback: LineupSchedule = {
-  timezone: "America/Toronto",
-  default_time: "10:00",
-  posts_per_day: 1,
-  coverage: 0,
-  next_available_at: new Date(Date.now() + 86_400_000).toISOString(),
-  scheduled: [],
-};
-
-const fallbackPublisherQueue: PublisherQueueStatus = {
-  running: false,
-  queued: 0,
-  paused: false,
-  paused_reason: null,
-};
+export const dynamic = "force-dynamic";
 
 export default async function LineupPage() {
   const [lineup, published, settings, publisherQueue] = await Promise.all([
-    apiGet<LineupSchedule>("/api/queue?limit=5000", fallback, isLineupSchedule),
-    apiGet<Proposal[]>(
-      "/api/proposals?status=published&limit=500",
-      [],
+    apiGetRequired<LineupSchedule>("/api/queue?limit=5000", isLineupSchedule),
+    apiGetRequired<Proposal[]>(
+      "/api/proposals?status=published&limit=500&order=desc",
       proposalList,
     ),
-    apiGet<{
+    apiGetRequired<{
       authorized_browser_ready: boolean;
       publishing_mode: "assisted" | "authorized_browser";
       channel_name: string;
-    }>("/api/settings", {
-      authorized_browser_ready: false,
-      publishing_mode: "assisted",
-      channel_name: "Qlob",
-    }, (value): value is {
+    }>("/api/settings/full", (value): value is {
       authorized_browser_ready: boolean;
       publishing_mode: "assisted" | "authorized_browser";
       channel_name: string;
@@ -58,9 +39,8 @@ export default async function LineupPage() {
       "channel_name" in value &&
       typeof value.channel_name === "string",
     ),
-    apiGet<PublisherQueueStatus>(
+    apiGetRequired<PublisherQueueStatus>(
       "/api/publisher/queue",
-      fallbackPublisherQueue,
       isPublisherQueueStatus,
     ),
   ]);

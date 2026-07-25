@@ -78,7 +78,6 @@ export function isSettings(value: unknown): value is Settings {
 export function SettingsForm({ initial }: { initial: Settings }) {
   const [settings, setSettings] = useState(initial);
   const [draft, setDraft] = useState({
-    channelName: initial.channel_name,
     timezone: initial.timezone,
     defaultPostTime: initial.default_post_time,
     duplicateWindowDays: String(initial.duplicate_window_days),
@@ -88,7 +87,6 @@ export function SettingsForm({ initial }: { initial: Settings }) {
     message: "",
   });
   const actionLock = useRef(false);
-  const channelNameInvalid = !draft.channelName.trim();
   const timezoneInvalid = !isValidTimeZone(draft.timezone.trim());
   const timeInvalid = !/^([01]\d|2[0-3]):[0-5]\d$/.test(
     draft.defaultPostTime,
@@ -135,12 +133,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
     event.preventDefault();
     if (actionLock.current) return;
 
-    const channelName = draft.channelName.trim();
     const duplicateWindowDays = Number(draft.duplicateWindowDays);
-    if (channelNameInvalid) {
-      setStatus({ kind: "error", message: "Channel name is required." });
-      return;
-    }
     if (timezoneInvalid) {
       setStatus({
         kind: "error",
@@ -163,7 +156,6 @@ export function SettingsForm({ initial }: { initial: Settings }) {
     actionLock.current = true;
     setStatus({ kind: "saving", message: "Saving settings…" });
     const fields = {
-      name: channelName,
       timezone: draft.timezone.trim(),
       default_post_time: draft.defaultPostTime,
       duplicate_window_days: duplicateWindowDays,
@@ -180,7 +172,6 @@ export function SettingsForm({ initial }: { initial: Settings }) {
       });
       setSettings(payload);
       setDraft({
-        channelName: payload.channel_name,
         timezone: payload.timezone,
         defaultPostTime: payload.default_post_time,
         duplicateWindowDays: String(payload.duplicate_window_days),
@@ -244,15 +235,10 @@ export function SettingsForm({ initial }: { initial: Settings }) {
           <input
             className="field"
             name="name"
-            value={draft.channelName}
-            onChange={(event) => updateDraft("channelName", event.target.value)}
-            required
-            maxLength={120}
-            aria-invalid={
-              status.kind === "error" && channelNameInvalid ? "true" : undefined
-            }
-            disabled={status.kind === "saving"}
+            value={settings.channel_name}
+            disabled
           />
+          <small>Runway is currently pinned to this channel identity.</small>
         </label>
         <label>
           <span>Handle</span>

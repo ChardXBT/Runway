@@ -47,7 +47,15 @@ const proposal: Proposal = {
   external_post_id: null,
   external_post_url: null,
   scheduled_verified_at: null,
+  latest_publish_attempt: null,
 };
+
+
+function markProposalImageLoaded() {
+  fireEvent.load(
+    screen.getByRole("img", { name: /Proposed Fixture image/ }),
+  );
+}
 
 const workflow: WorkflowStatus = {
   needs_review: 2,
@@ -108,6 +116,7 @@ describe("ReviewWorkspace", () => {
     );
 
     expect(screen.queryByText(/rights|provenance|copyright/i)).not.toBeInTheDocument();
+    markProposalImageLoaded();
     fireEvent.change(screen.getByLabelText("Primary caption"), {
       target: { value: "Why is One so excited?!" },
     });
@@ -224,6 +233,12 @@ describe("ReviewWorkspace", () => {
       screen.getByRole("button", { name: "Regenerate captions" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Alternative captions")).toBeInTheDocument();
+    expect(screen.getByLabelText("Primary caption")).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Accept" })).toBeDisabled();
+    markProposalImageLoaded();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Primary caption")).not.toHaveAttribute("readonly");
   });
 
   it("regenerates captions without changing the image", async () => {
@@ -283,7 +298,7 @@ describe("ReviewWorkspace", () => {
     });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
       target: 5,
-      live_discovery: true,
+      live_discovery: false,
     });
     expect(await screen.findByDisplayValue("Recommended caption.")).toBeInTheDocument();
   });
@@ -392,6 +407,7 @@ describe("ReviewWorkspace", () => {
         publishingEnabled
       />,
     );
+    markProposalImageLoaded();
     fireEvent.change(screen.getByLabelText("Primary caption"), {
       target: { value: "Why is One celebrating?!" },
     });
@@ -432,6 +448,7 @@ describe("ReviewWorkspace", () => {
         publishingEnabled
       />,
     );
+    markProposalImageLoaded();
     fireEvent.change(screen.getByLabelText("Primary caption"), {
       target: { value: "Wait... what?!" },
     });
@@ -462,6 +479,7 @@ describe("ReviewWorkspace", () => {
         publishingEnabled
       />,
     );
+    markProposalImageLoaded();
     fireEvent.change(screen.getByLabelText("Primary caption"), {
       target: { value: "Is this really happening?!" },
     });
@@ -491,6 +509,7 @@ describe("ReviewWorkspace", () => {
         publishingEnabled
       />,
     );
+    markProposalImageLoaded();
     fireEvent.change(screen.getByLabelText("Primary caption"), {
       target: { value: "Keep this?!" },
     });
@@ -504,5 +523,45 @@ describe("ReviewWorkspace", () => {
     expect(
       screen.queryByRole("link", { name: "Reload Generator to verify" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("requires the next proposal image to load before enabling its Accept action", async () => {
+    const next = {
+      ...proposal,
+      id: 99,
+      candidate_image_id: 99,
+      candidate: {
+        ...proposal.candidate!,
+        preview_url: "/media/previews/next.jpg",
+      },
+      final_caption: "Next image caption.",
+      recommended_caption: "Next image caption.",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          decision: "rejected",
+          proposal: { ...proposal, status: "rejected" },
+          next_proposal: next,
+          workflow: { ...workflow, needs_review: 1, rejected: 1 },
+        }),
+      }),
+    );
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
+    markProposalImageLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+
+    expect(await screen.findByDisplayValue("Next image caption.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeDisabled();
+    fireEvent.load(screen.getByRole("img", { name: /Proposed Fixture image/ }));
+    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
   });
 });

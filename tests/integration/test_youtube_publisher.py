@@ -34,6 +34,7 @@ class FakeYouTubeAdapter:
         self.validate_calls = 0
         self.session_valid = True
         self.session_detail = "Qlob Editor fixture session valid."
+        self.channel_access_calls: list[str] = []
         self.schedule_calls: list[PreparedPost] = []
         self.verify_calls: list[PreparedPost] = []
         self.edit_calls: list[tuple[PreparedPost, PreparedPost]] = []
@@ -68,6 +69,13 @@ class FakeYouTubeAdapter:
                 "Community composer": self.session_valid,
             },
         )
+
+    async def validate_channel_access(
+        self,
+        channel_url: str,
+    ) -> PublisherSessionStatus:
+        self.channel_access_calls.append(channel_url)
+        return await self.validate_session()
 
     async def schedule(self, post: PreparedPost) -> BrowserScheduleReceipt:
         self.schedule_calls.append(post)
@@ -784,3 +792,80 @@ async def test_overdue_internal_lineup_post_can_move_to_a_future_slot(
     moved = datetime.fromisoformat(str(updated["scheduled_publish_at"]))
     assert moved.astimezone(timezone).date() == future_date
     assert moved.astimezone(timezone).hour == 10
+
+
+@pytest.mark.asyncio
+async def test_connector_check_works_while_disabled_without_arming_saved_session(
+    database: Database,
+    settings: Settings,
+) -> None:
+    adapter = FakeYouTubeAdapter()
+    disabled = YouTubeBrowserPublisher(database, settings, adapter)
+
+    status = await disabled.validate_channel_access(settings.publisher_channel_url)
+
+    assert status.valid is True
+    assert adapter.channel_access_calls == [settings.publisher_channel_url]
+    enabled = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    assert enabled.connection_status()["state"] == "unchecked"
+
+
+@pytest.mark.asyncio
+async def test_connector_rejects_a_different_managed_channel(
+    database: Database,
+    settings: Settings,
+) -> None:
+    publisher = YouTubeBrowserPublisher(database, settings, FakeYouTubeAdapter())
+
+    with pytest.raises(ValueError, match="pinned to Qlob"):
+        await publisher.validate_channel_access("https://www.youtube.com/@another-channel")
+
+
+def test_explicit_empty_lineup_selection_is_never_expanded_to_all_posts(
+    database: Database,
+    settings: Settings,
+) -> None:
+    application = FastAPI()
+    application.include_router(build_proposal_router(database, settings))
+
+    with TestClient(application) as client:
+        response = client.post(
+            "/api/lineup/push",
+            json={"confirmed": True, "mode": "assisted", "proposal_ids": []},
+        )
+
+    assert response.status_code == 422
+    assert "select at least one" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_waiting_lineup_post_cannot_bypass_batch_confirmation_through_retry(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    application = FastAPI()
+    application.include_router(build_proposal_router(database, settings))
+
+    with TestClient(application) as client:
+        response = client.post(f"/api/lineup/{proposal_id}/retry")
+
+    assert response.status_code == 422
+    assert "failed-before-submission" in response.json()["detail"]
+    with database.session() as session:
+        assert session.scalars(select(PublishAttempt)).all() == []
+
+
+def test_queue_resume_requires_a_fresh_saved_session_check(
+    database: Database,
+    settings: Settings,
+) -> None:
+    publisher = YouTubeBrowserPublisher(
+        database,
+        _authorized_settings(settings),
+        FakeYouTubeAdapter(),
+    )
+    coordinator = PublisherQueueCoordinator(publisher)
+
+    with pytest.raises(ValueError, match="fresh successful saved-session check"):
+        coordinator.resume()

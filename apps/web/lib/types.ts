@@ -6,12 +6,34 @@ export type CandidateTopic = {
   emotion?: string;
 };
 
+export type ProposalStatus =
+  | "generating"
+  | "needs_review"
+  | "approved"
+  | "rejected"
+  | "internally_scheduled"
+  | "publishing"
+  | "externally_scheduled"
+  | "publish_unverified"
+  | "publish_failed"
+  | "published"
+  | "cancelled";
+
+export type LatestPublishAttempt = {
+  id: number;
+  status: string;
+  error_summary: string | null;
+  prepared_at: string;
+  submitted_at: string | null;
+  completed_at: string | null;
+};
+
 export type Proposal = {
   id: number;
   generation_run_id: number;
   planned_publish_at: string;
   scheduled_publish_at: string | null;
-  status: string;
+  status: ProposalStatus;
   candidate_image_id: number;
   backup_candidate_ids: number[];
   recommended_caption: string;
@@ -38,6 +60,7 @@ export type Proposal = {
   external_post_id: string | null;
   external_post_url: string | null;
   scheduled_verified_at: string | null;
+  latest_publish_attempt: LatestPublishAttempt | null;
   caption_feedback?: {
     id: number;
     verdict: string;
@@ -95,6 +118,7 @@ export type PublisherQueueStatus = {
   queued: number;
   paused: boolean;
   paused_reason: string | null;
+  proposal_ids: number[];
 };
 
 export type PublishingMode = "assisted" | "authorized_browser";

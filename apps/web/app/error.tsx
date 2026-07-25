@@ -11,7 +11,8 @@ export default function ErrorPage({
       <p className="eyebrow danger">View unavailable</p>
       <h1>This section did not load.</h1>
       <p>
-        Nothing was submitted. Check the local service, then retry this view.
+        This view could not be loaded. Check the local service, then verify Generator,
+        Lineup, or Activity before repeating the previous action.
       </p>
       <button className="button secondary" type="button" onClick={reset}>
         Try this view again

@@ -154,8 +154,9 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     def proposal_list(
         status: str | None = None,
         limit: int = Query(default=100, ge=1, le=500),
+        order: Literal["asc", "desc"] = "asc",
     ) -> list[dict[str, object]]:
-        return proposals.list_proposals(status=status, limit=limit)
+        return proposals.list_proposals(status=status, limit=limit, order=order)
 
     @router.get("/proposals/{proposal_id}")
     def proposal_detail(proposal_id: int) -> dict[str, object]:
@@ -199,20 +200,11 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
         payload: EditorialApproveRequest,
     ) -> dict[str, object]:
         try:
-            current = proposals.detail(proposal_id)
-            if payload.final_caption.strip() != current["final_caption"]:
-                proposals.edit_caption(
-                    proposal_id,
-                    payload.final_caption,
-                    reason_codes=["human_edit"],
-                    image_verdict="good",
-                )
-            proposals.approve(proposal_id)
-            asyncio.run(InternalPublisher(database, settings).schedule_post(proposal_id))
+            accepted = proposals.accept_to_lineup(proposal_id, payload.final_caption)
             return {
                 "decision": "approved",
                 "detail": "Accepted and added to Lineup. Nothing was sent to YouTube.",
-                "proposal": proposals.detail(proposal_id),
+                "proposal": accepted,
                 "next_proposal": proposals.next_for_review(exclude_id=proposal_id),
                 "workflow": proposals.workflow_summary(),
             }
@@ -509,7 +501,13 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
                 and item.get("status") in {"internally_scheduled", "publish_failed"}
                 and isinstance(item.get("id"), int)
             ]
-            selected_ids = list(dict.fromkeys(payload.proposal_ids or eligible_ids))
+            if payload.proposal_ids == []:
+                raise ValueError("select at least one Lineup post for external handling")
+            selected_ids = list(
+                dict.fromkeys(
+                    eligible_ids if payload.proposal_ids is None else payload.proposal_ids
+                )
+            )
             ineligible = [
                 proposal_id for proposal_id in selected_ids if proposal_id not in eligible_ids
             ]
@@ -615,12 +613,16 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     def retry_lineup_publish(proposal_id: int) -> dict[str, object]:
         try:
             proposal = proposals.detail(proposal_id)
-            if proposal["status"] not in {
-                "internally_scheduled",
-                "publish_failed",
-            }:
-                raise ValueError("only a waiting or failed YouTube action can be retried")
-            queued = publisher_queue.enqueue(proposal_id)
+            latest_attempt = youtube_publisher.latest_attempt(proposal_id)
+            if (
+                proposal["status"] != "publish_failed"
+                or latest_attempt is None
+                or latest_attempt.get("status") != "failed_before_submission"
+            ):
+                raise ValueError(
+                    "only a confirmed failed-before-submission YouTube action can be retried"
+                )
+            queued = publisher_queue.retry_failed(proposal_id)
             return {
                 "proposal": proposals.detail(proposal_id),
                 "lineup": proposals.queue_status(),
@@ -637,10 +639,18 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
     def activity(
         event_type: str | None = None,
         entity_type: str | None = None,
+        category: Literal[
+            "all", "decisions", "publishing", "intelligence", "data", "settings", "other"
+        ] = "all",
         limit: int = Query(default=200, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
     ) -> list[dict[str, object]]:
         return AuditService(database).list_events(
-            event_type=event_type, entity_type=entity_type, limit=limit
+            event_type=event_type,
+            entity_type=entity_type,
+            category=category,
+            limit=limit,
+            offset=offset,
         )
 
     @router.get("/settings/full")

@@ -61,6 +61,8 @@ export function ReviewWorkspace({
   const [message, setMessage] = useState("");
   const [messageIsError, setMessageIsError] = useState(false);
   const [decisionUncertain, setDecisionUncertain] = useState(false);
+  const [loadedImageId, setLoadedImageId] = useState<number | null>(null);
+  const [failedImageId, setFailedImageId] = useState<number | null>(null);
   const [sessionDecisions, setSessionDecisions] = useState(0);
   const warmingTray = useRef(false);
   const actionLock = useRef(false);
@@ -91,6 +93,8 @@ export function ReviewWorkspace({
     setCaption(next?.final_caption ?? "");
     setEditing(false);
     setDecisionUncertain(false);
+    setLoadedImageId(null);
+    setFailedImageId(null);
   }
 
   function applyEditorialStatus(payload: EditorialEnvelope) {
@@ -168,7 +172,7 @@ export function ReviewWorkspace({
       const response = await fetch(`${API_URL}/api/editorial/options/ensure`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: 5, live_discovery: true }),
+        body: JSON.stringify({ target: 5, live_discovery: false }),
       });
       await parseResponse(response);
     } catch {
@@ -207,7 +211,8 @@ export function ReviewWorkspace({
       !proposal ||
       actionLock.current ||
       decisionUncertain ||
-      !caption.trim()
+      !caption.trim() ||
+      loadedImageId !== proposal.candidate_image_id
     ) {
       return;
     }
@@ -342,8 +347,14 @@ export function ReviewWorkspace({
       showProposal(refreshed);
       setNotice("Fresh captions are ready.");
     } catch (error) {
+      const uncertain = hasUncertainOutcome(error);
+      setDecisionUncertain(uncertain);
       setNotice(
-        actionError(error, "Caption regeneration failed. The current caption is preserved."),
+        actionError(
+          error,
+          "Caption regeneration failed. The current caption is preserved.",
+          "The regeneration response could not be verified. Reload Generator to reconcile the current captions before trying again.",
+        ),
         true,
       );
     } finally {
@@ -370,8 +381,14 @@ export function ReviewWorkspace({
       showProposal(refreshed);
       setNotice("A replacement image and its captions are ready.");
     } catch (error) {
+      const uncertain = hasUncertainOutcome(error);
+      setDecisionUncertain(uncertain);
       setNotice(
-        actionError(error, "Image replacement failed. The current option is preserved."),
+        actionError(
+          error,
+          "Image replacement failed. The current option is preserved.",
+          "The image replacement response could not be verified. Reload Generator to reconcile the current image before trying again.",
+        ),
         true,
       );
     } finally {
@@ -490,15 +507,33 @@ export function ReviewWorkspace({
           </ol>
           <section className="decision-stage">
             <figure className="decision-image">
-              {proposal.candidate?.preview_url && (
+              {proposal.candidate?.preview_url ? (
                 <img
+                  key={proposal.candidate_image_id}
                   src={`${API_URL}${proposal.candidate.preview_url}`}
                   alt={
                     topic?.franchise
                       ? `Proposed ${topic.franchise} image for a Qlob Community post`
                       : "Proposed image for a Qlob Community post"
                   }
+                  onLoad={() => {
+                    setLoadedImageId(proposal.candidate_image_id);
+                    setFailedImageId((current) =>
+                      current === proposal.candidate_image_id ? null : current,
+                    );
+                  }}
+                  onError={() => {
+                    setFailedImageId(proposal.candidate_image_id);
+                    setLoadedImageId((current) =>
+                      current === proposal.candidate_image_id ? null : current,
+                    );
+                  }}
                 />
+              ) : (
+                <div className="decision-image-missing" role="alert">
+                  This option has no renderable preview. Replace or reject the image before
+                  accepting it.
+                </div>
               )}
               <figcaption>
                 <span>Look {String(proposal.id).padStart(3, "0")}</span>
@@ -522,7 +557,7 @@ export function ReviewWorkspace({
                   setCaption(event.target.value);
                   setEditing(true);
                 }}
-                onFocus={() => setEditing(true)}
+                readOnly={!editing}
                 rows={4}
                 maxLength={1000}
                 disabled={busy !== null || decisionUncertain}
@@ -557,7 +592,10 @@ export function ReviewWorkspace({
                   type="button"
                   className="decision-approve"
                   disabled={
-                    busy !== null || decisionUncertain || !caption.trim()
+                    busy !== null ||
+                    decisionUncertain ||
+                    !caption.trim() ||
+                    loadedImageId !== proposal.candidate_image_id
                   }
                   onClick={accept}
                   aria-busy={busy === "accept"}
@@ -572,7 +610,11 @@ export function ReviewWorkspace({
                 aria-live={messageIsError ? "assertive" : "polite"}
               >
                 {message ||
-                  "Accept records the editorial decision and adds this exact image and caption to Lineup. It never opens or queues YouTube."}
+                  (failedImageId === proposal.candidate_image_id
+                    ? "The exact image could not be loaded. Retry the media, replace the image, or reject this option."
+                    : loadedImageId !== proposal.candidate_image_id
+                      ? "Loading the exact image before acceptance is enabled."
+                      : "Accept records the editorial decision and adds this exact image and caption to Lineup. It never opens or queues YouTube.")}
               </p>
               {decisionUncertain && (
                 <a className="decision-recovery" href="/review">

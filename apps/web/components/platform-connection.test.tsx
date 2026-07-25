@@ -53,6 +53,7 @@ describe("PlatformConnection", () => {
           queued: 0,
           paused: false,
           paused_reason: null,
+          proposal_ids: [],
         }}
       />,
     );
@@ -84,6 +85,7 @@ describe("PlatformConnection", () => {
           queued: 0,
           paused: false,
           paused_reason: null,
+          proposal_ids: [],
         }}
       />,
     );
@@ -124,6 +126,7 @@ describe("PlatformConnection", () => {
           queued: 0,
           paused: false,
           paused_reason: null,
+          proposal_ids: [],
         }}
       />,
     );
@@ -159,12 +162,19 @@ describe("PlatformConnection", () => {
         channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
         connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
-        initialConnection={initialConnection}
+        initialConnection={{
+          ...initialConnection,
+          state: "connected",
+          valid: true,
+          checked_at: "2026-07-25T12:00:00Z",
+          detail: "Qlob publisher session is ready.",
+        }}
         initialQueue={{
           running: false,
           queued: 2,
           paused: true,
           paused_reason: "Sign-in required",
+          proposal_ids: [42, 43],
         }}
       />,
     );
@@ -206,6 +216,7 @@ describe("PlatformConnection", () => {
           queued: 0,
           paused: false,
           paused_reason: null,
+          proposal_ids: [],
         }}
       />,
     );
@@ -214,5 +225,69 @@ describe("PlatformConnection", () => {
     expect(screen.getByText("Configured Qlob channel")).toBeInTheDocument();
     expect(screen.getByText("Qlob identity selected")).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("clears stale green capability checks when a new check has no verified result", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+    render(
+      <PlatformConnection
+        publishingEnabled
+        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        connectorEmail="tryrunwaytoday@gmail.com"
+        browserChannel="chrome"
+        initialConnection={{
+          ...initialConnection,
+          state: "connected",
+          valid: true,
+          checked_at: "2026-07-20T13:00:00Z",
+          detail: "Previously connected.",
+          checks: { "configured channel": true, "Community composer": true },
+        }}
+        initialQueue={{
+          running: false,
+          queued: 0,
+          paused: false,
+          paused_reason: null,
+          proposal_ids: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Community composer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check saved session" }));
+
+    expect(await screen.findByText("Needs attention")).toBeInTheDocument();
+    expect(screen.queryByText("Community composer")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Not recorded").length).toBeGreaterThan(0);
+  });
+
+  it("does not offer Resume until a paused queue has a fresh connected session", () => {
+    render(
+      <PlatformConnection
+        publishingEnabled
+        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        connectorEmail="tryrunwaytoday@gmail.com"
+        browserChannel="chrome"
+        initialConnection={{
+          ...initialConnection,
+          state: "stale",
+          valid: true,
+          stale: true,
+          checked_at: "2026-07-18T13:00:00Z",
+        }}
+        initialQueue={{
+          running: false,
+          queued: 1,
+          paused: true,
+          paused_reason: "Sign-in required",
+          proposal_ids: [42],
+        }}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Resume failed actions" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/fresh successful saved-session check/i)).toBeInTheDocument();
   });
 });

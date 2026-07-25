@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { apiGet } from "@/lib/api";
+import { apiGetRequired } from "@/lib/api";
 import {
   activityCategories,
   activityCategory,
@@ -10,6 +10,8 @@ import {
   isActivityCategory,
 } from "@/lib/activity";
 import { isRecord } from "@/lib/guards";
+
+export const dynamic = "force-dynamic";
 
 type Event = {
   id: number;
@@ -40,24 +42,31 @@ function isEventList(value: unknown): value is Event[] {
 export default async function ActivityPage({
   searchParams,
 }: {
-  searchParams: Promise<{ category?: string }>;
+  searchParams: Promise<{ category?: string; page?: string }>;
 }) {
   const params = await searchParams;
   const selectedCategory =
     params.category && isActivityCategory(params.category)
       ? params.category
       : "all";
-  const events = await apiGet<Event[]>(
-    "/api/activity?limit=500",
-    [],
+  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
+  const pageSize = 100;
+  const query = new URLSearchParams({
+    limit: String(pageSize),
+    offset: String((page - 1) * pageSize),
+  });
+  if (selectedCategory !== "all") query.set("category", selectedCategory);
+  const events = await apiGetRequired<Event[]>(
+    `/api/activity?${query}`,
     isEventList,
   );
-  const visibleEvents =
-    selectedCategory === "all"
-      ? events
-      : events.filter(
-          (event) => activityCategory(event.event_type) === selectedCategory,
-        );
+  const pageHref = (target: number) => {
+    const next = new URLSearchParams();
+    if (selectedCategory !== "all") next.set("category", selectedCategory);
+    if (target > 1) next.set("page", String(target));
+    const encoded = next.toString();
+    return encoded ? `/activity?${encoded}` : "/activity";
+  };
 
   return (
     <>
@@ -71,8 +80,8 @@ export default async function ActivityPage({
           </p>
         </div>
         <div className="header-counter">
-          <strong>{visibleEvents.length}</strong>
-          <span>{events.length} latest events checked</span>
+          <strong>{events.length}</strong>
+          <span>page {page} · up to {pageSize} events</span>
         </div>
       </header>
       <form className="activity-filter" method="get">
@@ -89,15 +98,15 @@ export default async function ActivityPage({
         <button className="button secondary" type="submit">
           Apply filter
         </button>
-        {selectedCategory !== "all" && (
+        {(selectedCategory !== "all" || page > 1) && (
           <Link className="text-link" href="/activity">
             Clear
           </Link>
         )}
       </form>
-      {visibleEvents.length ? (
+      {events.length ? (
         <section className="activity-list" aria-label="Audit events">
-          {visibleEvents.map((event) => (
+          {events.map((event) => (
             <article key={event.id}>
               <span className="activity-index">#{event.id}</span>
               <time dateTime={event.created_at}>
@@ -128,16 +137,39 @@ export default async function ActivityPage({
         <section className="panel empty">
           <div>
             <strong>
-              {events.length
-                ? "No events match this filter."
+              {selectedCategory !== "all" || page > 1
+                ? "No events match this filter or page."
                 : "No audit events yet."}
             </strong>
-            {events.length
-              ? "Choose another activity category."
+            {selectedCategory !== "all" || page > 1
+              ? "Choose another category or return to an earlier page."
               : "Actions that change Runway’s local state will appear here."}
           </div>
         </section>
       )}
+      <nav className="pagination" aria-label="Activity pages">
+        {page > 1 ? (
+          <Link
+            className="button secondary"
+            href={pageHref(page - 1)}
+          >
+            Previous
+          </Link>
+        ) : (
+          <span />
+        )}
+        <span>Page {page}</span>
+        {events.length === pageSize ? (
+          <Link
+            className="button secondary"
+            href={pageHref(page + 1)}
+          >
+            Next
+          </Link>
+        ) : (
+          <span />
+        )}
+      </nav>
     </>
   );
 }

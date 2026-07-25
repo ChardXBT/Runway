@@ -1,8 +1,10 @@
 import Link from "next/link";
 
-import { API_URL, apiGet } from "@/lib/api";
+import { API_URL, apiGetRequired } from "@/lib/api";
 import { isRecord, proposalList } from "@/lib/guards";
 import type { Proposal } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
 
 type Media = { id: number; url: string; width: number; height: number };
 type Post = {
@@ -80,15 +82,10 @@ export default async function CataloguePage({
   if (params.franchise) query.set("franchise", params.franchise);
   if (params.character) query.set("character", params.character);
   const [catalogRows, status, rejected] = await Promise.all([
-    apiGet<Post[]>(`/api/catalog?${query}`, [], isPostList),
-    apiGet<CatalogStatus>("/api/catalog/status", {
-      total_posts: 0,
-      training_eligible: 0,
-      media_assets: 0,
-    }, isCatalogStatus),
-    apiGet<Proposal[]>(
-      "/api/proposals?status=rejected&limit=100",
-      [],
+    apiGetRequired<Post[]>(`/api/catalog?${query}`, isPostList),
+    apiGetRequired<CatalogStatus>("/api/catalog/status", isCatalogStatus),
+    apiGetRequired<Proposal[]>(
+      "/api/proposals?status=rejected&limit=100&order=desc",
       proposalList,
     ),
   ]);

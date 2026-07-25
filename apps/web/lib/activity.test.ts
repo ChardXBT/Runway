@@ -31,4 +31,19 @@ describe("activity presentation", () => {
       "swapped",
     );
   });
+
+  it("places unrecognized system events in Other instead of Intelligence", () => {
+    expect(activityCategory("database_backup_completed")).toBe("other");
+    expect(activityCategory("youtube_caption_published")).toBe("publishing");
+  });
+
+  it("describes local Lineup mutations without claiming YouTube synchronization", () => {
+    expect(activitySummary("lineup_post_updated", { swapped: true })).toBe(
+      "Two local Lineup slots were swapped. YouTube was unchanged.",
+    );
+    expect(activitySummary("lineup_post_removed", {})).toContain(
+      "YouTube was unchanged",
+    );
+  });
+
 });

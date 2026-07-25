@@ -124,6 +124,22 @@ export function scheduleIsPast(
   return instant.getTime() <= now.getTime();
 }
 
+export const MINIMUM_SCHEDULE_LEAD_MINUTES = 5;
+
+export function scheduleHasMinimumLead(
+  dateValue: string,
+  timeValue: string,
+  timeZone: string,
+  now = new Date(),
+) {
+  const instant = scheduleInstant(dateValue, timeValue, timeZone);
+  if (!instant) return null;
+  return (
+    instant.getTime() >
+    now.getTime() + MINIMUM_SCHEDULE_LEAD_MINUTES * 60_000
+  );
+}
+
 export function zonedScheduleIso(
   dateValue: string,
   timeValue: string,

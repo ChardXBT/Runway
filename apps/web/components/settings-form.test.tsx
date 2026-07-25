@@ -85,11 +85,19 @@ describe("SettingsForm", () => {
 
     resolveResponse({
       ok: true,
-      json: async () => ({ ...settings, channel_name: "Qlob Studio" }),
+      json: async () => ({ ...settings, default_post_time: "10:00" }),
     });
 
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Channel name")).toHaveValue("Qlob Studio");
+    expect(screen.getByDisplayValue("Qlob")).toBeDisabled();
+    expect(screen.getByDisplayValue("@Qlob")).toBeDisabled();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      fields: {
+        timezone: "America/Toronto",
+        default_post_time: "10:00",
+        duplicate_window_days: 180,
+      },
+    });
   });
 
   it("does not show success for a malformed response and keeps every entry", async () => {
@@ -102,9 +110,6 @@ describe("SettingsForm", () => {
     );
     render(<SettingsForm initial={settings} />);
 
-    fireEvent.change(screen.getByLabelText("Channel name"), {
-      target: { value: "Qlob Edited" },
-    });
     fireEvent.change(screen.getByLabelText("Duplicate window"), {
       target: { value: "240" },
     });
@@ -114,7 +119,7 @@ describe("SettingsForm", () => {
       "response could not be verified",
     );
     expect(screen.queryByText("Settings saved.")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Channel name")).toHaveValue("Qlob Edited");
+    expect(screen.getByDisplayValue("Qlob")).toHaveValue("Qlob");
     expect(screen.getByLabelText("Duplicate window")).toHaveValue(240);
   });
 
