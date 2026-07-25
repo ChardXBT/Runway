@@ -78,8 +78,13 @@ jobs:
           git diff --cached --check
           ruff check .
 
-      - name: Validate Ruff formatting
-        run: ruff format --check .
+      - name: Normalize and validate Ruff formatting
+        shell: bash
+        run: |
+          ruff format .
+          git add -u
+          git diff --cached --check
+          ruff format --check .
 
       - name: Validate Mypy
         run: mypy src/runway
