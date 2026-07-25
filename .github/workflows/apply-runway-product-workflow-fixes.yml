@@ -70,11 +70,14 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Validate backend static checks
-        run: |
-          ruff check .
-          ruff format --check .
-          mypy src/runway
+      - name: Validate Ruff lint
+        run: ruff check .
+
+      - name: Validate Ruff formatting
+        run: ruff format --check .
+
+      - name: Validate Mypy
+        run: mypy src/runway
 
       - name: Validate backend tests
         shell: bash
