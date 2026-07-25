@@ -21,6 +21,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.head_ref }}
 
       - uses: actions/setup-python@v6
         with:
@@ -43,7 +44,7 @@ jobs:
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$BASE_SHA"
 
-      - name: Apply verified product patch
+      - name: Reconstruct verified product patch
         shell: bash
         run: |
           cat .github/runway-patch/part-*.b64 \
@@ -52,7 +53,14 @@ jobs:
             > /tmp/runway-product-workflow-fixes.patch
           echo "116d8c1177d878f3adae7b1a9e7ec688c4bdb5b209bfb7f9ef74625bf646f3ec  /tmp/runway-product-workflow-fixes.patch" \
             | sha256sum --check --strict
-          git apply --index --whitespace=error-all /tmp/runway-product-workflow-fixes.patch
+
+      - name: Apply verified product patch
+        shell: bash
+        run: git apply --index --whitespace=error-all /tmp/runway-product-workflow-fixes.patch
+
+      - name: Exclude temporary validation files
+        shell: bash
+        run: |
           git rm -r .github/runway-patch
           git rm .github/workflows/apply-runway-product-workflow-fixes.yml
           git diff --cached --check
