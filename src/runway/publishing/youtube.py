@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
+from sqlalchemy.orm import Session
 
 from runway.config import Settings
 from runway.db.base import Database
@@ -1014,10 +1015,13 @@ class PlaywrightYouTubeAdapter:
             "m.youtube.com",
         }:
             return False
-        path = current.path.casefold()
+        parts = [part.casefold() for part in current.path.split("/") if part]
         channel_id = self.settings.publisher_channel_id.casefold()
         handle = self.settings.channel_handle.strip().lstrip("@").casefold()
-        return channel_id in path or (bool(handle) and f"/@{handle}" in path)
+        return bool(
+            (len(parts) >= 2 and parts[0] == "channel" and parts[1] == channel_id)
+            or (parts and bool(handle) and parts[0] == f"@{handle}")
+        )
 
     @staticmethod
     def _management_controls_visible(page: Any) -> bool:
@@ -1226,7 +1230,7 @@ class YouTubeBrowserPublisher:
             }
 
         with self.database.session() as session:
-            validation = session.scalar(
+            validations = session.scalars(
                 select(AuditEvent)
                 .where(
                     AuditEvent.event_type.in_(
@@ -1237,14 +1241,24 @@ class YouTubeBrowserPublisher:
                     )
                 )
                 .order_by(desc(AuditEvent.created_at), desc(AuditEvent.id))
-                .limit(1)
-            )
+                .limit(100)
+            ).all()
             last_verified = session.scalar(
                 select(AuditEvent)
                 .where(AuditEvent.event_type == "youtube_schedule_verified")
                 .order_by(desc(AuditEvent.created_at), desc(AuditEvent.id))
                 .limit(1)
             )
+
+        validation = None
+        for candidate in validations:
+            try:
+                candidate_details = json.loads(candidate.details_json)
+            except (TypeError, ValueError):
+                continue
+            if candidate_details.get("checked_channel_id") == (self.settings.publisher_channel_id):
+                validation = candidate
+                break
 
         last_verified_at = (
             last_verified.created_at.isoformat() if last_verified is not None else None
@@ -1419,50 +1433,14 @@ class YouTubeBrowserPublisher:
     ) -> dict[str, object]:
         """Persist an explicit Lineup scheduling request without waiting for the browser."""
         self._require_enabled()
-        post, payload_hash = self._prepared_post(proposal_id)
+        preflight = self._publishing_preflight(proposal_id)
         now = datetime.now(UTC)
         with self.database.session() as session:
-            existing = session.scalar(
-                select(PublishAttempt)
-                .where(
-                    PublishAttempt.proposal_id == proposal_id,
-                    PublishAttempt.publisher == self.publisher_name,
-                    PublishAttempt.status.in_(["queued", "submitting"]),
-                )
-                .order_by(desc(PublishAttempt.id))
-                .limit(1)
-            )
-            if existing is not None:
-                return self._attempt_dict(existing)
-            for prepared in session.scalars(
-                select(PublishAttempt).where(
-                    PublishAttempt.proposal_id == proposal_id,
-                    PublishAttempt.status == "prepared",
-                )
-            ):
-                prepared.status = "superseded"
-                prepared.completed_at = now
-            attempt = PublishAttempt(
-                proposal_id=proposal_id,
-                publisher=self.publisher_name,
-                status="queued",
-                confirmation_token_hash=self._token_hash(secrets.token_urlsafe(32)),
-                payload_hash=payload_hash,
-                planned_publish_at=post.planned_publish_at,
-                expires_at=now + timedelta(days=1),
-            )
-            session.add(attempt)
-            session.flush()
-            audit(
+            attempt = self._queue_preflight_in_session(
                 session,
-                "youtube_publish_queued",
-                "proposal",
-                proposal_id,
-                {
-                    "attempt_id": attempt.id,
-                    "planned_publish_at": post.planned_publish_at,
-                    "trigger": trigger,
-                },
+                preflight,
+                trigger=trigger,
+                now=now,
             )
             return self._attempt_dict(attempt)
 
@@ -1470,12 +1448,73 @@ class YouTubeBrowserPublisher:
         """Validate an ordered Lineup batch before persisting any queue requests."""
         unique_ids = list(dict.fromkeys(proposal_ids))
         self._require_enabled()
-        for proposal_id in unique_ids:
-            self._prepared_post(proposal_id)
-        return [
-            self.queue_attempt(proposal_id, trigger="human_lineup_push")
-            for proposal_id in unique_ids
-        ]
+        preflights = [self._publishing_preflight(proposal_id) for proposal_id in unique_ids]
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            attempts = [
+                self._queue_preflight_in_session(
+                    session,
+                    preflight,
+                    trigger="human_lineup_push",
+                    now=now,
+                )
+                for preflight in preflights
+            ]
+            return [self._attempt_dict(attempt) for attempt in attempts]
+
+    def _queue_preflight_in_session(
+        self,
+        session: Session,
+        preflight: PublishingPreflight,
+        *,
+        trigger: str,
+        now: datetime,
+    ) -> PublishAttempt:
+        proposal_id = preflight.post.proposal_id
+        existing = session.scalar(
+            select(PublishAttempt)
+            .where(
+                PublishAttempt.proposal_id == proposal_id,
+                PublishAttempt.publisher == self.publisher_name,
+                PublishAttempt.status.in_(["queued", "submitting"]),
+            )
+            .order_by(desc(PublishAttempt.id))
+            .limit(1)
+        )
+        if existing is not None:
+            return existing
+        for prepared in session.scalars(
+            select(PublishAttempt).where(
+                PublishAttempt.proposal_id == proposal_id,
+                PublishAttempt.publisher == self.publisher_name,
+                PublishAttempt.status == "prepared",
+            )
+        ):
+            prepared.status = "superseded"
+            prepared.completed_at = now
+        attempt = PublishAttempt(
+            proposal_id=proposal_id,
+            publisher=self.publisher_name,
+            status="queued",
+            confirmation_token_hash=self._token_hash(secrets.token_urlsafe(32)),
+            payload_hash=preflight.payload_hash,
+            planned_publish_at=preflight.post.planned_publish_at,
+            expires_at=now + timedelta(days=1),
+        )
+        session.add(attempt)
+        session.flush()
+        audit(
+            session,
+            "youtube_publish_queued",
+            "proposal",
+            proposal_id,
+            {
+                "attempt_id": attempt.id,
+                "planned_publish_at": preflight.post.planned_publish_at,
+                "trigger": trigger,
+            },
+        )
+        return attempt
 
     def next_queued_attempt_id(self) -> int | None:
         with self.database.session() as session:
@@ -1637,18 +1676,21 @@ class YouTubeBrowserPublisher:
                         )
                     ).all()
                     target_date = target_slot.astimezone(timezone).date()
-                    occupant = next(
-                        (
-                            item
-                            for item in possible_occupants
-                            if item.scheduled_publish_at
-                            and datetime.fromisoformat(item.scheduled_publish_at)
-                            .astimezone(timezone)
-                            .date()
-                            == target_date
-                        ),
-                        None,
-                    )
+                    target_occupants = [
+                        item
+                        for item in possible_occupants
+                        if item.scheduled_publish_at
+                        and datetime.fromisoformat(item.scheduled_publish_at)
+                        .astimezone(timezone)
+                        .date()
+                        == target_date
+                    ]
+                    if len(target_occupants) > 1:
+                        raise ValueError(
+                            "the target date contains multiple active RunWay posts; "
+                            "resolve the Lineup conflict before moving another post"
+                        )
+                    occupant = target_occupants[0] if target_occupants else None
                 if occupant is not None:
                     if current_slot.astimezone(UTC) <= datetime.now(UTC) + timedelta(minutes=5):
                         raise ValueError(

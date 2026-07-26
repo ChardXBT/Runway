@@ -12,6 +12,7 @@ from runway.db.base import Database
 from runway.db.models import (
     AuditEvent,
     CandidateImage,
+    CaptionExposure,
     GenerationRun,
     ProposalEvent,
 )
@@ -234,11 +235,26 @@ async def test_atomic_editorial_accept_survives_secondary_learning_failure(
 ) -> None:
     proposals, rows = await _generated_proposal_service(database, settings, days=1)
     proposal_id = int(rows[0]["id"])
+    exposure_decisions: list[str] = []
+    candidate_events: list[str] = []
 
     def fail_feedback(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError("secondary feedback unavailable")
 
+    def record_exposure(*_args: object, **kwargs: object) -> None:
+        exposure_decisions.append(str(kwargs["decision_type"]))
+
+    def record_candidate(*_args: object, **kwargs: object) -> bool:
+        candidate_events.append(str(kwargs["event_type"]))
+        return True
+
     monkeypatch.setattr(proposals.feedback, "record", fail_feedback)
+    monkeypatch.setattr(proposals.exposures, "record_decision", record_exposure)
+    monkeypatch.setattr(
+        proposals.candidate_exposures,
+        "record_proposal_event",
+        record_candidate,
+    )
     accepted = proposals.accept_to_lineup(proposal_id, "Human final caption?!")
 
     assert accepted["status"] == "internally_scheduled"
@@ -247,6 +263,8 @@ async def test_atomic_editorial_accept_survives_secondary_learning_failure(
     assert ProposalService(database, settings).detail(proposal_id)["status"] == (
         "internally_scheduled"
     )
+    assert exposure_decisions == ["edited", "accepted"]
+    assert candidate_events == ["accepted"]
 
 
 @pytest.mark.asyncio
@@ -260,6 +278,15 @@ async def test_proposal_history_can_request_newest_records_first(
     descending = [int(row["id"]) for row in proposals.list_proposals(order="desc")]
 
     assert descending == list(reversed(ascending))
+    requested_id = ascending[-1]
+    requested = proposals.next_for_review(proposal_id=requested_id)
+    assert requested is not None
+    assert requested["id"] == requested_id
+    with database.session() as session:
+        exposed_proposal_ids = session.scalars(
+            select(CaptionExposure.proposal_id).order_by(CaptionExposure.proposal_id)
+        ).all()
+    assert exposed_proposal_ids == [requested_id]
 
 
 @pytest.mark.asyncio
@@ -273,12 +300,24 @@ async def test_secondary_display_evidence_cannot_hide_a_review_option(
     def fail_display(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError("display evidence unavailable")
 
+    candidate_events: list[str] = []
+
+    def record_candidate(*_args: object, **kwargs: object) -> bool:
+        candidate_events.append(str(kwargs["event_type"]))
+        return True
+
     monkeypatch.setattr(proposals.exposures, "record_display", fail_display)
+    monkeypatch.setattr(
+        proposals.candidate_exposures,
+        "record_proposal_event",
+        record_candidate,
+    )
     result = proposals.next_for_review()
 
     assert result is not None
     assert result["id"] == rows[0]["id"]
     assert result["status"] == "needs_review"
+    assert candidate_events == ["shown"]
 
 
 @pytest.mark.asyncio

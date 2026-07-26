@@ -4,6 +4,7 @@ import json
 import logging
 import shutil
 import threading
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -400,7 +401,14 @@ class ProposalService:
             proposals = session.scalars(statement.limit(limit)).all()
             return [self._proposal_dict(session, proposal) for proposal in proposals]
 
-    def next_for_review(self, *, exclude_id: int | None = None) -> dict[str, object] | None:
+    def next_for_review(
+        self,
+        *,
+        proposal_id: int | None = None,
+        exclude_id: int | None = None,
+    ) -> dict[str, object] | None:
+        if proposal_id is not None and exclude_id is not None:
+            raise ValueError("choose a requested proposal or an excluded proposal, not both")
         with self.database.session() as session:
             channel_id = self._channel_id(session)
             statement = (
@@ -412,24 +420,28 @@ class ProposalService:
                 .order_by(Proposal.created_at, Proposal.id)
                 .limit(1)
             )
-            if exclude_id is not None:
+            if proposal_id is not None:
+                statement = statement.where(Proposal.id == proposal_id)
+            elif exclude_id is not None:
                 statement = statement.where(Proposal.id != exclude_id)
             proposal = session.scalar(statement)
             result = self._proposal_dict(session, proposal) if proposal else None
             proposal_id = proposal.id if proposal else None
         if proposal_id is not None:
-            try:
-                self.exposures.record_display(proposal_id)
-                self.candidate_exposures.record_proposal_event(
+            self._record_secondary_evidence(
+                proposal_id,
+                "caption display evidence",
+                lambda: self.exposures.record_display(proposal_id),
+            )
+            self._record_secondary_evidence(
+                proposal_id,
+                "candidate display evidence",
+                lambda: self.candidate_exposures.record_proposal_event(
                     proposal_id,
                     event_type="shown",
                     reason="presented in the creator review interface",
-                )
-            except Exception:
-                logger.exception(
-                    "secondary display evidence failed for proposal %s",
-                    proposal_id,
-                )
+                ),
+            )
         return result
 
     def next_generation_date(self) -> date:
@@ -927,17 +939,23 @@ class ProposalService:
                     {"network_action": False, "source": "editorial_accept"},
                 )
 
-        try:
-            if caption_changed:
-                self.exposures.record_decision(
+        if caption_changed:
+            self._record_secondary_evidence(
+                proposal_id,
+                "edited caption exposure",
+                lambda: self.exposures.record_decision(
                     proposal_id,
                     decision_type="edited",
                     final_caption=cleaned,
                     original_caption=original_caption,
                     reason_codes=["human_edit"],
                     source_event_id=edit_event_id,
-                )
-                self.feedback.record(
+                ),
+            )
+            self._record_secondary_evidence(
+                proposal_id,
+                "edited caption feedback",
+                lambda: self.feedback.record(
                     proposal_id,
                     verdict="edited",
                     generated_caption=original_caption,
@@ -945,16 +963,24 @@ class ProposalService:
                     reason_codes=["human_edit"],
                     image_verdict="good",
                     source_event_id=edit_event_id,
-                )
-            self.exposures.record_decision(
+                ),
+            )
+        self._record_secondary_evidence(
+            proposal_id,
+            "accepted caption exposure",
+            lambda: self.exposures.record_decision(
                 proposal_id,
                 decision_type="accepted",
                 final_caption=cleaned,
                 original_caption=generated_caption,
                 reason_codes=["approved"],
                 source_event_id=approval_event_id,
-            )
-            self.feedback.record(
+            ),
+        )
+        self._record_secondary_evidence(
+            proposal_id,
+            "accepted caption feedback",
+            lambda: self.feedback.record(
                 proposal_id,
                 verdict="accepted",
                 generated_caption=generated_caption,
@@ -962,19 +988,34 @@ class ProposalService:
                 reason_codes=["approved"],
                 image_verdict="good",
                 source_event_id=approval_event_id,
-            )
-            self.candidate_exposures.record_proposal_event(
+            ),
+        )
+        self._record_secondary_evidence(
+            proposal_id,
+            "accepted candidate feedback",
+            lambda: self.candidate_exposures.record_proposal_event(
                 proposal_id,
                 event_type="accepted",
                 reason="creator approved the image-caption proposal",
-            )
-        except Exception:
-            logger.exception(
-                "secondary acceptance evidence failed after proposal %s entered Lineup",
-                proposal_id,
-            )
+            ),
+        )
 
         return self.detail(proposal_id)
+
+    @staticmethod
+    def _record_secondary_evidence(
+        proposal_id: int,
+        label: str,
+        operation: Callable[[], object],
+    ) -> None:
+        try:
+            operation()
+        except Exception:
+            logger.exception(
+                "secondary %s failed for proposal %s",
+                label,
+                proposal_id,
+            )
 
     def reject(
         self,

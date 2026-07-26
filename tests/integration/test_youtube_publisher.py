@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -25,6 +26,7 @@ from runway.publishing.queue import PublisherQueueCoordinator
 from runway.publishing.youtube import (
     BrowserMutationReceipt,
     BrowserScheduleReceipt,
+    PlaywrightYouTubeAdapter,
     YouTubeBrowserPublisher,
 )
 
@@ -547,6 +549,7 @@ async def test_persisted_queue_starts_after_application_restart(
 async def test_lineup_batch_validates_every_post_before_queueing(
     database: Database,
     settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first_id, second_id = await _scheduled_proposal_pair(database, settings)
     enabled_settings = _authorized_settings(settings)
@@ -561,6 +564,30 @@ async def test_lineup_batch_validates_every_post_before_queueing(
         second.status = "rejected"
 
     with pytest.raises(ValueError, match="internally scheduled proposal"):
+        publisher.queue_attempts([first_id, second_id])
+
+    with database.session() as session:
+        attempts = session.scalars(select(PublishAttempt)).all()
+    assert attempts == []
+
+    with database.session() as session:
+        second = session.get(Proposal, second_id)
+        assert second is not None
+        second.status = "internally_scheduled"
+
+    original_queue = publisher._queue_preflight_in_session
+    queue_calls = 0
+
+    def fail_second_queue(*args: object, **kwargs: object) -> PublishAttempt:
+        nonlocal queue_calls
+        attempt = original_queue(*args, **kwargs)
+        queue_calls += 1
+        if queue_calls == 2:
+            raise RuntimeError("simulated second insert failure")
+        return attempt
+
+    monkeypatch.setattr(publisher, "_queue_preflight_in_session", fail_second_queue)
+    with pytest.raises(RuntimeError, match="second insert failure"):
         publisher.queue_attempts([first_id, second_id])
 
     with database.session() as session:
@@ -737,6 +764,45 @@ async def test_lineup_occupied_date_swaps_slots_without_a_daily_conflict(
 
 
 @pytest.mark.asyncio
+async def test_lineup_move_rejects_multiple_existing_posts_on_target_date(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    proposals = ProposalService(database, settings)
+    first_before = proposals.detail(first_id)
+    second_before = proposals.detail(second_id)
+    second_slot = datetime.fromisoformat(str(second_before["scheduled_publish_at"]))
+
+    with database.session() as session:
+        second = session.get(Proposal, second_id)
+        assert second is not None
+        copied_fields = {
+            column.name: getattr(second, column.name)
+            for column in Proposal.__table__.columns
+            if column.name not in {"id", "created_at", "updated_at"}
+        }
+        copied_fields["planned_publish_at"] = (
+            datetime.fromisoformat(second.planned_publish_at) + timedelta(hours=1)
+        ).isoformat()
+        copied_fields["scheduled_publish_at"] = (second_slot + timedelta(hours=1)).isoformat()
+        session.add(Proposal(**copied_fields))
+
+    target_date = second_slot.astimezone(ZoneInfo(settings.timezone)).date()
+    publisher = YouTubeBrowserPublisher(database, settings, FakeYouTubeAdapter())
+    with pytest.raises(ValueError, match="multiple active RunWay posts"):
+        await publisher.update_lineup(
+            first_id,
+            final_caption=None,
+            new_date=target_date,
+        )
+
+    assert (
+        proposals.detail(first_id)["scheduled_publish_at"] == first_before["scheduled_publish_at"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_unverified_lineup_edit_is_blocked_and_keeps_local_record_unchanged(
     database: Database,
     settings: Settings,
@@ -819,6 +885,81 @@ async def test_connector_rejects_a_different_managed_channel(
 
     with pytest.raises(ValueError, match="pinned to Qlob"):
         await publisher.validate_channel_access("https://www.youtube.com/@another-channel")
+
+
+def test_loaded_channel_identity_requires_an_exact_path_segment(settings: Settings) -> None:
+    adapter = PlaywrightYouTubeAdapter(settings)
+
+    assert adapter._configured_channel_loaded(SimpleNamespace(url=settings.publisher_channel_url))
+    assert adapter._configured_channel_loaded(
+        SimpleNamespace(url="https://www.youtube.com/@Qlob/posts")
+    )
+    assert not adapter._configured_channel_loaded(
+        SimpleNamespace(
+            url=(f"https://www.youtube.com/channel/not-{settings.publisher_channel_id}/posts")
+        )
+    )
+    assert not adapter._configured_channel_loaded(
+        SimpleNamespace(url="https://www.youtube.com/@Qlob-imposter/posts")
+    )
+
+
+def test_saved_session_status_is_scoped_to_the_configured_channel(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        session.add(
+            AuditEvent(
+                event_type="youtube_session_validated",
+                entity_type="publisher",
+                entity_id=None,
+                details_json=(
+                    '{"valid": true, "publisher": "fixture", '
+                    '"detail": "Wrong channel", "checks": {}, '
+                    '"checked_channel_id": "UC-not-qLOB"}'
+                ),
+            )
+        )
+
+    publisher = YouTubeBrowserPublisher(
+        database,
+        _authorized_settings(settings),
+        FakeYouTubeAdapter(),
+    )
+
+    assert publisher.connection_status()["state"] == "unchecked"
+
+
+@pytest.mark.asyncio
+async def test_persisted_session_block_prevents_other_queued_work_after_restart(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    adapter = FakeYouTubeAdapter()
+    adapter.session_valid = False
+    adapter.session_detail = "Sign in to the Qlob Editor account."
+    publisher = YouTubeBrowserPublisher(
+        database,
+        _authorized_settings(settings),
+        adapter,
+    )
+    attempts = publisher.queue_attempts([first_id, second_id])
+
+    with pytest.raises(ValueError, match="Sign in"):
+        await publisher.process_queued_attempt(int(attempts[0]["id"]))
+    assert publisher.attempt_status(int(attempts[0]["id"]))["status"] == ("blocked_session")
+    assert publisher.attempt_status(int(attempts[1]["id"]))["status"] == "queued"
+
+    adapter.session_valid = True
+    restarted = PublisherQueueCoordinator(publisher)
+    status = restarted.start()
+    await asyncio.sleep(0.05)
+
+    assert status["paused"] is True
+    assert publisher.attempt_status(int(attempts[1]["id"]))["status"] == "queued"
+    assert adapter.schedule_calls == []
 
 
 def test_explicit_empty_lineup_selection_is_never_expanded_to_all_posts(

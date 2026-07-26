@@ -36,16 +36,23 @@ export async function readApiJson<T>(
     malformedMessage?: string;
   },
 ): Promise<T> {
+  const uncertainFailure = response.status === 408 || response.status >= 500;
   let payload: unknown;
   try {
     payload = await response.json();
   } catch {
-    if (!response.ok) throw new ApiError(failureMessage);
+    if (!response.ok) {
+      throw new ApiError(failureMessage, {
+        uncertainOutcome: uncertainFailure,
+      });
+    }
     throw new ApiError(malformedMessage, { uncertainOutcome: true });
   }
 
   if (!response.ok) {
-    throw new ApiError(responseDetail(payload, failureMessage));
+    throw new ApiError(responseDetail(payload, failureMessage), {
+      uncertainOutcome: uncertainFailure,
+    });
   }
   if (!validate(payload)) {
     throw new ApiError(malformedMessage, { uncertainOutcome: true });

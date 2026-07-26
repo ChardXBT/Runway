@@ -166,9 +166,11 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get("/editorial/next")
-    def editorial_next() -> dict[str, object]:
+    def editorial_next(
+        proposal_id: int | None = Query(default=None, ge=1),
+    ) -> dict[str, object]:
         return {
-            "next_proposal": proposals.next_for_review(),
+            "next_proposal": proposals.next_for_review(proposal_id=proposal_id),
             "workflow": proposals.workflow_summary(),
             "publisher_queue": publisher_queue.status(),
             "generation": editorial.generation_status(),

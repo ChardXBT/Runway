@@ -29,6 +29,7 @@ describe("readApiJson", () => {
       readApiJson(
         {
           ok: false,
+          status: 422,
           json: async () => ({ detail: "The date is occupied." }),
         } as Response,
         {
@@ -68,6 +69,7 @@ describe("readApiJson", () => {
       readApiJson(
         {
           ok: false,
+          status: 422,
           json: async () => {
             throw new SyntaxError("HTML response");
           },
@@ -80,6 +82,25 @@ describe("readApiJson", () => {
     ).rejects.toMatchObject({
       message: "Save failed.",
       uncertainOutcome: false,
+    });
+  });
+
+  it("treats server failures as uncertain mutation outcomes", async () => {
+    await expect(
+      readApiJson(
+        {
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: "Response assembly failed." }),
+        } as Response,
+        {
+          validate: isResult,
+          failureMessage: "Save failed.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: "Response assembly failed.",
+      uncertainOutcome: true,
     });
   });
 });

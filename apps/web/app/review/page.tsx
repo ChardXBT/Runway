@@ -1,13 +1,9 @@
 import { ReviewWorkspace } from "@/components/review-workspace";
-import { apiGetOptional, apiGetRequired } from "@/lib/api";
-import {
-  isEditorialEnvelope,
-  isProposal,
-} from "@/lib/guards";
+import { apiGetRequired } from "@/lib/api";
+import { isEditorialEnvelope } from "@/lib/guards";
 import type {
   EditorialEnvelope,
   GenerationActivity,
-  Proposal
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -25,14 +21,9 @@ export default async function ReviewPage({
   searchParams: Promise<{ id?: string }>;
 }) {
   const { id } = await searchParams;
-  const editorial = await apiGetRequired<EditorialEnvelope>(
-    "/api/editorial/next",
-    isEditorialEnvelope,
-  );
-
-  let proposal = editorial.next_proposal;
+  let requestedId: number | null = null;
   if (id !== undefined) {
-    const requestedId = Number(id);
+    requestedId = Number(id);
     if (!Number.isInteger(requestedId) || requestedId < 1) {
       return (
         <section className="panel empty">
@@ -43,24 +34,27 @@ export default async function ReviewPage({
         </section>
       );
     }
-    const requested = await apiGetOptional<Proposal>(
-      `/api/proposals/${requestedId}`,
-      isProposal,
+  }
+
+  const editorial = await apiGetRequired<EditorialEnvelope>(
+    requestedId === null
+      ? "/api/editorial/next"
+      : `/api/editorial/next?proposal_id=${requestedId}`,
+    isEditorialEnvelope,
+  );
+  const proposal = editorial.next_proposal;
+  if (requestedId !== null && !proposal) {
+    return (
+      <section className="panel empty">
+        <div>
+          <strong>Requested Generator option is unavailable.</strong>
+          <span>
+            It may already have been accepted, rejected, or removed from review.
+          </span>
+          <a href="/review">Return to the current Generator option</a>
+        </div>
+      </section>
     );
-    if (!requested || requested.status !== "needs_review") {
-      return (
-        <section className="panel empty">
-          <div>
-            <strong>Requested Generator option is unavailable.</strong>
-            <span>
-              It may already have been accepted, rejected, or removed from review.
-            </span>
-            <a href="/review">Return to the current Generator option</a>
-          </div>
-        </section>
-      );
-    }
-    proposal = requested;
   }
 
   return (

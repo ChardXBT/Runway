@@ -87,7 +87,11 @@ class PublisherQueueCoordinator:
         }
 
     def _start_if_ready(self) -> None:
+        _queued, blocked_reason, _proposal_ids = self._persisted_queue_state()
         with self._guard:
+            if blocked_reason is not None:
+                self._paused_reason = blocked_reason
+                return
             if self._paused_reason is not None:
                 return
             if self._worker is not None and self._worker.is_alive():
@@ -162,7 +166,8 @@ class PublisherQueueCoordinator:
                         int(value or 0),
                         (
                             attempt.error_summary
-                            or "The publisher session needs attention before scheduling can continue."
+                            or "The publisher session needs attention before scheduling "
+                            "can continue."
                         ),
                         proposal_ids,
                     )
