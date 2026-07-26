@@ -67,6 +67,7 @@ export function ReviewWorkspace({
   const warmingTray = useRef(false);
   const actionLock = useRef(false);
   const captionRef = useRef<HTMLTextAreaElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const slotFormatter = useMemo(() => {
     try {
       return new Intl.DateTimeFormat("en-US", {
@@ -409,6 +410,25 @@ export function ReviewWorkspace({
   }
 
   useEffect(() => {
+    const image = imageRef.current;
+    const candidateImageId = proposal?.candidate_image_id;
+    if (
+      image &&
+      candidateImageId !== undefined &&
+      image.complete &&
+      image.naturalWidth > 0
+    ) {
+      // A cached image may finish before React hydrates and attaches onLoad.
+      // Reconcile the DOM state so a visibly loaded image cannot leave Accept
+      // disabled forever.
+      setLoadedImageId(candidateImageId);
+      setFailedImageId((current) =>
+        current === candidateImageId ? null : current,
+      );
+    }
+  }, [proposal?.candidate_image_id, proposal?.candidate?.preview_url]);
+
+  useEffect(() => {
     if (proposal || !generation.running || busy === "options") return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -509,6 +529,7 @@ export function ReviewWorkspace({
             <figure className="decision-image">
               {proposal.candidate?.preview_url ? (
                 <img
+                  ref={imageRef}
                   key={proposal.candidate_image_id}
                   src={`${API_URL}${proposal.candidate.preview_url}`}
                   alt={

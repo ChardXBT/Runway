@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
+from pathlib import Path
+
+import numpy as np
+import pytest
 
 from runway.analysis.schemas import CandidateAnalysis
 from runway.db.models import CandidateImage
@@ -324,3 +329,85 @@ def test_primary_franchise_matching_is_case_and_whitespace_insensitive() -> None
         "Futurama",
         "the simpsons",
     )
+
+
+def test_slate_uses_approved_secondary_topics_when_primary_supply_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    futurama = _candidate(
+        401,
+        0.9,
+        "Futurama Bender at a spaceport",
+        _analysis(
+            scene="spaceport delivery",
+            setting="spaceport",
+            emotion="curious",
+            composition="wide",
+            characters=["Bender"],
+            actions=["delivering a package"],
+        ),
+    )
+    family_guy = _candidate(
+        402,
+        0.85,
+        "Family Guy Stewie in a kitchen",
+        _analysis(
+            scene="kitchen conversation",
+            setting="kitchen",
+            emotion="annoyed",
+            composition="close up",
+            characters=["Stewie"],
+            actions=["talking"],
+        ),
+    )
+    for candidate, franchise in (
+        (futurama, "Futurama"),
+        (family_guy, "Family Guy"),
+    ):
+        analysis = json.loads(candidate.detected_topic_json)
+        analysis["franchise"] = franchise
+        candidate.detected_topic_json = json.dumps(analysis)
+        candidate.diversity_fingerprint_json = "{}"
+
+    class FakeRepresentations:
+        @staticmethod
+        def image_vector(
+            _channel_id: int,
+            path: Path,
+            *,
+            score_purpose: str,
+        ) -> tuple[np.ndarray, object]:
+            assert score_purpose == "candidate_slate_semantic_diversity"
+            vector = (
+                np.array([1.0, 0.0], dtype=np.float32)
+                if str(path) == "401"
+                else np.array([0.0, 1.0], dtype=np.float32)
+            )
+
+            class Resolution:
+                @staticmethod
+                def as_dict() -> dict[str, object]:
+                    return {"provider": "runway-local"}
+
+            return vector, Resolution()
+
+    optimizer = object.__new__(CandidateSlateOptimizer)
+    optimizer.representations = FakeRepresentations()
+    monkeypatch.setattr(
+        optimizer,
+        "_validated_media",
+        lambda _candidates: (1, {401: 401, 402: 402}),
+    )
+    monkeypatch.setattr(optimizer, "_media_path", lambda media: Path(str(media)))
+    monkeypatch.setattr(optimizer, "_recent_fatigue", lambda _channel_id: Counter())
+
+    result = optimizer.select(
+        [futurama, family_guy],
+        session_key="secondary-fallback",
+        primary_franchise="The Simpsons",
+        minimum_primary_share=0.8,
+        franchise_history=["The Simpsons", "Futurama"],
+    )
+
+    assert [candidate.id for candidate in result.candidates] == [401, 402]
+    assert result.diagnostics["primary_franchise_quota_unavailable_positions"] == [1, 2]

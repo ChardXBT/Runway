@@ -82,21 +82,25 @@ The canonical production path works as follows:
 SQLite is the canonical local intelligence store, not a disposable cache. It uses migrations,
 foreign keys, write-ahead logging, integrity checks, content hashes, and explicit provenance.
 
-The production snapshot validated on July 22, 2026 contains:
+The production snapshot validated and fully restore-rehearsed on July 26, 2026 contains:
 
 - 771 historical Qlob posts and raw source records.
-- 869 media assets and 698 compatible historical annotations.
-- 3,612 image, text, and multimodal representation records.
-- 33,694 persisted retrieval-evidence records.
-- 354 pairwise caption preferences and 90 normalized feedback signals.
-- 147 generated caption candidates across 23 caption slates.
-- 156 discovered candidate images, 29 proposals, and five versioned style profiles.
+- 1,545 database-referenced media assets and 698 compatible historical annotations.
+- 4,816 image, text, and multimodal representation records.
+- 136,202 persisted retrieval-evidence records.
+- 396 pairwise preferences and 282 normalized feedback signals.
+- 1,127 generated caption candidates across 101 caption slates.
+- 677 discovered candidate images, 81 proposals, and five versioned style profiles.
 - 52 schema-managed tables at migration `0010_neural_intelligence`.
 
 The private GitHub database release is an online SQLite backup rather than a copy of a potentially
-inconsistent live file. Its manifest records the source commit, migration, table counts, database
-hash, archive hash, integrity result, and foreign-key result. Browser profiles, authentication
-state, media caches, raw downloads, logs, WAL files, and temporary backups are excluded.
+inconsistent live file. Its companion archive contains every media file referenced by the
+database—not only current Lineup images—so Archive, retrieval, training evidence, rejected options,
+and active proposals survive a clean restore. The manifest records the exact pushed commit,
+migration, all 52 table counts, database and archive hashes, media hashes, integrity result, and
+foreign-key result. The release is created only after `origin/main` accepts that commit, then all
+assets are downloaded and restored again before the sync is considered successful. Browser
+profiles, authentication state, orphan media, logs, WAL files, and temporary backups are excluded.
 
 ### Retrieval is the first form of personalization
 
@@ -294,91 +298,79 @@ The production UI pass includes focused protections for:
 - Confirmation before destructive actions.
 - Immutable controls for externally sensitive post states.
 
-The current automated frontend gate covers 64 tests, ESLint, TypeScript, and a complete Next.js
-production build.
+The automated frontend gate covers component and data-boundary regressions, ESLint, TypeScript,
+and a complete Next.js production build. A real-browser matrix also covers every product section at
+1440px, 768px, and 390px with reduced motion enabled.
 
-### Frontend issues and aspirations
+### Frontend state and aspirations
 
-The interface is functionally complete for local review and Lineup management, but several areas
-still need real-world refinement:
+The current interface is functionally complete for local review and Lineup management. Generator
+refill survives navigation, public discovery retries across independent providers, cached images
+cannot leave decisions permanently disabled, and a 50-item Lineup stress pass preserved one post
+per local date through rapid acceptance and occupied-date swaps. All product sections render at the
+tested desktop, tablet, and mobile widths without horizontal overflow or browser errors.
 
-- Image discovery can exhaust or be blocked by an upstream provider. The UI needs better recovery,
-  source switching, and explanation when no safe distinct candidate can be produced.
-- Connection status is based on observed browser capabilities. It cannot cryptographically prove
-  that the signed-in Google account has a particular YouTube Studio role.
-- Browser authentication and YouTube DOM behavior can change independently of Runway.
-- Authorized publishing needs a controlled creator-supervised acceptance pass against the real
-  channel before it can be treated as proven production automation.
-- Large Lineups need more real-use testing for rapid swaps, repeated movement, filtering, and
-  long-session performance.
-- The activity and profile pages can become more actionable by linking warnings directly to the
-  affected post, candidate, experiment, or recovery action.
-- Model comparisons, blind studies, and active-learning decisions need dedicated creator-friendly
-  screens rather than relying mainly on backend commands and reports.
-- The product should eventually explain recommendations in plain language, such as “shown because
-  this scene type has performed well, but the character has not appeared recently.”
+The remaining frontend work is optional product growth, not a known broken daily workflow:
+
+- Connection status is based on observed browser capabilities; YouTube does not expose a way to
+  cryptographically prove the exact delegated Studio role.
+- Browser authentication and YouTube's own page structure can change independently of Runway.
+- A future creator-facing experiment area could make blind studies and active learning easier than
+  the current controlled commands and reports.
+- Future explanations could summarize why an option was shown without cluttering the fast review
+  loop.
 
 The design goal remains a fast editorial runway: open the app, see a strong option, make one clear
 decision, and immediately receive the next one without administrative clutter.
 
 ## 3. Final Issues — Work Remaining Before the Full Vision Is Complete
 
-### Highest-priority production issues
+### Software state versus external acceptance
 
-1. **Complete a controlled live publishing acceptance test.** The scheduler and browser publisher
-   are extensively tested offline, but a real final Schedule click has not been included in
-   automated QA. The first pass should use one disposable or intentionally scheduled post with the
-   creator watching every step.
-2. **Prove recovery from ambiguous YouTube outcomes.** Runway must demonstrate that an interrupted
-   or unclear final click enters `publish_unverified`, can be verified later, and never creates a
-   duplicate post.
-3. **Harden discovery continuity.** “Generate more” should automatically search additional bounded
-   providers or explain the precise blocker. Runway cannot guarantee that every external search
-   engine will return usable images, but the product should avoid silent dead ends.
-4. **Improve connector confidence.** Record the exact channel page observed, last successful
-   capability check, authenticated browser profile, and last verification time. Continue describing
-   the role as observed capability rather than claiming an Editor role that cannot be proven.
+No known fixable production defect remains in the tested local Generator, intelligence, database,
+Archive, Settings, Profile, Activity, or Lineup paths. The remaining publishing proof requires an
+explicit creator-authorized YouTube mutation, which routine testing deliberately does not perform:
+
+1. **Complete one supervised live publishing acceptance.** Confirm one intentional post appears in
+   Qlob's Scheduled tab with the exact image, caption, date, time, and channel.
+2. **Observe one real ambiguous-outcome recovery if the platform produces it.** Offline tests prove
+   the `publish_unverified` pause and no-duplicate retry policy; only YouTube can supply a genuine
+   ambiguous final result.
+3. **Recheck connector capability after Google or YouTube changes.** Runway records the exact
+   channel, checks, browser profile, and verification time, but cannot claim an exact account role
+   that the platform does not expose.
 
 ### ML and database work still required
 
-1. **Collect genuine exposure data.** The production database currently contains historical
-   feedback, but the new candidate-exposure system has not yet accumulated a meaningful live sample.
-   Training without knowing what was shown would bias the model toward selected items only.
-2. **Increase creator labels.** The present pairwise evidence is enough to exercise the lifecycle,
-   not enough to justify a powerful personalized neural model. The first useful target is roughly
-   500 clean creator decisions; 1,000 or more would provide a stronger training base.
-3. **Train the first lightweight reranker.** Start with existing representations and structured
+1. **Increase genuine creator labels.** Runway now records displayed candidates as well as accepts,
+   edits, rejects, replacements, and pairwise choices. Caption has 70 training-eligible human
+   comparisons; image and pairing still need real creator evidence. The product-quality gate is 100
+   clean comparisons per target, plus the sealed blind evaluation.
+2. **Train the first lightweight reranker.** Start with existing representations and structured
    features. This is cheaper, easier to evaluate, and more data-efficient than fine-tuning a large
    caption model immediately.
-4. **Run shadow and blind evaluations.** No candidate model should control production until it
+3. **Run shadow and blind evaluations.** No candidate model should control production until it
    beats the current engine on a sealed holdout and in a creator-blind comparison.
-5. **Evaluate neural representations.** Optional trained adapters exist, but their dependencies and
+4. **Evaluate neural representations.** Optional trained adapters exist, but their dependencies and
    weights are not installed or authorized. A candidate must demonstrate better semantic diversity
    and retrieval without increasing false suppression.
-6. **Resolve preserved historical warnings.** Three invalid vectors remain in inactive
-   representation sets, and a small set of older displayed caption candidates predate complete
-   exposure logging. They do not affect the active engine, but should remain explicitly excluded or
-   repaired before broader historical training.
-7. **Expand evaluation depth.** The current test suite proves correctness and safety; it does not
-   prove that creator preference quality has reached its ceiling. Future reports need confidence
-   intervals, mode-by-mode results, diversity metrics, factual-error rates, and longitudinal drift.
-8. **Rehearse backup restoration.** Snapshot creation, upload, hashing, integrity, and foreign-key
-   checks are verified. A documented restoration rehearsal should periodically prove that the
-   private release can rebuild a clean environment.
+5. **Expand evaluation depth as data grows.** The current test suite proves correctness and safety;
+   it does not prove that creator preference quality has reached its ceiling. Future reports need
+   confidence intervals, mode-by-mode results, diversity metrics, factual-error rates, and
+   longitudinal drift.
+
+Three malformed vectors remain deliberately quarantined inside immutable, inactive historical
+sets. The doctor classifies them as information with zero active-read impact; rewriting preserved
+evidence would be less safe than retaining the explicit quarantine.
 
 ### Frontend and workflow work still required
 
-1. Add real-browser end-to-end coverage for long review sessions, rapid repeated actions, Lineup
-   swaps, network interruption, and browser refresh recovery.
-2. Improve recovery controls for failed image discovery, failed caption generation, and failed or
-   unverified YouTube actions.
-3. Add creator-facing experiment, blind-study, active-learning, and model-activation screens.
-4. Continue testing calendar usability with dozens of accepted posts and across daylight-saving
-   boundaries.
-5. Add better archive filtering for accepted, edited, rejected-image, rejected-caption, published,
+1. Add creator-facing experiment, blind-study, active-learning, and model-activation screens if
+   those workflows become frequent enough to deserve UI space.
+2. Add more archive filtering for accepted, edited, rejected-image, rejected-caption, published,
    failed, and model-version history.
-6. Make explanations and warnings actionable without turning the main Generator into a technical
-   dashboard.
+3. Make explanations and warnings more actionable without turning the main Generator into a
+   technical dashboard.
 
 ### Platform constraints that Runway cannot solve alone
 
@@ -414,7 +406,8 @@ Runway can be considered fully complete when:
 - The Lineup safely enforces one Runway post per day in the configured timezone.
 - Assisted publishing is reliable, and authorized publishing has passed a supervised real-channel
   acceptance and recovery test.
-- Database backup and restoration are both rehearsed and verified.
+- The exact pushed database release, including every referenced media asset, restores and passes the
+  intelligence doctor.
 - Frontend, backend, migration, accessibility, and browser end-to-end checks are green on the exact
   production commit.
 - The remaining limitations are external platform constraints rather than unresolved Runway logic.

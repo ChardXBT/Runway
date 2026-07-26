@@ -1,18 +1,10 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { Nav } from "@/components/nav";
 import { apiGet } from "@/lib/api";
 import { isRecord } from "@/lib/guards";
 import "./runway-next.css";
-
-const plexSans = IBM_Plex_Sans({
-  variable: "--font-runway",
-  subsets: ["latin"],
-  weight: "variable",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: {
@@ -43,7 +35,7 @@ export default async function RootLayout({
   );
   return (
     <html lang="en">
-      <body className={plexSans.variable}>
+      <body>
         <a className="skip-link" href="#main-content">
           Skip to content
         </a>

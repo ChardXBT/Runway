@@ -1,5 +1,5 @@
 import { PlatformConnection } from "@/components/platform-connection";
-import { isSettings, SettingsForm } from "@/components/settings-form";
+import { SettingsForm } from "@/components/settings-form";
 import { apiGetRequired } from "@/lib/api";
 import {
   isPublisherConnectionStatus,
@@ -9,10 +9,9 @@ import type {
   PublisherConnectionStatus,
   PublisherQueueStatus,
 } from "@/lib/types";
+import { isSettings, type Settings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
-
-type Settings = Parameters<typeof SettingsForm>[0]["initial"];
 
 export default async function SettingsPage() {
   const [settings, publisherQueue, publisherConnection] = await Promise.all([

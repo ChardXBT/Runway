@@ -41,6 +41,12 @@ GENERIC_PATTERNS = {
     "like and subscribe",
     "thoughts?",
 }
+UNRESOLVED_VISUAL_PLACEHOLDER_RE = re.compile(
+    r"(?:\bso\s+(?:unknown|unclear|unspecified)\b|"
+    r"\b(?:unknown|unclear|unspecified|unidentified)\s+"
+    r"(?:action|emotion|expression|feeling|look|mood|reaction)\b)",
+    re.IGNORECASE,
+)
 GENERIC_QUESTION_PATTERNS = (
     re.compile(r"^what (?:is|was) .{1,48} thinking about\??$", re.IGNORECASE),
     re.compile(r"^what(?:'s| is) (?:going on|happening)(?: here)?\??$", re.IGNORECASE),
@@ -535,6 +541,12 @@ def is_generic_engagement_bait(text: str) -> bool:
     return any(pattern in lowered for pattern in GENERIC_PATTERNS) or any(
         pattern.fullmatch(normalized) for pattern in GENERIC_QUESTION_PATTERNS
     )
+
+
+def has_unresolved_visual_placeholder(text: str) -> bool:
+    """Reject model-internal uncertainty labels that escaped into audience copy."""
+
+    return UNRESOLVED_VISUAL_PLACEHOLDER_RE.search(" ".join(text.split())) is not None
 
 
 def verification_pass_rate(rows: Iterable[VerificationResult]) -> float:

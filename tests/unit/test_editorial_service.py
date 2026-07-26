@@ -229,3 +229,83 @@ async def test_editorial_uses_fallback_when_browser_search_fails(
     attempts = result["discovery"]["attempts"]
     assert attempts[0]["status"] == "failed"
     assert attempts[1]["provider"] == "frinkiac"
+
+
+@pytest.mark.asyncio
+async def test_editorial_continues_after_one_fallback_provider_fails(
+    database: Database,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = EditorialService(
+        database,
+        settings.model_copy(update={"enable_browser_search": True}),
+    )
+    review_count = 0
+    candidate_available = False
+    discovery_providers: list[str] = []
+
+    class FakeDiscoveryService:
+        def __init__(self, _database: Database, _settings: Settings) -> None:
+            pass
+
+        async def discover(
+            self,
+            *,
+            days: int,
+            provider_name: str,
+            live: bool = False,
+        ) -> dict[str, object]:
+            nonlocal candidate_available
+            assert days == 1
+            assert live is False
+            discovery_providers.append(provider_name)
+            if provider_name in {"archives", "frinkiac"}:
+                raise RuntimeError(f"{provider_name} unavailable")
+            candidate_available = True
+            return {"provider": provider_name, "accepted": 1}
+
+    async def generate(_count: int) -> list[int]:
+        nonlocal review_count
+        review_count = 1
+        return [101]
+
+    monkeypatch.setattr(service, "_review_count", lambda: review_count)
+    monkeypatch.setattr(
+        service,
+        "_unused_candidate_count",
+        lambda: int(candidate_available),
+    )
+    monkeypatch.setattr(
+        service,
+        "_frame_archive_providers",
+        lambda: ["frinkiac", "family-guy-wiki", "morbotron"],
+    )
+    monkeypatch.setattr(service, "_generate", generate)
+    monkeypatch.setattr(
+        service,
+        "_result",
+        lambda generated, discovery, detail: {
+            "detail": detail,
+            "generated_proposal_ids": generated,
+            "discovery": discovery,
+        },
+    )
+    monkeypatch.setattr(
+        "runway.editorial.service.DiscoveryService",
+        FakeDiscoveryService,
+    )
+
+    result = await service.ensure_options(target=1)
+
+    assert result["generated_proposal_ids"] == [101]
+    assert discovery_providers == ["archives", "frinkiac", "family-guy-wiki"]
+    attempts = result["discovery"]["attempts"]
+    assert [attempt["status"] for attempt in attempts[:2]] == ["failed", "failed"]
+    assert attempts[2]["provider"] == "family-guy-wiki"
+
+
+def test_editorial_includes_every_creator_approved_archive() -> None:
+    assert EditorialService._secondary_archive_providers(
+        ["Family Guy", "Futurama"],
+    ) == ["family-guy-wiki", "morbotron"]

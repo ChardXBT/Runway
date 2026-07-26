@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -14,12 +15,14 @@ from runway.db.models import (
     CandidateImage,
     CaptionExposure,
     GenerationRun,
+    MediaAsset,
     ProposalEvent,
 )
 from runway.db.repositories import get_channel
 from runway.discovery.service import DiscoveryService
 from runway.intelligence.profile import StyleProfileService
-from runway.proposals.service import ProposalService
+from runway.intelligence.slate_optimization import CandidateSlateResult
+from runway.proposals.service import NoDistinctCandidateError, ProposalService
 from runway.publishing.internal import InternalPublisher
 from runway.services.settings import SettingsService
 
@@ -318,6 +321,73 @@ async def test_secondary_display_evidence_cannot_hide_a_review_option(
     assert result["id"] == rows[0]["id"]
     assert result["status"] == "needs_review"
     assert candidate_events == ["shown"]
+
+
+@pytest.mark.asyncio
+async def test_generation_survives_a_missing_historical_anchor_file(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposals, rows = await _generated_proposal_service(database, settings, days=1)
+    anchor_candidate_id = int(rows[0]["candidate_image_id"])
+    with database.session() as session:
+        anchor = session.get(CandidateImage, anchor_candidate_id)
+        assert anchor is not None
+        media = session.get(MediaAsset, anchor.media_asset_id)
+        assert media is not None
+        anchor_path = settings.resolved_data_dir / Path(media.local_path)
+    anchor_path.unlink()
+
+    result = await proposals.generate_batch(
+        days=1,
+        start_date=proposals.next_generation_date(),
+    )
+
+    assert result["status"] == "completed"
+    assert result["fulfilled_count"] == 1
+    with database.session() as session:
+        generation = session.get(GenerationRun, int(result["generation_run_id"]))
+        assert generation is not None
+        diagnostics = json.loads(generation.selection_diagnostics_json)
+    assert diagnostics["anchor_vector_failures"]
+    assert str(anchor_candidate_id) in diagnostics["anchor_vector_failures"]
+
+
+@pytest.mark.asyncio
+async def test_abstained_slate_persists_selection_diagnostics(
+    database: Database,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposals, _rows = await _generated_proposal_service(database, settings, days=1)
+    diagnostics = {
+        "status": "abstained_no_safe_semantic_slate",
+        "candidate_count": 22,
+        "represented_candidate_count": 0,
+        "vector_failures": {"99": "FileNotFoundError: missing media"},
+    }
+    monkeypatch.setattr(
+        proposals.diversity,
+        "select",
+        lambda *_args, **_kwargs: CandidateSlateResult(
+            candidates=(),
+            diagnostics=diagnostics,
+        ),
+    )
+
+    with pytest.raises(NoDistinctCandidateError):
+        await proposals.generate_batch(
+            days=1,
+            start_date=proposals.next_generation_date(),
+        )
+
+    with database.session() as session:
+        generation = session.scalar(
+            select(GenerationRun).order_by(GenerationRun.id.desc()).limit(1)
+        )
+        assert generation is not None
+        assert generation.status == "failed"
+        assert json.loads(generation.selection_diagnostics_json) == diagnostics
 
 
 @pytest.mark.asyncio

@@ -110,6 +110,7 @@ class CandidateSlateOptimizer:
         selected: list[CandidateImage] = []
         selected_utility: list[float] = []
         quota_required_positions: list[int] = []
+        quota_unavailable_positions: list[int] = []
         remaining = list(eligible)
         candidate_diagnostics: dict[str, dict[str, object]] = {
             str(candidate.id): {
@@ -120,11 +121,18 @@ class CandidateSlateOptimizer:
             }
             for candidate in ordered_pool
         }
+        anchor_vector_failures: dict[str, str] = {}
         for candidate_id, error in vector_failures.items():
-            candidate_diagnostics[candidate_id]["suppression_reasons"] = [
-                "active_representation_unavailable"
-            ]
-            candidate_diagnostics[candidate_id]["representation_error"] = error
+            diagnostic = candidate_diagnostics.get(candidate_id)
+            if diagnostic is None:
+                # Anchors are historical context rather than members of the candidate
+                # pool. A database-only restore intentionally excludes their media
+                # files, so a missing anchor representation must reduce comparison
+                # coverage instead of aborting otherwise healthy generation.
+                anchor_vector_failures[candidate_id] = error
+                continue
+            diagnostic["suppression_reasons"] = ["active_representation_unavailable"]
+            diagnostic["representation_error"] = error
 
         while remaining and len(selected) < maximum:
             evaluations = [
@@ -161,9 +169,11 @@ class CandidateSlateOptimizer:
                 if primary_evaluations:
                     eligible_evaluations = primary_evaluations
                 else:
-                    for _candidate, reasons, _penalties, _utility in eligible_evaluations:
-                        reasons.append("primary_franchise_quota_required")
-                    eligible_evaluations = []
+                    # The primary-share target controls ordering when primary
+                    # material is available. It must not turn an explicitly
+                    # approved secondary franchise into an artificial empty
+                    # state when discovery has exhausted the primary supply.
+                    quota_unavailable_positions.append(len(selected) + 1)
             if not eligible_evaluations:
                 for candidate, reasons, penalties, utility in evaluations:
                     candidate_diagnostics[str(candidate.id)].update(
@@ -245,6 +255,7 @@ class CandidateSlateOptimizer:
                 ),
             },
             "vector_failures": vector_failures,
+            "anchor_vector_failures": anchor_vector_failures,
             "primary_franchise_quota": self._primary_quota_diagnostics(
                 primary_franchise=normalized_primary,
                 minimum_share=minimum_primary_share,
@@ -253,6 +264,7 @@ class CandidateSlateOptimizer:
                 fingerprints=fingerprints,
                 required_positions=quota_required_positions,
             ),
+            "primary_franchise_quota_unavailable_positions": (quota_unavailable_positions),
             "randomized": False,
             "exploration_policy": "deterministic_slate_v5",
         }

@@ -42,6 +42,7 @@ from runway.captions.taxonomy import analyze_caption, normalize_caption
 from runway.captions.verification import (
     CaptionVerifier,
     VerificationResult,
+    has_unresolved_visual_placeholder,
     is_generic_engagement_bait,
 )
 from runway.captions.visual_consensus import (
@@ -935,6 +936,8 @@ class CaptionService:
             if normalized in seen:
                 exclusion_reasons.append("duplicate_within_generation")
             seen.add(normalized)
+            if has_unresolved_visual_placeholder(text):
+                exclusion_reasons.append("unresolved_visual_placeholder")
             taxonomy = analyze_caption(text, language=raw.language)
             candidate = raw.model_copy(update={"structure": taxonomy.structure, "text": text})
             if any(

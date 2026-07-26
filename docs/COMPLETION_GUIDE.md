@@ -78,9 +78,10 @@ Settings reads the last durable publisher check without opening Chrome. A succes
 stale after 24 hours. `Check saved session` performs the fresh read-only browser capability check and
 records its individual channel, identity, posting-access, and composer results.
 
-Profile reports training readiness separately for caption, image, and pairing. A target becomes
-trainable only when it has at least eight training-eligible human pairwise labels; held-out study
-labels do not inflate this threshold.
+Profile reports training readiness separately for caption, image, and pairing. Eight clean labels
+are enough only for an engineering experiment. A target is not presented as a product challenger
+until it has at least 100 training-eligible human pairwise labels; held-out study labels do not
+inflate either threshold.
 
 ## Publisher setup
 

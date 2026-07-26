@@ -111,6 +111,19 @@ media, browser sessions, and `.env` are ignored by Git.
 SQLite uses WAL. Stop Runway before copying the database and its `-wal`/`-shm` companions, or use
 SQLite's backup API.
 
+After a validated commit has been pushed and `origin/main` is confirmed at that exact SHA, publish
+the private recovery release:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\sync_private_database_release.ps1 -TargetSha <full-commit-sha>
+```
+
+This command refuses to run before the commit exists on `origin/main` or if the GitHub repository
+is not private. It creates an online SQLite backup plus every media file referenced by the
+database, validates all hashes and table counts, uploads the assets, downloads them again, and
+performs a complete restoration verification. Browser profiles and Google authentication are
+never included.
+
 ## Intelligence lifecycle
 
 Schema migration, online backup, exact representation planning/backfill,

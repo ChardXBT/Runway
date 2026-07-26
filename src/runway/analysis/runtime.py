@@ -68,6 +68,17 @@ def _mock_subject_label(value: str) -> str:
 
 def _mock_emotion_label(value: str) -> str:
     words = set(re.sub(r"[^a-z ]", " ", value.casefold()).split())
+    if not words or words <= {
+        "ambiguous",
+        "neutral",
+        "none",
+        "null",
+        "unclear",
+        "unknown",
+        "unreadable",
+        "unspecified",
+    }:
+        return "curious"
     mappings = (
         ({"excited", "excitement", "thrilled", "eager"}, "excited"),
         ({"surprise", "surprised", "shocked", "astonished"}, "surprised"),

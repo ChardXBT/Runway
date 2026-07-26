@@ -170,6 +170,13 @@ class ProposalService:
                 minimum_primary_share=self.settings.discovery_primary_topic_query_share,
                 franchise_history=franchise_history,
             )
+            with self.database.session() as session:
+                loaded_run = session.get(GenerationRun, run_id)
+                if loaded_run is not None:
+                    loaded_run.selection_diagnostics_json = json.dumps(
+                        selection_slate.diagnostics,
+                        sort_keys=True,
+                    )
             candidates = list(selection_slate.candidates)
             if not candidates and missing_count:
                 raise NoDistinctCandidateError(
@@ -185,13 +192,6 @@ class ProposalService:
                 exploration_policy="deterministic_slate_v5",
                 randomized=False,
             )
-            with self.database.session() as session:
-                loaded_run = session.get(GenerationRun, run_id)
-                if loaded_run is not None:
-                    loaded_run.selection_diagnostics_json = json.dumps(
-                        selection_slate.diagnostics,
-                        sort_keys=True,
-                    )
             for offset in range(days):
                 planned_date = local_start + timedelta(days=offset)
                 planned_at = self._planned_datetime(planned_date, timezone_name, default_time)

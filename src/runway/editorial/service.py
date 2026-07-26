@@ -127,13 +127,26 @@ class EditorialService:
                         # Keep replenishing from topic-specific frame archives instead of
                         # treating one exhausted result window as the end of the internet.
                         for provider_name in archive_providers:
-                            fallback = await DiscoveryService(
-                                self.database,
-                                self.settings,
-                            ).discover(
-                                days=missing,
-                                provider_name=provider_name,
-                            )
+                            try:
+                                fallback = await DiscoveryService(
+                                    self.database,
+                                    self.settings,
+                                ).discover(
+                                    days=missing,
+                                    provider_name=provider_name,
+                                )
+                            except AgentTerminalError:
+                                raise
+                            except Exception as exc:
+                                # One public archive being throttled must not prevent
+                                # the remaining approved franchise providers from being
+                                # tried during the same Generate more request.
+                                fallback = {
+                                    "provider": provider_name,
+                                    "status": "failed",
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                    "accepted": 0,
+                                }
                             fallback["fallback_from"] = "archives"
                             discovery_attempts.append(fallback)
                             available = self._unused_candidate_count()
@@ -259,9 +272,19 @@ class EditorialService:
             and "simpson" in str(first[0]).casefold()
         ):
             providers.append("frinkiac")
-        if any(
-            "futurama" in topic.casefold() for topic in self.settings.discovery_secondary_topic_list
-        ):
+        providers.extend(
+            self._secondary_archive_providers(
+                self.settings.discovery_secondary_topic_list,
+            )
+        )
+        return providers
+
+    @staticmethod
+    def _secondary_archive_providers(topics: list[str]) -> list[str]:
+        providers: list[str] = []
+        if any("family guy" in topic.casefold() for topic in topics):
+            providers.append("family-guy-wiki")
+        if any("futurama" in topic.casefold() for topic in topics):
             providers.append("morbotron")
         return providers
 

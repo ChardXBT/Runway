@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 
-import { apiGetRequired } from "@/lib/api";
+import { apiGetOptional, apiGetRequired } from "@/lib/api";
 import { isRecord } from "@/lib/guards";
 
 export const dynamic = "force-dynamic";
@@ -55,7 +55,11 @@ type IntelligenceStatus = {
   trainable_targets: string[];
   blind_study_responses: number;
   blind_study_target: number;
-  state: "collecting_creator_labels" | "ready_to_train" | "active";
+  state:
+    | "collecting_creator_labels"
+    | "engineering_data_available"
+    | "ready_for_product_challenger_training"
+    | "active";
 };
 
 const intelligenceTargets = ["caption", "image", "pairing"] as const;
@@ -151,7 +155,12 @@ function isIntelligenceStatus(value: unknown): value is IntelligenceStatus {
     value.trainable_targets.every((target) => typeof target === "string") &&
     typeof value.blind_study_responses === "number" &&
     typeof value.blind_study_target === "number" &&
-    ["collecting_creator_labels", "ready_to_train", "active"].includes(
+    [
+      "collecting_creator_labels",
+      "engineering_data_available",
+      "ready_for_product_challenger_training",
+      "active",
+    ].includes(
       String(value.state),
     )
   );
@@ -167,10 +176,9 @@ export default async function ProfilePage() {
       "/api/profiles/active",
       (value): value is Profile | null => value === null || isProfile(value),
     ),
-    apiGetRequired<Evaluation | null>(
+    apiGetOptional<Evaluation>(
       "/api/profiles/evaluation",
-      (value): value is Evaluation | null =>
-        value === null || isEvaluation(value),
+      isEvaluation,
     ),
     apiGetRequired<IntelligenceStatus | null>(
       "/api/intelligence/status",
@@ -205,8 +213,11 @@ export default async function ProfilePage() {
             <h2>
               {intelligence.state === "active"
                 ? "Preference model active"
-                : intelligence.state === "ready_to_train"
-                  ? "Labels ready for an evaluated training run"
+                : intelligence.state ===
+                    "ready_for_product_challenger_training"
+                  ? "Labels ready for a product challenger run"
+                  : intelligence.state === "engineering_data_available"
+                    ? "Engineering evidence available"
                   : "Collecting your decisions"}
             </h2>
             <p>

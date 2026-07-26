@@ -13,7 +13,11 @@ from runway.captions.claim_grounding import (
 )
 from runway.captions.planning import EditorialBrief, EditorialFact, EditorialPlanner
 from runway.captions.service import CaptionService
-from runway.captions.verification import CaptionVerifier, is_generic_engagement_bait
+from runway.captions.verification import (
+    CaptionVerifier,
+    has_unresolved_visual_placeholder,
+    is_generic_engagement_bait,
+)
 from runway.intelligence.embeddings import configuration_hash
 from runway.intelligence.policies import PolicySnapshot
 
@@ -292,6 +296,22 @@ def test_generic_open_questions_fail_policy(text: str) -> None:
 
 def test_visually_specific_pronoun_question_is_not_treated_as_generic() -> None:
     assert not is_generic_engagement_bait("Why is he standing alone in these snowy mountains?")
+
+
+@pytest.mark.parametrize(
+    "caption",
+    [
+        "Why is the subject so unknown?",
+        "What could explain the subject's unknown reaction?",
+        "How would you caption this unclear expression?",
+    ],
+)
+def test_unresolved_visual_placeholders_never_reach_the_editor(caption: str) -> None:
+    assert has_unresolved_visual_placeholder(caption)
+
+
+def test_normal_open_question_is_not_a_visual_placeholder() -> None:
+    assert not has_unresolved_visual_placeholder("Why is Homer so excited?")
 
 
 def test_incomplete_bare_verb_question_fails_policy() -> None:

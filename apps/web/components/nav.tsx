@@ -24,7 +24,7 @@ const primaryLinks = [
 ] as const;
 
 const secondaryLinks = [
-  ["Archive", "/catalogue", "Past Qlob posts and source records", "archive"],
+  ["Archive", "/archive", "Past Qlob posts and source records", "archive"],
   ["Profile", "/profile", "What Runway has learned", "profile"],
   ["Activity", "/activity", "Decision and publishing history", "activity"],
   ["Settings", "/settings", "Channel, schedule, and safeguards", "settings"],
@@ -169,7 +169,9 @@ export function Nav({
             <span className="nav-section-label">Workspace</span>
             <nav aria-label="Runway menu">
               {secondaryLinks.map(([label, href, description, icon]) => {
-                const active = pathname.startsWith(href);
+                const active =
+                  pathname.startsWith(href) ||
+                  (href === "/archive" && pathname.startsWith("/catalogue"));
                 return (
                   <Link
                     href={href}

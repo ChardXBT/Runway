@@ -69,6 +69,7 @@ const workflow: WorkflowStatus = {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -239,6 +240,26 @@ describe("ReviewWorkspace", () => {
     expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByLabelText("Primary caption")).not.toHaveAttribute("readonly");
+  });
+
+  it("enables Accept when a cached image completed before hydration", async () => {
+    vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(640);
+
+    render(
+      <ReviewWorkspace
+        initialProposal={proposal}
+        initialWorkflow={workflow}
+        publishingEnabled
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+    });
+    expect(screen.getByRole("status")).not.toHaveTextContent(
+      "Loading the exact image",
+    );
   });
 
   it("regenerates captions without changing the image", async () => {

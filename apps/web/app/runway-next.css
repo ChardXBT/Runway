@@ -37,7 +37,8 @@
   --duration-press: 120ms;
   --duration-ui: 180ms;
   --duration-panel: 220ms;
-  --font-body: var(--font-runway), "Segoe UI", sans-serif;
+  --font-body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+    BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
   --font-data: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 }
 
