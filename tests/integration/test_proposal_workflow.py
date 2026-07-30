@@ -4,7 +4,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from runway.analysis.service import AnalysisService
 from runway.capture.service import CaptureService
@@ -109,7 +109,25 @@ async def test_continuous_workflow_actions_and_restart_persistence(
     proposals = ProposalService(database, settings)
     generated = await proposals.generate_batch(days=10, start_date=date(2026, 3, 5))
     assert len(generated["proposal_ids"]) == 10
-    rows = proposals.list_proposals()
+    list_queries: list[str] = []
+
+    def record_list_query(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            list_queries.append(statement)
+
+    event.listen(database.engine, "before_cursor_execute", record_list_query)
+    try:
+        rows = proposals.list_proposals()
+    finally:
+        event.remove(database.engine, "before_cursor_execute", record_list_query)
+    assert len(list_queries) <= 6
     assert len(rows) == 10
     first_candidate_id = int(rows[0]["candidate_image_id"])
     with database.session() as session:

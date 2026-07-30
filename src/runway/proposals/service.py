@@ -4,12 +4,13 @@ import json
 import logging
 import shutil
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from runway.captions.exposures import CaptionExposureService
@@ -42,6 +43,14 @@ logger = logging.getLogger(__name__)
 
 class NoDistinctCandidateError(ValueError):
     """The current unused candidate pool cannot satisfy the diversity policy."""
+
+
+@dataclass(frozen=True)
+class _ProposalHydration:
+    candidates: dict[int, CandidateImage]
+    media: dict[int, MediaAsset]
+    slates: dict[int, CaptionSlate]
+    latest_attempts: dict[int, PublishAttempt]
 
 
 class ProposalService:
@@ -399,7 +408,11 @@ class ProposalService:
             if status:
                 statement = statement.where(Proposal.status == status)
             proposals = session.scalars(statement.limit(limit)).all()
-            return [self._proposal_dict(session, proposal) for proposal in proposals]
+            hydration = self._proposal_hydration(session, proposals)
+            return [
+                self._proposal_dict(session, proposal, hydration=hydration)
+                for proposal in proposals
+            ]
 
     def next_for_review(
         self,
@@ -513,7 +526,11 @@ class ProposalService:
                 .order_by(Proposal.scheduled_publish_at, Proposal.id)
                 .limit(limit)
             ).all()
-            rows = [self._proposal_dict(session, proposal) for proposal in proposals]
+            hydration = self._proposal_hydration(session, proposals)
+            rows = [
+                self._proposal_dict(session, proposal, hydration=hydration)
+                for proposal in proposals
+            ]
 
         result: dict[str, object] = {
             "timezone": timezone_name,
@@ -1567,25 +1584,48 @@ class ProposalService:
         )
 
     def _proposal_dict(
-        self, session: Session, proposal: Proposal, *, include_events: bool = False
+        self,
+        session: Session,
+        proposal: Proposal,
+        *,
+        include_events: bool = False,
+        hydration: _ProposalHydration | None = None,
     ) -> dict[str, object]:
-        candidate = session.get(CandidateImage, proposal.candidate_image_id)
-        media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
+        candidate = (
+            hydration.candidates.get(proposal.candidate_image_id)
+            if hydration is not None
+            else session.get(CandidateImage, proposal.candidate_image_id)
+        )
+        media = (
+            hydration.media.get(candidate.media_asset_id)
+            if hydration is not None and candidate is not None
+            else session.get(MediaAsset, candidate.media_asset_id)
+            if candidate is not None
+            else None
+        )
         preview = (
-            session.get(MediaAsset, candidate.preview_asset_id)
-            if candidate and candidate.preview_asset_id
+            hydration.media.get(candidate.preview_asset_id)
+            if hydration is not None and candidate is not None and candidate.preview_asset_id
+            else session.get(MediaAsset, candidate.preview_asset_id)
+            if candidate is not None and candidate.preview_asset_id
             else None
         )
         display_media = preview or media
-        latest_publish_attempt = session.scalar(
-            select(PublishAttempt)
-            .where(PublishAttempt.proposal_id == proposal.id)
-            .order_by(desc(PublishAttempt.id))
-            .limit(1)
+        latest_publish_attempt = (
+            hydration.latest_attempts.get(proposal.id)
+            if hydration is not None
+            else session.scalar(
+                select(PublishAttempt)
+                .where(PublishAttempt.proposal_id == proposal.id)
+                .order_by(desc(PublishAttempt.id))
+                .limit(1)
+            )
         )
         slate = (
-            session.get(CaptionSlate, proposal.caption_slate_id)
-            if proposal.caption_slate_id
+            hydration.slates.get(proposal.caption_slate_id)
+            if hydration is not None and proposal.caption_slate_id is not None
+            else session.get(CaptionSlate, proposal.caption_slate_id)
+            if proposal.caption_slate_id is not None
             else None
         )
         result: dict[str, object] = {
@@ -1711,3 +1751,71 @@ class ProposalService:
                 for row in feedback
             ]
         return result
+
+    @staticmethod
+    def _proposal_hydration(
+        session: Session,
+        proposals: Sequence[Proposal],
+    ) -> _ProposalHydration:
+        """Batch-load proposal relationships for list and Lineup responses."""
+
+        if not proposals:
+            return _ProposalHydration({}, {}, {}, {})
+        proposal_ids = [proposal.id for proposal in proposals]
+        candidate_ids = {proposal.candidate_image_id for proposal in proposals}
+        candidates = {
+            candidate.id: candidate
+            for candidate in session.scalars(
+                select(CandidateImage).where(CandidateImage.id.in_(candidate_ids))
+            ).all()
+        }
+        media_ids = {
+            media_id
+            for candidate in candidates.values()
+            for media_id in (candidate.media_asset_id, candidate.preview_asset_id)
+            if media_id is not None
+        }
+        media = (
+            {
+                asset.id: asset
+                for asset in session.scalars(
+                    select(MediaAsset).where(MediaAsset.id.in_(media_ids))
+                ).all()
+            }
+            if media_ids
+            else {}
+        )
+        slate_ids = {
+            proposal.caption_slate_id
+            for proposal in proposals
+            if proposal.caption_slate_id is not None
+        }
+        slates = (
+            {
+                slate.id: slate
+                for slate in session.scalars(
+                    select(CaptionSlate).where(CaptionSlate.id.in_(slate_ids))
+                ).all()
+            }
+            if slate_ids
+            else {}
+        )
+        latest_ids = (
+            select(
+                PublishAttempt.proposal_id.label("proposal_id"),
+                func.max(PublishAttempt.id).label("attempt_id"),
+            )
+            .where(PublishAttempt.proposal_id.in_(proposal_ids))
+            .group_by(PublishAttempt.proposal_id)
+            .subquery()
+        )
+        attempts = {
+            attempt.proposal_id: attempt
+            for attempt in session.scalars(
+                select(PublishAttempt).join(
+                    latest_ids,
+                    PublishAttempt.id == latest_ids.c.attempt_id,
+                )
+            ).all()
+        }
+        return _ProposalHydration(candidates, media, slates, attempts)

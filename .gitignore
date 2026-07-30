@@ -10,6 +10,7 @@ htmlcov/
 
 node_modules/
 apps/web/.next/
+apps/web/next-env.d.ts
 apps/web/coverage/
 apps/web/playwright-report/
 .playwright-cli/

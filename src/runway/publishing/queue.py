@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from runway.db.models import Proposal, PublishAttempt
 from runway.domain.enums import ProposalStatus
@@ -138,37 +138,35 @@ class PublisherQueueCoordinator:
             ).all()
             proposal_ids = list(dict.fromkeys(attempt.proposal_id for attempt in active_attempts))
             value = sum(attempt.status == "queued" for attempt in active_attempts)
-            blocked = session.scalars(
-                select(PublishAttempt)
+            latest_ids = (
+                select(
+                    PublishAttempt.proposal_id.label("proposal_id"),
+                    func.max(PublishAttempt.id).label("attempt_id"),
+                )
                 .where(
                     PublishAttempt.publisher == self.publisher.publisher_name,
+                )
+                .group_by(PublishAttempt.proposal_id)
+                .subquery()
+            )
+            blocked = session.scalar(
+                select(PublishAttempt)
+                .join(latest_ids, PublishAttempt.id == latest_ids.c.attempt_id)
+                .join(Proposal, Proposal.id == PublishAttempt.proposal_id)
+                .where(
                     PublishAttempt.status == "blocked_session",
+                    Proposal.status == ProposalStatus.INTERNALLY_SCHEDULED.value,
                 )
                 .order_by(PublishAttempt.id.desc())
-            ).all()
-            for attempt in blocked:
-                proposal = session.get(Proposal, attempt.proposal_id)
-                latest_attempt_id = session.scalar(
-                    select(PublishAttempt.id)
-                    .where(
-                        PublishAttempt.proposal_id == attempt.proposal_id,
-                        PublishAttempt.publisher == self.publisher.publisher_name,
-                    )
-                    .order_by(PublishAttempt.id.desc())
-                    .limit(1)
+                .limit(1)
+            )
+            if blocked is not None:
+                return (
+                    int(value or 0),
+                    (
+                        blocked.error_summary
+                        or "The publisher session needs attention before scheduling can continue."
+                    ),
+                    proposal_ids,
                 )
-                if (
-                    latest_attempt_id == attempt.id
-                    and proposal is not None
-                    and proposal.status == ProposalStatus.INTERNALLY_SCHEDULED.value
-                ):
-                    return (
-                        int(value or 0),
-                        (
-                            attempt.error_summary
-                            or "The publisher session needs attention before scheduling "
-                            "can continue."
-                        ),
-                        proposal_ids,
-                    )
             return int(value or 0), None, proposal_ids

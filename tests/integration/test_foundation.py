@@ -47,16 +47,41 @@ def test_migrations_seed_channel_and_enable_wal(database: Database) -> None:
                 "SELECT count(*) FROM pragma_table_info('proposals') WHERE name='caption_slate_id'"
             )
         ).scalar_one()
+        runtime_indexes = set(
+            session.execute(
+                text("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'ix_%'")
+            ).scalars()
+        )
+        similarity_plan = " ".join(
+            str(row[3])
+            for row in session.execute(
+                text(
+                    "EXPLAIN QUERY PLAN SELECT * FROM similarity_edges "
+                    "WHERE source_post_id=1 OR target_post_id=1"
+                )
+            )
+        )
     assert channel_count == 1
     assert journal_mode.lower() == "wal"
     assert foreign_keys == 1
-    assert migration == "0010_neural_intelligence"
+    assert migration == "0011_runtime_performance"
     assert feedback_table == 1
     assert publisher_table == 1
     assert schedule_slot == 1
     assert planning_horizon == 0
     assert canonical_tables == 6
     assert caption_slate_column == 1
+    assert {
+        "ix_similarity_edges_target_post_id",
+        "ix_proposals_channel_created",
+        "ix_proposals_channel_scheduled",
+        "ix_audit_events_created",
+        "ix_audit_events_type_created",
+        "ix_candidate_exposure_candidate_event_created",
+        "ix_publish_attempts_publisher_status_id",
+        "ix_publish_attempts_proposal_publisher_id",
+    } <= runtime_indexes
+    assert "SCAN similarity_edges" not in similarity_plan
 
 
 def test_health_app_is_local_and_publishing_is_disabled(settings: Settings) -> None:

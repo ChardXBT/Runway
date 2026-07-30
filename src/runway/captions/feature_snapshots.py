@@ -106,16 +106,3 @@ def snapshot_json_and_hash(
         separators=(",", ":"),
     )
     return payload, hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def feature_vector(snapshot: dict[str, object]) -> list[float]:
-    values = snapshot.get("features")
-    if not isinstance(values, dict):
-        raise ValueError("feature snapshot has no feature mapping")
-    result: list[float] = []
-    for name in FEATURE_NAMES:
-        value = values.get(name)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"feature snapshot has invalid {name!r}")
-        result.append(float(value))
-    return result

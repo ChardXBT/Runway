@@ -190,6 +190,7 @@ class StyleProfile(Base):
 
 class SimilarityEdge(Base):
     __tablename__ = "similarity_edges"
+    __table_args__ = (Index("ix_similarity_edges_target_post_id", "target_post_id"),)
 
     source_post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
     target_post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"), primary_key=True)
@@ -272,7 +273,16 @@ class GenerationRun(Base):
 
 class Proposal(Base, TimestampMixin):
     __tablename__ = "proposals"
-    __table_args__ = (UniqueConstraint("channel_id", "planned_publish_at"),)
+    __table_args__ = (
+        UniqueConstraint("channel_id", "planned_publish_at"),
+        Index("ix_proposals_channel_created", "channel_id", "created_at", "id"),
+        Index(
+            "ix_proposals_channel_scheduled",
+            "channel_id",
+            "scheduled_publish_at",
+            "id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     generation_run_id: Mapped[int] = mapped_column(ForeignKey("generation_runs.id"), index=True)
@@ -336,6 +346,20 @@ class CaptionFeedback(Base):
 
 class PublishAttempt(Base):
     __tablename__ = "publish_attempts"
+    __table_args__ = (
+        Index(
+            "ix_publish_attempts_publisher_status_id",
+            "publisher",
+            "status",
+            "id",
+        ),
+        Index(
+            "ix_publish_attempts_proposal_publisher_id",
+            "proposal_id",
+            "publisher",
+            "id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id"), index=True)
@@ -375,6 +399,10 @@ class ModelRun(Base):
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
+    __table_args__ = (
+        Index("ix_audit_events_created", "created_at", "id"),
+        Index("ix_audit_events_type_created", "event_type", "created_at", "id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_type: Mapped[str] = mapped_column(String(80), index=True)
@@ -771,6 +799,14 @@ class CandidateExposure(Base):
         ),
         Index("ix_candidate_exposure_session", "channel_id", "session_key", "created_at"),
         Index("ix_candidate_exposure_cluster", "channel_id", "cluster_key", "event_type"),
+        Index(
+            "ix_candidate_exposure_candidate_event_created",
+            "channel_id",
+            "candidate_image_id",
+            "event_type",
+            "created_at",
+            "id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

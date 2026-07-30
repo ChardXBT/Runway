@@ -101,13 +101,17 @@ describe("SettingsForm", () => {
   });
 
   it("does not show success for a malformed response and keeps every entry", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ detail: "maybe" }),
-      }),
-    );
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => settings,
+      });
+    vi.stubGlobal("fetch", fetchMock);
     render(<SettingsForm initial={settings} />);
 
     fireEvent.change(screen.getByLabelText("Duplicate window"), {
@@ -121,6 +125,14 @@ describe("SettingsForm", () => {
     expect(screen.queryByText("Settings saved.")).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("Qlob")).toHaveValue("Qlob");
     expect(screen.getByLabelText("Duplicate window")).toHaveValue(240);
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check saved state" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "save did not take effect",
+    );
+    expect(screen.getByLabelText("Duplicate window")).toHaveValue(240);
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeEnabled();
   });
 
   it("reports network failure without clearing the form", async () => {

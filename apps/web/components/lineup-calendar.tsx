@@ -987,12 +987,21 @@ export function LineupCalendar({
       return;
     let cancelled = false;
     let timer: number | undefined;
+    let controller: AbortController | null = null;
+    let nextDelay = 1500;
 
     async function refreshPublisher() {
+      controller = new AbortController();
       try {
         const [lineupResponse, queueResponse] = await Promise.all([
-          fetch(`${API_URL}/api/queue?limit=5000`, { cache: "no-store" }),
-          fetch(`${API_URL}/api/publisher/queue`, { cache: "no-store" }),
+          fetch(`${API_URL}/api/queue?limit=5000`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+          fetch(`${API_URL}/api/publisher/queue`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
         ]);
         const [freshLineup, freshQueue] = await Promise.all([
           readApiJson(lineupResponse, {
@@ -1013,6 +1022,7 @@ export function LineupCalendar({
         }
         setLineup(freshLineup);
         setPublisherQueue(freshQueue);
+        nextDelay = 1500;
         const targetIds =
           publisherTargetIds.length > 0
             ? publisherTargetIds
@@ -1063,7 +1073,8 @@ export function LineupCalendar({
           return;
         }
       } catch (error) {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
+        nextDelay = Math.min(nextDelay * 2, 15_000);
         setNotice(
           actionError(
             error,
@@ -1074,13 +1085,14 @@ export function LineupCalendar({
         );
       }
       if (!cancelled) {
-        timer = window.setTimeout(refreshPublisher, 1500);
+        timer = window.setTimeout(refreshPublisher, nextDelay);
       }
     }
 
     timer = window.setTimeout(refreshPublisher, 700);
     return () => {
       cancelled = true;
+      controller?.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [publishingEnabled, publishingMode, publisherTargetIds, watchPublisher]);

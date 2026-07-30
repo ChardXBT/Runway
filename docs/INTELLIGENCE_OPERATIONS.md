@@ -104,7 +104,7 @@ Record before migration:
   candidates, proposals, and feedback.
 
 Never overwrite or delete the pre-migration backup during validation. The
-current head is `0010_neural_intelligence`; use `pre-0010` in new backup names.
+current head is `0011_runtime_performance`; use `pre-0011` in new backup names.
 
 ## Neural challenger and proof workflow
 

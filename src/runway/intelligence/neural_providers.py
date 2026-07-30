@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
-import json
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -460,7 +459,3 @@ def provider_diagnostics(settings: Settings) -> dict[str, object]:
             },
         ],
     }
-
-
-def provider_status_json(settings: Settings) -> str:
-    return json.dumps(provider_diagnostics(settings), indent=2, sort_keys=True)

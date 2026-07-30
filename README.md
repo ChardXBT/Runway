@@ -91,7 +91,7 @@ The production snapshot validated and fully restore-rehearsed on July 26, 2026 c
 - 396 pairwise preferences and 282 normalized feedback signals.
 - 1,127 generated caption candidates across 101 caption slates.
 - 677 discovered candidate images, 81 proposals, and five versioned style profiles.
-- 52 schema-managed tables at migration `0010_neural_intelligence`.
+- 52 schema-managed tables at migration `0011_runtime_performance`.
 
 The private GitHub database release is an online SQLite backup rather than a copy of a potentially
 inconsistent live file. Its companion archive contains every media file referenced by the

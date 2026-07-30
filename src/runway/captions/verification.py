@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -547,8 +546,3 @@ def has_unresolved_visual_placeholder(text: str) -> bool:
     """Reject model-internal uncertainty labels that escaped into audience copy."""
 
     return UNRESOLVED_VISUAL_PLACEHOLDER_RE.search(" ".join(text.split())) is not None
-
-
-def verification_pass_rate(rows: Iterable[VerificationResult]) -> float:
-    values = list(rows)
-    return sum(row.passed for row in values) / len(values) if values else 0.0

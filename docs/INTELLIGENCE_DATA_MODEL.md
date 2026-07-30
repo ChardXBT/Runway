@@ -2,7 +2,7 @@
 
 This document describes the canonical intelligence-data flywheel introduced by
 Alembic revision `0008_intelligence_data_flywheel` and extended additively by
-`0010_neural_intelligence`. It supplements
+`0010_neural_intelligence` and `0011_runtime_performance`. It supplements
 [`DATA_MODEL.md`](DATA_MODEL.md) and the committed structural contract at
 [`schema/intelligence-data-flywheel.json`](schema/intelligence-data-flywheel.json).
 
@@ -82,7 +82,7 @@ nullability, default, primary-key, foreign-key, unique-constraint, and index
 metadata. Its fingerprint is:
 
 ```text
-cd024bcb9cd41464a3319145577c3dbdf51cf2d2229943237d8255abf0f445d2
+320403dfd84fa4f4e1b489082756b45a819cbdd7f1cc96adacdbc7006ad1ac04
 ```
 
 `runway database schema-verify` structurally compares the live database with
@@ -92,7 +92,12 @@ also reports missing, unexpected, and changed structures.
 The migrations create their new structures explicitly. They do not call mutable
 ORM metadata to construct them. Migration tests prove that a clean install and
 an upgrade from `0007_canonical_intelligence` converge to the same normalized
-schema at `0010_neural_intelligence`.
+schema at `0011_runtime_performance`.
+
+Revision `0011_runtime_performance` adds only query indexes for similarity
+neighbors, proposal ordering, activity history, candidate exposure lookups,
+and publisher-attempt recovery. It does not add tables or change stored
+intelligence semantics.
 
 ## Neural-intelligence additions
 

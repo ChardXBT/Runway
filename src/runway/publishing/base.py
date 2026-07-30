@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -63,13 +63,3 @@ class VerificationResult(BaseModel):
     verified: bool
     status: str
     detail: str
-
-
-class PostPublisher(Protocol):
-    async def validate_session(self) -> PublisherSessionStatus: ...
-
-    async def prepare_post(self, proposal_id: int) -> PreparedPost: ...
-
-    async def schedule_post(self, proposal_id: int) -> PublishResult: ...
-
-    async def verify_scheduled_post(self, proposal_id: int) -> VerificationResult: ...

@@ -7,8 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, exists, func, or_, select
+from sqlalchemy.orm import Session
 
+from runway.analysis.service import AnalysisService
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -105,13 +107,24 @@ class CatalogService:
             if training_eligible is not None:
                 statement = statement.where(Post.is_training_eligible.is_(training_eligible))
             if franchise or character:
-                statement = statement.join(PostAnnotation, PostAnnotation.post_id == Post.id)
-            if franchise:
-                statement = statement.where(PostAnnotation.franchise.ilike(f"%{franchise}%"))
-            if character:
-                statement = statement.where(PostAnnotation.characters_json.ilike(f"%{character}%"))
+                annotation_match = select(PostAnnotation.id).where(
+                    PostAnnotation.post_id == Post.id
+                )
+                if franchise:
+                    annotation_match = annotation_match.where(
+                        PostAnnotation.franchise.ilike(f"%{franchise}%")
+                    )
+                if character:
+                    annotation_match = annotation_match.where(
+                        PostAnnotation.characters_json.ilike(f"%{character}%")
+                    )
+                statement = statement.where(exists(annotation_match))
             posts = session.scalars(statement.offset(offset).limit(limit)).all()
-            return [self._post_summary(session, post) for post in posts]
+            media_by_post = self._media_by_post(session, [post.id for post in posts])
+            return [
+                self._post_summary(session, post, assets=media_by_post.get(post.id, []))
+                for post in posts
+            ]
 
     def detail(self, post_id: int) -> dict[str, object]:
         with self.database.session() as session:
@@ -140,6 +153,7 @@ class CatalogService:
             return result
 
     def set_training_eligibility(self, post_id: int, eligible: bool) -> dict[str, object]:
+        changed = False
         with self.database.session() as session:
             channel_id = get_channel(session, self.settings.channel_handle).id
             post = session.scalar(
@@ -150,15 +164,19 @@ class CatalogService:
             )
             if post is None:
                 raise LookupError(f"post {post_id} not found")
-            post.is_training_eligible = eligible
-            session.add(
-                AuditEvent(
-                    event_type="catalogue_eligibility_changed",
-                    entity_type="post",
-                    entity_id=post.id,
-                    details_json=json.dumps({"is_training_eligible": eligible}),
+            changed = post.is_training_eligible != eligible
+            if changed:
+                post.is_training_eligible = eligible
+                session.add(
+                    AuditEvent(
+                        event_type="catalogue_eligibility_changed",
+                        entity_type="post",
+                        entity_id=post.id,
+                        details_json=json.dumps({"is_training_eligible": eligible}),
+                    )
                 )
-            )
+        if changed:
+            AnalysisService(self.database, self.settings).refresh_similarity_edges([post_id])
         return self.detail(post_id)
 
     def verify(self, *, write_reports: bool = True) -> dict[str, Any]:
@@ -266,13 +284,15 @@ class CatalogService:
             self._write_report(report)
         return report
 
-    def _post_summary(self, session: Any, post: Post) -> dict[str, object]:
-        assets = session.scalars(
-            select(MediaAsset)
-            .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
-            .where(PostMedia.post_id == post.id)
-            .order_by(PostMedia.position)
-        ).all()
+    def _post_summary(
+        self,
+        session: Session,
+        post: Post,
+        *,
+        assets: Sequence[MediaAsset] | None = None,
+    ) -> dict[str, object]:
+        if assets is None:
+            assets = self._media_by_post(session, [post.id]).get(post.id, [])
         return {
             "id": post.id,
             "external_post_id": post.external_post_id,
@@ -295,6 +315,24 @@ class CatalogService:
                 for asset in assets
             ],
         }
+
+    @staticmethod
+    def _media_by_post(
+        session: Session,
+        post_ids: Sequence[int],
+    ) -> dict[int, list[MediaAsset]]:
+        if not post_ids:
+            return {}
+        grouped: defaultdict[int, list[MediaAsset]] = defaultdict(list)
+        rows = session.execute(
+            select(PostMedia.post_id, MediaAsset)
+            .join(MediaAsset, MediaAsset.id == PostMedia.media_asset_id)
+            .where(PostMedia.post_id.in_(post_ids))
+            .order_by(PostMedia.post_id, PostMedia.position, MediaAsset.id)
+        ).all()
+        for post_id, asset in rows:
+            grouped[post_id].append(asset)
+        return dict(grouped)
 
     @staticmethod
     def _near_duplicate_clusters(media: Sequence[MediaAsset]) -> list[dict[str, object]]:

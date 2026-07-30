@@ -422,6 +422,38 @@ describe("LineupCalendar", () => {
     expect(screen.queryByText(/sync complete/i)).not.toBeInTheDocument();
   });
 
+  it("cancels in-flight publisher refreshes when Lineup unmounts", async () => {
+    vi.useFakeTimers();
+    const requestSignals: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        if (init?.signal) requestSignals.push(init.signal as AbortSignal);
+        return new Promise(() => undefined);
+      }),
+    );
+    const { unmount } = render(
+      <LineupCalendar
+        initialLineup={lineup}
+        publishingEnabled
+        publishingMode="authorized_browser"
+        initialPublisherQueue={{
+          running: true,
+          queued: 1,
+          paused: false,
+          paused_reason: null,
+          proposal_ids: [first.id],
+        }}
+      />,
+    );
+
+    await vi.advanceTimersByTimeAsync(700);
+    expect(requestSignals).toHaveLength(2);
+    unmount();
+
+    expect(requestSignals.every((signal) => signal.aborted)).toBe(true);
+  });
+
   it("turns an occupied drag target into a confirmed animated swap", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

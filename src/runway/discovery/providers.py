@@ -112,10 +112,6 @@ class EnsembleSearchProvider:
             return result.result_rank
 
 
-class PageImageExtractor(Protocol):
-    async def extract(self, page_url: str) -> list[ImageSearchResult]: ...
-
-
 def _queries(plan: SearchPlan) -> list[str]:
     return [query for family in plan.query_families for query in family.queries]
 

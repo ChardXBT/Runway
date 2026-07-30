@@ -720,6 +720,14 @@
         "indexes": [
           {
             "columns": [
+              "created_at",
+              "id"
+            ],
+            "name": "ix_audit_events_created",
+            "unique": false
+          },
+          {
+            "columns": [
               "entity_id"
             ],
             "name": "ix_audit_events_entity_id",
@@ -737,6 +745,15 @@
               "event_type"
             ],
             "name": "ix_audit_events_event_type",
+            "unique": false
+          },
+          {
+            "columns": [
+              "event_type",
+              "created_at",
+              "id"
+            ],
+            "name": "ix_audit_events_type_created",
             "unique": false
           }
         ],
@@ -1589,6 +1606,17 @@
           }
         ],
         "indexes": [
+          {
+            "columns": [
+              "channel_id",
+              "candidate_image_id",
+              "event_type",
+              "created_at",
+              "id"
+            ],
+            "name": "ix_candidate_exposure_candidate_event_created",
+            "unique": false
+          },
           {
             "columns": [
               "channel_id",
@@ -7747,9 +7775,27 @@
           },
           {
             "columns": [
+              "channel_id",
+              "created_at",
+              "id"
+            ],
+            "name": "ix_proposals_channel_created",
+            "unique": false
+          },
+          {
+            "columns": [
               "channel_id"
             ],
             "name": "ix_proposals_channel_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "channel_id",
+              "scheduled_publish_at",
+              "id"
+            ],
+            "name": "ix_proposals_channel_scheduled",
             "unique": false
           },
           {
@@ -7936,9 +7982,27 @@
           },
           {
             "columns": [
+              "proposal_id",
+              "publisher",
+              "id"
+            ],
+            "name": "ix_publish_attempts_proposal_publisher_id",
+            "unique": false
+          },
+          {
+            "columns": [
               "publisher"
             ],
             "name": "ix_publish_attempts_publisher",
+            "unique": false
+          },
+          {
+            "columns": [
+              "publisher",
+              "status",
+              "id"
+            ],
+            "name": "ix_publish_attempts_publisher_status_id",
             "unique": false
           },
           {
@@ -9397,7 +9461,15 @@
             "referred_table": "posts"
           }
         ],
-        "indexes": [],
+        "indexes": [
+          {
+            "columns": [
+              "target_post_id"
+            ],
+            "name": "ix_similarity_edges_target_post_id",
+            "unique": false
+          }
+        ],
         "unique_constraints": []
       },
       "style_profiles": {
@@ -9508,7 +9580,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "cd024bcb9cd41464a3319145577c3dbdf51cf2d2229943237d8255abf0f445d2",
-  "migration": "0010_neural_intelligence",
+  "fingerprint": "320403dfd84fa4f4e1b489082756b45a819cbdd7f1cc96adacdbc7006ad1ac04",
+  "migration": "0011_runtime_performance",
   "table_count": 52
 }

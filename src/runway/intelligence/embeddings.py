@@ -5,7 +5,7 @@ import json
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar, cast
@@ -1024,25 +1024,6 @@ class RepresentationStore:
         if record.dimensions <= 0 or values.size != record.dimensions * record.vector_count:
             raise ValueError(f"representation {record.id} has inconsistent dimensions")
         return values.reshape(record.vector_count, record.dimensions)
-
-
-def mean_pool(results: Iterable[RepresentationResult], *, purpose: str) -> RepresentationResult:
-    rows = [result.as_array()[0] for result in results if result.vector_count]
-    if not rows:
-        raise ValueError("cannot pool an empty representation set")
-    dimensions = {row.size for row in rows}
-    if len(dimensions) != 1:
-        raise ValueError("pooled representations must have matching dimensions")
-    vector = _normalize(np.mean(np.vstack(rows), axis=0))
-    return RepresentationResult(
-        provider="runway-local",
-        model="mean-pool",
-        version="1",
-        purpose=purpose,
-        vectors=(tuple(float(value) for value in vector),),
-        normalized=True,
-        configuration_hash=configuration_hash({"pooling": "mean", "count": len(rows)}),
-    )
 
 
 def cosine(first: np.ndarray, second: np.ndarray) -> float:

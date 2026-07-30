@@ -359,13 +359,46 @@ describe("ReviewWorkspace", () => {
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining("/api/editorial/next"),
-        { cache: "no-store" },
+        expect.objectContaining({
+          cache: "no-store",
+          signal: expect.any(AbortSignal),
+        }),
       ),
     );
     expect(await screen.findByDisplayValue("Recommended caption.")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(
       "The generated option is ready.",
     );
+  });
+
+  it("cancels an in-flight generation check when Generator unmounts", async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, init?: RequestInit) => {
+        requestSignal = init?.signal as AbortSignal | undefined;
+        return new Promise(() => undefined);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(
+      <ReviewWorkspace
+        initialProposal={null}
+        initialWorkflow={{ ...workflow, needs_review: 0 }}
+        initialGeneration={{
+          running: true,
+          started_at: "2026-03-07T15:00:00Z",
+          completed_at: null,
+          detail: "Discovering images and generating captions.",
+        }}
+        publishingEnabled
+      />,
+    );
+
+    await waitFor(() => expect(requestSignal).toBeDefined());
+    unmount();
+
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it("shows a completed no-result explanation and allows another search", async () => {

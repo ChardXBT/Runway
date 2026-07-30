@@ -4,17 +4,13 @@ import json
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from sqlalchemy import desc, select
 
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ChannelPolicyRule
 from runway.intelligence.embeddings import configuration_hash
-
-
-class PolicyRuleValue(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
 
 class PolicySnapshot(BaseModel):

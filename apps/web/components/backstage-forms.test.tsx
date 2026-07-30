@@ -140,34 +140,44 @@ describe("backstage forms", () => {
     expect(screen.getByText("Eligibility saved.")).toBeInTheDocument();
   });
 
-  it("locks annotation edits after an ambiguous save until the page is reconciled", async () => {
+  it("reconciles an ambiguous annotation save without losing the draft", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, json: async () => annotation })
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ ok: true, json: async () => annotation });
     vi.stubGlobal("fetch", fetchMock);
     render(<AnnotationEditor postId={12} />);
 
-    await screen.findByLabelText("Scene description");
+    const scene = await screen.findByLabelText("Scene description");
+    fireEvent.change(scene, { target: { value: "A preserved correction." } });
     fireEvent.click(screen.getByRole("button", { name: "Save review" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "response could not be verified",
     );
     expect(screen.getByRole("button", { name: "Save review" })).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Reload to verify" }),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check saved state" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "save did not take effect",
+    );
+    expect(scene).toHaveValue("A preserved correction.");
+    expect(screen.getByRole("button", { name: "Save review" })).toBeEnabled();
   });
 
-  it("locks eligibility after an ambiguous response until the page is reconciled", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
+  it("reconciles eligibility after an ambiguous response", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ is_training_eligible: "maybe" }),
-      }),
-    );
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ is_training_eligible: false }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
     render(<EligibilityToggle postId={13} initial />);
 
     fireEvent.click(screen.getByRole("button", { name: "Exclude from profile" }));
@@ -178,8 +188,13 @@ describe("backstage forms", () => {
     expect(
       screen.getByRole("button", { name: "Exclude from profile" }),
     ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Reload to verify" }),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check saved state" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Include in profile" }),
+      ).toBeEnabled(),
+    );
+    expect(screen.getByText("Eligibility save verified.")).toBeInTheDocument();
   });
 });

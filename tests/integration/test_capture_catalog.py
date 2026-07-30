@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from runway.capture.schemas import BrowserDomSnapshot, ExtractedPost, ImageReference
 from runway.capture.service import CaptureService
@@ -33,6 +33,27 @@ def test_fixture_capture_resumes_and_is_idempotent(database: Database, settings:
         assert asset is not None
         assert len(asset.sha256) == 64
         assert (settings.resolved_data_dir / asset.local_path).is_file()
+
+    list_queries: list[str] = []
+
+    def record_list_query(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            list_queries.append(statement)
+
+    event.listen(database.engine, "before_cursor_execute", record_list_query)
+    try:
+        listed = CatalogService(database, settings).list_posts(limit=500)
+    finally:
+        event.remove(database.engine, "before_cursor_execute", record_list_query)
+    assert len(listed) == 12
+    assert len(list_queries) <= 3
 
     second = capture.run_fixture(resume=True)
     assert second.run_id != completed.run_id

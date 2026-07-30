@@ -18,7 +18,6 @@ import type {
   EditorialEnvelope,
   GenerationActivity,
   Proposal,
-  PublisherQueueStatus,
   WorkflowStatus,
 } from "@/lib/types";
 
@@ -47,8 +46,6 @@ export function ReviewWorkspace({
   initialProposal: Proposal | null;
   initialWorkflow: WorkflowStatus;
   initialGeneration?: GenerationActivity;
-  publishingEnabled?: boolean;
-  initialPublisherQueue?: PublisherQueueStatus;
 }) {
   const [proposal, setProposal] = useState(initialProposal);
   const [caption, setCaption] = useState(initialProposal?.final_caption ?? "");
@@ -432,12 +429,16 @@ export function ReviewWorkspace({
     if (proposal || !generation.running || busy === "options") return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
+    let nextDelay = 3000;
 
     async function pollGeneration() {
       let keepPolling = true;
+      controller = new AbortController();
       try {
         const response = await fetch(`${API_URL}/api/editorial/next`, {
           cache: "no-store",
+          signal: controller.signal,
         });
         const payload = await readApiJson(response, {
           validate: isEditorialEnvelope,
@@ -462,8 +463,10 @@ export function ReviewWorkspace({
           );
           keepPolling = false;
         }
+        nextDelay = 3000;
       } catch (error) {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
+        nextDelay = Math.min(nextDelay * 2, 15_000);
         setNotice(
           actionError(
             error,
@@ -473,13 +476,14 @@ export function ReviewWorkspace({
         );
       }
       if (!cancelled && keepPolling) {
-        timer = setTimeout(pollGeneration, 3000);
+        timer = setTimeout(pollGeneration, nextDelay);
       }
     }
 
     void pollGeneration();
     return () => {
       cancelled = true;
+      controller?.abort();
       if (timer) clearTimeout(timer);
     };
   }, [busy, generation.running, proposal]);

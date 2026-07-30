@@ -70,7 +70,7 @@ No ChatGPT usage, Qlob post, or production YouTube mutation occurred during this
 ## Database recovery validation
 
 - SQLite online backup restored to a clean temporary directory.
-- 52 table counts, migration `0010_neural_intelligence`, database SHA-256, archive SHA-256,
+- 52 table counts, migration `0011_runtime_performance`, database SHA-256, archive SHA-256,
   integrity check, and foreign-key check all matched.
 - All 1,545 database-referenced media files (246.02 MiB of content) were archived, individually
   hashed, restored, and rechecked.

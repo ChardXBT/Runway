@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import cast
 
 import numpy as np
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, insert, select
+from sqlalchemy.orm import Session
 
-from runway.analysis.features import text_embedding, text_similarity
+from runway.analysis.features import text_embedding
 from runway.analysis.runtime import AgentRuntime, AgentTerminalError, runtime_for
 from runway.analysis.schemas import HistoricalAnnotation
 from runway.config import Settings
@@ -24,7 +26,7 @@ from runway.db.models import (
     utcnow,
 )
 from runway.db.repositories import audit, get_channel
-from runway.media.service import cosine_similarity, prepare_model_image
+from runway.media.service import prepare_model_image
 
 CORRECTION_OUTPUT_ALIASES = {
     "characters": "visible_characters",
@@ -32,6 +34,38 @@ CORRECTION_OUTPUT_ALIASES = {
     "emotion": "facial_emotional_cues",
     "text_in_image": "text_overlay",
 }
+
+SIMILARITY_INSERT_BATCH_SIZE = 2_000
+
+
+def _media_assets_by_post(
+    session: Session,
+    post_ids: Sequence[int],
+) -> dict[int, list[MediaAsset]]:
+    """Load ordered post media in one query instead of one query per post."""
+
+    if not post_ids:
+        return {}
+    grouped: defaultdict[int, list[MediaAsset]] = defaultdict(list)
+    rows = session.execute(
+        select(PostMedia.post_id, MediaAsset)
+        .join(MediaAsset, MediaAsset.id == PostMedia.media_asset_id)
+        .where(PostMedia.post_id.in_(post_ids))
+        .order_by(PostMedia.post_id, PostMedia.position, MediaAsset.id)
+    ).all()
+    for post_id, media in rows:
+        grouped[post_id].append(media)
+    return dict(grouped)
+
+
+def _normalized_media_vector(media: MediaAsset | None) -> np.ndarray | None:
+    if media is None or not media.embedding_vector:
+        return None
+    vector = np.frombuffer(media.embedding_vector, dtype=np.float32)
+    if not vector.size:
+        return None
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm else vector
 
 
 def effective_annotation_fields(annotation: PostAnnotation) -> dict[str, object]:
@@ -134,52 +168,58 @@ class AnalysisService:
                 )
                 .order_by(Post.id)
             ).all()
-            existing_ids = set(
-                session.scalars(
-                    select(PostAnnotation.post_id).where(
-                        PostAnnotation.annotation_version == self.annotation_version
-                    )
-                ).all()
-            )
-            payloads: list[dict[str, object]] = []
-            for post in posts:
-                if resume and post.id in existing_ids:
-                    continue
-                media_assets = session.scalars(
-                    select(MediaAsset)
-                    .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
-                    .where(PostMedia.post_id == post.id)
-                    .order_by(PostMedia.position)
-                ).all()
-                if not media_assets:
-                    continue
-                prepared_paths = [
-                    prepare_model_image(
-                        self.settings.resolved_data_dir / asset.local_path,
-                        self.settings,
-                    )
-                    for asset in media_assets
-                ]
-                payloads.append(
-                    {
-                        "post_id": post.id,
-                        "caption": post.caption or "",
-                        "post_type": post.post_type,
-                        "published_at": (
-                            post.published_at.isoformat() if post.published_at else None
-                        ),
-                        "_image_paths": [str(path) for path in prepared_paths],
-                    }
+            post_ids = [post.id for post in posts]
+            existing_ids = (
+                set(
+                    session.scalars(
+                        select(PostAnnotation.post_id).where(
+                            PostAnnotation.post_id.in_(post_ids),
+                            PostAnnotation.annotation_version == self.annotation_version,
+                        )
+                    ).all()
                 )
+                if post_ids
+                else set()
+            )
+            pending_posts = [post for post in posts if not resume or post.id not in existing_ids]
+            media_by_post = _media_assets_by_post(
+                session,
+                [post.id for post in pending_posts],
+            )
+            pending = [
+                (post, media_by_post[post.id])
+                for post in pending_posts
+                if media_by_post.get(post.id)
+            ]
 
-        pending_before_limit = len(payloads)
+        pending_before_limit = len(pending)
         if max_posts is not None:
-            payloads = payloads[:max_posts]
+            pending = pending[:max_posts]
+        payloads: list[dict[str, object]] = []
+        for post, media_assets in pending:
+            prepared_paths = [
+                prepare_model_image(
+                    self.settings.resolved_data_dir / asset.local_path,
+                    self.settings,
+                )
+                for asset in media_assets
+            ]
+            payloads.append(
+                {
+                    "post_id": post.id,
+                    "caption": post.caption or "",
+                    "post_type": post.post_type,
+                    "published_at": (post.published_at.isoformat() if post.published_at else None),
+                    "_image_paths": [str(path) for path in prepared_paths],
+                }
+            )
+
         completed = 0
         failed = 0
         skipped = len(posts) - pending_before_limit
         deferred = pending_before_limit - len(payloads)
         batches = 0
+        refreshed_post_ids: list[int] = []
         batch_size = self.settings.analysis_batch_size
         for offset in range(0, len(payloads), batch_size):
             payload_batch = payloads[offset : offset + batch_size]
@@ -228,21 +268,30 @@ class AnalysisService:
                 continue
             annotations = {item.post_id: item.annotation for item in output.annotations}
             with self.database.session() as session:
-                for post_id in post_ids:
-                    existing = session.scalar(
+                existing_by_id = {
+                    row.post_id: row
+                    for row in session.scalars(
                         select(PostAnnotation).where(
-                            PostAnnotation.post_id == post_id,
+                            PostAnnotation.post_id.in_(post_ids),
                             PostAnnotation.annotation_version == self.annotation_version,
                         )
-                    )
+                    ).all()
+                }
+                for post_id in post_ids:
+                    existing = existing_by_id.get(post_id)
                     if existing is None:
                         session.add(self._annotation_record(post_id, annotations[post_id]))
+                    else:
+                        self._refresh_annotation_record(existing, annotations[post_id])
                     audit(
                         session,
                         "historical_post_annotated",
                         "post",
                         post_id,
-                        {"annotation_version": self.annotation_version},
+                        {
+                            "annotation_version": self.annotation_version,
+                            "refreshed": existing is not None,
+                        },
                     )
             self._record_model_run(
                 task="annotate_historical_posts",
@@ -254,8 +303,16 @@ class AnalysisService:
                 error=None,
             )
             completed += len(post_ids)
+            refreshed_post_ids.extend(post_ids)
             batches += 1
-        edges = self.rebuild_similarity_edges()
+        expected_edges = len(posts) * (len(posts) - 1) // 2
+        current_edges = self._similarity_edge_count()
+        if refreshed_post_ids:
+            edges = self.refresh_similarity_edges(refreshed_post_ids)
+        elif current_edges != expected_edges:
+            edges = self.rebuild_similarity_edges()
+        else:
+            edges = current_edges
         return {
             "completed": completed,
             "skipped": skipped,
@@ -266,8 +323,21 @@ class AnalysisService:
         }
 
     def rebuild_similarity_edges(self) -> int:
+        return self._refresh_similarity_edges(None)
+
+    def refresh_similarity_edges(self, changed_post_ids: Sequence[int]) -> int:
+        """Update changed neighborhoods and repair an incomplete graph if needed."""
+
+        edges = self._refresh_similarity_edges(changed_post_ids)
+        expected = self._expected_similarity_edge_count()
+        return edges if edges == expected else self.rebuild_similarity_edges()
+
+    def _refresh_similarity_edges(self, changed_post_ids: Sequence[int] | None) -> int:
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
+            channel_post_ids = session.scalars(
+                select(Post.id).where(Post.channel_id == channel.id)
+            ).all()
             posts = session.scalars(
                 select(Post)
                 .where(
@@ -276,63 +346,110 @@ class AnalysisService:
                 )
                 .order_by(Post.id)
             ).all()
-            annotation_map = {
-                annotation.post_id: annotation
-                for annotation in session.scalars(
-                    select(PostAnnotation).where(
-                        PostAnnotation.annotation_version == self.annotation_version
-                    )
-                ).all()
-            }
-            media_map: dict[int, MediaAsset] = {}
-            for post in posts:
-                media = session.scalar(
-                    select(MediaAsset)
-                    .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
-                    .where(PostMedia.post_id == post.id)
-                    .order_by(PostMedia.position)
-                    .limit(1)
-                )
-                if media is not None:
-                    media_map[post.id] = media
-            post_ids = [post.id for post in posts]
-            if post_ids:
+            eligible_ids = {post.id for post in posts}
+            annotation_map = (
+                {
+                    annotation.post_id: annotation
+                    for annotation in session.scalars(
+                        select(PostAnnotation).where(
+                            PostAnnotation.post_id.in_(eligible_ids),
+                            PostAnnotation.annotation_version == self.annotation_version,
+                        )
+                    ).all()
+                }
+                if eligible_ids
+                else {}
+            )
+            media_rows = _media_assets_by_post(session, list(eligible_ids))
+            media_map = {post_id: rows[0] for post_id, rows in media_rows.items() if rows}
+
+            full_rebuild = changed_post_ids is None
+            changed_ids = (
+                set(channel_post_ids)
+                if changed_post_ids is None
+                else set(changed_post_ids) & set(channel_post_ids)
+            )
+            if changed_ids:
                 session.execute(
                     delete(SimilarityEdge).where(
-                        (SimilarityEdge.source_post_id.in_(post_ids))
-                        | (SimilarityEdge.target_post_id.in_(post_ids))
+                        (SimilarityEdge.source_post_id.in_(changed_ids))
+                        | (SimilarityEdge.target_post_id.in_(changed_ids))
                     )
                 )
-            count = 0
+
+            caption_vectors = {post.id: text_embedding(post.caption or "") for post in posts}
+            image_vectors = {
+                post_id: vector
+                for post_id, media in media_map.items()
+                if (vector := _normalized_media_vector(media)) is not None
+            }
+            concept_values = {
+                post_id: self._concept_values(annotation)
+                for post_id, annotation in annotation_map.items()
+            }
+            calculated_at = utcnow()
+            batch: list[dict[str, object]] = []
             for index, source in enumerate(posts):
                 for target in posts[index + 1 :]:
-                    source_media = media_map.get(source.id)
-                    target_media = media_map.get(target.id)
+                    if not full_rebuild and not ({source.id, target.id} & changed_ids):
+                        continue
+                    source_media = image_vectors.get(source.id)
+                    target_media = image_vectors.get(target.id)
                     visual = 0.0
                     if (
-                        source_media
-                        and target_media
-                        and source_media.embedding_vector
-                        and target_media.embedding_vector
+                        source_media is not None
+                        and target_media is not None
+                        and source_media.shape == target_media.shape
                     ):
-                        visual = cosine_similarity(
-                            source_media.embedding_vector, target_media.embedding_vector
-                        )
-                    caption = text_similarity(source.caption or "", target.caption or "")
-                    concept = self._concept_similarity(
-                        annotation_map.get(source.id), annotation_map.get(target.id)
+                        visual = float(np.dot(source_media, target_media))
+                    caption = float(np.dot(caption_vectors[source.id], caption_vectors[target.id]))
+                    concept = self._jaccard(
+                        concept_values.get(source.id, set()),
+                        concept_values.get(target.id, set()),
                     )
-                    session.add(
-                        SimilarityEdge(
-                            source_post_id=source.id,
-                            target_post_id=target.id,
-                            visual_similarity=visual,
-                            caption_similarity=caption,
-                            concept_similarity=concept,
-                        )
+                    batch.append(
+                        {
+                            "source_post_id": source.id,
+                            "target_post_id": target.id,
+                            "visual_similarity": visual,
+                            "caption_similarity": caption,
+                            "concept_similarity": concept,
+                            "calculated_at": calculated_at,
+                        }
                     )
-                    count += 1
-            return count
+                    if len(batch) >= SIMILARITY_INSERT_BATCH_SIZE:
+                        session.execute(insert(SimilarityEdge), batch)
+                        batch.clear()
+            if batch:
+                session.execute(insert(SimilarityEdge), batch)
+        return self._similarity_edge_count()
+
+    def _similarity_edge_count(self) -> int:
+        with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(SimilarityEdge)
+                    .join(Post, Post.id == SimilarityEdge.source_post_id)
+                    .where(Post.channel_id == channel_id)
+                )
+                or 0
+            )
+
+    def _expected_similarity_edge_count(self) -> int:
+        with self.database.session() as session:
+            channel_id = get_channel(session, self.settings.channel_handle).id
+            posts = int(
+                session.scalar(
+                    select(func.count(Post.id)).where(
+                        Post.channel_id == channel_id,
+                        Post.is_training_eligible.is_(True),
+                    )
+                )
+                or 0
+            )
+        return posts * (posts - 1) // 2
 
     def correct_annotation(
         self,
@@ -373,6 +490,7 @@ class AnalysisService:
         if not expected_fields:
             raise ValueError("at least one reviewed field is required")
         self._validate_correction_fields(expected_fields)
+        changed: dict[str, object] = {}
         with self.database.session() as session:
             annotation = session.scalar(
                 select(PostAnnotation)
@@ -421,6 +539,8 @@ class AnalysisService:
             if review_note:
                 review_details["review_note"] = review_note
             audit(session, "annotation_reviewed", "post", post_id, review_details)
+        if changed:
+            self.refresh_similarity_edges([post_id])
         return self.effective_annotation(post_id)
 
     def effective_annotation(self, post_id: int) -> dict[str, object]:
@@ -519,27 +639,57 @@ class AnalysisService:
         )
 
     @staticmethod
+    def _refresh_annotation_record(
+        annotation: PostAnnotation,
+        output: HistoricalAnnotation,
+    ) -> None:
+        """Refresh model-owned fields while preserving human review overlays."""
+
+        fresh = AnalysisService._annotation_record(annotation.post_id, output)
+        for field in (
+            "franchise",
+            "show_name",
+            "characters_json",
+            "visible_character_count",
+            "scene_description",
+            "visual_format",
+            "composition",
+            "emotion",
+            "reaction_potential",
+            "caption_intent",
+            "caption_structure",
+            "humor_style",
+            "tone",
+            "text_in_image",
+            "model_confidence_json",
+            "original_output_json",
+        ):
+            setattr(annotation, field, getattr(fresh, field))
+
+    @staticmethod
     def _concept_similarity(first: PostAnnotation | None, second: PostAnnotation | None) -> float:
         if first is None or second is None:
             return 0.0
-        first_effective = effective_annotation_fields(first)
-        second_effective = effective_annotation_fields(second)
-        first_values = {
-            first_effective["franchise"],
-            first_effective["composition"],
-            *cast(list[object], first_effective["characters"]),
-            *cast(list[object], first_effective["actions"]),
-            *cast(list[object], first_effective["objects"]),
+        return AnalysisService._jaccard(
+            AnalysisService._concept_values(first),
+            AnalysisService._concept_values(second),
+        )
+
+    @staticmethod
+    def _concept_values(annotation: PostAnnotation) -> set[object]:
+        effective = effective_annotation_fields(annotation)
+        values = {
+            effective["franchise"],
+            effective["composition"],
+            *cast(list[object], effective["characters"]),
+            *cast(list[object], effective["actions"]),
+            *cast(list[object], effective["objects"]),
         }
-        second_values = {
-            second_effective["franchise"],
-            second_effective["composition"],
-            *cast(list[object], second_effective["characters"]),
-            *cast(list[object], second_effective["actions"]),
-            *cast(list[object], second_effective["objects"]),
-        }
-        first_values.discard(None)
-        second_values.discard(None)
+        values.discard(None)
+        return values
+
+    @staticmethod
+    def _jaccard(first_values: set[object], second_values: set[object]) -> float:
         union = first_values | second_values
         return len(first_values & second_values) / len(union) if union else 0.0
 
@@ -615,28 +765,19 @@ def image_matrix_for_posts(
     vectors: list[np.ndarray] = []
     matched: list[int] = []
     with database.session() as session:
-        for post_id in post_ids:
-            media_rows = session.scalars(
-                select(MediaAsset)
-                .join(PostMedia, PostMedia.media_asset_id == MediaAsset.id)
-                .where(PostMedia.post_id == post_id)
-                .order_by(PostMedia.position)
-            ).all()
-            media_vectors = [
-                np.frombuffer(media.embedding_vector, dtype=np.float32)
-                for media in media_rows
-                if media.embedding_vector
-            ]
-            dimensions = {vector.size for vector in media_vectors}
-            if media_vectors and len(dimensions) == 1:
-                pooled = np.mean(np.vstack(media_vectors), axis=0)
-                norm = float(np.linalg.norm(pooled))
-                vectors.append(pooled / norm if norm else pooled)
-                matched.append(post_id)
+        media_by_post = _media_assets_by_post(session, post_ids)
+    for post_id in post_ids:
+        media_vectors = [
+            np.frombuffer(media.embedding_vector, dtype=np.float32)
+            for media in media_by_post.get(post_id, [])
+            if media.embedding_vector
+        ]
+        dimensions = {vector.size for vector in media_vectors}
+        if media_vectors and len(dimensions) == 1:
+            pooled = np.mean(np.vstack(media_vectors), axis=0)
+            norm = float(np.linalg.norm(pooled))
+            vectors.append(pooled / norm if norm else pooled)
+            matched.append(post_id)
     if not vectors:
         return np.empty((0, 0), dtype=np.float32), []
     return np.vstack(vectors), matched
-
-
-def caption_matrix(captions: Sequence[str]) -> np.ndarray:
-    return np.vstack([text_embedding(caption) for caption in captions])

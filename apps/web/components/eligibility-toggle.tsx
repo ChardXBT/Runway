@@ -17,12 +17,15 @@ export function EligibilityToggle({ postId, initial }: { postId: number; initial
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const actionLock = useRef(false);
+  const pendingValue = useRef<boolean | null>(null);
 
   async function toggle() {
     if (actionLock.current) return;
     const next = !eligible;
+    pendingValue.current = next;
     actionLock.current = true;
     setBusy(true);
+    setUncertain(false);
     setMessage("Saving eligibility…");
     setMessageIsError(false);
     try {
@@ -53,6 +56,47 @@ export function EligibilityToggle({ postId, initial }: { postId: number; initial
       setBusy(false);
     }
   }
+
+  async function reconcile() {
+    if (actionLock.current || pendingValue.current === null) return;
+    actionLock.current = true;
+    setBusy(true);
+    setMessage("Checking saved eligibility…");
+    setMessageIsError(false);
+    try {
+      const response = await fetch(`${API_URL}/api/catalog/${postId}`, {
+        cache: "no-store",
+      });
+      const saved = await readApiJson(response, {
+        validate: (value): value is Record<string, unknown> =>
+          isRecord(value) && typeof value.is_training_eligible === "boolean",
+        failureMessage: "Saved eligibility could not be checked.",
+        malformedMessage:
+          "The eligibility check returned unreadable data. The displayed setting has not been changed.",
+      });
+      const savedValue = saved.is_training_eligible as boolean;
+      setEligible(savedValue);
+      setUncertain(false);
+      if (savedValue === pendingValue.current) {
+        setMessage("Eligibility save verified.");
+        setMessageIsError(false);
+      } else {
+        setMessage("The change did not take effect. You can try it again.");
+        setMessageIsError(true);
+      }
+    } catch (error) {
+      setMessage(
+        actionError(
+          error,
+          "Saved eligibility could not be checked. The displayed setting has not been changed.",
+        ),
+      );
+      setMessageIsError(true);
+    } finally {
+      actionLock.current = false;
+      setBusy(false);
+    }
+  }
   return (
     <div className="eligibility-toggle">
       <button
@@ -72,9 +116,10 @@ export function EligibilityToggle({ postId, initial }: { postId: number; initial
         <button
           type="button"
           className="text-link"
-          onClick={() => window.location.reload()}
+          onClick={reconcile}
+          disabled={busy}
         >
-          Reload to verify
+          Check saved state
         </button>
       )}
       <small role={messageIsError ? "alert" : "status"}>{message}</small>

@@ -21,6 +21,14 @@ type Annotation = {
   review_status: string;
 };
 
+type AnnotationFields = {
+  franchise: string | null;
+  characters: string[];
+  scene_description: string;
+  composition: string;
+  tone: string;
+};
+
 function isAnnotation(value: unknown): value is Annotation {
   if (!isRecord(value) || !isRecord(value.effective)) return false;
   const effective = value.effective;
@@ -42,6 +50,21 @@ function isAnnotation(value: unknown): value is Annotation {
   );
 }
 
+function annotationMatchesFields(
+  annotation: Annotation,
+  fields: AnnotationFields,
+) {
+  const effective = annotation.effective;
+  return (
+    (effective.franchise ?? null) === fields.franchise &&
+    JSON.stringify(effective.visible_characters ?? []) ===
+      JSON.stringify(fields.characters) &&
+    (effective.scene_description ?? "") === fields.scene_description &&
+    (effective.composition ?? "") === fields.composition &&
+    (effective.tone ?? "") === fields.tone
+  );
+}
+
 export function AnnotationEditor({ postId }: { postId: number }) {
   const [annotation, setAnnotation] = useState<Annotation | null>(null);
   const [status, setStatus] = useState("Loading annotation…");
@@ -49,6 +72,7 @@ export function AnnotationEditor({ postId }: { postId: number }) {
   const [saving, setSaving] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const actionLock = useRef(false);
+  const lastAttempt = useRef<AnnotationFields | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -83,9 +107,9 @@ export function AnnotationEditor({ postId }: { postId: number }) {
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (actionLock.current) return;
+    if (actionLock.current || uncertain) return;
     const data = new FormData(event.currentTarget);
-    const fields = {
+    const fields: AnnotationFields = {
       franchise: String(data.get("franchise") || "") || null,
       characters: String(data.get("characters") || "")
         .split(",")
@@ -95,8 +119,10 @@ export function AnnotationEditor({ postId }: { postId: number }) {
       composition: String(data.get("composition") || ""),
       tone: String(data.get("tone") || ""),
     };
+    lastAttempt.current = fields;
     actionLock.current = true;
     setSaving(true);
+    setUncertain(false);
     setStatus("Saving…");
     setStatusIsError(false);
     try {
@@ -133,6 +159,47 @@ export function AnnotationEditor({ postId }: { postId: number }) {
     }
   }
 
+  async function reconcile() {
+    if (actionLock.current || !lastAttempt.current) return;
+    actionLock.current = true;
+    setSaving(true);
+    setStatus("Checking the saved annotation…");
+    setStatusIsError(false);
+    try {
+      const response = await fetch(`${API_URL}/api/annotations/${postId}`, {
+        cache: "no-store",
+      });
+      const saved = await readApiJson(response, {
+        validate: isAnnotation,
+        failureMessage: "The saved annotation could not be checked.",
+        malformedMessage:
+          "The saved annotation response was unreadable. Your entries are still preserved.",
+      });
+      setAnnotation(saved);
+      setUncertain(false);
+      if (annotationMatchesFields(saved, lastAttempt.current)) {
+        setStatus("Save verified. The reviewed annotation is stored.");
+        setStatusIsError(false);
+      } else {
+        setStatus(
+          "The save did not take effect. Your unsaved entries are still here; review them and try again.",
+        );
+        setStatusIsError(true);
+      }
+    } catch (error) {
+      setStatus(
+        actionError(
+          error,
+          "The saved annotation could not be checked. Your entries are still preserved.",
+        ),
+      );
+      setStatusIsError(true);
+    } finally {
+      actionLock.current = false;
+      setSaving(false);
+    }
+  }
+
   if (!annotation) {
     return (
       <section className="panel" aria-busy={!statusIsError}>
@@ -152,12 +219,12 @@ export function AnnotationEditor({ postId }: { postId: number }) {
         <div><p className="eyebrow">Reviewed overlay</p><h2>Annotation</h2></div>
         <span className="pill">{annotation.review_status}</span>
       </div>
-      <label><span>Franchise / show</span><input className="field" name="franchise" defaultValue={current.franchise ?? ""} /></label>
-      <label><span>Characters, comma separated</span><input className="field" name="characters" defaultValue={(current.visible_characters ?? []).join(", ")} /></label>
-      <label><span>Scene description</span><textarea name="scene_description" rows={3} defaultValue={current.scene_description ?? ""} /></label>
+      <label><span>Franchise / show</span><input className="field" name="franchise" defaultValue={current.franchise ?? ""} disabled={saving || uncertain} /></label>
+      <label><span>Characters, comma separated</span><input className="field" name="characters" defaultValue={(current.visible_characters ?? []).join(", ")} disabled={saving || uncertain} /></label>
+      <label><span>Scene description</span><textarea name="scene_description" rows={3} defaultValue={current.scene_description ?? ""} disabled={saving || uncertain} /></label>
       <div className="two-fields">
-        <label><span>Composition</span><input className="field" name="composition" defaultValue={current.composition ?? ""} /></label>
-        <label><span>Tone</span><input className="field" name="tone" defaultValue={current.tone ?? ""} /></label>
+        <label><span>Composition</span><input className="field" name="composition" defaultValue={current.composition ?? ""} disabled={saving || uncertain} /></label>
+        <label><span>Tone</span><input className="field" name="tone" defaultValue={current.tone ?? ""} disabled={saving || uncertain} /></label>
       </div>
       <div className="form-actions">
         <button className="button" type="submit" disabled={saving || uncertain}>
@@ -167,9 +234,10 @@ export function AnnotationEditor({ postId }: { postId: number }) {
           <button
             type="button"
             className="text-link"
-            onClick={() => window.location.reload()}
+            onClick={reconcile}
+            disabled={saving}
           >
-            Reload to verify
+            Check saved state
           </button>
         )}
         <small role={statusIsError ? "alert" : "status"}>{status}</small>

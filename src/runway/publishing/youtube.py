@@ -2035,18 +2035,6 @@ class YouTubeBrowserPublisher:
             attempt.completed_at = now
         return len(attempts)
 
-    def _record_lineup_sync_issue(
-        self,
-        proposal_id: int,
-        event_type: str,
-        details: dict[str, object],
-    ) -> None:
-        with self.database.session() as session:
-            proposal = session.get(Proposal, proposal_id)
-            if proposal is not None:
-                proposal.scheduled_verified_at = None
-            audit(session, event_type, "proposal", proposal_id, details)
-
     def _prepared_post(
         self,
         proposal_id: int,

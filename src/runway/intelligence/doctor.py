@@ -157,7 +157,6 @@ class DoctorReport:
 class IntelligenceDoctor:
     """Read-only integrity audit for the canonical intelligence flywheel."""
 
-    expected_migration = "0010_neural_intelligence"
     forbidden_capability_tokens = IntelligenceCapabilityRegistry.FORBIDDEN_TOKENS
 
     def __init__(
@@ -213,6 +212,11 @@ class IntelligenceDoctor:
     def _check_core(self) -> None:
         path = self.settings.database_path
         wal_path = Path(f"{path}-wal")
+        snapshot_path = (
+            self.settings.project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
+        )
+        expected = load_schema_snapshot(snapshot_path)
+        expected_migration = expected.get("migration")
         self.report.measurements.update(
             {
                 "database_bytes": path.stat().st_size if path.exists() else 0,
@@ -255,20 +259,16 @@ class IntelligenceDoctor:
             )
         observed_migration = str(migration_row[0]) if migration_row else None
         self.report.measurements["migration"] = observed_migration
-        if observed_migration != self.expected_migration:
+        if observed_migration != expected_migration:
             self.report.add(
                 "critical",
                 "core.migration_head",
                 "Database migration is not at the canonical head.",
-                expected=self.expected_migration,
+                expected=expected_migration,
                 observed=observed_migration,
             )
 
         observed = schema_snapshot(self.database.engine)
-        snapshot_path = (
-            self.settings.project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
-        )
-        expected = load_schema_snapshot(snapshot_path)
         self.report.measurements["schema_fingerprint"] = observed["fingerprint"]
         if observed["fingerprint"] != expected.get("fingerprint"):
             self.report.add(

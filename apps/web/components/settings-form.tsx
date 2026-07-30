@@ -3,16 +3,34 @@
 import { FormEvent, useMemo, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
-import { actionError, readApiJson } from "@/lib/client-api";
+import {
+  actionError,
+  hasUncertainOutcome,
+  readApiJson,
+} from "@/lib/client-api";
 import { isValidTimeZone } from "@/lib/datetime";
 import { isSettings, type Settings } from "@/lib/settings";
 
 export type { Settings } from "@/lib/settings";
 
 type FormStatus = {
-  kind: "idle" | "saving" | "success" | "error";
+  kind: "idle" | "saving" | "checking" | "success" | "error";
   message: string;
 };
+
+type SettingsFields = {
+  timezone: string;
+  default_post_time: string;
+  duplicate_window_days: number;
+};
+
+function settingsMatchFields(settings: Settings, fields: SettingsFields) {
+  return (
+    settings.timezone === fields.timezone &&
+    settings.default_post_time === fields.default_post_time &&
+    settings.duplicate_window_days === fields.duplicate_window_days
+  );
+}
 
 export function SettingsForm({ initial }: { initial: Settings }) {
   const [settings, setSettings] = useState(initial);
@@ -26,6 +44,10 @@ export function SettingsForm({ initial }: { initial: Settings }) {
     message: "",
   });
   const actionLock = useRef(false);
+  const lastAttempt = useRef<SettingsFields | null>(null);
+  const [uncertain, setUncertain] = useState(false);
+  const actionRunning =
+    status.kind === "saving" || status.kind === "checking";
   const timezoneInvalid = !isValidTimeZone(draft.timezone.trim());
   const timeInvalid = !/^([01]\d|2[0-3]):[0-5]\d$/.test(
     draft.defaultPostTime,
@@ -63,14 +85,14 @@ export function SettingsForm({ initial }: { initial: Settings }) {
     value: string,
   ) {
     setDraft((current) => ({ ...current, [key]: value }));
-    if (status.kind !== "saving") {
+    if (!actionRunning) {
       setStatus({ kind: "idle", message: "" });
     }
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (actionLock.current) return;
+    if (actionLock.current || uncertain) return;
 
     const duplicateWindowDays = Number(draft.duplicateWindowDays);
     if (timezoneInvalid) {
@@ -94,11 +116,13 @@ export function SettingsForm({ initial }: { initial: Settings }) {
 
     actionLock.current = true;
     setStatus({ kind: "saving", message: "Saving settings…" });
-    const fields = {
+    const fields: SettingsFields = {
       timezone: draft.timezone.trim(),
       default_post_time: draft.defaultPostTime,
       duplicate_window_days: duplicateWindowDays,
     };
+    lastAttempt.current = fields;
+    setUncertain(false);
     try {
       const response = await fetch(`${API_URL}/api/settings/full`, {
         method: "PATCH",
@@ -117,12 +141,59 @@ export function SettingsForm({ initial }: { initial: Settings }) {
       });
       setStatus({ kind: "success", message: "Settings saved." });
     } catch (error) {
+      setUncertain(hasUncertainOutcome(error));
       setStatus({
         kind: "error",
         message: actionError(
           error,
           "Settings could not be saved. Check the local service and try again.",
           "The save response could not be verified. Your entries are preserved; reload before trying again.",
+        ),
+      });
+    } finally {
+      actionLock.current = false;
+    }
+  }
+
+  async function reconcile() {
+    if (actionLock.current || !lastAttempt.current) return;
+    actionLock.current = true;
+    setStatus({
+      kind: "checking",
+      message: "Checking the saved settings…",
+    });
+    try {
+      const response = await fetch(`${API_URL}/api/settings/full`, {
+        cache: "no-store",
+      });
+      const payload = await readApiJson(response, {
+        validate: isSettings,
+        failureMessage: "Saved settings could not be checked.",
+        malformedMessage:
+          "The settings check returned unreadable data. Your entries are still preserved.",
+      });
+      setSettings(payload);
+      setUncertain(false);
+      if (settingsMatchFields(payload, lastAttempt.current)) {
+        setDraft({
+          timezone: payload.timezone,
+          defaultPostTime: payload.default_post_time,
+          duplicateWindowDays: String(payload.duplicate_window_days),
+        });
+        setStatus({ kind: "success", message: "Settings save verified." });
+      } else {
+        setStatus({
+          kind: "error",
+          message:
+            "The save did not take effect. Your unsaved entries are still here; review them and try again.",
+        });
+      }
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message: actionError(
+          error,
+          "Saved settings could not be checked. Your entries are still preserved.",
         ),
       });
     } finally {
@@ -166,7 +237,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
       <form
         className="panel settings-form"
         onSubmit={save}
-        aria-busy={status.kind === "saving"}
+        aria-busy={actionRunning}
         noValidate
       >
         <label>
@@ -197,7 +268,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
               aria-invalid={
                 status.kind === "error" && timezoneInvalid ? "true" : undefined
               }
-              disabled={status.kind === "saving"}
+              disabled={actionRunning || uncertain}
             />
             <small id="timezone-hint">IANA format, for example America/Toronto</small>
           </label>
@@ -215,7 +286,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
               aria-invalid={
                 status.kind === "error" && timeInvalid ? "true" : undefined
               }
-              disabled={status.kind === "saving"}
+              disabled={actionRunning || uncertain}
             />
           </label>
         </div>
@@ -245,16 +316,30 @@ export function SettingsForm({ initial }: { initial: Settings }) {
                 ? "true"
                 : undefined
             }
-            disabled={status.kind === "saving"}
+            disabled={actionRunning || uncertain}
           />
         </label>
-        <button
-          className="button"
-          type="submit"
-          disabled={status.kind === "saving"}
-        >
-          {status.kind === "saving" ? "Saving settings…" : "Save settings"}
-        </button>
+        <div className="form-actions">
+          <button
+            className="button"
+            type="submit"
+            disabled={actionRunning || uncertain}
+          >
+            {status.kind === "saving" ? "Saving settings…" : "Save settings"}
+          </button>
+          {uncertain && (
+            <button
+              className="text-link"
+              type="button"
+              onClick={reconcile}
+              disabled={actionRunning}
+            >
+              {status.kind === "checking"
+                ? "Checking saved state…"
+                : "Check saved state"}
+            </button>
+          )}
+        </div>
         <small
           className={`form-message form-message-${status.kind}`}
           id="settings-form-message"
