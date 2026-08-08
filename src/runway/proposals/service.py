@@ -533,6 +533,7 @@ class ProposalService:
             ]
 
         result: dict[str, object] = {
+            "generated_at": datetime.now(timezone).isoformat(),
             "timezone": timezone_name,
             "default_time": default_time,
             "posts_per_day": 1,

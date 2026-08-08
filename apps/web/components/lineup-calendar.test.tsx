@@ -14,8 +14,8 @@ import { LineupCalendar } from "./lineup-calendar";
 const first: Proposal = {
   id: 12,
   generation_run_id: 1,
-  planned_publish_at: "2026-08-08T10:00:00-04:00",
-  scheduled_publish_at: "2026-08-08T10:00:00-04:00",
+  planned_publish_at: "2099-08-08T10:00:00-04:00",
+  scheduled_publish_at: "2099-08-08T10:00:00-04:00",
   status: "internally_scheduled",
   candidate_image_id: 7,
   backup_candidate_ids: [],
@@ -50,18 +50,19 @@ const first: Proposal = {
 const second: Proposal = {
   ...first,
   id: 13,
-  planned_publish_at: "2026-08-09T10:00:00-04:00",
-  scheduled_publish_at: "2026-08-09T10:00:00-04:00",
+  planned_publish_at: "2099-08-09T10:00:00-04:00",
+  scheduled_publish_at: "2099-08-09T10:00:00-04:00",
   recommended_caption: "Second line",
   final_caption: "Second line",
 };
 
 const lineup: LineupSchedule = {
+  generated_at: "2099-08-07T22:00:00-04:00",
   timezone: "America/Toronto",
   default_time: "10:00",
   posts_per_day: 1,
   coverage: 2,
-  next_available_at: "2026-08-10T10:00:00-04:00",
+  next_available_at: "2099-08-10T10:00:00-04:00",
   scheduled: [first, second],
 };
 
@@ -89,7 +90,7 @@ describe("LineupCalendar", () => {
       target: { value: "Wait... what?!" },
     });
     fireEvent.change(screen.getByLabelText(/Release date/), {
-      target: { value: "2026-08-09" },
+      target: { value: "2099-08-09" },
     });
 
     expect(screen.getByText("Swap on confirmation.")).toBeInTheDocument();
@@ -98,7 +99,7 @@ describe("LineupCalendar", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       final_caption: "Wait... what?!",
-      scheduled_publish_at: "2026-08-09T10:00:00-04:00",
+      scheduled_publish_at: "2099-08-09T10:00:00-04:00",
       confirmed: true,
     });
   });
@@ -211,6 +212,84 @@ describe("LineupCalendar", () => {
     expect(screen.getByLabelText("Runway release agenda")).toBeInTheDocument();
     expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("First line");
     expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent("Second line");
+  });
+
+  it("keeps the calendar month synchronized with the selected upcoming post", () => {
+    const september: Proposal = {
+      ...second,
+      id: 14,
+      planned_publish_at: "2099-09-02T10:00:00-04:00",
+      scheduled_publish_at: "2099-09-02T10:00:00-04:00",
+      recommended_caption: "September line",
+      final_caption: "September line",
+    };
+    render(
+      <LineupCalendar
+        initialLineup={{ ...lineup, coverage: 3, scheduled: [first, second, september] }}
+        publishingEnabled
+      />,
+    );
+
+    const controls = screen.getByLabelText("Calendar controls");
+    expect(within(controls).getByText("August 2099")).toBeInTheDocument();
+    fireEvent.click(
+      within(screen.getByLabelText("Upcoming posts")).getByRole("button", {
+        name: /September line/,
+      }),
+    );
+
+    expect(within(controls).getByText("September 2099")).toBeInTheDocument();
+    expect(screen.getByLabelText("Selected post")).toHaveTextContent(
+      "September line",
+    );
+  });
+
+  it("opens on the next relevant post instead of stale external history", () => {
+    const staleExternal: Proposal = {
+      ...first,
+      id: 31,
+      status: "externally_scheduled",
+      planned_publish_at: "2026-07-19T10:00:00-04:00",
+      scheduled_publish_at: "2026-07-19T10:00:00-04:00",
+      recommended_caption: "Stale external",
+      final_caption: "Stale external",
+    };
+    const futureExternal: Proposal = {
+      ...second,
+      id: 32,
+      status: "externally_scheduled",
+      planned_publish_at: "2026-08-09T10:00:00-04:00",
+      scheduled_publish_at: "2026-08-09T10:00:00-04:00",
+      recommended_caption: "Next external",
+      final_caption: "Next external",
+    };
+
+    render(
+      <LineupCalendar
+        initialLineup={{
+          ...lineup,
+          generated_at: "2026-08-08T18:00:00-04:00",
+          scheduled: [staleExternal, futureExternal],
+        }}
+        publishingEnabled
+      />,
+    );
+
+    expect(screen.getByLabelText("Selected post")).toHaveTextContent(
+      "Next external",
+    );
+    expect(screen.getByLabelText("Upcoming posts")).toHaveTextContent(
+      "Next external",
+    );
+    expect(screen.getByLabelText("Upcoming posts")).not.toHaveTextContent(
+      "Stale external",
+    );
+    expect(screen.getByLabelText("Past scheduled posts")).toHaveTextContent(
+      "Stale external",
+    );
+    expect(
+      within(screen.getByLabelText("Calendar controls")).getByText("August 2026"),
+    ).toBeInTheDocument();
   });
 
   it("retries only a confirmed pre-submission failure", async () => {
@@ -484,7 +563,7 @@ describe("LineupCalendar", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("Swap on confirmation.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Release date")).toHaveValue("2026-08-09");
+    expect(screen.getByLabelText("Release date")).toHaveValue("2099-08-09");
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Confirm changes" }),
     );
@@ -506,14 +585,22 @@ describe("LineupCalendar", () => {
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("Swap on confirmation.")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("there will still be only one Runway post per day");
-    expect(screen.getByLabelText("Release date")).toHaveValue("2026-08-09");
+    expect(screen.getByLabelText("Release date")).toHaveValue("2099-08-09");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("prevents a Toronto slot in the past and explains why", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-18T14:30:00Z"));
-    render(<LineupCalendar initialLineup={lineup} publishingEnabled />);
+    render(
+      <LineupCalendar
+        initialLineup={{
+          ...lineup,
+          generated_at: "2026-07-18T10:30:00-04:00",
+        }}
+        publishingEnabled
+      />,
+    );
 
     fireEvent.click(
       screen.getByRole("button", { name: /Edit or choose date|Reschedule overdue post/ }),
@@ -544,6 +631,7 @@ describe("LineupCalendar", () => {
     vi.setSystemTime(new Date("2026-07-18T16:30:00Z"));
     const pacific = {
       ...lineup,
+      generated_at: "2026-07-18T09:30:00-07:00",
       timezone: "America/Vancouver",
     };
     render(<LineupCalendar initialLineup={pacific} publishingEnabled />);

@@ -212,3 +212,34 @@ def test_activity_categories_follow_frontend_priority_and_support_pagination(
         activity.list_events(category="all", limit=1, offset=1)[0]["event_type"]
         == "caption_feedback_recorded"
     )
+
+
+def test_activity_orders_mixed_timezone_timestamp_formats_by_instant(
+    database: Database,
+) -> None:
+    with database.session() as session:
+        session.execute(
+            text(
+                "INSERT INTO audit_events "
+                "(event_type, entity_type, entity_id, details_json, created_at) "
+                "VALUES (:event_type, 'system', NULL, '{}', :created_at)"
+            ),
+            [
+                {
+                    "event_type": "mixed_timestamp_earlier",
+                    "created_at": "2026-07-23 14:12:16.961475+00:00",
+                },
+                {
+                    "event_type": "mixed_timestamp_later",
+                    "created_at": "2026-07-23 18:20:09.909529",
+                },
+            ],
+        )
+
+    events = AuditService(database).list_events(category="all")
+    mixed = [
+        event["event_type"]
+        for event in events
+        if str(event["event_type"]).startswith("mixed_timestamp_")
+    ]
+    assert mixed == ["mixed_timestamp_later", "mixed_timestamp_earlier"]

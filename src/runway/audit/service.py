@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import and_, desc, not_, or_, select
+from sqlalchemy import and_, desc, func, not_, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from runway.db.base import Database
@@ -58,7 +58,7 @@ class AuditService:
     ) -> list[dict[str, object]]:
         with self.database.session() as session:
             statement = select(AuditEvent).order_by(
-                desc(AuditEvent.created_at), desc(AuditEvent.id)
+                desc(func.julianday(AuditEvent.created_at)), desc(AuditEvent.id)
             )
             if event_type:
                 statement = statement.where(AuditEvent.event_type == event_type)

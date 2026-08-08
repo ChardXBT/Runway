@@ -234,6 +234,7 @@ export function isEditorialEnvelope(value: unknown): value is EditorialEnvelope 
 export function isLineupSchedule(value: unknown): value is LineupSchedule {
   if (!isRecord(value)) return false;
   return (
+    isDateString(value.generated_at) &&
     typeof value.timezone === "string" &&
     isValidTimeZone(value.timezone) &&
     typeof value.default_time === "string" &&

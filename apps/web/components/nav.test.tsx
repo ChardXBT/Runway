@@ -18,6 +18,10 @@ describe("Nav", () => {
     );
     expect(screen.getByRole("link", { name: "Lineup" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Connector" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Archive/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Profile/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Activity/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Settings/ })).toBeInTheDocument();
     expect(screen.getByText("Qlob editorial desk")).toBeInTheDocument();
     expect(screen.getByText("Assisted publishing")).toBeInTheDocument();
     expect(screen.getByText("No browser actions are queued")).toBeInTheDocument();
@@ -34,12 +38,12 @@ describe("Nav", () => {
     const openMenu = screen.getByLabelText("Open Runway menu");
     fireEvent.click(openMenu);
     const closeMenu = await screen.findByLabelText("Close Runway menu");
-    expect(closeMenu.closest("details")).toHaveAttribute("open");
+    expect(closeMenu.closest(".nav-menu")).toHaveClass("open");
 
     fireEvent.keyDown(document, { key: "Escape" });
 
     const reopenedLabel = await screen.findByLabelText("Open Runway menu");
-    expect(reopenedLabel.closest("details")).not.toHaveAttribute("open");
+    expect(reopenedLabel.closest(".nav-menu")).not.toHaveClass("open");
     expect(reopenedLabel).toHaveFocus();
   });
 });

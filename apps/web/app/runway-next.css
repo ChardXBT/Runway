@@ -295,12 +295,8 @@ code {
   flex-direction: column;
 }
 
-.nav-menu > summary {
+.nav-menu-trigger {
   display: none;
-}
-
-.nav-menu:not([open]) > .nav-menu-popover {
-  display: flex;
 }
 
 .nav-menu-popover {
@@ -2986,9 +2982,10 @@ label > span,
     display: block;
   }
 
-  .nav-menu > summary {
+  .nav-menu-trigger {
     width: 42px;
     height: 42px;
+    padding: 0;
     display: grid;
     place-content: center;
     gap: 4px;
@@ -2999,18 +2996,14 @@ label > span,
     transition: transform var(--duration-press) var(--ease-out);
   }
 
-  .nav-menu > summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .nav-menu > summary span {
+  .nav-menu-trigger span {
     width: 17px;
     height: 1.5px;
     display: block;
     background: white;
   }
 
-  .nav-menu:not([open]) > .nav-menu-popover {
+  .nav-menu:not(.open) > .nav-menu-popover {
     display: none;
   }
 
@@ -3033,7 +3026,7 @@ label > span,
   }
 
   @starting-style {
-    .nav-menu[open] .nav-menu-popover {
+    .nav-menu.open .nav-menu-popover {
       opacity: 0;
       transform: translateY(-8px) scale(0.98);
     }

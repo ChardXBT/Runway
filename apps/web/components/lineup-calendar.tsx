@@ -164,6 +164,32 @@ const idlePublisherQueue: PublisherQueueStatus = {
   proposal_ids: [],
 };
 
+function defaultSelection(
+  scheduled: Proposal[],
+  published: Proposal[],
+  nowMs: number,
+) {
+  const needsAttention = scheduled.find((proposal) =>
+    ["publish_failed", "publish_unverified", "publishing"].includes(
+      proposal.status,
+    ),
+  );
+  const localDraft = scheduled.find(
+    (proposal) => proposal.status === "internally_scheduled",
+  );
+  const nextUpcoming = scheduled.find(
+    (proposal) => new Date(proposalSlot(proposal)).getTime() > nowMs,
+  );
+  return (
+    needsAttention ??
+    localDraft ??
+    nextUpcoming ??
+    scheduled.at(-1) ??
+    published[0] ??
+    null
+  );
+}
+
 export function LineupCalendar({
   initialLineup,
   initialPublished = [],
@@ -198,8 +224,12 @@ export function LineupCalendar({
   const [publisherTargetIds, setPublisherTargetIds] = useState<number[]>(
     initialPublisherQueue.proposal_ids,
   );
-  const initialSelection =
-    initialLineup.scheduled[0] ?? initialPublishedSorted[0] ?? null;
+  const initialNowMs = new Date(initialLineup.generated_at).getTime();
+  const initialSelection = defaultSelection(
+    initialLineup.scheduled,
+    initialPublishedSorted,
+    initialNowMs,
+  );
   const initialMonthValue = initialSelection
     ? proposalSlot(initialSelection)
     : undefined;
@@ -227,7 +257,7 @@ export function LineupCalendar({
   const [recentlyChangedIds, setRecentlyChangedIds] = useState<number[]>([]);
   const [assistedWorkspace, setAssistedWorkspace] =
     useState<AssistedWorkspace | null>(null);
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(initialNowMs);
   const actionLock = useRef(false);
   const dialogRef = useRef<HTMLElement>(null);
   const dialogOpener = useRef<HTMLElement | null>(null);
@@ -334,6 +364,24 @@ export function LineupCalendar({
       ),
     [lineup.scheduled],
   );
+  const pastExternallyScheduled = useMemo(
+    () =>
+      lineup.scheduled.filter((proposal) => {
+        const instant = new Date(proposalSlot(proposal)).getTime();
+        return (
+          proposal.status === "externally_scheduled" &&
+          Number.isFinite(instant) &&
+          instant <= nowMs + 5 * 60_000
+        );
+      }),
+    [lineup.scheduled, nowMs],
+  );
+  const currentScheduled = useMemo(() => {
+    const pastIds = new Set(
+      pastExternallyScheduled.map((proposal) => proposal.id),
+    );
+    return lineup.scheduled.filter((proposal) => !pastIds.has(proposal.id));
+  }, [lineup.scheduled, pastExternallyScheduled]);
 
   function setNotice(text: string, error = false) {
     setMessage(text);
@@ -393,6 +441,7 @@ export function LineupCalendar({
   function select(proposal: Proposal) {
     if (busy !== null) return;
     setSelectedId(proposal.id);
+    setMonth(monthStart(proposalSlot(proposal), lineup.timezone));
     setNotice("");
   }
 
@@ -412,6 +461,7 @@ export function LineupCalendar({
     if (!canEditProposal(proposal)) return;
     rememberOpener(opener);
     setSelectedId(proposal.id);
+    setMonth(monthStart(dateOverride ?? proposalSlot(proposal), lineup.timezone));
     setDraftCaption(proposal.final_caption);
     setDraftDate(
       dateOverride ??
@@ -596,6 +646,9 @@ export function LineupCalendar({
       });
       const payload = await parseMutation(response);
       setLineup(payload.lineup);
+      if (newTimestamp) {
+        setMonth(monthStart(newTimestamp, lineup.timezone));
+      }
       const workspaceInvalidated = assistedWorkspace !== null;
       if (workspaceInvalidated) setAssistedWorkspace(null);
       setRecentlyChangedIds(
@@ -717,9 +770,15 @@ export function LineupCalendar({
       setLineup(payload.lineup);
       const workspaceInvalidated = assistedWorkspace !== null;
       if (workspaceInvalidated) setAssistedWorkspace(null);
-      setSelectedId(
-        payload.lineup.scheduled[0]?.id ?? published[0]?.id ?? null,
+      const nextSelection = defaultSelection(
+        payload.lineup.scheduled,
+        published,
+        new Date(payload.lineup.generated_at).getTime(),
       );
+      setSelectedId(nextSelection?.id ?? null);
+      if (nextSelection) {
+        setMonth(monthStart(proposalSlot(nextSelection), lineup.timezone));
+      }
       setDialog(null);
       setNotice(
         workspaceInvalidated
@@ -1135,7 +1194,7 @@ export function LineupCalendar({
           <p className="eyebrow">Qlob scheduler</p>
           <h1>Release calendar.</h1>
           <p className="lede">
-            {lineup.coverage} upcoming{" "}
+            {lineup.coverage} scheduled{" "}
             {lineup.coverage === 1 ? "post" : "posts"} organized. One Runway post
             per local day in {displayTimezone(lineup.timezone)}. New posts start at{" "}
             {displayTime(lineup.default_time)}, and every post can use its own time.
@@ -1404,11 +1463,11 @@ export function LineupCalendar({
             <section className="lineup-upcoming" aria-label="Upcoming posts">
               <div className="lineup-section-label">
                 <strong>Upcoming</strong>
-                <span>{lineup.coverage} total</span>
+                <span>{currentScheduled.length} current</span>
               </div>
               <div className="lineup-upcoming-list">
-                {lineup.scheduled.length ? (
-                  lineup.scheduled.map((proposal) => (
+                {currentScheduled.length ? (
+                  currentScheduled.map((proposal) => (
                     <button
                       type="button"
                       key={proposal.id}
@@ -1443,6 +1502,50 @@ export function LineupCalendar({
                 )}
               </div>
             </section>
+
+            {pastExternallyScheduled.length > 0 && (
+              <section
+                className="lineup-upcoming lineup-history"
+                aria-label="Past scheduled posts"
+              >
+                <div className="lineup-section-label">
+                  <strong>Past scheduled</strong>
+                  <span>{pastExternallyScheduled.length} locked</span>
+                </div>
+                <div className="lineup-upcoming-list">
+                  {pastExternallyScheduled.map((proposal) => (
+                    <button
+                      type="button"
+                      key={proposal.id}
+                      className={[
+                        selectedId === proposal.id ? "selected" : "",
+                        `status-tone-${statusTone(proposal.status)}`,
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      onClick={() => select(proposal)}
+                    >
+                      {proposal.candidate?.preview_url && (
+                        <img
+                          src={`${API_URL}${proposal.candidate.preview_url}`}
+                          alt=""
+                          loading="lazy"
+                        />
+                      )}
+                      <span>
+                        <time>
+                          {slotFormatter.format(
+                            new Date(proposalSlot(proposal)),
+                          )}
+                        </time>
+                        <strong>{proposal.final_caption}</strong>
+                        <small>{statusLabel(proposal.status)}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {published.length > 0 && (
               <section

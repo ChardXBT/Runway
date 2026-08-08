@@ -163,6 +163,7 @@ export type PublisherConnectionStatus = {
 };
 
 export type LineupSchedule = {
+  generated_at: string;
   timezone: string;
   default_time: string;
   posts_per_day: number;

@@ -85,23 +85,23 @@ export function Nav({
   publishingMode?: "assisted" | "authorized_browser";
 }) {
   const pathname = usePathname();
-  const menuRef = useRef<HTMLDetailsElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     function closeMenu(event: PointerEvent) {
       const menu = menuRef.current;
-      if (menu?.open && event.target instanceof Node && !menu.contains(event.target)) {
-        menu.open = false;
+      if (menuOpen && event.target instanceof Node && !menu?.contains(event.target)) {
         setMenuOpen(false);
       }
     }
 
     function closeMenuWithKeyboard(event: KeyboardEvent) {
-      if (event.key !== "Escape" || !menuRef.current?.open) return;
-      menuRef.current.open = false;
+      if (event.key !== "Escape" || !menuOpen) return;
       setMenuOpen(false);
-      menuRef.current.querySelector("summary")?.focus();
+      menuRef.current
+        ?.querySelector<HTMLButtonElement>(".nav-menu-trigger")
+        ?.focus();
     }
 
     document.addEventListener("pointerdown", closeMenu);
@@ -110,11 +110,9 @@ export function Nav({
       document.removeEventListener("pointerdown", closeMenu);
       document.removeEventListener("keydown", closeMenuWithKeyboard);
     };
-  }, []);
+  }, [menuOpen]);
 
   function dismissMenu() {
-    if (!menuRef.current) return;
-    menuRef.current.open = false;
     setMenuOpen(false);
   }
 
@@ -155,16 +153,21 @@ export function Nav({
           })}
         </nav>
 
-        <details
+        <div
           ref={menuRef}
-          className="nav-menu"
-          onToggle={(event) => setMenuOpen(event.currentTarget.open)}
+          className={menuOpen ? "nav-menu open" : "nav-menu"}
         >
-          <summary aria-label={menuOpen ? "Close Runway menu" : "Open Runway menu"}>
+          <button
+            type="button"
+            className="nav-menu-trigger"
+            aria-label={menuOpen ? "Close Runway menu" : "Open Runway menu"}
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
             <span aria-hidden="true" />
             <span aria-hidden="true" />
             <span aria-hidden="true" />
-          </summary>
+          </button>
           <div className="nav-menu-popover">
             <span className="nav-section-label">Workspace</span>
             <nav aria-label="Runway menu">
@@ -197,7 +200,7 @@ export function Nav({
               </span>
             </div>
           </div>
-        </details>
+        </div>
       </div>
     </header>
   );

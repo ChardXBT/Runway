@@ -26,8 +26,10 @@ type Profile = {
 type Evaluation = {
   profile_version: number;
   image_caption_matching: { accuracy: number; evaluated: number };
-  qlob_caption_ranking_accuracy: number;
-  retrieval_top3_franchise_relevance: number;
+  channel_caption_ranking_accuracy?: number;
+  qlob_caption_ranking_accuracy?: number;
+  retrieval_top3_topic_relevance?: number;
+  retrieval_top3_franchise_relevance?: number;
   duplicate_detection: { transformed_true_positive_rate: number; unrelated_false_positive_rate: number };
 };
 
@@ -112,14 +114,22 @@ function isProfile(value: unknown): value is Profile {
 }
 
 function isEvaluation(value: unknown): value is Evaluation {
+  const captionRanking = isRecord(value)
+    ? value.channel_caption_ranking_accuracy ??
+      value.qlob_caption_ranking_accuracy
+    : undefined;
+  const retrievalRelevance = isRecord(value)
+    ? value.retrieval_top3_topic_relevance ??
+      value.retrieval_top3_franchise_relevance
+    : undefined;
   return (
     isRecord(value) &&
     typeof value.profile_version === "number" &&
     isRecord(value.image_caption_matching) &&
     typeof value.image_caption_matching.accuracy === "number" &&
     typeof value.image_caption_matching.evaluated === "number" &&
-    typeof value.qlob_caption_ranking_accuracy === "number" &&
-    typeof value.retrieval_top3_franchise_relevance === "number" &&
+    typeof captionRanking === "number" &&
+    typeof retrievalRelevance === "number" &&
     isRecord(value.duplicate_detection) &&
     typeof value.duplicate_detection.transformed_true_positive_rate ===
       "number" &&
@@ -189,6 +199,12 @@ export default async function ProfilePage() {
   if (!profile) {
     return <><p className="eyebrow">Style intelligence</p><h1>No profile yet.</h1><section className="panel empty"><div><strong>Analyze the fixture catalogue first.</strong>Run <code>runway analyze history --resume</code>, then <code>runway profile build</code>.</div></section></>;
   }
+  const captionRankingAccuracy =
+    evaluation?.channel_caption_ranking_accuracy ??
+    evaluation?.qlob_caption_ranking_accuracy;
+  const retrievalRelevance =
+    evaluation?.retrieval_top3_topic_relevance ??
+    evaluation?.retrieval_top3_franchise_relevance;
   return (
     <>
       <header className="page-header">
@@ -261,7 +277,9 @@ export default async function ProfilePage() {
       )}
       <section className="panel"><p className="eyebrow">Representative images + captions</p><div className="quote-list">{profile.representative_positive_examples.map((example) => <Link href={`/catalogue/${example.post_id}`} key={example.post_id}>{example.media_url && <img src={`${process.env.NEXT_PUBLIC_RUNWAY_API_URL ?? "http://127.0.0.1:8000"}${example.media_url}`} alt="" />}<span>#{example.post_id}</span><q>{example.caption}</q></Link>)}</div></section>
       <section className="panel"><p className="eyebrow">Rotation observations</p><ul className="clean-list">{profile.rotation_patterns.map((item) => <li key={item}>{item}</li>)}</ul></section>
-      {evaluation?.profile_version === profile.version && <section className="panel"><p className="eyebrow">Measured holdout evaluation · v{evaluation.profile_version}</p><div className="evaluation-grid"><div><span>Image-caption matching</span><strong><Percent value={evaluation.image_caption_matching.accuracy} /></strong></div><div><span>Caption ranking</span><strong><Percent value={evaluation.qlob_caption_ranking_accuracy} /></strong></div><div><span>Retrieval relevance</span><strong><Percent value={evaluation.retrieval_top3_franchise_relevance} /></strong></div><div><span>Duplicate recall</span><strong><Percent value={evaluation.duplicate_detection.transformed_true_positive_rate} /></strong></div></div><small>Holdout metrics diagnose retrieval behavior; every generated caption still requires human judgment.</small></section>}
+      {evaluation?.profile_version === profile.version &&
+        captionRankingAccuracy !== undefined &&
+        retrievalRelevance !== undefined && <section className="panel"><p className="eyebrow">Measured holdout evaluation · v{evaluation.profile_version}</p><div className="evaluation-grid"><div><span>Image-caption matching</span><strong><Percent value={evaluation.image_caption_matching.accuracy} /></strong></div><div><span>Caption ranking</span><strong><Percent value={captionRankingAccuracy} /></strong></div><div><span>Retrieval relevance</span><strong><Percent value={retrievalRelevance} /></strong></div><div><span>Duplicate recall</span><strong><Percent value={evaluation.duplicate_detection.transformed_true_positive_rate} /></strong></div></div><small>Holdout metrics diagnose retrieval behavior; every generated caption still requires human judgment.</small></section>}
     </>
   );
 }
