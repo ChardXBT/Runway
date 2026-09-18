@@ -1781,7 +1781,7 @@ class RetrievalService:
             raise ValueError("reference media representations are incompatible")
         value = np.mean(np.vstack(vectors), axis=0)
         norm = float(np.linalg.norm(value))
-        return value / norm if norm else value
+        return value / norm if norm else value  # type: ignore[no-any-return]
 
     @classmethod
     def _excluded_entity_match(

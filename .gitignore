@@ -27,3 +27,7 @@ data/*
 Thumbs.db
 .idea/
 *.log
+
+# Local Windows automation
+A_Runway.bat
+A_Runway_Task.xml
