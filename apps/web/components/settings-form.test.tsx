@@ -28,7 +28,7 @@ const settings: Settings = {
   youtube_automation_authorized: true,
   authorized_browser_ready: true,
   caption_question_first: true,
-  publisher_channel_id: "UCQ-nHijGwxNU3Go_wyLQ5Ng",
+  publisher_channel_id: "UCxxxxxxxxxxxxxxxxxxxxxx",
   publisher_browser_channel: "chrome",
   blocked_sources: [],
 };

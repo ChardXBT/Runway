@@ -7,9 +7,9 @@ import { AssistedPublishingWorkspace } from "./assisted-publishing-workspace";
 const workspace: Workspace = {
   mode: "assisted",
   channel_name: "Qlob",
-  channel_id: "UCQ-nHijGwxNU3Go_wyLQ5Ng",
+  channel_id: "UCxxxxxxxxxxxxxxxxxxxxxx",
   timezone: "America/Toronto",
-  youtube_url: "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts",
+  youtube_url: "https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx/posts",
   items: [
     {
       proposal_id: 42,

@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     duplicate_semantic_threshold: float = 0.99
     caption_duplicate_threshold: float = 0.92
     caption_question_first: bool = True
-    publisher_channel_id: str = "UCQ-nHijGwxNU3Go_wyLQ5Ng"
+    publisher_channel_id: str = "UCxxxxxxxxxxxxxxxxxxxxxx"
     publisher_confirmation_ttl_minutes: int = Field(default=10, ge=2, le=30)
     publisher_browser_channel: Literal["chrome", "chromium"] = "chrome"
     publisher_chrome_path: Path | None = None

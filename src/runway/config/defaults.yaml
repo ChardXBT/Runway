@@ -10,7 +10,7 @@ publishing_enabled: false
 publishing_mode: assisted
 youtube_automation_authorized: false
 caption_question_first: true
-publisher_channel_id: UCQ-nHijGwxNU3Go_wyLQ5Ng
+publisher_channel_id: UCxxxxxxxxxxxxxxxxxxxxxx
 publisher_confirmation_ttl_minutes: 10
 capture_scroll_delay_ms: 1800
 capture_idle_cycles_before_stop: 30

@@ -7,10 +7,11 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 3000",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "next": "^16.2.12",
+    "next": "^16.3.6",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -22,7 +23,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "eslint": "^9.0.0",
-    "eslint-config-next": "^16.2.12",
+    "eslint-config-next": "^16.3.6",
     "jsdom": "^27.0.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.9.0",
@@ -30,8 +31,8 @@
   },
   "overrides": {
     "next": {
-      "postcss": "^8.5.19"
+      "postcss": "^8.5.22"
     },
-    "sharp": "^0.35.0"
+    "sharp": "^0.35.4"
   }
 }

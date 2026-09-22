@@ -112,7 +112,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
 
@@ -161,7 +160,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Reject" }));
@@ -194,7 +192,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Fewer like this" }));
@@ -219,7 +216,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
     const controls = screen.getByLabelText("Decision controls");
@@ -250,7 +246,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
 
@@ -279,7 +274,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Regenerate captions" }));
@@ -306,7 +300,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={null}
         initialWorkflow={{ ...workflow, needs_review: 0 }}
-        publishingEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Generate more" }));
@@ -350,7 +343,6 @@ describe("ReviewWorkspace", () => {
           completed_at: null,
           detail: "Discovering images and generating captions.",
         }}
-        publishingEnabled
       />,
     );
 
@@ -391,7 +383,6 @@ describe("ReviewWorkspace", () => {
           completed_at: null,
           detail: "Discovering images and generating captions.",
         }}
-        publishingEnabled
       />,
     );
 
@@ -429,7 +420,6 @@ describe("ReviewWorkspace", () => {
           completed_at: null,
           detail: "Discovering images and generating captions.",
         }}
-        publishingEnabled
       />,
     );
 
@@ -458,7 +448,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={{ ...workflow, needs_review: 5 }}
-        publishingEnabled
       />,
     );
     markProposalImageLoaded();
@@ -499,7 +488,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
     markProposalImageLoaded();
@@ -530,7 +518,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
     markProposalImageLoaded();
@@ -560,7 +547,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
     markProposalImageLoaded();
@@ -607,7 +593,6 @@ describe("ReviewWorkspace", () => {
       <ReviewWorkspace
         initialProposal={proposal}
         initialWorkflow={workflow}
-        publishingEnabled
       />,
     );
     markProposalImageLoaded();

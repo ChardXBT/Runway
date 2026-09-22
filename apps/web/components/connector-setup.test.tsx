@@ -71,7 +71,7 @@ describe("ConnectorSetup", () => {
     render(
       <ConnectorSetup
         connectorEmail="tryrunwaytoday@gmail.com"
-        configuredChannelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        configuredChannelId="UCxxxxxxxxxxxxxxxxxxxxxx"
         browserName="Google Chrome"
         publishingMode="assisted"
         publishingEnabled={false}

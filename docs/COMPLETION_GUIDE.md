@@ -101,7 +101,7 @@ Assisted mode is the safe default:
 RUNWAY_PUBLISHING_MODE=assisted
 RUNWAY_PUBLISHING_ENABLED=false
 RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=false
-RUNWAY_PUBLISHER_CHANNEL_ID=UCQ-nHijGwxNU3Go_wyLQ5Ng
+RUNWAY_PUBLISHER_CHANNEL_ID=UCxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 Authorized browser operation requires all three interlocks:

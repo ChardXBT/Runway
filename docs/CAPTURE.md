@@ -13,7 +13,7 @@ HTML snapshot, screenshot, and JSON diagnostic under `data/snapshots/`.
 Use the canonical Qlob channel-ID route:
 
 ```powershell
-.\.venv\Scripts\runway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts" --headed --resume
+.\.venv\Scripts\runway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx/posts" --headed --resume
 ```
 
 YouTube can pause at continuation boundaries or replace continuation elements while they are being

@@ -44,7 +44,7 @@ describe("PlatformConnection", () => {
     render(
       <PlatformConnection
         publishingEnabled
-        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        channelId="UCxxxxxxxxxxxxxxxxxxxxxx"
         connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
         initialConnection={initialConnection}
@@ -72,7 +72,7 @@ describe("PlatformConnection", () => {
     render(
       <PlatformConnection
         publishingEnabled={false}
-        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        channelId="UCxxxxxxxxxxxxxxxxxxxxxx"
         connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
         initialConnection={{
@@ -117,7 +117,7 @@ describe("PlatformConnection", () => {
     render(
       <PlatformConnection
         publishingEnabled
-        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        channelId="UCxxxxxxxxxxxxxxxxxxxxxx"
         connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
         initialConnection={initialConnection}
@@ -159,7 +159,7 @@ describe("PlatformConnection", () => {
     render(
       <PlatformConnection
         publishingEnabled
-        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        channelId="UCxxxxxxxxxxxxxxxxxxxxxx"
         connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
         initialConnection={{
@@ -195,7 +195,7 @@ describe("PlatformConnection", () => {
     render(
       <PlatformConnection
         publishingEnabled
-        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        channelId="UCxxxxxxxxxxxxxxxxxxxxxx"
         connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
         initialConnection={{
@@ -232,7 +232,7 @@ describe("PlatformConnection", () => {
     render(
       <PlatformConnection
         publishingEnabled
-        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        channelId="UCxxxxxxxxxxxxxxxxxxxxxx"
         connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
         initialConnection={{
@@ -265,7 +265,7 @@ describe("PlatformConnection", () => {
     render(
       <PlatformConnection
         publishingEnabled
-        channelId="UCQ-nHijGwxNU3Go_wyLQ5Ng"
+        channelId="UCxxxxxxxxxxxxxxxxxxxxxx"
         connectorEmail="tryrunwaytoday@gmail.com"
         browserChannel="chrome"
         initialConnection={{

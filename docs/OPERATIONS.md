@@ -25,7 +25,7 @@ failure stops a run.
 ## One-time data preparation
 
 ```powershell
-.\.venv\Scripts\runway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts" --headed --resume
+.\.venv\Scripts\runway.exe capture youtube-posts --channel-url "https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx/posts" --headed --resume
 .\.venv\Scripts\runway.exe catalog verify
 .\.venv\Scripts\runway.exe analyze history --resume
 .\.venv\Scripts\runway.exe profile build

@@ -405,10 +405,10 @@ describe("LineupCalendar", () => {
         assisted_workspace: {
           mode: "assisted",
           channel_name: "Qlob",
-          channel_id: "UCQ-nHijGwxNU3Go_wyLQ5Ng",
+          channel_id: "UCxxxxxxxxxxxxxxxxxxxxxx",
           timezone: "America/Toronto",
           youtube_url:
-            "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts",
+            "https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx/posts",
           items: [first, second].map((proposal) => ({
             proposal_id: proposal.id,
             planned_publish_at:

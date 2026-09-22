@@ -108,8 +108,8 @@ def test_publisher_selects_the_only_visible_control_from_responsive_duplicates()
             "https://www.youtube.com/@creator/posts",
         ),
         (
-            "UCQ-nHijGwxNU3Go_wyLQ5Ng",
-            "https://www.youtube.com/channel/UCQ-nHijGwxNU3Go_wyLQ5Ng/posts",
+            "UCxxxxxxxxxxxxxxxxxxxxxx",
+            "https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx/posts",
         ),
     ],
 )

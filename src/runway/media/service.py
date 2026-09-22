@@ -34,7 +34,7 @@ def _dct_matrix(size: int) -> np.ndarray:
     x = np.arange(size)
     matrix = np.cos((math.pi / size) * (x[None, :] + 0.5) * np.arange(size)[:, None])
     matrix[0] *= 1 / math.sqrt(2)
-    return matrix * math.sqrt(2 / size)  # type: ignore[no-any-return]
+    return matrix * math.sqrt(2 / size)
 
 
 _DCT_32 = _dct_matrix(32)

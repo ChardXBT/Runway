@@ -411,3 +411,8 @@ Runway can be considered fully complete when:
 - Frontend, backend, migration, accessibility, and browser end-to-end checks are green on the exact
   production commit.
 - The remaining limitations are external platform constraints rather than unresolved Runway logic.
+
+## License
+
+Proprietary. All Rights Reserved. See [LICENSE](LICENSE). This repository is shared publicly for
+portfolio purposes only; no license to use, copy, modify, or distribute the code is granted.

@@ -7,8 +7,9 @@
     "web:dev": "npm --prefix apps/web run dev",
     "web:build": "npm --prefix apps/web run build",
     "web:lint": "npm --prefix apps/web run lint",
+    "web:typecheck": "npm --prefix apps/web run typecheck",
     "web:test": "npm --prefix apps/web run test",
-    "check": "npm run web:lint && npm run web:test && npm run web:build"
+    "check": "npm run web:lint && npm run web:typecheck && npm run web:test && npm run web:build"
   },
   "engines": {
     "node": ">=20"
