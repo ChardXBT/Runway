@@ -1,10 +1,24 @@
 import type { Metadata } from "next";
+import { Instrument_Serif, Work_Sans } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { Nav } from "@/components/nav";
 import { apiGet } from "@/lib/api";
 import { isRecord } from "@/lib/guards";
 import "./runway-next.css";
+
+const workSans = Work_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-ui",
+});
+
+const instrumentSerif = Instrument_Serif({
+  subsets: ["latin"],
+  weight: "400",
+  style: ["normal", "italic"],
+  variable: "--font-serif",
+});
 
 export const metadata: Metadata = {
   title: {
@@ -35,7 +49,7 @@ export default async function RootLayout({
   );
   return (
     <html lang="en">
-      <body>
+      <body className={`${workSans.variable} ${instrumentSerif.variable}`}>
         <a className="skip-link" href="#main-content">
           Skip to content
         </a>

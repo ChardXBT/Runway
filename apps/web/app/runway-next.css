@@ -2,43 +2,46 @@
 
 :root {
   color-scheme: light;
-  --canvas: #f2f4f8;
-  --surface: #ffffff;
-  --surface-soft: #f7f8fb;
-  --surface-strong: #e8ebf2;
-  --ink: #182033;
-  --ink-secondary: #50596d;
-  --ink-tertiary: #70798c;
-  --ink-inverse: #fbfcff;
-  --nav: #171d30;
-  --nav-raised: #222a43;
-  --line: #d8dce5;
-  --line-strong: #bec5d2;
-  --brand: #c9365b;
-  --brand-deep: #9f2746;
-  --brand-soft: #f9e6ec;
-  --accent: #3659d9;
-  --accent-deep: #2643aa;
-  --accent-soft: #e8edff;
-  --success: #147a65;
-  --success-deep: #0e5f4f;
-  --success-soft: #def2ec;
+  --canvas: #f7f6f2;
+  --surface: #f7f6f2;
+  --surface-soft: #efede6;
+  --surface-strong: #e6e3da;
+  --ink: #181a1b;
+  --ink-secondary: #54595d;
+  --ink-tertiary: #7a7f83;
+  --ink-inverse: #f7f6f2;
+  --nav: #181a1b;
+  --nav-raised: #26292c;
+  --line: #dddad1;
+  --line-strong: #c8c4b9;
+  --brand: #d84a3a;
+  --brand-deep: #b53a2b;
+  --brand-soft: #f8e4e0;
+  --accent: #d84a3a;
+  --accent-deep: #b53a2b;
+  --accent-soft: #f8e4e0;
+  --success: #52705f;
+  --success-deep: #3f5a4b;
+  --success-soft: #e3ece6;
   --warning: #a65f0d;
   --warning-deep: #7d4709;
-  --warning-soft: #f9ead5;
-  --danger: #b72f49;
-  --danger-deep: #8f2238;
-  --danger-soft: #fae5e9;
-  --radius-control: 8px;
-  --radius-panel: 12px;
+  --warning-soft: #f6ead6;
+  --danger: #b53a2b;
+  --danger-deep: #932e22;
+  --danger-soft: #f8e4e0;
+  --radius-control: 6px;
+  --radius-panel: 8px;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --duration-press: 120ms;
   --duration-ui: 180ms;
   --duration-panel: 220ms;
-  --font-body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
-    BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-body: var(--font-ui, "Work Sans"), "Work Sans", "Segoe UI",
+    system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-display: var(--font-serif, "Instrument Serif"), "Instrument Serif",
+    Georgia, serif;
   --font-data: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 }
 
@@ -121,29 +124,25 @@ h2,
 h3 {
   margin: 0;
   color: var(--ink);
-  font-family: var(--font-body);
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0;
   text-wrap: balance;
 }
 
 h1 {
   max-width: 24ch;
-  font-size: 2.25rem;
-  font-weight: 650;
-  letter-spacing: -0.032em;
-  line-height: 1.08;
+  font-size: 2.6rem;
+  line-height: 1.05;
 }
 
 h2 {
-  font-size: 1.45rem;
-  font-weight: 630;
-  letter-spacing: -0.022em;
-  line-height: 1.18;
+  font-size: 1.6rem;
+  line-height: 1.15;
 }
 
 h3 {
-  font-size: 1.05rem;
-  font-weight: 620;
-  letter-spacing: -0.014em;
+  font-size: 1.15rem;
   line-height: 1.25;
 }
 
@@ -174,9 +173,9 @@ code {
   position: sticky;
   top: 0;
   overflow: hidden;
-  color: rgba(255, 255, 255, 0.76);
-  background: var(--nav);
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--ink-secondary);
+  background: var(--canvas);
+  border-right: 1px solid var(--line);
 }
 
 .topbar::before {
@@ -184,7 +183,7 @@ code {
   position: absolute;
   inset: 0 auto 0 0;
   content: "";
-  background: linear-gradient(180deg, #e04468 0 34%, #e99b32 34% 54%, #4d6ee8 54% 100%);
+  background: none;
 }
 
 .topbar-inner {
@@ -201,7 +200,7 @@ code {
   display: flex;
   align-items: center;
   gap: 11px;
-  color: white;
+  color: var(--ink);
 }
 
 .brand-mark {
@@ -227,15 +226,16 @@ code {
 }
 
 .brand-copy strong {
-  font-size: 1rem;
-  font-weight: 650;
-  letter-spacing: -0.015em;
+  font-family: var(--font-display);
+  font-size: 1.55rem;
+  font-weight: 400;
+  letter-spacing: 0;
   line-height: 1.1;
 }
 
 .brand-copy small {
   overflow: hidden;
-  color: rgba(255, 255, 255, 0.58);
+  color: var(--ink-tertiary);
   font-size: 0.72rem;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -244,7 +244,7 @@ code {
 
 .nav-section-label {
   margin: 12px 10px 5px;
-  color: rgba(255, 255, 255, 0.42);
+  color: var(--ink-tertiary);
   font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.035em;
@@ -264,17 +264,17 @@ code {
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  border-radius: 8px;
-  color: rgba(255, 255, 255, 0.7);
+  border-radius: var(--radius-control);
+  color: var(--ink-secondary);
   font-size: 0.88rem;
   font-weight: 540;
 }
 
 .nav-link.active,
 .nav-menu-popover nav a.active {
-  color: white;
-  background: var(--nav-raised);
-  box-shadow: inset 3px 0 0 var(--brand);
+  color: var(--ink-inverse);
+  background: var(--ink);
+  box-shadow: none;
 }
 
 .nav-glyph {
@@ -323,7 +323,7 @@ code {
 
 .nav-menu-popover nav a small {
   overflow: hidden;
-  color: rgba(255, 255, 255, 0.42);
+  color: var(--ink-tertiary);
   font-size: 0.68rem;
   font-weight: 430;
   line-height: 1.2;
@@ -338,7 +338,7 @@ code {
   grid-template-columns: 28px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  border-top: 1px solid var(--line);
 }
 
 .nav-menu-status > span:last-child {
@@ -348,13 +348,13 @@ code {
 }
 
 .nav-menu-status strong {
-  color: white;
+  color: var(--ink);
   font-size: 0.75rem;
   font-weight: 570;
 }
 
 .nav-menu-status small {
-  color: rgba(255, 255, 255, 0.46);
+  color: var(--ink-tertiary);
   font-size: 0.67rem;
   line-height: 1.3;
 }
@@ -517,7 +517,7 @@ button.button {
 }
 
 .button.approve {
-  background: var(--success);
+  background: var(--ink);
 }
 
 .button.reject {
@@ -943,7 +943,7 @@ label > span,
   display: grid;
   gap: 2px;
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
-  border-radius: 9px;
+  border-radius: var(--radius-control);
   color: var(--accent-deep);
   background: var(--accent-soft);
 }
@@ -962,8 +962,9 @@ label > span,
 .decision-console textarea {
   min-height: 130px;
   border-color: var(--line-strong);
-  font-size: 1.05rem;
-  line-height: 1.55;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  line-height: 1.3;
 }
 
 .decision-console textarea.caption-editing {
@@ -2905,14 +2906,14 @@ label > span,
     top: 0;
     overflow: visible;
     border-right: 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--line);
   }
 
   .topbar::before {
     width: auto;
     height: 3px;
     inset: 0 0 auto;
-    background: linear-gradient(90deg, #e04468 0 36%, #e99b32 36% 58%, #4d6ee8 58% 100%);
+    background: none;
   }
 
   .topbar-inner {
@@ -2950,7 +2951,7 @@ label > span,
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
     border-top: 1px solid var(--line);
-    background: rgba(255, 255, 255, 0.96);
+    background: rgba(247, 246, 242, 0.96);
     backdrop-filter: blur(14px) saturate(140%);
   }
 
@@ -2966,8 +2967,8 @@ label > span,
   }
 
   .nav-link.active {
-    color: var(--brand-deep);
-    background: var(--brand-soft);
+    color: var(--ink-inverse);
+    background: var(--ink);
     box-shadow: none;
   }
 
@@ -2989,8 +2990,8 @@ label > span,
     display: grid;
     place-content: center;
     gap: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 9px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-control);
     cursor: pointer;
     list-style: none;
     transition: transform var(--duration-press) var(--ease-out);
@@ -3000,7 +3001,7 @@ label > span,
     width: 17px;
     height: 1.5px;
     display: block;
-    background: white;
+    background: var(--ink);
   }
 
   .nav-menu:not(.open) > .nav-menu-popover {
@@ -3042,9 +3043,9 @@ label > span,
   }
 
   .nav-menu-popover nav a.active {
-    color: var(--brand-deep);
-    background: var(--brand-soft);
-    box-shadow: inset 3px 0 0 var(--brand);
+    color: var(--ink-inverse);
+    background: var(--ink);
+    box-shadow: none;
   }
 
   .nav-menu-popover nav a small {

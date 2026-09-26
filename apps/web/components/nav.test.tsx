@@ -12,14 +12,14 @@ describe("Nav", () => {
 
   it("shows the three primary product sections and signed-out status", () => {
     render(<Nav />);
-    expect(screen.getByRole("link", { name: "Generator" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    expect(screen.getByRole("link", { name: "Lineup" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Calendar" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Connector" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Archive/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Profile/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Library/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Editorial voice/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Activity/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Settings/ })).toBeInTheDocument();
     expect(screen.getByText("Qlob editorial desk")).toBeInTheDocument();
@@ -30,7 +30,7 @@ describe("Nav", () => {
   it("shows the one-post-per-day automation state", () => {
     render(<Nav publishingEnabled publishingMode="authorized_browser" />);
     expect(screen.getByText("Browser publishing ready")).toBeInTheDocument();
-    expect(screen.getByText("Actions start from Lineup")).toBeInTheDocument();
+    expect(screen.getByText("Actions start from Calendar")).toBeInTheDocument();
   });
 
   it("closes the backstage menu with Escape and restores focus", async () => {

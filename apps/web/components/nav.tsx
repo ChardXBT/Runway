@@ -18,14 +18,14 @@ type GlyphName =
   | "settings";
 
 const primaryLinks = [
-  ["Generator", "/review", "generator"],
-  ["Lineup", "/lineup", "lineup"],
+  ["Review", "/review", "generator"],
+  ["Calendar", "/lineup", "lineup"],
   ["Connector", "/connector", "connector"],
 ] as const;
 
 const secondaryLinks = [
-  ["Archive", "/archive", "Past Qlob posts and source records", "archive"],
-  ["Profile", "/profile", "What Runway has learned", "profile"],
+  ["Library", "/archive", "Past Qlob posts and source records", "archive"],
+  ["Editorial voice", "/profile", "What Runway has learned", "profile"],
   ["Activity", "/activity", "Decision and publishing history", "activity"],
   ["Settings", "/settings", "Channel, schedule, and safeguards", "settings"],
 ] as const;
@@ -119,7 +119,7 @@ export function Nav({
   const browserReady = publishingMode === "authorized_browser" && publishingEnabled;
   const stateTitle = browserReady ? "Browser publishing ready" : "Assisted publishing";
   const stateDetail = browserReady
-    ? "Actions start from Lineup"
+    ? "Actions start from Calendar"
     : "No browser actions are queued";
 
   return (
@@ -201,7 +201,6 @@ export function Nav({
             </div>
           </div>
         </div>
-      </div>
-    </header>
+      </header>
   );
 }
