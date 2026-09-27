@@ -201,6 +201,7 @@ export function Nav({
             </div>
           </div>
         </div>
-      </header>
+      </div>
+    </header>
   );
 }
