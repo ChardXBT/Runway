@@ -4,9 +4,32 @@ import { ApiReadError, apiGet, apiGetOptional, apiGetRequired } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("apiGet", () => {
+  it("bounds stalled server reads and exposes an actionable failure", async () => {
+    const controller = new AbortController();
+    const deadline = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(controller.signal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url, options: RequestInit) => new Promise((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () =>
+          reject(new DOMException("Timed out", "TimeoutError")),
+        );
+      })),
+    );
+    const result = apiGetRequired("/api/example", Array.isArray);
+    const assertion = expect(result).rejects.toThrow(
+      "could not reach the local service",
+    );
+    controller.abort();
+    await assertion;
+    expect(deadline).toHaveBeenCalledWith(15_000);
+  });
+
   it("falls back on network and malformed JSON failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
     await expect(apiGet("/api/example", [])).resolves.toEqual([]);

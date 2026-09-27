@@ -29,7 +29,10 @@ async function readRequiredJson<T>(
 ): Promise<T | null> {
   let response: Response;
   try {
-    response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+    response = await fetch(`${API_URL}${path}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
   } catch {
     throw new ApiReadError(
       "Runway could not reach the local service. Start or restart the API, then reload this view.",
@@ -87,7 +90,10 @@ export async function apiGet<T>(
   validate?: Validator<T>,
 ): Promise<T> {
   try {
-    const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+    const response = await fetch(`${API_URL}${path}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
     if (!response.ok) return fallback;
     const value: unknown = await response.json();
     if (validate ? !validate(value) : !matchesFallbackShape(value, fallback)) {
