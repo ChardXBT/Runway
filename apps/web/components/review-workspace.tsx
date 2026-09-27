@@ -61,6 +61,7 @@ export function ReviewWorkspace({
   const [loadedImageId, setLoadedImageId] = useState<number | null>(null);
   const [failedImageId, setFailedImageId] = useState<number | null>(null);
   const [sessionDecisions, setSessionDecisions] = useState(0);
+  const shownProposal = useRef<Proposal | null>(initialProposal ?? null);
   const warmingTray = useRef(false);
   const actionLock = useRef(false);
   const captionRef = useRef<HTMLTextAreaElement>(null);
@@ -87,12 +88,24 @@ export function ReviewWorkspace({
   }
 
   function showProposal(next: Proposal | null) {
+    // A refreshed proposal that shows the same image (caption regeneration)
+    // keeps its load proof: the <img> does not reload, so no new load event
+    // would arrive and Accept would stay disabled until a page reload.
+    const shown = shownProposal.current;
+    const sameImage =
+      next !== null &&
+      shown !== null &&
+      next.candidate_image_id === shown.candidate_image_id &&
+      next.candidate?.preview_url === shown.candidate?.preview_url;
+    shownProposal.current = next;
     setProposal(next);
     setCaption(next?.final_caption ?? "");
     setEditing(false);
     setDecisionUncertain(false);
-    setLoadedImageId(null);
-    setFailedImageId(null);
+    if (!sameImage) {
+      setLoadedImageId(null);
+      setFailedImageId(null);
+    }
   }
 
   function applyEditorialStatus(payload: EditorialEnvelope) {

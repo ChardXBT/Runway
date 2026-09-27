@@ -285,6 +285,51 @@ describe("ReviewWorkspace", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps Accept available after regenerating captions for the same loaded image", async () => {
+    // The same <img> never reloads, so no second load event arrives. Resetting
+    // the load proof left Accept disabled until a full page reload.
+    const refreshed = {
+      ...proposal,
+      recommended_caption: "Fresh caption.",
+      final_caption: "Fresh caption.",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => refreshed }),
+    );
+    render(
+      <ReviewWorkspace initialProposal={proposal} initialWorkflow={workflow} />,
+    );
+    markProposalImageLoaded();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate captions" }));
+    expect(await screen.findByDisplayValue("Fresh caption.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+  });
+
+  it("still requires a replacement image to load before Accept", async () => {
+    const replaced = {
+      ...proposal,
+      candidate_image_id: 8,
+      candidate: { ...proposal.candidate!, preview_url: "/media/previews/other.jpg" },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => replaced }),
+    );
+    render(
+      <ReviewWorkspace initialProposal={proposal} initialWorkflow={workflow} />,
+    );
+    markProposalImageLoaded();
+    fireEvent.click(screen.getByRole("button", { name: "Replace image" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Accept" })).toBeDisabled(),
+    );
+    markProposalImageLoaded();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
+  });
+
   it("replenishes the conveyor when the tray is empty", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
