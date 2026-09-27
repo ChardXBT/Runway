@@ -3,6 +3,54 @@
 Use `runway init` once, `runway doctor` after dependency or configuration changes, and
 `run-runway.ps1` (Windows) or `run-runway.sh` (POSIX) to run the local application.
 
+## Windows production startup
+
+Install the Python environment and run `npm ci` followed by `npm run check` before
+launching. The Windows launcher uses the built Next.js server, not a development
+server. Rebuild after frontend updates while the application is stopped.
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\run-runway.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_task.ps1
+Start-ScheduledTask -TaskName A_Runway_Task
+```
+
+The installer updates an existing task while preserving its account, triggers,
+enabled state, and restart policy. It removes unnecessary elevation and network
+availability gating. Updating an old elevated task requires Administrator
+PowerShell once. A new installation creates an on-demand task for the current
+logged-in user. It does not register an automatic publishing or generation job.
+After replacing an elevated task, stop its old services from an administrator
+session before relaunching at normal privilege. Do not interrupt active generation
+or publishing work.
+
+Manual launches, Task Scheduler, and Supervisor all call `run-runway.ps1`.
+The launcher is independent of the caller's directory and PowerShell profile,
+uses an exclusive file lock across sessions, and returns zero only after the
+requested API and web services report their product identities and healthy states.
+Both ports are checked before starting children. An unrelated or unverifiable
+listener causes a safe failure; the launcher never kills it. A partial stack is
+completed while retaining its healthy component. `-ApiOnly` and `-WebOnly` are
+available for diagnostics and are mutually exclusive.
+
+Node is located through `RUNWAY_NODE_EXE`, PATH, or the standard Program Files
+installation. Python always comes from this checkout's `.venv`. No npm command,
+dependency installation, network download, or build occurs at launch. Services
+bind only to `127.0.0.1`, on ports 8000 and 3000. The web `/health` endpoint
+identifies the frontend; callers must also check the API `/health` endpoint.
+
+Diagnostics are in ignored `data/runtime/launcher.log`, `api.stdout.log`,
+`api.stderr.log`, `web.stdout.log`, and `web.stderr.log`. Failed startup rolls back
+only children started by that invocation. An existing owned but unhealthy service
+is allowed the readiness timeout (90 seconds by default) before startup fails with
+diagnostics. It is deliberately not force-killed: inspect its logs and confirm no
+work remains before stopping it. Reinvoke the launcher after the process exits;
+there is no stale PID file or lock-directory cleanup requirement. This is an
+on-demand launcher, not a service watchdog; run it again after a later child crash.
+
+For development only, use `npm run web:dev` and a separately started API.
+Do not share production ports between development and production servers.
+
 ## Codex runtime
 
 The real model runtime uses the project-local Codex CLI and the user's included ChatGPT/Codex
@@ -123,6 +171,10 @@ is not private. It creates an online SQLite backup plus every media file referen
 database, validates all hashes and table counts, uploads the assets, downloads them again, and
 performs a complete restoration verification. Browser profiles and Google authentication are
 never included.
+
+If the code repository is public, the private database release is intentionally
+blocked. Do not bypass this guard or upload production data to a public release;
+configure an approved private backup destination separately.
 
 ## Intelligence lifecycle
 
