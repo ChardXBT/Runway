@@ -96,8 +96,8 @@ async def test_codex_runtime_uses_chatgpt_guardrails_and_real_image(
     settings = Settings(
         data_dir=tmp_path / "data",
         agent_runtime="codex",
-        codex_model="gpt-5.6-luna",
-        codex_reasoning_effort="low",
+        codex_model="gpt-6-luna",
+        codex_reasoning_effort="high",
     )
     image = tmp_path / "candidate.png"
     image.write_bytes(b"fixture-image")
@@ -137,8 +137,8 @@ async def test_codex_runtime_uses_chatgpt_guardrails_and_real_image(
     exec_command, exec_kwargs = calls[1]
     assert exec_command[:4] == ["codex-test", "--ask-for-approval", "never", "exec"]
     assert exec_command[exec_command.index("--sandbox") + 1] == "read-only"
-    assert exec_command[exec_command.index("--model") + 1] == "gpt-5.6-luna"
-    assert 'model_reasoning_effort="low"' in exec_command
+    assert exec_command[exec_command.index("--model") + 1] == "gpt-6-luna"
+    assert 'model_reasoning_effort="high"' in exec_command
     assert 'web_search="disabled"' in exec_command
     assert exec_command[exec_command.index("--image") + 1] == str(image.resolve())
     assert exec_command[-1] == "-"

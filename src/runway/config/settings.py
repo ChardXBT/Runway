@@ -49,8 +49,8 @@ class Settings(BaseSettings):
     discovery_secondary_topics: str = ""
 
     codex_cli_path: Path | None = None
-    codex_model: str = "gpt-5.6-luna"
-    codex_reasoning_effort: Literal["none", "low", "medium"] = "low"
+    codex_model: str = "gpt-6-luna"
+    codex_reasoning_effort: Literal["none", "low", "medium", "high"] = "high"
     codex_timeout_seconds: int = Field(default=300, ge=30, le=1800)
     analysis_batch_size: int = Field(default=5, ge=1, le=10)
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")

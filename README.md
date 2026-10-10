@@ -172,6 +172,10 @@ credentials are removed from the Codex subprocess, and there is no automatic pai
 Invalid output, authentication failure, timeout, or included-usage exhaustion stops the current
 batch safely.
 
+The default Codex model is `gpt-6-luna` with `high` reasoning effort. Runway requires Codex to be
+signed in with ChatGPT; its normal production runtime uses that account's included usage, rather
+than an OpenAI API key. The ignored local `.env` may override these defaults.
+
 The production caption path now records each blind visual audit, the consensus coverage and
 disputes, each final-caption grounding audit, aggregate token usage, immutable prompt versions, and
 candidate-level rejection reasons. This makes a confident visual mistake inspectable and prevents

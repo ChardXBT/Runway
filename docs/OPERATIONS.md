@@ -62,10 +62,10 @@ allowance:
 .\.venv\Scripts\runway.exe agent smoke
 ```
 
-Choose `Sign in with ChatGPT`. `agent status` must report `codex-chatgpt`, the configured low- or
-medium-reasoning model, and `paid_api_fallback_enabled: false`. Runway strips API-key credentials
-from model subprocesses and stops when included usage is exhausted. It never switches to paid API
-billing.
+Choose `Sign in with ChatGPT`. `agent status` must report `codex-chatgpt`, `gpt-6-luna` with high
+reasoning (or your configured override), and `paid_api_fallback_enabled: false`. Runway strips
+API-key credentials from model subprocesses and stops when included usage is exhausted. It never
+switches to paid API billing.
 
 Only one model request runs at a time. Completed records remain resumable if a limit or transient
 failure stops a run.
