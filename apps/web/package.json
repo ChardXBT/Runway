@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "next": "^16.3.6",
+    "next": "^16.4.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -23,7 +23,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "eslint": "^9.0.0",
-    "eslint-config-next": "^16.3.6",
+    "eslint-config-next": "^16.4.0",
     "jsdom": "^27.0.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.9.0",
@@ -33,6 +33,6 @@
     "next": {
       "postcss": "^8.5.22"
     },
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   }
 }
