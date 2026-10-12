@@ -131,3 +131,55 @@ def test_failed_start_rollback_stops_the_redirected_server(tmp_path: Path) -> No
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "rollback stopped the whole tree" in result.stdout
+
+
+ROTATION_SCRIPT = r"""
+param([string]$Launcher, [string]$Runtime)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Launcher, [ref]$null, [ref]$null)
+$ast.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+}, $false) | ForEach-Object { Invoke-Expression $_.Extent.Text }
+$runtime = $Runtime
+function Assert($Value, $Label) { if (-not $Value) { throw $Label } }
+Save-PreviousLog 'api.stderr'
+Assert (-not (Test-Path (Join-Path $runtime 'api.stderr.previous.log'))) 'missing log must be a no-op'
+Set-Content -LiteralPath (Join-Path $runtime 'api.stderr.log') -Value 'Traceback: crash evidence'
+Save-PreviousLog 'api.stderr'
+Assert (-not (Test-Path (Join-Path $runtime 'api.stderr.log'))) 'restart must not append to the crashed log'
+Assert ((Get-Content (Join-Path $runtime 'api.stderr.previous.log')) -eq 'Traceback: crash evidence') 'crash evidence must survive a restart'
+Set-Content -LiteralPath (Join-Path $runtime 'launcher.log') -Value 'small'
+Save-PreviousLog 'launcher' 1MB
+Assert (Test-Path (Join-Path $runtime 'launcher.log')) 'launcher log below the cap must stay in place'
+Write-Output 'log rotation contracts passed'
+"""
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows launcher contract")
+def test_restart_preserves_previous_component_logs(tmp_path: Path) -> None:
+    launcher = Path(__file__).resolve().parents[2] / "run-runway.ps1"
+    script = tmp_path / "rotation.ps1"
+    script.write_text(ROTATION_SCRIPT, encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-Launcher",
+            str(launcher),
+            "-Runtime",
+            str(runtime),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "log rotation contracts passed" in result.stdout

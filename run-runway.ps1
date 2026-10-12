@@ -15,6 +15,20 @@ $null = New-Item -ItemType Directory -Force -Path $runtime
 $lock = $null
 $started = @()
 
+function Save-PreviousLog([string]$Name, [long]$MaxBytes = 0) {
+    # Keep one previous generation so a restart never erases the evidence of a crash.
+    $path = Join-Path $runtime "$Name.log"
+    try {
+        $item = Get-Item -LiteralPath $path -ErrorAction Stop
+        if ($item.Length -gt $MaxBytes) {
+            Move-Item -LiteralPath $path -Destination (Join-Path $runtime "$Name.previous.log") -Force
+        }
+    } catch [System.Management.Automation.ItemNotFoundException] {
+    } catch {
+        Write-Host "Could not rotate $Name.log: $($_.Exception.Message)"
+    }
+}
+
 function Write-Diagnostic([string]$Message) {
     $line = '{0:o} {1}' -f (Get-Date), $Message
     Add-Content -LiteralPath (Join-Path $runtime 'launcher.log') -Value $line
@@ -91,6 +105,8 @@ function Start-Component([string]$Component, [int]$Port) {
         '"{0}" start "{1}" --hostname 127.0.0.1 --port 3000' -f $next, $webRoot
     }
     $executable = if ($Component -eq 'api') { $python } else { $script:node }
+    Save-PreviousLog "$Component.stdout"
+    Save-PreviousLog "$Component.stderr"
     Write-Diagnostic "Starting $Component using $executable on port $Port."
     # Start-Process -Redirect* would create the server with handle inheritance on,
     # handing it this launcher's stdout/stderr and any handle a concurrent caller
@@ -132,6 +148,8 @@ try {
             Start-Sleep -Milliseconds 300
         }
     } while ($null -eq $lock)
+    # Scheduled watchdog runs append a line every few minutes; cap the log at about 1 MB.
+    Save-PreviousLog 'launcher' 1MB
     if (-not $WebOnly -and -not (Test-Path -LiteralPath $python -PathType Leaf)) {
         throw 'Missing .venv/Scripts/python.exe. Install the documented Python environment first.'
     }
