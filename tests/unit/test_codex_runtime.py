@@ -105,6 +105,10 @@ async def test_codex_runtime_uses_chatgpt_guardrails_and_real_image(
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
     monkeypatch.setenv("CODEX_API_KEY", "must-not-leak")
     monkeypatch.setenv("CODEX_ACCESS_TOKEN", "must-not-leak")
+    monkeypatch.setenv("RUNWAY_SEARCH_API_KEY", "must-not-leak")
+    monkeypatch.setenv("GH_TOKEN", "must-not-leak")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-leak")
+    monkeypatch.setenv("RUNWAY_TEST_VISIBLE", "kept")
 
     def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         calls.append((command, kwargs))
@@ -148,6 +152,8 @@ async def test_codex_runtime_uses_chatgpt_guardrails_and_real_image(
     assert "OPENAI_API_KEY" not in exec_kwargs["env"]
     assert "CODEX_API_KEY" not in exec_kwargs["env"]
     assert "CODEX_ACCESS_TOKEN" not in exec_kwargs["env"]
+    assert "must-not-leak" not in exec_kwargs["env"].values()
+    assert exec_kwargs["env"]["RUNWAY_TEST_VISIBLE"] == "kept"
 
 
 @pytest.mark.asyncio

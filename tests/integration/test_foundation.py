@@ -93,7 +93,7 @@ def test_health_app_is_local_and_publishing_is_disabled(settings: Settings) -> N
 
 
 def test_lineup_mutations_require_literal_confirmation(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
         update = client.patch(
             "/api/lineup/1",
             json={"final_caption": "Why now?!", "confirmed": False},
@@ -115,7 +115,7 @@ def test_lineup_mutations_require_literal_confirmation(settings: Settings) -> No
 def test_passive_connection_and_intelligence_status_are_truthful(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
         connection = client.get("/api/publisher/session/status")
         intelligence = client.get("/api/intelligence/status")
 
@@ -158,7 +158,7 @@ def test_intelligence_readiness_excludes_nonhuman_engineering_fixtures(
                     )
                 )
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
         collecting = client.get("/api/intelligence/status").json()
 
     assert collecting["human_pairwise_labels"] == 0

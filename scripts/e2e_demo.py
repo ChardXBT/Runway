@@ -21,7 +21,8 @@ def main() -> None:
     args = parser.parse_args()
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     data_dir = args.data_dir or Path("data") / "proofs" / timestamp
-    settings = Settings(data_dir=data_dir)
+    # The proof must never use model allowance or publish, whatever .env selects.
+    settings = Settings(data_dir=data_dir, agent_runtime="mock", publishing_enabled=False)
     result = asyncio.run(run_fixture_demo(settings))
     report_path = settings.resolved_data_dir / "reports" / "fixture-proof.json"
     report_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")

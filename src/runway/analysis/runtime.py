@@ -33,6 +33,10 @@ from runway.analysis.schemas import (
 )
 from runway.config import Settings
 
+_SECRET_ENVIRONMENT_NAME = re.compile(
+    r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE", re.IGNORECASE
+)
+
 
 def _mock_subject_label(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9 .'-]", "", value).strip()
@@ -749,10 +753,14 @@ class CodexAgentRuntime:
 
     @staticmethod
     def _safe_environment() -> dict[str, str]:
-        environment = os.environ.copy()
-        for secret_name in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"):
-            environment.pop(secret_name, None)
-        return environment
+        # Codex authenticates from its own ChatGPT login file. The model also reads
+        # third-party images, so no credential-like variable is passed through.
+        return {
+            name: value
+            for name, value in os.environ.items()
+            if name.upper() not in {"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"}
+            and not _SECRET_ENVIRONMENT_NAME.search(name)
+        }
 
     def login_status(self) -> str:
         try:

@@ -71,6 +71,8 @@ class Settings(BaseSettings):
 
     minimum_image_dimension: int = 480
     maximum_image_bytes: int = 20 * 1024 * 1024
+    # Decoded-size budget; far below Pillow's decompression-bomb threshold.
+    maximum_image_pixels: int = Field(default=40_000_000, ge=1_000_000, le=89_000_000)
     duplicate_perceptual_threshold: float = 0.94
     duplicate_semantic_threshold: float = 0.99
     caption_duplicate_threshold: float = 0.92

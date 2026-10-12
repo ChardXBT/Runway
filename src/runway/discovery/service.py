@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import hashlib
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
-import httpx
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -42,6 +41,7 @@ from runway.discovery.providers import (
 from runway.discovery.safety import is_known_adult_result
 from runway.discovery.schemas import ImageSearchResult
 from runway.domain.enums import MediaKind, RunStatus
+from runway.media.download import download_image
 from runway.media.service import (
     content_addressed_copy,
     create_square_preview,
@@ -756,21 +756,14 @@ class DiscoveryService:
             if key not in assets:
                 raise FileNotFoundError(key)
             return assets[key]
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            response = await client.get(result.direct_image_url)
-            response.raise_for_status()
-        content_type = response.headers.get("content-type", "").split(";")[0]
-        if content_type not in {"image/jpeg", "image/png", "image/webp"}:
-            raise ValueError(f"unsupported MIME type {content_type or 'unknown'}")
-        if len(response.content) > self.settings.maximum_image_bytes:
-            raise ValueError("candidate exceeds configured maximum size")
-        digest = hashlib.sha256(response.content).hexdigest()
-        extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[content_type]
-        path = self.settings.resolved_data_dir / "raw" / "downloads" / f"{digest}{extension}"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            path.write_bytes(response.content)
-        return path
+        return await asyncio.to_thread(
+            download_image,
+            result.direct_image_url,
+            self.settings.resolved_data_dir / "raw" / "downloads",
+            max_bytes=self.settings.maximum_image_bytes,
+            max_pixels=self.settings.maximum_image_pixels,
+            allowed_types=("image/jpeg", "image/png", "image/webp"),
+        )
 
     def _active_profile(self) -> tuple[StyleProfile, dict[str, object]]:
         with self.database.session() as session:

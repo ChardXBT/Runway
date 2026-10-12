@@ -265,7 +265,7 @@ async def test_editorial_accept_stays_local_and_never_creates_publisher_work(
     application = FastAPI()
     application.include_router(build_proposal_router(database, settings))
     detail = ProposalService(database, settings).detail(proposal_id)
-    with TestClient(application) as client:
+    with TestClient(application, base_url="http://127.0.0.1:8000") as client:
         response = client.post(
             f"/api/editorial/proposals/{proposal_id}/approve",
             json={"final_caption": detail["final_caption"]},
@@ -969,7 +969,7 @@ def test_explicit_empty_lineup_selection_is_never_expanded_to_all_posts(
     application = FastAPI()
     application.include_router(build_proposal_router(database, settings))
 
-    with TestClient(application) as client:
+    with TestClient(application, base_url="http://127.0.0.1:8000") as client:
         response = client.post(
             "/api/lineup/push",
             json={"confirmed": True, "mode": "assisted", "proposal_ids": []},
@@ -988,7 +988,7 @@ async def test_waiting_lineup_post_cannot_bypass_batch_confirmation_through_retr
     application = FastAPI()
     application.include_router(build_proposal_router(database, settings))
 
-    with TestClient(application) as client:
+    with TestClient(application, base_url="http://127.0.0.1:8000") as client:
         response = client.post(f"/api/lineup/{proposal_id}/retry")
 
     assert response.status_code == 422

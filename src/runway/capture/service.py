@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
 from pydantic import BaseModel
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
@@ -41,6 +40,7 @@ from runway.domain.enums import (
     RightsStatus,
     RunStatus,
 )
+from runway.media.download import download_image
 from runway.media.service import (
     content_addressed_copy,
     ensure_fixture_images,
@@ -803,29 +803,12 @@ class CaptureService:
                 raise FileNotFoundError(f"unknown fixture asset {name}")
             return fixture_assets[name]
 
-        parsed = urlparse(reference.url)
-        if parsed.scheme not in {"http", "https"}:
-            raise ValueError("only HTTPS/HTTP and fixture image URLs are supported")
-        with httpx.Client(timeout=httpx.Timeout(20.0), follow_redirects=True) as client:
-            response = client.get(reference.url)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "").split(";")[0]
-            if content_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
-                raise ValueError(f"unsupported MIME type {content_type or 'unknown'}")
-            if len(response.content) > self.settings.maximum_image_bytes:
-                raise ValueError("image exceeds configured maximum size")
-            digest = hashlib.sha256(response.content).hexdigest()
-            extension = {
-                "image/jpeg": ".jpg",
-                "image/png": ".png",
-                "image/webp": ".webp",
-                "image/gif": ".gif",
-            }[content_type]
-            target = self.settings.resolved_data_dir / "raw" / "downloads" / f"{digest}{extension}"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if not target.exists():
-                target.write_bytes(response.content)
-            return target
+        return download_image(
+            reference.url,
+            self.settings.resolved_data_dir / "raw" / "downloads",
+            max_bytes=self.settings.maximum_image_bytes,
+            max_pixels=self.settings.maximum_image_pixels,
+        )
 
     @staticmethod
     def _result(run: CaptureRun, diagnostics: int) -> CaptureResult:

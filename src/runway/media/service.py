@@ -95,6 +95,10 @@ def inspect_image(path: Path) -> ImageFeatures:
     raw = path.read_bytes()
     sha256 = hashlib.sha256(raw).hexdigest()
     with Image.open(path) as opened:
+        limit = Image.MAX_IMAGE_PIXELS
+        if limit and opened.width * opened.height > limit:
+            # Refuse to decode before allocating; Pillow itself only warns at this size.
+            raise ValueError("image dimensions exceed the decompression-bomb limit")
         opened.load()
         image = opened.convert("RGB")
         width, height = image.size

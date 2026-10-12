@@ -88,6 +88,26 @@ async def test_manual_provider_rejects_non_http_urls() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_manual_discovery_urls_cannot_reach_loopback_services(
+    database: Database, settings: Settings
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    await AnalysisService(database, settings).analyze_history()
+    await StyleProfileService(database, settings).build()
+
+    result = await DiscoveryService(database, settings).discover(
+        provider_name="manual",
+        manual_urls=["http://127.0.0.1/api/settings", "http://localhost/a.png"],
+    )
+
+    assert result["candidates"] == 0
+    errors = result["errors"]
+    assert isinstance(errors, list) and len(errors) == 2
+    assert all("non-public network address" in str(error) for error in errors)
+    assert not (settings.resolved_data_dir / "raw" / "downloads").exists()
+
+
 def test_search_plan_uses_supported_named_franchises() -> None:
     payload = DiscoveryService._plan_payload(
         {

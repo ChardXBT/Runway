@@ -9,6 +9,7 @@ from runway.api.catalog_routes import build_catalog_router
 from runway.api.discovery_routes import build_discovery_router
 from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.proposal_routes import build_proposal_router
+from runway.api.security import LocalRequestGuard, loopback_origins
 from runway.config import Settings, get_settings
 from runway.db import initialize_database
 from runway.logging import configure_logging
@@ -30,16 +31,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.state.settings = active_settings
     application.state.database = database
+    web_origins = loopback_origins(active_settings.web_port)
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            f"http://127.0.0.1:{active_settings.web_port}",
-            f"http://localhost:{active_settings.web_port}",
-        ],
+        allow_origins=web_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
+    # Added last so it runs first, before CORS handling and every route.
+    application.add_middleware(LocalRequestGuard, allowed_origins=web_origins)
     application.mount(
         "/media",
         StaticFiles(directory=active_settings.resolved_data_dir / "media"),
