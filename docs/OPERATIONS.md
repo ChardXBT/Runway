@@ -1,7 +1,9 @@
 # Operations
 
 Use `runway init` once, `runway doctor` after dependency or configuration changes, and
-`run-runway.ps1` (Windows) or `run-runway.sh` (POSIX) to run the local application.
+`run-runway.ps1` to run the local production stack on Windows. `run-runway.sh` is a POSIX
+development launcher: it starts the API and the Next.js development server, not the production
+build.
 
 ## Windows production startup
 
@@ -15,16 +17,29 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_window
 Start-ScheduledTask -TaskName A_Runway_Task
 ```
 
+A new installation registers a task for the current user that starts Runway 30 seconds after
+logon and then reruns the launcher every 5 minutes (`-WatchdogMinutes 0` disables the
+repetition). Each run is idempotent: healthy services are left alone, a component whose port is
+free (for example after a crash, sleep, or reboot) is started again, and nothing is ever killed.
+Runs never overlap (`IgnoreNew`), failed runs are retried three times a minute apart, and a run
+is stopped after 10 minutes; the launcher's own waits end well before that.
+
 The installer updates an existing task while preserving its account, triggers,
-enabled state, and restart policy. It removes unnecessary elevation and network
-availability gating. Updating an old elevated task requires Administrator
-PowerShell once. A new installation creates an on-demand task for the current
-logged-in user. It does not register an automatic publishing or generation job.
+enabled state, and restart policy. If the task has no logon trigger, the watchdog trigger is
+added beside the existing ones. It removes unnecessary elevation and network
+availability gating, and bounds the run time. Updating an old elevated task requires
+Administrator PowerShell once. The task never triggers publishing or generation.
 After replacing an elevated task, stop its old services from an administrator
 session before relaunching at normal privilege. Do not interrupt active generation
 or publishing work.
 
-Manual launches, Task Scheduler, and Supervisor all call `run-runway.ps1`.
+To keep Runway stopped, disable the task first (`Disable-ScheduledTask -TaskName A_Runway_Task`)
+and only then stop the services; otherwise the watchdog starts them again. Disable it the same
+way while running `npm run web:build`, then re-enable it.
+
+Manual launches and Task Scheduler both call `run-runway.ps1`. No other process supervisor is
+configured in this repository; any external supervisor should call the launcher the same way
+rather than starting the servers directly.
 The launcher is independent of the caller's directory and PowerShell profile,
 uses an exclusive file lock across sessions, and returns zero only after the
 requested API and web services report their product identities and healthy states.
@@ -40,13 +55,15 @@ bind only to `127.0.0.1`, on ports 8000 and 3000. The web `/health` endpoint
 identifies the frontend; callers must also check the API `/health` endpoint.
 
 Diagnostics are in ignored `data/runtime/launcher.log`, `api.stdout.log`,
-`api.stderr.log`, `web.stdout.log`, and `web.stderr.log`. Failed startup rolls back
+`api.stderr.log`, `web.stdout.log`, and `web.stderr.log`. Before a component is started again,
+its previous logs are kept as `*.previous.log`, so the output of a crashed server survives the
+restart. `launcher.log` rotates to `launcher.previous.log` at about 1 MB. Failed startup rolls back
 only children started by that invocation. An existing owned but unhealthy service
 is allowed the readiness timeout (90 seconds by default) before startup fails with
 diagnostics. It is deliberately not force-killed: inspect its logs and confirm no
 work remains before stopping it. Reinvoke the launcher after the process exits;
-there is no stale PID file or lock-directory cleanup requirement. This is an
-on-demand launcher, not a service watchdog; run it again after a later child crash.
+there is no stale PID file or lock-directory cleanup requirement. The launcher itself is
+one-shot; crash recovery comes from the scheduled task rerunning it.
 
 For development only, use `npm run web:dev` and a separately started API.
 Do not share production ports between development and production servers.
@@ -159,8 +176,11 @@ media, browser sessions, and `.env` are ignored by Git.
 SQLite uses WAL. Stop Runway before copying the database and its `-wal`/`-shm` companions, or use
 SQLite's backup API.
 
-After a validated commit has been pushed and `origin/main` is confirmed at that exact SHA, publish
-the private recovery release:
+The code repository is public, so routine maintenance does not publish a database release.
+Back up the database with SQLite's online backup API (see
+[`INTELLIGENCE_OPERATIONS.md`](INTELLIGENCE_OPERATIONS.md)) to a location outside Git.
+
+`scripts\sync_private_database_release.ps1` exists only for a private repository:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\sync_private_database_release.ps1 -TargetSha <full-commit-sha>

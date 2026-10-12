@@ -1,6 +1,6 @@
 # Build status
 
-Last validated: 2026-07-26
+Last validated: 2026-10-12 (local Windows run; CI results are on the GitHub Actions page)
 
 ## Software build
 
@@ -21,30 +21,29 @@ Last validated: 2026-07-26
 - [x] Persisted pause-and-resume behavior when the Google session needs attention
 - [x] Human-readable, filterable Activity history with technical records preserved
 - [x] Desktop, tablet, and 390px mobile interface QA
-- [x] Complete private recovery release with every database-referenced media asset
+- [x] Private recovery release tooling with every database-referenced media asset; it refuses
+  to run while the repository is public
 - [x] Post-push database release sequencing with remote download-and-restore verification
-- [x] Private GitHub repository with `main` as the working branch
+- [x] Public GitHub repository under a proprietary license, with `main` as the working branch
+- [x] Bounded, SSRF-resistant image downloader for discovery and capture
+- [x] Loopback `Host` and cross-origin request guards on the API and web server
+- [x] Scheduled-task watchdog that restarts a crashed component without killing anything
 
 ## Quality gate
 
-- Ruff lint: passed
-- Ruff format: 174 files passed
-- Mypy strict mode: configured package check passed across 112 files; direct source check passed
-  across 110 files
-- Pytest: 289 passed in 26m23s
-- ESLint: passed
-- Vitest: 82 passed across 14 frontend test files
-- Next.js production build and TypeScript: passed without a network font dependency
-- `npm run check`: passed
-- Root live npm audit and frontend cached advisory audit: zero known vulnerabilities
+- Ruff lint and format: passed (180 files)
+- Mypy strict mode: passed across 112 source files
+- Pytest: 346 passed in 30m39s (Windows, Python 3.13)
+- ESLint, TypeScript, and the Next.js 16.4.0 production build: passed
+- Vitest: 101 passed across 15 frontend test files
+- `pip-audit`: no known vulnerabilities
+- `npm audit` (root) and `npm --prefix apps/web audit --omit=dev`: zero vulnerabilities
+- Full web audit: one accepted development-only advisory (`braces`, see `SECURITY.md`)
+- Launcher scenarios on the built stack with an isolated data directory: cold start,
+  idempotent rerun, API crash recovery, unrelated process on port 8000, concurrent launches
 - `git diff --check`: passed
 
-The Python suite emits one dependency-level deprecation warning from FastAPI/Starlette's synchronous
-`TestClient`, which recommends the future `httpx2` transport. Replacing it with raw `httpx`
-`ASGITransport` was tested and rejected because it does not provide equivalent application
-lifespan/background-task handling. No production path uses `TestClient`.
-
-## Real browser validation
+## Real browser validation (2026-07-26)
 
 An isolated, publishing-disabled restore of the production database and required media was used for
 the browser and stress pass. Playwright and the running API exercised the real product interface:
@@ -67,7 +66,7 @@ the browser and stress pass. Playwright and the running API exercised the real p
 
 No ChatGPT usage, Qlob post, or production YouTube mutation occurred during this validation.
 
-## Database recovery validation
+## Database recovery validation (2026-07-26)
 
 - SQLite online backup restored to a clean temporary directory.
 - 52 table counts, migration `0011_runtime_performance`, database SHA-256, archive SHA-256,

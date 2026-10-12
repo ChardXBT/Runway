@@ -116,3 +116,45 @@ Detailed references:
 - [`INTELLIGENCE_OPERATIONS.md`](INTELLIGENCE_OPERATIONS.md)
 - [`INTELLIGENCE_PROVIDER_MATRIX.md`](INTELLIGENCE_PROVIDER_MATRIX.md)
 - [`BLIND_CREATOR_STUDY.md`](BLIND_CREATOR_STUDY.md)
+
+## Editorial pipeline, stage by stage
+
+1. **Capture.** Historical Community posts, captions, media, and timestamps are stored with
+   stable identities. Capture is resumable and does not treat a temporary loading plateau as the
+   end of the history.
+2. **Annotation.** Each post gets versioned annotations: characters, entities, actions, emotion,
+   setting, composition, scene type, text overlays, and uncertainty. Corrections are overlays,
+   so earlier model output is never erased.
+3. **Representations.** Images, captions, image-caption pairs, and text evidence become
+   comparable vectors for retrieval and similarity.
+4. **Channel profile.** The profile describes several content modes (reaction, character debate,
+   prediction, comparison, scene interpretation, and so on) instead of one average style.
+5. **Discovery.** Search providers return candidate images. Runway keeps provenance, downloads
+   through the bounded downloader, rejects unsafe or duplicate material, and scores editorial
+   potential.
+6. **Slate optimization** (`active-representation-slate-v2`). The chosen set is varied, not just
+   the top individual scores. Deterministic editorial fingerprints can hard-suppress clear concept
+   repeats; the lightweight local image descriptor only applies a soft similarity penalty because
+   it is not a trained semantic model.
+7. **Evidence retrieval.** Relevant historical posts, corrections, preferences, visual examples,
+   and channel rules are retrieved and persisted for every generation.
+8. **Visual consensus.** The stored annotation is treated as a hypothesis. A blind multimodal
+   audit examines the full frame and nine overlapping detail crops; ambiguous or risky actions get
+   a second independent audit. Only independently agreed facts are kept, and disagreements sit
+   behind an uncertainty firewall. Exact-frame source metadata may corroborate a fact; a search
+   query never can.
+9. **Caption slate.** A primary caption and alternatives are drafted from the evidence and the
+   reconciled facts, using deliberately different editorial angles. Open-ended questions are
+   preferred when the image supports their premise.
+10. **Grounding audit and rerank.** A fresh multimodal judge decomposes each caption into factual
+    premises and must score it at least 0.85. A question may leave its answer open, but its
+    premise must be visible. If nothing survives, the engine abstains.
+11. **Learning from review.** Accepts, edits, alternative selections, image replacements,
+    rejections, and "fewer like this" signals become normalized, append-only evidence for future
+    retrieval and training. Image, caption, and pairing judgments are stored separately, so
+    rejecting an image does not teach the system that its caption was bad.
+
+Most personalization happens through retrieval: changing the evidence supplied to the next
+decision is fast, inspectable, and reversible, and it avoids refitting a model on a small,
+unstable dataset. Training is explicit and versioned (frozen datasets, time-based splits, shadow
+evaluation, blind studies, gated activation with rollback); nothing refits inside a web request.

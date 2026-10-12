@@ -132,3 +132,20 @@ scheduled post, or click YouTube's final Schedule control.
 
 A live acceptance test requires an explicit production instruction and must report the exact image,
 caption, date, time, external URL, and verification result.
+
+## Roadmap
+
+These are planned, not implemented:
+
+- Collect enough genuine display, accept, edit, and reject events to train a lightweight
+  preference reranker. The product gate is 100 clean comparisons per target plus a sealed blind
+  evaluation.
+- Build a larger sealed temporal holdout with minimum improvements for acceptance rate, caption
+  edit distance, factual accuracy, and batch diversity.
+- Run the first genuine shadow comparison and blind creator study.
+- Evaluate a trusted local neural image representation against the deterministic baseline, and
+  activate trained components only when they beat the current engine without reducing grounding
+  or diversity.
+- Complete one supervised live publishing acceptance in authorized browser mode.
+- Add UI for experiments, blind studies, and model activation if those workflows become frequent,
+  and richer Archive filters.
