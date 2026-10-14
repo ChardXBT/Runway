@@ -11,6 +11,16 @@ It was built for one channel (Qlob) and runs entirely on the creator's own machi
 backend and a Next.js frontend, both bound to `127.0.0.1`. The creator stays in control. Nothing
 is published unless they explicitly ask for it from the Lineup.
 
+## Demo
+
+[![Runway demo preview](docs/media/runway/runway-preview.gif)](docs/media/runway/runway-demo.mp4)
+
+A 36-second silent walkthrough of the real app: the review desk presents one post
+option (image plus grounded captions), the creator accepts it, and the post lands
+in the Lineup release calendar for the next day at 10:00 AM. Watch the full video
+([MP4, 1.6 MB](docs/media/runway/runway-demo.mp4)) or see the
+[poster frame](docs/media/runway/runway-poster.png).
+
 ## What works today
 
 - **History capture.** A headed, read-only browser capture of the channel's Community posts into
