@@ -21,6 +21,47 @@ in the Lineup release calendar for the next day at 10:00 AM. Watch the full vide
 ([MP4, 1.6 MB](docs/media/runway/runway-demo.mp4)) or see the
 [poster frame](docs/media/runway/runway-poster.png).
 
+## Runway × Muse integration workflow
+
+[![Runway × Muse workflow preview](docs/media/runway/workflow-preview.gif)](docs/media/runway/runway-workflow.mp4)
+
+A 52-second silent documentary of one real post, start to finish. Muse — the
+channel's AI manager, built on this Runway integration — brainstorms ideas tied
+to a real occasion, designs the image, runs a caption tournament, and loads the
+winner onto Runway's review desk. The creator accepts it with one click, it
+lands in the Lineup calendar, and the same post goes out on YouTube the next
+morning at 10:00 AM. Watch the full video
+([MP4, 4.6 MB](docs/media/runway/runway-workflow.mp4)) or see the
+[poster frame](docs/media/runway/workflow-poster.png).
+
+### How a post gets made
+
+1. **Brainstorm.** Every post ties to something real: an episode anniversary, a
+   voice-actor birthday, or a cartoon-culture moment. The demo post: the 33rd
+   anniversary of "Homer Goes to College" (S05E03, aired October 14, 1993).
+2. **Design.** A real episode still is picked for one readable moment — here,
+   Homer mid victory-dance, engulfed in flames.
+3. **Caption tournament.** Six candidates in round one, four in round two,
+   judged in the channel's own voice (short, casual, no hashtags). Winner:
+   "Bro is literally on fire".
+4. **Review.** Runway's desk presents the image, the grounded caption options,
+   and the rationale. The creator accepts, edits, or rejects — one option at a
+   time, and nothing ever goes to YouTube from this desk.
+5. **Lineup & publish.** The accepted post lands on the release calendar (at
+   most one Runway post per day), and publishes to YouTube at 10:00 AM.
+
+The demo post — "Bro is literally on fire" — was really scheduled on the Qlob
+channel for October 14, 2026 at 10:00 AM America/Toronto.
+
+### Screenshots
+
+![Brainstorming ideas tied to real occasions](docs/media/runway/shot-workflow-brainstorm.png)
+![Caption tournament, round two](docs/media/runway/shot-workflow-tournament.png)
+![Review desk with the winning post](docs/media/runway/shot-review-desk.png)
+![Lineup release calendar](docs/media/runway/shot-lineup.png)
+![Archive of past posts and rejected options](docs/media/runway/shot-archive.png)
+![Post scheduled on YouTube](docs/media/runway/shot-studio-scheduled.png)
+
 ## What works today
 
 - **History capture.** A headed, read-only browser capture of the channel's Community posts into
