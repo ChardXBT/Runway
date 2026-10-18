@@ -1,80 +1,182 @@
 "use client";
 
-import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { RunwayLogo } from "@/components/runway-logo";
-import { StatusGlyph } from "@/components/status-glyph";
+import { RunwayLogo } from "./runway-logo";
+import { StatusGlyph } from "./status-glyph";
+
+type NavLinkDef = { label: string; href: string; glyph: GlyphName; hint?: string };
+type NavGroup = { label: string; links: NavLinkDef[] };
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: "Overview",
+    links: [{ label: "Dashboard", href: "/dashboard", glyph: "dashboard" }],
+  },
+  {
+    label: "Create and schedule",
+    links: [
+      { label: "Review", href: "/review", glyph: "generator" },
+      { label: "Calendar", href: "/lineup", glyph: "lineup" },
+      { label: "Drafts", href: "/drafts", glyph: "drafts" },
+    ],
+  },
+  {
+    label: "Audience",
+    links: [
+      { label: "Analytics", href: "/analytics", glyph: "analytics" },
+      { label: "Inbox", href: "/inbox", glyph: "inbox" },
+      { label: "Content", href: "/content", glyph: "content" },
+    ],
+  },
+  {
+    label: "Workspace",
+    links: [
+      { label: "Accounts", href: "/accounts", glyph: "accounts" },
+      { label: "Connector", href: "/connector", glyph: "connector" },
+      {
+        label: "Archive",
+        href: "/archive",
+        glyph: "catalogue",
+        hint: "Captured Community history",
+      },
+      { label: "Editorial voice", href: "/profile", glyph: "profile" },
+      { label: "Activity", href: "/activity", glyph: "activity" },
+      { label: "Settings", href: "/settings", glyph: "settings" },
+    ],
+  },
+];
+
+const HREF_ALIASES: Record<string, string> = {
+  "/queue": "/lineup",
+  "/catalogue": "/archive",
+};
 
 type GlyphName =
-  | "generator"
-  | "lineup"
-  | "connector"
-  | "archive"
-  | "profile"
+  | "accounts"
   | "activity"
+  | "analytics"
+  | "catalogue"
+  | "connector"
+  | "content"
+  | "dashboard"
+  | "drafts"
+  | "generator"
+  | "inbox"
+  | "lineup"
+  | "profile"
   | "settings";
 
-const primaryLinks = [
-  ["Review", "/review", "generator"],
-  ["Calendar", "/lineup", "lineup"],
-  ["Connector", "/connector", "connector"],
-] as const;
-
-const secondaryLinks = [
-  ["Library", "/archive", "Past Qlob posts and source records", "archive"],
-  ["Editorial voice", "/profile", "What Runway has learned", "profile"],
-  ["Activity", "/activity", "Decision and publishing history", "activity"],
-  ["Settings", "/settings", "Channel, schedule, and safeguards", "settings"],
-] as const;
-
 function NavGlyph({ name }: { name: GlyphName }) {
-  const paths: Record<GlyphName, ReactNode> = {
-    generator: <path d="M4 15.5 7.8 5l2.1 6 2.2-3.3 3.9 7.8H4Z" />,
-    lineup: (
-      <>
-        <path d="M4 5.5h12v10H4z" />
-        <path d="M4 9h12M8 3.8v3.4m4-3.4v3.4" />
-      </>
-    ),
-    connector: (
-      <>
-        <path d="M7.2 12.8 5 15a2.8 2.8 0 0 1-4-4l2.2-2.2" />
-        <path d="m12.8 7.2 2.2-2.2a2.8 2.8 0 0 1 4 4l-2.2 2.2M6.8 13.2l6.4-6.4" />
-      </>
-    ),
-    archive: (
-      <>
-        <path d="M3.5 6.5h13v10h-13z" />
-        <path d="M2.5 3.5h15v3h-15zM8 10h4" />
-      </>
-    ),
-    profile: (
-      <>
-        <path d="M10 10a3.2 3.2 0 1 0 0-6.4A3.2 3.2 0 0 0 10 10Z" />
-        <path d="M4 17c.7-3 2.7-4.5 6-4.5s5.3 1.5 6 4.5" />
-      </>
-    ),
-    activity: <path d="M3 10h3l1.8-4.5 3.3 9 2-4.5H17" />,
-    settings: (
-      <>
-        <path d="M10 12.7a2.7 2.7 0 1 0 0-5.4 2.7 2.7 0 0 0 0 5.4Z" />
-        <path d="m10 2 .8 1.9 2 .8 1.9-.8 1.4 1.4-.8 2 .8 1.9-.8 1.9.8 2-1.4 1.4-1.9-.8-2 .8-.8 1.9H8l-.8-1.9-2-.8-1.9.8-1.4-1.4.8-2-.8-1.9.8-1.9-.8-2 1.4-1.4 1.9.8 2-.8L8 2h2Z" />
-      </>
-    ),
-  };
-  return (
-    <svg
-      className="nav-glyph"
-      viewBox="0 0 20 20"
-      aria-hidden="true"
-      focusable="false"
-    >
-      {paths[name]}
-    </svg>
-  );
+  switch (name) {
+    case "dashboard":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="6" height="6" rx="1.5" />
+          <rect x="11" y="3" width="6" height="6" rx="1.5" />
+          <rect x="3" y="11" width="6" height="6" rx="1.5" />
+          <rect x="11" y="11" width="6" height="6" rx="1.5" />
+        </svg>
+      );
+    case "generator":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="2.75" y="4" width="14.5" height="12" rx="2.5" />
+          <path d="M6 8.5h8" />
+          <path d="M6 11.5h5" />
+        </svg>
+      );
+    case "lineup":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="14" height="13" rx="2" />
+          <path d="M3 8h14" />
+          <path d="M7 2.75v2.5" />
+          <path d="M13 2.75v2.5" />
+          <circle cx="10" cy="12.5" r="1.6" />
+        </svg>
+      );
+    case "drafts":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M4 15.5V6a2 2 0 0 1 2-2h6.5L16 7.5v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
+          <path d="M12.5 4v3.5H16" />
+          <path d="M7 12.5h6" />
+        </svg>
+      );
+    case "analytics":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3.5 16.5h13" />
+          <path d="M6 16.5v-5" />
+          <path d="M10 16.5v-8" />
+          <path d="M14 16.5v-3" />
+        </svg>
+      );
+    case "inbox":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3.5 12v3a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-3" />
+          <path d="M3.5 12l2-6.5A1.5 1.5 0 0 1 6.93 4.5h6.14a1.5 1.5 0 0 1 1.43 1L16.5 12" />
+          <path d="M3.5 12h3.7l1 1.5h3.6l1-1.5h3.7" />
+        </svg>
+      );
+    case "content":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="14" height="12" rx="2" />
+          <path d="M3 8h14" />
+          <path d="M7 4v4" />
+          <path d="M13 4v4" />
+          <path d="M9 10.75l3 1.75-3 1.75z" />
+        </svg>
+      );
+    case "accounts":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="10" cy="7" r="3" />
+          <path d="M4.5 16.5c.8-2.6 2.9-4 5.5-4s4.7 1.4 5.5 4" />
+        </svg>
+      );
+    case "connector":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M7.5 7.5H6a3.5 3.5 0 0 0 0 7h1.5" />
+          <path d="M12.5 7.5H14a3.5 3.5 0 0 1 0 7h-1.5" />
+          <path d="M7.5 11h5" />
+        </svg>
+      );
+    case "catalogue":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="4" y="4" width="12" height="12" rx="2" />
+          <path d="M4 9h12" />
+          <path d="M9 9v7" />
+        </svg>
+      );
+    case "profile":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="10" cy="10" r="6.5" />
+          <path d="M10 6.5V10l2.4 1.6" />
+        </svg>
+      );
+    case "activity":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 10h3l2-5 4 10 2-5h3" />
+        </svg>
+      );
+    case "settings":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="10" cy="10" r="2.6" />
+          <path d="M10 3.2v2M10 14.8v2M3.2 10h2M14.8 10h2M5.2 5.2l1.4 1.4M13.4 13.4l1.4 1.4M14.8 5.2l-1.4 1.4M6.6 13.4l-1.4 1.4" />
+        </svg>
+      );
+  }
 }
 
 export function Nav({
@@ -85,123 +187,107 @@ export function Nav({
   publishingMode?: "assisted" | "authorized_browser";
 }) {
   const pathname = usePathname();
-  const menuRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    function closeMenu(event: PointerEvent) {
-      const menu = menuRef.current;
-      if (menuOpen && event.target instanceof Node && !menu?.contains(event.target)) {
-        setMenuOpen(false);
-      }
-    }
-
-    function closeMenuWithKeyboard(event: KeyboardEvent) {
-      if (event.key !== "Escape" || !menuOpen) return;
-      setMenuOpen(false);
-      menuRef.current
-        ?.querySelector<HTMLButtonElement>(".nav-menu-trigger")
-        ?.focus();
-    }
-
-    document.addEventListener("pointerdown", closeMenu);
-    document.addEventListener("keydown", closeMenuWithKeyboard);
-    return () => {
-      document.removeEventListener("pointerdown", closeMenu);
-      document.removeEventListener("keydown", closeMenuWithKeyboard);
-    };
-  }, [menuOpen]);
-
-  function dismissMenu() {
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
     setMenuOpen(false);
   }
 
-  const browserReady = publishingMode === "authorized_browser" && publishingEnabled;
-  const stateTitle = browserReady ? "Browser publishing ready" : "Assisted publishing";
-  const stateDetail = browserReady
-    ? "Actions start from Calendar"
-    : "No browser actions are queued";
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    const onPointerDown = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [menuOpen]);
+
+  const isActive = (href: string) => {
+    const current = HREF_ALIASES[pathname] ?? pathname;
+    return current === href || current.startsWith(`${href}/`);
+  };
+
+  const publishingReady =
+    publishingEnabled && publishingMode === "authorized_browser";
 
   return (
-    <header className="topbar">
-      <div className="topbar-inner">
-        <Link href="/review" className="brand" aria-label="Runway editorial desk">
-          <RunwayLogo className="brand-mark" />
-          <span className="brand-copy">
-            <strong>Runway</strong>
-            <small>Qlob editorial desk</small>
-          </span>
-        </Link>
-
-        <span className="nav-section-label">Create and schedule</span>
-        <nav className="primary-navigation" aria-label="Primary navigation">
-          {primaryLinks.map(([label, href, icon]) => {
-            const active =
-              pathname.startsWith(href) ||
-              (href === "/lineup" && pathname.startsWith("/queue"));
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={active ? "nav-link active" : "nav-link"}
-                aria-current={active ? "page" : undefined}
-              >
-                <NavGlyph name={icon} />
-                <span>{label}</span>
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div
-          ref={menuRef}
-          className={menuOpen ? "nav-menu open" : "nav-menu"}
+    <div className="topbar-inner">
+      <Link className="brand" href="/" aria-label="Runway home">
+        <RunwayLogo className="brand-mark" />
+        <span className="brand-copy">
+          <strong>Runway</strong>
+          <small>Creator desk</small>
+        </span>
+      </Link>
+      <div className={`nav-menu${menuOpen ? " open" : ""}`} ref={menuRef}>
+        <button
+          className="nav-menu-trigger"
+          type="button"
+          aria-expanded={menuOpen}
+          aria-controls="runway-nav-drawer"
+          aria-label={menuOpen ? "Close Runway menu" : "Open Runway menu"}
+          onClick={() => setMenuOpen((open) => !open)}
+          ref={triggerRef}
         >
-          <button
-            type="button"
-            className="nav-menu-trigger"
-            aria-label={menuOpen ? "Close Runway menu" : "Open Runway menu"}
-            aria-expanded={menuOpen}
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            <span aria-hidden="true" />
-            <span aria-hidden="true" />
-            <span aria-hidden="true" />
-          </button>
-          <div className="nav-menu-popover">
-            <span className="nav-section-label">Workspace</span>
-            <nav aria-label="Runway menu">
-              {secondaryLinks.map(([label, href, description, icon]) => {
-                const active =
-                  pathname.startsWith(href) ||
-                  (href === "/archive" && pathname.startsWith("/catalogue"));
-                return (
+          <span aria-hidden="true" />
+          <span aria-hidden="true" />
+          <span aria-hidden="true" />
+        </button>
+        <div className="nav-menu-popover" id="runway-nav-drawer">
+          {NAV_GROUPS.map((group) => (
+            <div className="nav-group" key={group.label}>
+              <p className="nav-section-label">{group.label}</p>
+              <nav aria-label={group.label}>
+                {group.links.map((link) => (
                   <Link
-                    href={href}
-                    key={href}
-                    onClick={dismissMenu}
-                    className={active ? "active" : ""}
-                    aria-current={active ? "page" : undefined}
+                    key={link.href}
+                    href={link.href}
+                    className="nav-link"
+                    aria-current={isActive(link.href) ? "page" : undefined}
                   >
-                    <NavGlyph name={icon} />
+                    <NavGlyph name={link.glyph} />
                     <span>
-                      <strong>{label}</strong>
-                      <small>{description}</small>
+                      <strong>{link.label}</strong>
+                      {link.hint ? <small>{link.hint}</small> : null}
                     </span>
                   </Link>
-                );
-              })}
-            </nav>
-            <div className="nav-menu-status">
-              <StatusGlyph tone={browserReady ? "success" : "info"} />
-              <span>
-                <strong>{stateTitle}</strong>
-                <small>{stateDetail}</small>
-              </span>
+                ))}
+              </nav>
+            </div>
+          ))}
+          <div className="nav-menu-status">
+            <StatusGlyph tone={publishingReady ? "success" : "info"} />
+            <div>
+              <strong>
+                {publishingReady
+                  ? "Browser publishing ready"
+                  : "Assisted publishing"}
+              </strong>
+              <small>
+                {publishingReady
+                  ? "Actions start from Calendar"
+                  : "No browser actions are queued"}
+              </small>
             </div>
           </div>
         </div>
       </div>
-    </header>
+    </div>
   );
 }

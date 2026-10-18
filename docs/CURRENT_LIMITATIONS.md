@@ -110,6 +110,36 @@ age and exposure before it influences ranking.
 This cannot be considered complete until a documented, permitted source of Community-post analytics
 is available and its data quality is validated.
 
+## Creator platform connections
+
+The platform layer (Accounts, Analytics, Inbox, Content, Drafts) is implemented against the
+official YouTube, Instagram, and TikTok APIs with offline tests on recorded response shapes. The
+exact per-capability status is in [`PLATFORM_CAPABILITIES.md`](PLATFORM_CAPABILITIES.md). The
+honest summary:
+
+- **No live account has been connected during development.** The OAuth flows, sync steps, and
+  parsers are verified against documented payloads and mocked transports, not against a real
+  channel or profile. Expect first-run surprises per platform (field renames, scope prompts) and
+  treat the first live connection as an acceptance test.
+- **Publishing videos, Reels, and TikToks is not implemented.** YouTube `videos.insert` is
+  possible but not built; Instagram publishing needs media on a public URL that loopback-only
+  Runway cannot provide; TikTok Direct Post needs an app audit and otherwise posts privately.
+  Drafts record manual publication and link to the imported post after the next sync.
+- **Comments on TikTok are read-only elsewhere.** TikTok's Display API has no comments; the
+  Business Account API is a separate product and is not integrated.
+- **Replies are off by default** and, when enabled, are limited to YouTube (with the
+  `force-ssl` scope) and Instagram. Another system (the private Qlob Manager) already replies on
+  the Qlob accounts; running both would create two responders.
+- **Analytics are per platform and delayed.** YouTube Analytics finalizes with a delay of about
+  two days; TikTok has no daily series at all, so TikTok trends come only from Runway's own sync
+  snapshots. Nothing is blended across platforms, by design and by YouTube policy.
+- **TikTok local OAuth needs an HTTPS tunnel** because TikTok rejects loopback redirect URIs.
+- **Sync is polled, not real time.** Webhooks (Instagram comment webhooks, YouTube push
+  notifications) are not implemented. Data freshness is shown everywhere; manual "Sync now" and
+  an optional interval scheduler are the only triggers.
+- **Single workspace.** Multiple accounts per platform are supported by the schema and UI, but
+  there is still one local user and one token store.
+
 ## Signup and multiple customers
 
 Runway remains a local, single-user product pinned to Qlob. It does not currently provide:

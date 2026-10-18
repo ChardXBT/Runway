@@ -110,6 +110,66 @@ data directory. The offline fixture path uses the mock runtime. The real caption
 runtime uses the project-local Codex CLI with ChatGPT authentication and no paid
 API fallback.
 
+## Creator platforms
+
+The creator-platform layer sits beside the editorial engine and never calls into it. It adds
+connected accounts, synchronization, a content library, an inbox, analytics, and
+cross-platform drafts for YouTube, Instagram, and TikTok. The research behind it is in
+[`PLATFORM_RESEARCH.md`](PLATFORM_RESEARCH.md); what each platform can actually do is in
+[`PLATFORM_CAPABILITIES.md`](PLATFORM_CAPABILITIES.md).
+
+```text
+Next.js pages (/dashboard /accounts /analytics /inbox /content /drafts)
+        |
+        v
+FastAPI platform routes (/api/platforms, /api/overview, /api/content, /api/analytics,
+                         /api/inbox, /api/drafts)
+        |
+        v
+runway.platforms services
+  |- registry        live or mock providers, redirect URIs, token store
+  |- oauth           single-use state rows (10 minute TTL), PKCE for Google
+  |- sync            bounded per-account runs: identity -> content -> content metrics
+  |                  -> daily metrics -> comments; cursors; step-level errors
+  |- content/inbox/drafts/overview   read models and the few local writes
+  `- providers       youtube | instagram | tiktok | mock, one capability matrix each
+        |
+        v
+SQLite tables (connected_accounts, platform_content, comment_records, account_metric_days,
+               account_metric_snapshots, content_metric_snapshots, sync_runs, sync_cursors,
+               platform_actions, reply_drafts, content_drafts, draft_targets, content_groups,
+               oauth_states)  +  data/secrets/ (Fernet-encrypted tokens, key file)
+```
+
+Design rules that the code enforces:
+
+- **Capabilities are data.** Each provider returns a matrix of
+  `implemented | supported_not_implemented | approval_required | unsupported | unverified`
+  entries with required scopes. A capability is *ready* for an account only when it is
+  implemented, the account is connected, the scopes were granted, and any interlock setting is
+  on. The UI reads `ready` and never enables an action that is not.
+- **No blended metrics.** Every number carries its platform, metric, source, and collection
+  time. Dashboard and analytics never sum YouTube, Instagram, and TikTok values together.
+- **Reads are bounded and observable.** A sync run records each step's status, item count, and
+  estimated quota. A failing step leaves the run `partial`; an expired token marks the account
+  `needs_reauth` and stops that account only. Nothing in sync can take the web app down; pages
+  show the last data with its timestamp.
+- **Writes are explicit.** The only external mutation is a comment reply. It requires
+  `RUNWAY_INBOX_REPLIES_ENABLED=true`, the engage scope on that account, a per-reply
+  confirmation, and a ledger row in `platform_actions` that moves
+  `proposed -> attempted -> completed -> verified`; an ambiguous outcome becomes `uncertain`
+  and is never retried automatically. Video, Reel, and TikTok publishing is not implemented;
+  drafts record manual publication instead.
+- **Tokens never enter the database or logs.** They live in `data/secrets/platform-tokens.json`
+  encrypted with a key in `data/secrets/token.key`; the database stores only an opaque
+  `token_ref`. Persisted request/response JSON is redacted of token-like fields.
+- **Mock providers are a mode, not a fallback.** `RUNWAY_PLATFORM_PROVIDER=mock` serves
+  fictional accounts and shows a persistent banner; `live` (default) never falls back to mock
+  data when a provider fails.
+
+The Community-post path is untouched: Lineup, the assisted workspace, the authorized browser
+publisher, and the connector keep their own routes, services, and interlocks.
+
 Detailed references:
 
 - [`INTELLIGENCE_DATA_MODEL.md`](INTELLIGENCE_DATA_MODEL.md)

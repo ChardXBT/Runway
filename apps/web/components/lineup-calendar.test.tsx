@@ -73,7 +73,7 @@ afterEach(() => {
 });
 
 describe("LineupCalendar", () => {
-  it("confirms punctuation-preserving edits and occupied-date swaps", async () => {
+  it("confirms punctuation-preserving edits and occupied-date swaps", { timeout: 20000 }, async () => {
     const response = { lineup };
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

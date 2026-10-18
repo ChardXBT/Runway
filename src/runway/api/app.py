@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,12 +12,40 @@ from runway import __version__
 from runway.api.catalog_routes import build_catalog_router
 from runway.api.discovery_routes import build_discovery_router
 from runway.api.intelligence_routes import build_intelligence_router
+from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
 from runway.config import Settings, get_settings
 from runway.db import initialize_database
+from runway.db.base import Database
 from runway.logging import configure_logging
+from runway.platforms.sync import PlatformSyncScheduler, SyncService
 from runway.services.dashboard import DashboardService
+
+logger = logging.getLogger(__name__)
+
+
+def _lifespan(
+    database: Database, settings: Settings
+) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        sync_service = SyncService(database, settings)
+        try:
+            sync_service.mark_stale_runs_failed()
+        except Exception:  # noqa: BLE001
+            logger.exception("stale sync-run cleanup failed during startup")
+        scheduler: PlatformSyncScheduler | None = None
+        if settings.platform_sync_interval_minutes > 0:
+            scheduler = PlatformSyncScheduler(sync_service, settings.platform_sync_interval_minutes)
+            scheduler.start()
+        try:
+            yield
+        finally:
+            if scheduler is not None:
+                scheduler.stop()
+
+    return lifespan
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -28,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "Local-only YouTube Community-post intelligence and planning API "
             f"for the configured {active_settings.channel_name} channel"
         ),
+        lifespan=_lifespan(database, active_settings),
     )
     application.state.settings = active_settings
     application.state.database = database
@@ -50,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(build_discovery_router(database, active_settings))
     application.include_router(build_intelligence_router(database, active_settings))
     application.include_router(build_proposal_router(database, active_settings))
+    application.include_router(build_platform_router(database, active_settings))
 
     @application.get("/health", tags=["system"])
     def health() -> dict[str, object]:
@@ -62,6 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "publishing_mode": active_settings.publishing_mode,
             "one_bot_post_per_day": True,
             "scheduling_horizon_days": None,
+            "platform_provider": active_settings.platform_provider,
         }
 
     @application.get("/api/settings", tags=["settings"])

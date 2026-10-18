@@ -13,6 +13,7 @@ authors = [{ name = "Runway" }]
 dependencies = [
   "alembic>=1.14,<2",
   "beautifulsoup4>=4.12,<5",
+  "cryptography>=44,<51",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "numpy>=2.1,<3",

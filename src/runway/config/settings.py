@@ -82,6 +82,22 @@ class Settings(BaseSettings):
     publisher_browser_channel: Literal["chrome", "chromium"] = "chrome"
     publisher_chrome_path: Path | None = None
 
+    platform_provider: Literal["live", "mock"] = "live"
+    oauth_redirect_base_url: str | None = None
+    web_base_url: str | None = None
+    youtube_client_id: str | None = None
+    youtube_client_secret: str | None = None
+    youtube_engage_scopes: bool = False
+    instagram_app_id: str | None = None
+    instagram_app_secret: str | None = None
+    tiktok_client_key: str | None = None
+    tiktok_client_secret: str | None = None
+    inbox_replies_enabled: bool = False
+    platform_sync_interval_minutes: int = Field(default=0, ge=0, le=1440)
+    platform_sync_max_content_items: int = Field(default=200, ge=10, le=2000)
+    platform_sync_comment_content_limit: int = Field(default=10, ge=0, le=100)
+    platform_sync_analytics_days: int = Field(default=90, ge=7, le=365)
+
     @field_validator("host")
     @classmethod
     def loopback_only(cls, value: str) -> str:
@@ -98,6 +114,23 @@ class Settings(BaseSettings):
     )
     @classmethod
     def blank_optional_path(cls, value: object) -> object | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
+    @field_validator(
+        "oauth_redirect_base_url",
+        "web_base_url",
+        "youtube_client_id",
+        "youtube_client_secret",
+        "instagram_app_id",
+        "instagram_app_secret",
+        "tiktok_client_key",
+        "tiktok_client_secret",
+        mode="before",
+    )
+    @classmethod
+    def blank_optional_str(cls, value: object) -> object | None:
         if value is None or (isinstance(value, str) and not value.strip()):
             return None
         return value
@@ -177,6 +210,30 @@ class Settings(BaseSettings):
     def publisher_channel_url(self) -> str:
         return f"https://www.youtube.com/channel/{self.publisher_channel_id}/posts"
 
+    @property
+    def resolved_oauth_redirect_base_url(self) -> str:
+        if self.oauth_redirect_base_url:
+            return self.oauth_redirect_base_url.rstrip("/")
+        return f"http://127.0.0.1:{self.api_port}"
+
+    @property
+    def resolved_web_base_url(self) -> str:
+        if self.web_base_url:
+            return self.web_base_url.rstrip("/")
+        return f"http://127.0.0.1:{self.web_port}"
+
+    @property
+    def youtube_oauth_configured(self) -> bool:
+        return bool(self.youtube_client_id and self.youtube_client_secret)
+
+    @property
+    def instagram_oauth_configured(self) -> bool:
+        return bool(self.instagram_app_id and self.instagram_app_secret)
+
+    @property
+    def tiktok_oauth_configured(self) -> bool:
+        return bool(self.tiktok_client_key and self.tiktok_client_secret)
+
     def ensure_directories(self) -> list[Path]:
         directories = [
             self.resolved_data_dir,
@@ -249,6 +306,13 @@ class Settings(BaseSettings):
                 "automatic_downloads": False,
                 "implicit_activation": False,
             },
+            "platform_provider": self.platform_provider,
+            "youtube_oauth_configured": self.youtube_oauth_configured,
+            "instagram_oauth_configured": self.instagram_oauth_configured,
+            "tiktok_oauth_configured": self.tiktok_oauth_configured,
+            "inbox_replies_enabled": self.inbox_replies_enabled,
+            "platform_sync_interval_minutes": self.platform_sync_interval_minutes,
+            "oauth_redirect_base_url": self.resolved_oauth_redirect_base_url,
             "data_dir": str(self.resolved_data_dir),
         }
 

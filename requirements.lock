@@ -8,10 +8,12 @@ beautifulsoup4==4.15.0
 boolean.py==5.0
 CacheControl==0.14.4
 certifi==2026.6.17
+cffi==2.1.1
 charset-normalizer==3.5.1
 click==8.4.2
 colorama==0.4.6
 coverage==7.15.2
+cryptography==50.0.2
 cyclonedx-python-lib==11.12.0
 defusedxml==0.7.1
 distro==1.9.0
@@ -52,6 +54,7 @@ pydantic-settings==2.14.2
 pydantic_core==2.46.4
 pyee==13.0.1
 Pygments==2.20.0
+pycparser==3.11
 pyparsing==3.3.3
 pytest==9.1.1
 pytest-asyncio==1.4.0

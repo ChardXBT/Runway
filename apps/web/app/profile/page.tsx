@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 
-import { apiGetOptional, apiGetRequired } from "@/lib/api";
+import { apiGetOptional } from "@/lib/api";
 import { isRecord } from "@/lib/guards";
 
 export const dynamic = "force-dynamic";
@@ -182,18 +182,17 @@ function Percent({ value }: { value: number }) {
 
 export default async function ProfilePage() {
   const [profile, evaluation, intelligence] = await Promise.all([
-    apiGetRequired<Profile | null>(
+    apiGetOptional<Profile>(
       "/api/profiles/active",
-      (value): value is Profile | null => value === null || isProfile(value),
+      isProfile,
     ),
     apiGetOptional<Evaluation>(
       "/api/profiles/evaluation",
       isEvaluation,
     ),
-    apiGetRequired<IntelligenceStatus | null>(
+    apiGetOptional<IntelligenceStatus>(
       "/api/intelligence/status",
-      (value): value is IntelligenceStatus | null =>
-        value === null || isIntelligenceStatus(value),
+      isIntelligenceStatus,
     ),
   ]);
   if (!profile) {

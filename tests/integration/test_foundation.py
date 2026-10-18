@@ -64,7 +64,7 @@ def test_migrations_seed_channel_and_enable_wal(database: Database) -> None:
     assert channel_count == 1
     assert journal_mode.lower() == "wal"
     assert foreign_keys == 1
-    assert migration == "0011_runtime_performance"
+    assert migration == "0012_creator_platforms"
     assert feedback_table == 1
     assert publisher_table == 1
     assert schedule_slot == 1

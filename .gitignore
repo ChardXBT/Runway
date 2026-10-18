@@ -17,6 +17,7 @@ apps/web/playwright-report/
 *.tsbuildinfo
 
 data/*
+data/secrets/
 !data/.gitkeep
 !data/README.md
 *.db

@@ -1,12 +1,26 @@
 import type {
+  AccountAnalytics,
+  AccountView,
   AssistedPublishingWorkspace,
+  CapabilityView,
+  ContentDetail,
+  ContentItem,
+  ContentListResponse,
+  DraftView,
   EditorialEnvelope,
   GenerationActivity,
+  InboxComment,
+  InboxDetail,
+  InboxListResponse,
   LineupSchedule,
   LineupPushResponse,
+  OverviewResponse,
+  PlatformsResponse,
   Proposal,
   PublisherConnectionStatus,
   PublisherQueueStatus,
+  ReplyActionResult,
+  SyncRunView,
   WorkflowStatus,
 } from "@/lib/types";
 import { isValidTimeZone, localDate } from "@/lib/datetime";
@@ -251,6 +265,245 @@ export function isLineupSchedule(value: unknown): value is LineupSchedule {
 
 export function proposalList(value: unknown): value is Proposal[] {
   return Array.isArray(value) && value.every(isProposal);
+}
+
+const platformKinds = new Set(["youtube", "instagram", "tiktok"]);
+
+function isCapabilityView(value: unknown): value is CapabilityView {
+  return (
+    isRecord(value) &&
+    typeof value.capability === "string" &&
+    typeof value.state === "string" &&
+    typeof value.ready === "boolean" &&
+    Array.isArray(value.missing_scopes) &&
+    typeof value.blocked_by_setting === "boolean" &&
+    typeof value.detail === "string"
+  );
+}
+
+export function isAccountView(value: unknown): value is AccountView {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.id) &&
+    typeof value.platform === "string" &&
+    platformKinds.has(value.platform) &&
+    typeof value.status === "string" &&
+    (value.handle === null || typeof value.handle === "string") &&
+    (value.display_name === null || typeof value.display_name === "string") &&
+    Array.isArray(value.granted_scopes) &&
+    value.granted_scopes.every((scope) => typeof scope === "string") &&
+    Array.isArray(value.capabilities) &&
+    value.capabilities.every(isCapabilityView) &&
+    typeof value.freshness === "string"
+  );
+}
+
+export function isPlatformsResponse(
+  value: unknown,
+): value is PlatformsResponse {
+  return (
+    isRecord(value) &&
+    (value.provider_mode === "live" || value.provider_mode === "mock") &&
+    Array.isArray(value.platforms) &&
+    value.platforms.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.platform === "string" &&
+        platformKinds.has(entry.platform) &&
+        typeof entry.configured === "boolean" &&
+        Array.isArray(entry.required_env) &&
+        entry.required_env.every((name) => typeof name === "string") &&
+        Array.isArray(entry.capabilities) &&
+        entry.capabilities.every(
+          (capability) =>
+            isRecord(capability) &&
+            typeof capability.capability === "string" &&
+            typeof capability.state === "string" &&
+            typeof capability.detail === "string",
+        ) &&
+        Array.isArray(entry.accounts) &&
+        entry.accounts.every(isAccountView),
+    )
+  );
+}
+
+export function isSyncRunView(value: unknown): value is SyncRunView {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.id) &&
+    isFiniteNumber(value.account_id) &&
+    typeof value.status === "string" &&
+    Array.isArray(value.steps) &&
+    value.steps.every(
+      (step) =>
+        isRecord(step) &&
+        typeof step.step === "string" &&
+        typeof step.status === "string" &&
+        isFiniteNumber(step.items) &&
+        (step.error === null || typeof step.error === "string"),
+    ) &&
+    isFiniteNumber(value.items_fetched) &&
+    (value.error_summary === null || typeof value.error_summary === "string")
+  );
+}
+
+export function isOverviewResponse(
+  value: unknown,
+): value is OverviewResponse {
+  return (
+    isRecord(value) &&
+    isDateString(value.generated_at) &&
+    (value.provider_mode === "live" || value.provider_mode === "mock") &&
+    Array.isArray(value.accounts) &&
+    value.accounts.every(isAccountView) &&
+    Array.isArray(value.platform_summaries) &&
+    value.platform_summaries.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.platform === "string" &&
+        platformKinds.has(entry.platform) &&
+        typeof entry.state === "string" &&
+        typeof entry.followers_label === "string",
+    ) &&
+    isRecord(value.inbox) &&
+    isFiniteNumber(value.inbox.unanswered_total) &&
+    isRecord(value.inbox.by_platform) &&
+    Array.isArray(value.inbox.latest) &&
+    isRecord(value.lineup) &&
+    Array.isArray(value.lineup.next) &&
+    isFiniteNumber(value.lineup.needs_review) &&
+    isFiniteNumber(value.lineup.in_lineup) &&
+    isRecord(value.drafts) &&
+    Array.isArray(value.drafts.scheduled_next) &&
+    isRecord(value.drafts.counts) &&
+    Array.isArray(value.recent_sync_runs) &&
+    Array.isArray(value.warnings) &&
+    value.warnings.every((warning) => typeof warning === "string")
+  );
+}
+
+export function isAccountAnalytics(
+  value: unknown,
+): value is AccountAnalytics {
+  return (
+    isRecord(value) &&
+    isRecord(value.account) &&
+    isFiniteNumber(value.account.id) &&
+    typeof value.account.platform === "string" &&
+    platformKinds.has(value.account.platform) &&
+    isFiniteNumber(value.range) &&
+    Array.isArray(value.kpis) &&
+    Array.isArray(value.series) &&
+    Array.isArray(value.snapshot_series) &&
+    Array.isArray(value.top_content) &&
+    Array.isArray(value.notes) &&
+    Array.isArray(value.data_sources)
+  );
+}
+
+function isInboxComment(value: unknown): value is InboxComment {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.id) &&
+    isFiniteNumber(value.account_id) &&
+    typeof value.platform === "string" &&
+    platformKinds.has(value.platform) &&
+    typeof value.text === "string" &&
+    typeof value.status === "string" &&
+    typeof value.has_owner_reply === "boolean"
+  );
+}
+
+export function isInboxListResponse(
+  value: unknown,
+): value is InboxListResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.every(isInboxComment) &&
+    isFiniteNumber(value.total) &&
+    isRecord(value.counts) &&
+    isFiniteNumber(value.counts.unanswered)
+  );
+}
+
+export function isInboxDetail(value: unknown): value is InboxDetail {
+  return (
+    isRecord(value) &&
+    isInboxComment(value.comment) &&
+    Array.isArray(value.replies) &&
+    value.replies.every(isInboxComment) &&
+    isRecord(value.reply_capability) &&
+    typeof value.reply_capability.ready === "boolean" &&
+    typeof value.reply_capability.detail === "string"
+  );
+}
+
+function isContentItem(value: unknown): value is ContentItem {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.id) &&
+    typeof value.platform === "string" &&
+    platformKinds.has(value.platform) &&
+    typeof value.content_type === "string"
+  );
+}
+
+export function isContentListResponse(
+  value: unknown,
+): value is ContentListResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.every(isContentItem) &&
+    isFiniteNumber(value.total) &&
+    isRecord(value.counts) &&
+    isRecord(value.counts.by_platform) &&
+    isRecord(value.counts.by_type)
+  );
+}
+
+export function isContentDetail(value: unknown): value is ContentDetail {
+  if (!isContentItem(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Array.isArray(record.metric_history) &&
+    isFiniteNumber(record.comment_count_local)
+  );
+}
+
+function isDraftView(value: unknown): value is DraftView {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.id) &&
+    typeof value.title === "string" &&
+    typeof value.status === "string" &&
+    Array.isArray(value.targets) &&
+    value.targets.every(
+      (target) =>
+        isRecord(target) &&
+        isFiniteNumber(target.id) &&
+        typeof target.platform === "string" &&
+        platformKinds.has(target.platform) &&
+        typeof target.status === "string" &&
+        isRecord(target.publish_capability) &&
+        typeof target.publish_capability.state === "string",
+    )
+  );
+}
+
+export function isDraftList(value: unknown): value is DraftView[] {
+  return Array.isArray(value) && value.every(isDraftView);
+}
+
+export function isReplyActionResult(
+  value: unknown,
+): value is ReplyActionResult {
+  return (
+    isRecord(value) &&
+    typeof value.state === "string" &&
+    typeof value.verified === "boolean"
+  );
 }
 
 export function conflictingLineupDates(lineup: LineupSchedule) {

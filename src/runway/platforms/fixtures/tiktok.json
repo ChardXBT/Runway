@@ -1,0 +1,210 @@
+{
+  "identity": {
+    "external_account_id": "tt_openid_northwind",
+    "handle": "northwindstudio",
+    "display_name": "Northwind Studio",
+    "avatar_url": null,
+    "profile_url": "https://www.tiktok.com/@northwindstudio",
+    "account_type": "creator",
+    "followers": 73102,
+    "following": 129,
+    "content_count": 148,
+    "total_likes": 1204407
+  },
+  "content": [
+    {
+      "external_id": "tt_001",
+      "content_type": "video",
+      "title": "POV: your tripod sinks in the bog",
+      "caption": "Northwind Studio shorts #1",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_001",
+      "thumbnail_url": null,
+      "published_at": "2026-10-16T12:21:00Z",
+      "duration_seconds": 51,
+      "metrics": {
+        "views": 148417,
+        "likes": 6874,
+        "comments": 627,
+        "shares": 1996
+      }
+    },
+    {
+      "external_id": "tt_002",
+      "content_type": "video",
+      "title": "Set design speedrun, 45 seconds",
+      "caption": "Northwind Studio shorts #2",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_002",
+      "thumbnail_url": null,
+      "published_at": "2026-10-13T12:14:00Z",
+      "duration_seconds": 52,
+      "metrics": {
+        "views": 177763,
+        "likes": 8526,
+        "comments": 35,
+        "shares": 2085
+      }
+    },
+    {
+      "external_id": "tt_003",
+      "content_type": "video",
+      "title": "The fog machine earned its keep today",
+      "caption": "Northwind Studio shorts #3",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_003",
+      "thumbnail_url": null,
+      "published_at": "2026-10-10T12:13:00Z",
+      "duration_seconds": 50,
+      "metrics": {
+        "views": 2526,
+        "likes": 7277,
+        "comments": 876,
+        "shares": 650
+      }
+    },
+    {
+      "external_id": "tt_004",
+      "content_type": "video",
+      "title": "Studio hack: clamp everything",
+      "caption": "Northwind Studio shorts #4",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_004",
+      "thumbnail_url": null,
+      "published_at": "2026-10-07T12:19:00Z",
+      "duration_seconds": 38,
+      "metrics": {
+        "views": 75780,
+        "likes": 7295,
+        "comments": 269,
+        "shares": 943
+      }
+    },
+    {
+      "external_id": "tt_005",
+      "content_type": "video",
+      "title": "Color test, ungraded",
+      "caption": "Northwind Studio shorts #5",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_005",
+      "thumbnail_url": null,
+      "published_at": "2026-10-04T12:06:00Z",
+      "duration_seconds": 12,
+      "metrics": {
+        "views": 58549,
+        "likes": 5846,
+        "comments": 755,
+        "shares": 1781
+      }
+    },
+    {
+      "external_id": "tt_006",
+      "content_type": "video",
+      "title": "Rain rig, take four",
+      "caption": "Northwind Studio shorts #6",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_006",
+      "thumbnail_url": null,
+      "published_at": "2026-10-01T12:27:00Z",
+      "duration_seconds": 18,
+      "metrics": {
+        "views": 97407,
+        "likes": 12836,
+        "comments": 593,
+        "shares": 1170
+      }
+    },
+    {
+      "external_id": "tt_007",
+      "content_type": "video",
+      "title": "Packing a whole kit into one backpack",
+      "caption": "Northwind Studio shorts #7",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_007",
+      "thumbnail_url": null,
+      "published_at": "2026-09-28T12:14:00Z",
+      "duration_seconds": 54,
+      "metrics": {
+        "views": 166956,
+        "likes": 11921,
+        "comments": 522,
+        "shares": 1189
+      }
+    },
+    {
+      "external_id": "tt_008",
+      "content_type": "video",
+      "title": "Timelapse: building the cave set",
+      "caption": "Northwind Studio shorts #8",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_008",
+      "thumbnail_url": null,
+      "published_at": "2026-09-25T12:12:00Z",
+      "duration_seconds": 51,
+      "metrics": {
+        "views": 40381,
+        "likes": 12409,
+        "comments": 619,
+        "shares": 181
+      }
+    },
+    {
+      "external_id": "tt_009",
+      "content_type": "video",
+      "title": "One light, three looks",
+      "caption": "Northwind Studio shorts #9",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_009",
+      "thumbnail_url": null,
+      "published_at": "2026-09-22T12:26:00Z",
+      "duration_seconds": 31,
+      "metrics": {
+        "views": 160552,
+        "likes": 14992,
+        "comments": 623,
+        "shares": 1467
+      }
+    },
+    {
+      "external_id": "tt_010",
+      "content_type": "video",
+      "title": "The shot that took all night",
+      "caption": "Northwind Studio shorts #10",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_010",
+      "thumbnail_url": null,
+      "published_at": "2026-09-19T12:13:00Z",
+      "duration_seconds": 28,
+      "metrics": {
+        "views": 112571,
+        "likes": 5908,
+        "comments": 492,
+        "shares": 35
+      }
+    },
+    {
+      "external_id": "tt_011",
+      "content_type": "video",
+      "title": "Field audio is 80 percent of the job",
+      "caption": "Northwind Studio shorts #11",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_011",
+      "thumbnail_url": null,
+      "published_at": "2026-09-16T12:38:00Z",
+      "duration_seconds": 49,
+      "metrics": {
+        "views": 8583,
+        "likes": 9961,
+        "comments": 143,
+        "shares": 912
+      }
+    },
+    {
+      "external_id": "tt_012",
+      "content_type": "video",
+      "title": "Bloopers, because it was a long week",
+      "caption": "Northwind Studio shorts #12",
+      "permalink": "https://www.tiktok.com/@northwindstudio/video/tt_012",
+      "thumbnail_url": null,
+      "published_at": "2026-09-13T12:38:00Z",
+      "duration_seconds": 30,
+      "metrics": {
+        "views": 229129,
+        "likes": 10279,
+        "comments": 255,
+        "shares": 987
+      }
+    }
+  ],
+  "daily_metrics": [],
+  "comments": []
+}

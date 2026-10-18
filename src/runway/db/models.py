@@ -1456,3 +1456,248 @@ class IntelligenceExperiment(Base):
     selection_decision: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+# -----------------------------------------------------------------------------
+# Creator platforms
+
+
+class ConnectedAccount(Base, TimestampMixin):
+    __tablename__ = "connected_accounts"
+    __table_args__ = (
+        UniqueConstraint("platform", "external_account_id", name="uq_connected_account_external"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    platform: Mapped[str] = mapped_column(String(20), index=True)
+    external_account_id: Mapped[str] = mapped_column(String(200))
+    handle: Mapped[str | None] = mapped_column(String(200))
+    display_name: Mapped[str | None] = mapped_column(String(200))
+    avatar_url: Mapped[str | None] = mapped_column(Text)
+    profile_url: Mapped[str | None] = mapped_column(Text)
+    account_type: Mapped[str | None] = mapped_column(String(60))
+    status: Mapped[str] = mapped_column(String(30), index=True, default="connected")
+    granted_scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    token_ref: Mapped[str | None] = mapped_column(String(64), unique=True)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_status: Mapped[str | None] = mapped_column(String(30))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class OAuthState(Base):
+    __tablename__ = "oauth_states"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    platform: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(128), unique=True)
+    code_verifier: Mapped[str | None] = mapped_column(Text)
+    redirect_uri: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ContentGroup(Base):
+    __tablename__ = "content_groups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(300))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PlatformContent(Base):
+    __tablename__ = "platform_content"
+    __table_args__ = (
+        UniqueConstraint("account_id", "external_id", name="uq_platform_content_external"),
+        Index("ix_platform_content_platform_published", "platform", "published_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
+    platform: Mapped[str] = mapped_column(String(20), index=True)
+    external_id: Mapped[str] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(30), index=True, default="unknown")
+    title: Mapped[str | None] = mapped_column(Text)
+    caption: Mapped[str | None] = mapped_column(Text)
+    permalink: Mapped[str | None] = mapped_column(Text)
+    thumbnail_url: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    privacy_status: Mapped[str | None] = mapped_column(String(30))
+    view_count: Mapped[int | None] = mapped_column(Integer, index=True)
+    like_count: Mapped[int | None] = mapped_column(Integer, index=True)
+    comment_count: Mapped[int | None] = mapped_column(Integer, index=True)
+    share_count: Mapped[int | None] = mapped_column(Integer, index=True)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    metrics_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("content_groups.id"), index=True
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    raw_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class ContentMetricSnapshot(Base):
+    __tablename__ = "content_metric_snapshots"
+    __table_args__ = (
+        Index("ix_content_metric_snapshots_content_captured", "content_id", "captured_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    content_id: Mapped[int] = mapped_column(ForeignKey("platform_content.id"), index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class AccountMetricSnapshot(Base):
+    __tablename__ = "account_metric_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    followers: Mapped[int | None] = mapped_column(Integer)
+    following: Mapped[int | None] = mapped_column(Integer)
+    content_count: Mapped[int | None] = mapped_column(Integer)
+    total_views: Mapped[int | None] = mapped_column(Integer)
+    total_likes: Mapped[int | None] = mapped_column(Integer)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class AccountMetricDay(Base):
+    __tablename__ = "account_metric_days"
+    __table_args__ = (
+        UniqueConstraint("account_id", "day", "metric", name="uq_account_metric_day"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
+    day: Mapped[date] = mapped_column(Date)
+    metric: Mapped[str] = mapped_column(String(60))
+    value: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(60))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CommentRecord(Base):
+    __tablename__ = "comment_records"
+    __table_args__ = (
+        UniqueConstraint("account_id", "external_id", name="uq_comment_record_external"),
+        Index("ix_comment_records_account_published", "account_id", "published_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
+    platform: Mapped[str] = mapped_column(String(20), index=True)
+    external_id: Mapped[str] = mapped_column(String(200))
+    content_id: Mapped[int | None] = mapped_column(ForeignKey("platform_content.id"), index=True)
+    parent_external_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    author_name: Mapped[str | None] = mapped_column(String(200))
+    author_external_id: Mapped[str | None] = mapped_column(String(200))
+    author_avatar_url: Mapped[str | None] = mapped_column(Text)
+    author_is_owner: Mapped[bool] = mapped_column(Boolean, default=False)
+    text: Mapped[str] = mapped_column(Text)
+    like_count: Mapped[int | None] = mapped_column(Integer)
+    reply_count: Mapped[int | None] = mapped_column(Integer)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    platform_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20), index=True, default="new")
+    has_owner_reply: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    permalink: Mapped[str | None] = mapped_column(Text)
+    raw_json: Mapped[str] = mapped_column(Text, default="{}")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReplyDraft(Base):
+    __tablename__ = "reply_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    comment_id: Mapped[int] = mapped_column(ForeignKey("comment_records.id"), unique=True)
+    text: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class PlatformAction(Base):
+    __tablename__ = "platform_actions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
+    action_type: Mapped[str] = mapped_column(String(40), index=True)
+    target_type: Mapped[str] = mapped_column(String(40))
+    target_id: Mapped[int | None] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(20), index=True, default="proposed")
+    request_json: Mapped[str] = mapped_column(Text, default="{}")
+    response_json: Mapped[str] = mapped_column(Text, default="{}")
+    external_result_id: Mapped[str | None] = mapped_column(String(200))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SyncRun(Base):
+    __tablename__ = "sync_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
+    trigger: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), index=True, default="running")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    steps_json: Mapped[str] = mapped_column(Text, default="[]")
+    items_fetched: Mapped[int] = mapped_column(Integer, default=0)
+    quota_units_estimate: Mapped[int] = mapped_column(Integer, default=0)
+    error_summary: Mapped[str | None] = mapped_column(Text)
+
+
+class SyncCursor(Base):
+    __tablename__ = "sync_cursors"
+    __table_args__ = (UniqueConstraint("account_id", "scope", name="uq_sync_cursor_scope"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
+    scope: Mapped[str] = mapped_column(String(200))
+    cursor_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ContentDraft(Base, TimestampMixin):
+    __tablename__ = "content_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text, default="")
+    media_path: Mapped[str | None] = mapped_column(Text)
+    media_kind: Mapped[str | None] = mapped_column(String(20))
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(30), index=True, default="draft")
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class DraftTarget(Base):
+    __tablename__ = "draft_targets"
+    __table_args__ = (
+        UniqueConstraint("draft_id", "platform", "account_id", name="uq_draft_target"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    draft_id: Mapped[int] = mapped_column(ForeignKey("content_drafts.id"), index=True)
+    platform: Mapped[str] = mapped_column(String(20))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
+    caption_override: Mapped[str | None] = mapped_column(Text)
+    settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    published_content_id: Mapped[int | None] = mapped_column(ForeignKey("platform_content.id"))
+    published_url: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)

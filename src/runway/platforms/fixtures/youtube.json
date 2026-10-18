@@ -1,0 +1,1408 @@
+{
+  "identity": {
+    "external_account_id": "UCnorthwindstudio",
+    "handle": "northwindstudio",
+    "display_name": "Northwind Studio",
+    "avatar_url": null,
+    "profile_url": "https://www.youtube.com/@northwindstudio",
+    "account_type": "channel",
+    "followers": 184213,
+    "following": null,
+    "content_count": 96,
+    "total_views": 14203518,
+    "uploads_playlist": "UUnorthwindstudio_uploads"
+  },
+  "content": [
+    {
+      "external_id": "ytv_001",
+      "content_type": "video",
+      "title": "Building a forest diorama from scratch",
+      "caption": "Building a forest diorama from scratch - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_001",
+      "thumbnail_url": null,
+      "published_at": "2026-10-15T12:52:00Z",
+      "duration_seconds": 1390,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 45465,
+        "likes": 710,
+        "comments": 414
+      }
+    },
+    {
+      "external_id": "ytv_002",
+      "content_type": "video",
+      "title": "I graded 200 hours of footage in one day",
+      "caption": "I graded 200 hours of footage in one day - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_002",
+      "thumbnail_url": null,
+      "published_at": "2026-10-09T12:39:00Z",
+      "duration_seconds": 994,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 93063,
+        "likes": 4995,
+        "comments": 60
+      }
+    },
+    {
+      "external_id": "ytv_003",
+      "content_type": "short",
+      "title": "The studio tour nobody asked for",
+      "caption": "The studio tour nobody asked for - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_003",
+      "thumbnail_url": null,
+      "published_at": "2026-10-03T12:49:00Z",
+      "duration_seconds": 48,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 3188,
+        "likes": 417,
+        "comments": 74
+      }
+    },
+    {
+      "external_id": "ytv_004",
+      "content_type": "video",
+      "title": "Testing the cheapest cinema lens on the market",
+      "caption": "Testing the cheapest cinema lens on the market - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_004",
+      "thumbnail_url": null,
+      "published_at": "2026-09-27T12:43:00Z",
+      "duration_seconds": 744,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 12511,
+        "likes": 1695,
+        "comments": 101
+      }
+    },
+    {
+      "external_id": "ytv_005",
+      "content_type": "video",
+      "title": "A week of filming in the far north",
+      "caption": "A week of filming in the far north - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_005",
+      "thumbnail_url": null,
+      "published_at": "2026-09-21T12:49:00Z",
+      "duration_seconds": 1325,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 39769,
+        "likes": 5751,
+        "comments": 23
+      }
+    },
+    {
+      "external_id": "ytv_006",
+      "content_type": "short",
+      "title": "How we light night scenes without a crew",
+      "caption": "How we light night scenes without a crew - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_006",
+      "thumbnail_url": null,
+      "published_at": "2026-09-15T12:54:00Z",
+      "duration_seconds": 20,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 76672,
+        "likes": 5487,
+        "comments": 123
+      }
+    },
+    {
+      "external_id": "ytv_007",
+      "content_type": "video",
+      "title": "Every camera I have ever owned",
+      "caption": "Every camera I have ever owned - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_007",
+      "thumbnail_url": null,
+      "published_at": "2026-09-09T12:23:00Z",
+      "duration_seconds": 1259,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 72380,
+        "likes": 1734,
+        "comments": 331
+      }
+    },
+    {
+      "external_id": "ytv_008",
+      "content_type": "video",
+      "title": "Sound design for a silent short",
+      "caption": "Sound design for a silent short - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_008",
+      "thumbnail_url": null,
+      "published_at": "2026-09-03T12:31:00Z",
+      "duration_seconds": 879,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 51254,
+        "likes": 4082,
+        "comments": 233
+      }
+    },
+    {
+      "external_id": "ytv_009",
+      "content_type": "short",
+      "title": "The 90 second film school: framing",
+      "caption": "The 90 second film school: framing - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_009",
+      "thumbnail_url": null,
+      "published_at": "2026-08-28T12:38:00Z",
+      "duration_seconds": 25,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 53648,
+        "likes": 6150,
+        "comments": 294
+      }
+    },
+    {
+      "external_id": "ytv_010",
+      "content_type": "video",
+      "title": "Printing and mounting our stills",
+      "caption": "Printing and mounting our stills - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_010",
+      "thumbnail_url": null,
+      "published_at": "2026-08-22T12:36:00Z",
+      "duration_seconds": 1234,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 86394,
+        "likes": 3719,
+        "comments": 343
+      }
+    },
+    {
+      "external_id": "ytv_011",
+      "content_type": "video",
+      "title": "What went wrong on the lighthouse shoot",
+      "caption": "What went wrong on the lighthouse shoot - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_011",
+      "thumbnail_url": null,
+      "published_at": "2026-08-16T12:25:00Z",
+      "duration_seconds": 1246,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 52177,
+        "likes": 233,
+        "comments": 201
+      }
+    },
+    {
+      "external_id": "ytv_012",
+      "content_type": "short",
+      "title": "Q&A: gear, budgets, burnout",
+      "caption": "Q&A: gear, budgets, burnout - full breakdown in the description.",
+      "permalink": "https://www.youtube.com/watch?v=ytv_012",
+      "thumbnail_url": null,
+      "published_at": "2026-08-10T12:10:00Z",
+      "duration_seconds": 33,
+      "privacy_status": "public",
+      "metrics": {
+        "views": 32430,
+        "likes": 4189,
+        "comments": 449
+      }
+    }
+  ],
+  "daily_metrics": [
+    {
+      "day": "2026-07-20",
+      "views": 36468,
+      "likes": 1458,
+      "comments": 145,
+      "shares": 218,
+      "subscribers_gained": 984,
+      "subscribers_lost": 1,
+      "estimated_minutes_watched": 113050
+    },
+    {
+      "day": "2026-07-21",
+      "views": 41609,
+      "likes": 1664,
+      "comments": 166,
+      "shares": 249,
+      "subscribers_gained": 1357,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 128987
+    },
+    {
+      "day": "2026-07-22",
+      "views": 42543,
+      "likes": 1701,
+      "comments": 170,
+      "shares": 255,
+      "subscribers_gained": 1107,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 131883
+    },
+    {
+      "day": "2026-07-23",
+      "views": 50962,
+      "likes": 2038,
+      "comments": 203,
+      "shares": 305,
+      "subscribers_gained": 1141,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 157982
+    },
+    {
+      "day": "2026-07-24",
+      "views": 52716,
+      "likes": 2108,
+      "comments": 210,
+      "shares": 316,
+      "subscribers_gained": 1063,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 163419
+    },
+    {
+      "day": "2026-07-25",
+      "views": 43598,
+      "likes": 1743,
+      "comments": 174,
+      "shares": 261,
+      "subscribers_gained": 712,
+      "subscribers_lost": 2,
+      "estimated_minutes_watched": 135153
+    },
+    {
+      "day": "2026-07-26",
+      "views": 33522,
+      "likes": 1340,
+      "comments": 134,
+      "shares": 201,
+      "subscribers_gained": 855,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 103918
+    },
+    {
+      "day": "2026-07-27",
+      "views": 48641,
+      "likes": 1945,
+      "comments": 194,
+      "shares": 291,
+      "subscribers_gained": 668,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 150787
+    },
+    {
+      "day": "2026-07-28",
+      "views": 37637,
+      "likes": 1505,
+      "comments": 150,
+      "shares": 225,
+      "subscribers_gained": 712,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 116674
+    },
+    {
+      "day": "2026-07-29",
+      "views": 43387,
+      "likes": 1735,
+      "comments": 173,
+      "shares": 260,
+      "subscribers_gained": 1345,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 134499
+    },
+    {
+      "day": "2026-07-30",
+      "views": 39016,
+      "likes": 1560,
+      "comments": 156,
+      "shares": 234,
+      "subscribers_gained": 884,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 120949
+    },
+    {
+      "day": "2026-07-31",
+      "views": 48743,
+      "likes": 1949,
+      "comments": 194,
+      "shares": 292,
+      "subscribers_gained": 777,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 151103
+    },
+    {
+      "day": "2026-08-01",
+      "views": 38290,
+      "likes": 1531,
+      "comments": 153,
+      "shares": 229,
+      "subscribers_gained": 1364,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 118699
+    },
+    {
+      "day": "2026-08-02",
+      "views": 37019,
+      "likes": 1480,
+      "comments": 148,
+      "shares": 222,
+      "subscribers_gained": 598,
+      "subscribers_lost": 2,
+      "estimated_minutes_watched": 114758
+    },
+    {
+      "day": "2026-08-03",
+      "views": 50598,
+      "likes": 2023,
+      "comments": 202,
+      "shares": 303,
+      "subscribers_gained": 1282,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 156853
+    },
+    {
+      "day": "2026-08-04",
+      "views": 39899,
+      "likes": 1595,
+      "comments": 159,
+      "shares": 239,
+      "subscribers_gained": 921,
+      "subscribers_lost": 4,
+      "estimated_minutes_watched": 123686
+    },
+    {
+      "day": "2026-08-05",
+      "views": 45184,
+      "likes": 1807,
+      "comments": 180,
+      "shares": 271,
+      "subscribers_gained": 847,
+      "subscribers_lost": 4,
+      "estimated_minutes_watched": 140070
+    },
+    {
+      "day": "2026-08-06",
+      "views": 52871,
+      "likes": 2114,
+      "comments": 211,
+      "shares": 317,
+      "subscribers_gained": 973,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 163900
+    },
+    {
+      "day": "2026-08-07",
+      "views": 31462,
+      "likes": 1258,
+      "comments": 125,
+      "shares": 188,
+      "subscribers_gained": 1248,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 97532
+    },
+    {
+      "day": "2026-08-08",
+      "views": 36697,
+      "likes": 1467,
+      "comments": 146,
+      "shares": 220,
+      "subscribers_gained": 1330,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 113760
+    },
+    {
+      "day": "2026-08-09",
+      "views": 32612,
+      "likes": 1304,
+      "comments": 130,
+      "shares": 195,
+      "subscribers_gained": 1331,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 101097
+    },
+    {
+      "day": "2026-08-10",
+      "views": 33835,
+      "likes": 1353,
+      "comments": 135,
+      "shares": 203,
+      "subscribers_gained": 623,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 104888
+    },
+    {
+      "day": "2026-08-11",
+      "views": 50703,
+      "likes": 2028,
+      "comments": 202,
+      "shares": 304,
+      "subscribers_gained": 585,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 157179
+    },
+    {
+      "day": "2026-08-12",
+      "views": 52613,
+      "likes": 2104,
+      "comments": 210,
+      "shares": 315,
+      "subscribers_gained": 1544,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 163100
+    },
+    {
+      "day": "2026-08-13",
+      "views": 38882,
+      "likes": 1555,
+      "comments": 155,
+      "shares": 233,
+      "subscribers_gained": 1430,
+      "subscribers_lost": 1,
+      "estimated_minutes_watched": 120534
+    },
+    {
+      "day": "2026-08-14",
+      "views": 51820,
+      "likes": 2072,
+      "comments": 207,
+      "shares": 310,
+      "subscribers_gained": 999,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 160642
+    },
+    {
+      "day": "2026-08-15",
+      "views": 42250,
+      "likes": 1690,
+      "comments": 169,
+      "shares": 253,
+      "subscribers_gained": 642,
+      "subscribers_lost": 4,
+      "estimated_minutes_watched": 130975
+    },
+    {
+      "day": "2026-08-16",
+      "views": 49864,
+      "likes": 1994,
+      "comments": 199,
+      "shares": 299,
+      "subscribers_gained": 1085,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 154578
+    },
+    {
+      "day": "2026-08-17",
+      "views": 51551,
+      "likes": 2062,
+      "comments": 206,
+      "shares": 309,
+      "subscribers_gained": 1182,
+      "subscribers_lost": 3,
+      "estimated_minutes_watched": 159808
+    },
+    {
+      "day": "2026-08-18",
+      "views": 31907,
+      "likes": 1276,
+      "comments": 127,
+      "shares": 191,
+      "subscribers_gained": 1131,
+      "subscribers_lost": 1,
+      "estimated_minutes_watched": 98911
+    },
+    {
+      "day": "2026-08-19",
+      "views": 42184,
+      "likes": 1687,
+      "comments": 168,
+      "shares": 253,
+      "subscribers_gained": 1502,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 130770
+    },
+    {
+      "day": "2026-08-20",
+      "views": 37240,
+      "likes": 1489,
+      "comments": 148,
+      "shares": 223,
+      "subscribers_gained": 1060,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 115444
+    },
+    {
+      "day": "2026-08-21",
+      "views": 38619,
+      "likes": 1544,
+      "comments": 154,
+      "shares": 231,
+      "subscribers_gained": 941,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 119718
+    },
+    {
+      "day": "2026-08-22",
+      "views": 46881,
+      "likes": 1875,
+      "comments": 187,
+      "shares": 281,
+      "subscribers_gained": 912,
+      "subscribers_lost": 4,
+      "estimated_minutes_watched": 145331
+    },
+    {
+      "day": "2026-08-23",
+      "views": 46131,
+      "likes": 1845,
+      "comments": 184,
+      "shares": 276,
+      "subscribers_gained": 539,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 143006
+    },
+    {
+      "day": "2026-08-24",
+      "views": 46872,
+      "likes": 1874,
+      "comments": 187,
+      "shares": 281,
+      "subscribers_gained": 676,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 145303
+    },
+    {
+      "day": "2026-08-25",
+      "views": 34499,
+      "likes": 1379,
+      "comments": 137,
+      "shares": 206,
+      "subscribers_gained": 1207,
+      "subscribers_lost": 4,
+      "estimated_minutes_watched": 106946
+    },
+    {
+      "day": "2026-08-26",
+      "views": 29879,
+      "likes": 1195,
+      "comments": 119,
+      "shares": 179,
+      "subscribers_gained": 1141,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 92624
+    },
+    {
+      "day": "2026-08-27",
+      "views": 48648,
+      "likes": 1945,
+      "comments": 194,
+      "shares": 291,
+      "subscribers_gained": 1251,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 150808
+    },
+    {
+      "day": "2026-08-28",
+      "views": 47568,
+      "likes": 1902,
+      "comments": 190,
+      "shares": 285,
+      "subscribers_gained": 553,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 147460
+    },
+    {
+      "day": "2026-08-29",
+      "views": 39505,
+      "likes": 1580,
+      "comments": 158,
+      "shares": 237,
+      "subscribers_gained": 551,
+      "subscribers_lost": 2,
+      "estimated_minutes_watched": 122465
+    },
+    {
+      "day": "2026-08-30",
+      "views": 30924,
+      "likes": 1236,
+      "comments": 123,
+      "shares": 185,
+      "subscribers_gained": 1184,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 95864
+    },
+    {
+      "day": "2026-08-31",
+      "views": 41364,
+      "likes": 1654,
+      "comments": 165,
+      "shares": 248,
+      "subscribers_gained": 769,
+      "subscribers_lost": 3,
+      "estimated_minutes_watched": 128228
+    },
+    {
+      "day": "2026-09-01",
+      "views": 41394,
+      "likes": 1655,
+      "comments": 165,
+      "shares": 248,
+      "subscribers_gained": 638,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 128321
+    },
+    {
+      "day": "2026-09-02",
+      "views": 50696,
+      "likes": 2027,
+      "comments": 202,
+      "shares": 304,
+      "subscribers_gained": 904,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 157157
+    },
+    {
+      "day": "2026-09-03",
+      "views": 43941,
+      "likes": 1757,
+      "comments": 175,
+      "shares": 263,
+      "subscribers_gained": 908,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 136217
+    },
+    {
+      "day": "2026-09-04",
+      "views": 45111,
+      "likes": 1804,
+      "comments": 180,
+      "shares": 270,
+      "subscribers_gained": 1019,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 139844
+    },
+    {
+      "day": "2026-09-05",
+      "views": 44597,
+      "likes": 1783,
+      "comments": 178,
+      "shares": 267,
+      "subscribers_gained": 1057,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 138250
+    },
+    {
+      "day": "2026-09-06",
+      "views": 43084,
+      "likes": 1723,
+      "comments": 172,
+      "shares": 258,
+      "subscribers_gained": 1071,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 133560
+    },
+    {
+      "day": "2026-09-07",
+      "views": 42343,
+      "likes": 1693,
+      "comments": 169,
+      "shares": 254,
+      "subscribers_gained": 1200,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 131263
+    },
+    {
+      "day": "2026-09-08",
+      "views": 43830,
+      "likes": 1753,
+      "comments": 175,
+      "shares": 262,
+      "subscribers_gained": 1070,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 135873
+    },
+    {
+      "day": "2026-09-09",
+      "views": 36667,
+      "likes": 1466,
+      "comments": 146,
+      "shares": 220,
+      "subscribers_gained": 1297,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 113667
+    },
+    {
+      "day": "2026-09-10",
+      "views": 42631,
+      "likes": 1705,
+      "comments": 170,
+      "shares": 255,
+      "subscribers_gained": 1122,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 132156
+    },
+    {
+      "day": "2026-09-11",
+      "views": 38740,
+      "likes": 1549,
+      "comments": 154,
+      "shares": 232,
+      "subscribers_gained": 1474,
+      "subscribers_lost": 2,
+      "estimated_minutes_watched": 120094
+    },
+    {
+      "day": "2026-09-12",
+      "views": 51637,
+      "likes": 2065,
+      "comments": 206,
+      "shares": 309,
+      "subscribers_gained": 726,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 160074
+    },
+    {
+      "day": "2026-09-13",
+      "views": 32234,
+      "likes": 1289,
+      "comments": 128,
+      "shares": 193,
+      "subscribers_gained": 1064,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 99925
+    },
+    {
+      "day": "2026-09-14",
+      "views": 40043,
+      "likes": 1601,
+      "comments": 160,
+      "shares": 240,
+      "subscribers_gained": 722,
+      "subscribers_lost": 4,
+      "estimated_minutes_watched": 124133
+    },
+    {
+      "day": "2026-09-15",
+      "views": 31249,
+      "likes": 1249,
+      "comments": 124,
+      "shares": 187,
+      "subscribers_gained": 1568,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 96871
+    },
+    {
+      "day": "2026-09-16",
+      "views": 44189,
+      "likes": 1767,
+      "comments": 176,
+      "shares": 265,
+      "subscribers_gained": 1014,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 136985
+    },
+    {
+      "day": "2026-09-17",
+      "views": 53492,
+      "likes": 2139,
+      "comments": 213,
+      "shares": 320,
+      "subscribers_gained": 937,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 165825
+    },
+    {
+      "day": "2026-09-18",
+      "views": 44516,
+      "likes": 1780,
+      "comments": 178,
+      "shares": 267,
+      "subscribers_gained": 808,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 137999
+    },
+    {
+      "day": "2026-09-19",
+      "views": 33784,
+      "likes": 1351,
+      "comments": 135,
+      "shares": 202,
+      "subscribers_gained": 763,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 104730
+    },
+    {
+      "day": "2026-09-20",
+      "views": 35678,
+      "likes": 1427,
+      "comments": 142,
+      "shares": 214,
+      "subscribers_gained": 1324,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 110601
+    },
+    {
+      "day": "2026-09-21",
+      "views": 45755,
+      "likes": 1830,
+      "comments": 183,
+      "shares": 274,
+      "subscribers_gained": 1540,
+      "subscribers_lost": 3,
+      "estimated_minutes_watched": 141840
+    },
+    {
+      "day": "2026-09-22",
+      "views": 49239,
+      "likes": 1969,
+      "comments": 196,
+      "shares": 295,
+      "subscribers_gained": 1406,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 152640
+    },
+    {
+      "day": "2026-09-23",
+      "views": 47466,
+      "likes": 1898,
+      "comments": 189,
+      "shares": 284,
+      "subscribers_gained": 1269,
+      "subscribers_lost": 4,
+      "estimated_minutes_watched": 147144
+    },
+    {
+      "day": "2026-09-24",
+      "views": 52286,
+      "likes": 2091,
+      "comments": 209,
+      "shares": 313,
+      "subscribers_gained": 706,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 162086
+    },
+    {
+      "day": "2026-09-25",
+      "views": 39489,
+      "likes": 1579,
+      "comments": 157,
+      "shares": 236,
+      "subscribers_gained": 1233,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 122415
+    },
+    {
+      "day": "2026-09-26",
+      "views": 38824,
+      "likes": 1552,
+      "comments": 155,
+      "shares": 232,
+      "subscribers_gained": 1092,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 120354
+    },
+    {
+      "day": "2026-09-27",
+      "views": 38262,
+      "likes": 1530,
+      "comments": 153,
+      "shares": 229,
+      "subscribers_gained": 1173,
+      "subscribers_lost": 1,
+      "estimated_minutes_watched": 118612
+    },
+    {
+      "day": "2026-09-28",
+      "views": 40824,
+      "likes": 1632,
+      "comments": 163,
+      "shares": 244,
+      "subscribers_gained": 1469,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 126554
+    },
+    {
+      "day": "2026-09-29",
+      "views": 39119,
+      "likes": 1564,
+      "comments": 156,
+      "shares": 234,
+      "subscribers_gained": 616,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 121268
+    },
+    {
+      "day": "2026-09-30",
+      "views": 45214,
+      "likes": 1808,
+      "comments": 180,
+      "shares": 271,
+      "subscribers_gained": 1051,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 140163
+    },
+    {
+      "day": "2026-10-01",
+      "views": 30287,
+      "likes": 1211,
+      "comments": 121,
+      "shares": 181,
+      "subscribers_gained": 928,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 93889
+    },
+    {
+      "day": "2026-10-02",
+      "views": 41091,
+      "likes": 1643,
+      "comments": 164,
+      "shares": 246,
+      "subscribers_gained": 889,
+      "subscribers_lost": 3,
+      "estimated_minutes_watched": 127382
+    },
+    {
+      "day": "2026-10-03",
+      "views": 46288,
+      "likes": 1851,
+      "comments": 185,
+      "shares": 277,
+      "subscribers_gained": 1563,
+      "subscribers_lost": 3,
+      "estimated_minutes_watched": 143492
+    },
+    {
+      "day": "2026-10-04",
+      "views": 43200,
+      "likes": 1728,
+      "comments": 172,
+      "shares": 259,
+      "subscribers_gained": 1404,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 133920
+    },
+    {
+      "day": "2026-10-05",
+      "views": 31780,
+      "likes": 1271,
+      "comments": 127,
+      "shares": 190,
+      "subscribers_gained": 1067,
+      "subscribers_lost": 2,
+      "estimated_minutes_watched": 98518
+    },
+    {
+      "day": "2026-10-06",
+      "views": 35634,
+      "likes": 1425,
+      "comments": 142,
+      "shares": 213,
+      "subscribers_gained": 1389,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 110465
+    },
+    {
+      "day": "2026-10-07",
+      "views": 46443,
+      "likes": 1857,
+      "comments": 185,
+      "shares": 278,
+      "subscribers_gained": 1016,
+      "subscribers_lost": 1,
+      "estimated_minutes_watched": 143973
+    },
+    {
+      "day": "2026-10-08",
+      "views": 45343,
+      "likes": 1813,
+      "comments": 181,
+      "shares": 272,
+      "subscribers_gained": 1112,
+      "subscribers_lost": 5,
+      "estimated_minutes_watched": 140563
+    },
+    {
+      "day": "2026-10-09",
+      "views": 40712,
+      "likes": 1628,
+      "comments": 162,
+      "shares": 244,
+      "subscribers_gained": 847,
+      "subscribers_lost": 3,
+      "estimated_minutes_watched": 126207
+    },
+    {
+      "day": "2026-10-10",
+      "views": 41764,
+      "likes": 1670,
+      "comments": 167,
+      "shares": 250,
+      "subscribers_gained": 1352,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 129468
+    },
+    {
+      "day": "2026-10-11",
+      "views": 45169,
+      "likes": 1806,
+      "comments": 180,
+      "shares": 271,
+      "subscribers_gained": 1196,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 140023
+    },
+    {
+      "day": "2026-10-12",
+      "views": 50308,
+      "likes": 2012,
+      "comments": 201,
+      "shares": 301,
+      "subscribers_gained": 577,
+      "subscribers_lost": 7,
+      "estimated_minutes_watched": 155954
+    },
+    {
+      "day": "2026-10-13",
+      "views": 38112,
+      "likes": 1524,
+      "comments": 152,
+      "shares": 228,
+      "subscribers_gained": 758,
+      "subscribers_lost": 8,
+      "estimated_minutes_watched": 118147
+    },
+    {
+      "day": "2026-10-14",
+      "views": 46550,
+      "likes": 1862,
+      "comments": 186,
+      "shares": 279,
+      "subscribers_gained": 1186,
+      "subscribers_lost": 0,
+      "estimated_minutes_watched": 144305
+    },
+    {
+      "day": "2026-10-15",
+      "views": 48484,
+      "likes": 1939,
+      "comments": 193,
+      "shares": 290,
+      "subscribers_gained": 739,
+      "subscribers_lost": 1,
+      "estimated_minutes_watched": 150300
+    },
+    {
+      "day": "2026-10-16",
+      "views": 47672,
+      "likes": 1906,
+      "comments": 190,
+      "shares": 286,
+      "subscribers_gained": 913,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 147783
+    },
+    {
+      "day": "2026-10-17",
+      "views": 31952,
+      "likes": 1278,
+      "comments": 127,
+      "shares": 191,
+      "subscribers_gained": 1522,
+      "subscribers_lost": 6,
+      "estimated_minutes_watched": 99051
+    }
+  ],
+  "comments": [
+    {
+      "external_id": "yt_c001",
+      "author_name": "Aster Vale",
+      "author_external_id": "u_aster_0",
+      "text": "This edit timing is perfect, what do you cut on?",
+      "like_count": 81,
+      "published_at": "2026-10-07T13:46:00Z",
+      "replies": [
+        {
+          "external_id": "yt_c001_r1",
+          "author_name": "Northwind Studio",
+          "author_external_id": "UCnorthwindstudio",
+          "author_is_owner": true,
+          "text": "Thank you! New one drops Friday.",
+          "like_count": 40,
+          "published_at": "2026-10-10T12:18:00Z"
+        }
+      ]
+    },
+    {
+      "external_id": "yt_c002",
+      "author_name": "Rowan Pike",
+      "author_external_id": "u_rowan_1",
+      "text": "Watched this three times already.",
+      "like_count": 43,
+      "published_at": "2026-09-28T12:06:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c003",
+      "author_name": "Mira Sol",
+      "author_external_id": "u_mira_2",
+      "text": "The color grade on the last shot is unreal.",
+      "like_count": 141,
+      "published_at": "2026-10-15T09:26:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c004",
+      "author_name": "Jules Hart",
+      "author_external_id": "u_jules_3",
+      "text": "How long did this take to make?",
+      "like_count": 23,
+      "published_at": "2026-10-11T11:13:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c005",
+      "author_name": "Petra Lindqvist",
+      "author_external_id": "u_petra_4",
+      "text": "Instant subscribe, the pacing is so good.",
+      "like_count": 109,
+      "published_at": "2026-10-05T14:41:00Z",
+      "replies": [
+        {
+          "external_id": "yt_c005_r1",
+          "author_name": "Northwind Studio",
+          "author_external_id": "UCnorthwindstudio",
+          "author_is_owner": true,
+          "text": "Thank you! New one drops Friday.",
+          "like_count": 24,
+          "published_at": "2026-09-30T10:58:00Z"
+        }
+      ]
+    },
+    {
+      "external_id": "yt_c006",
+      "author_name": "Theo Marsh",
+      "author_external_id": "u_theo_5",
+      "text": "This edit timing is perfect, what do you cut on?",
+      "like_count": 190,
+      "published_at": "2026-10-04T19:42:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c007",
+      "author_name": "Ines Duarte",
+      "author_external_id": "u_ines_6",
+      "text": "Watched this three times already.",
+      "like_count": 20,
+      "published_at": "2026-10-17T22:09:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c008",
+      "author_name": "Casper Yuen",
+      "author_external_id": "u_casper_7",
+      "text": "The color grade on the last shot is unreal.",
+      "like_count": 15,
+      "published_at": "2026-10-14T21:00:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c009",
+      "author_name": "Nadia Okafor",
+      "author_external_id": "u_nadia_8",
+      "text": "How long did this take to make?",
+      "like_count": 151,
+      "published_at": "2026-10-02T22:26:00Z",
+      "replies": [
+        {
+          "external_id": "yt_c009_r1",
+          "author_name": "Northwind Studio",
+          "author_external_id": "UCnorthwindstudio",
+          "author_is_owner": true,
+          "text": "Thank you! New one drops Friday.",
+          "like_count": 17,
+          "published_at": "2026-10-06T15:53:00Z"
+        }
+      ]
+    },
+    {
+      "external_id": "yt_c010",
+      "author_name": "Felix Brandt",
+      "author_external_id": "u_felix_9",
+      "text": "Instant subscribe, the pacing is so good.",
+      "like_count": 32,
+      "published_at": "2026-09-29T19:55:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c011",
+      "author_name": "Sana Iqbal",
+      "author_external_id": "u_sana_10",
+      "text": "This edit timing is perfect, what do you cut on?",
+      "like_count": 93,
+      "published_at": "2026-10-01T11:21:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c012",
+      "author_name": "Milo Ferreira",
+      "author_external_id": "u_milo_11",
+      "text": "Watched this three times already.",
+      "like_count": 100,
+      "published_at": "2026-10-07T12:10:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c013",
+      "author_name": "Odette Roy",
+      "author_external_id": "u_odette_12",
+      "text": "The color grade on the last shot is unreal.",
+      "like_count": 35,
+      "published_at": "2026-10-05T15:06:00Z",
+      "replies": [
+        {
+          "external_id": "yt_c013_r1",
+          "author_name": "Northwind Studio",
+          "author_external_id": "UCnorthwindstudio",
+          "author_is_owner": true,
+          "text": "Thank you! New one drops Friday.",
+          "like_count": 27,
+          "published_at": "2026-10-06T12:45:00Z"
+        }
+      ]
+    },
+    {
+      "external_id": "yt_c014",
+      "author_name": "Kian Boyle",
+      "author_external_id": "u_kian_13",
+      "text": "How long did this take to make?",
+      "like_count": 27,
+      "published_at": "2026-09-29T10:35:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c015",
+      "author_name": "Tessa Marlowe",
+      "author_external_id": "u_tessa_14",
+      "text": "Instant subscribe, the pacing is so good.",
+      "like_count": 4,
+      "published_at": "2026-10-14T09:24:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c016",
+      "author_name": "Bruno Kessler",
+      "author_external_id": "u_bruno_15",
+      "text": "This edit timing is perfect, what do you cut on?",
+      "like_count": 170,
+      "published_at": "2026-10-03T08:50:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c017",
+      "author_name": "Lena Vogt",
+      "author_external_id": "u_lena_16",
+      "text": "Watched this three times already.",
+      "like_count": 230,
+      "published_at": "2026-10-11T22:13:00Z",
+      "replies": [
+        {
+          "external_id": "yt_c017_r1",
+          "author_name": "Northwind Studio",
+          "author_external_id": "UCnorthwindstudio",
+          "author_is_owner": true,
+          "text": "Thank you! New one drops Friday.",
+          "like_count": 20,
+          "published_at": "2026-09-30T21:08:00Z"
+        }
+      ]
+    },
+    {
+      "external_id": "yt_c018",
+      "author_name": "Aris Papas",
+      "author_external_id": "u_aris_17",
+      "text": "The color grade on the last shot is unreal.",
+      "like_count": 187,
+      "published_at": "2026-10-06T19:42:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c019",
+      "author_name": "Hazel Wren",
+      "author_external_id": "u_hazel_18",
+      "text": "How long did this take to make?",
+      "like_count": 85,
+      "published_at": "2026-10-15T18:58:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c020",
+      "author_name": "Dario Fontaine",
+      "author_external_id": "u_dario_19",
+      "text": "Instant subscribe, the pacing is so good.",
+      "like_count": 232,
+      "published_at": "2026-10-13T08:31:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c021",
+      "author_name": "Mabel Ortiz",
+      "author_external_id": "u_mabel_20",
+      "text": "This edit timing is perfect, what do you cut on?",
+      "like_count": 164,
+      "published_at": "2026-09-30T12:52:00Z",
+      "replies": [
+        {
+          "external_id": "yt_c021_r1",
+          "author_name": "Northwind Studio",
+          "author_external_id": "UCnorthwindstudio",
+          "author_is_owner": true,
+          "text": "Thank you! New one drops Friday.",
+          "like_count": 39,
+          "published_at": "2026-10-16T20:22:00Z"
+        }
+      ]
+    },
+    {
+      "external_id": "yt_c022",
+      "author_name": "Silas Creed",
+      "author_external_id": "u_silas_21",
+      "text": "Watched this three times already.",
+      "like_count": 93,
+      "published_at": "2026-10-06T10:54:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c023",
+      "author_name": "Yuki Amari",
+      "author_external_id": "u_yuki_22",
+      "text": "The color grade on the last shot is unreal.",
+      "like_count": 63,
+      "published_at": "2026-10-09T19:47:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c024",
+      "author_name": "Iris Bell",
+      "author_external_id": "u_iris_23",
+      "text": "How long did this take to make?",
+      "like_count": 117,
+      "published_at": "2026-10-04T17:58:00Z",
+      "replies": []
+    },
+    {
+      "external_id": "yt_c025",
+      "author_name": "Nolan Frost",
+      "author_external_id": "u_nolan_24",
+      "text": "Instant subscribe, the pacing is so good.",
+      "like_count": 216,
+      "published_at": "2026-10-03T11:32:00Z",
+      "replies": [
+        {
+          "external_id": "yt_c025_r1",
+          "author_name": "Northwind Studio",
+          "author_external_id": "UCnorthwindstudio",
+          "author_is_owner": true,
+          "text": "Thank you! New one drops Friday.",
+          "like_count": 9,
+          "published_at": "2026-10-17T08:12:00Z"
+        }
+      ]
+    }
+  ]
+}

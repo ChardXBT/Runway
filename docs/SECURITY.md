@@ -56,6 +56,37 @@
 - Assisted responses expose media URLs under `/media/`, never local filesystem paths, browser
   profiles, cookies, or session material.
 
+## Creator platform connections
+
+- Platform accounts connect through each platform's official OAuth 2.0 flow (Google, Business
+  Login for Instagram, TikTok Login Kit). Runway never asks for a platform password.
+- Each authorization issues a random single-use `state` stored in `oauth_states` with a
+  ten-minute expiry; the callback rejects unknown, reused, expired, or platform-mismatched
+  states and redirects back to `/accounts` with a short error code only. Google requests use
+  PKCE (S256). Consent requests the minimum scopes: read-only data and analytics; the YouTube
+  `force-ssl` scope is requested only when `RUNWAY_YOUTUBE_ENGAGE_SCOPES=true`.
+- Access and refresh tokens are stored in `data/secrets/platform-tokens.json`, encrypted with
+  Fernet using a key in `data/secrets/token.key` (created with mode `0600` on POSIX). The
+  database holds only an opaque `token_ref`, so database backups contain no usable credential.
+  `data/secrets/` is ignored by Git. Disconnecting revokes the token where the platform supports
+  it and deletes it locally.
+- Tokens are sent only as `Authorization: Bearer` headers to the platform hosts, never in URLs,
+  frontend responses, logs, or persisted JSON; `redact_payload` strips token-like fields from
+  anything written to `platform_actions`.
+- The OAuth callback is an ordinary top-level `GET` on the loopback API, so the existing
+  `LocalRequestGuard` still applies: only loopback `Host` headers are served. TikTok requires
+  an HTTPS redirect, which means a tunnel that rewrites the Host header; the guard is not
+  relaxed for it.
+- Comment replies are the only external write. They require
+  `RUNWAY_INBOX_REPLIES_ENABLED=true`, a connected account holding the reply scope, and a
+  per-reply confirmation. Every reply is recorded in `platform_actions` before it is attempted
+  and is reported as sent only after Runway re-reads it from the platform. Ambiguous outcomes
+  are marked `uncertain` and never retried automatically.
+- Mock providers run only when `RUNWAY_PLATFORM_PROVIDER=mock`; they make no network calls,
+  cannot be connected through OAuth, and are labelled in the UI.
+- Sync reads are bounded per run (items, pages, comment targets) and back off on platform
+  rate-limit errors. A provider outage degrades a sync run, not the web app.
+
 ## Dependency audits
 
 CI runs `pip-audit`, a strict `npm audit --omit=dev` for the web app, and

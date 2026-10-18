@@ -80,6 +80,7 @@ active_learning_app = typer.Typer(help="Select and export high-information creat
 arena_app = typer.Typer(help="Operate the blinded three-arm raw-frontier arena.")
 neural_app = typer.Typer(help="Evaluate local neural representation challengers offline.")
 composed_app = typer.Typer(help="Prepare learned composed-image retrieval datasets.")
+platforms_app = typer.Typer(help="Inspect and sync connected creator platforms.")
 
 app.add_typer(capture_app, name="capture")
 app.add_typer(catalog_app, name="catalog")
@@ -105,6 +106,7 @@ intelligence_app.add_typer(active_learning_app, name="active-learning")
 intelligence_app.add_typer(arena_app, name="arena")
 intelligence_app.add_typer(neural_app, name="neural")
 intelligence_app.add_typer(composed_app, name="composed-retrieval")
+app.add_typer(platforms_app, name="platforms")
 
 
 @app.callback()
@@ -2221,6 +2223,84 @@ def queue_status(
     database = initialize_database(settings)
     result = ProposalService(database, settings).queue_status(days=days, limit=limit)
     typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@platforms_app.command("list")
+def platforms_list() -> None:
+    """List connected platform accounts with status and last-sync summary."""
+    from sqlalchemy import select
+
+    from runway.db.models import ConnectedAccount
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    with database.session() as session:
+        accounts = session.scalars(
+            select(ConnectedAccount).order_by(ConnectedAccount.platform)
+        ).all()
+        rows = [
+            {
+                "id": account.id,
+                "platform": account.platform,
+                "handle": account.handle,
+                "display_name": account.display_name,
+                "status": account.status,
+                "last_sync_at": (
+                    account.last_sync_at.isoformat() if account.last_sync_at else None
+                ),
+                "last_sync_status": account.last_sync_status,
+                "last_error": account.last_error,
+            }
+            for account in accounts
+        ]
+    typer.echo(json.dumps(rows, indent=2, default=str))
+
+
+@platforms_app.command("sync")
+def platforms_sync(
+    account: int | None = typer.Option(
+        None,
+        "--account",
+        help="Sync a single connected account by id; omit to sync all connected.",
+    ),
+) -> None:
+    """Run a manual sync for connected platform accounts."""
+    from sqlalchemy import select
+
+    from runway.db.models import ConnectedAccount
+    from runway.platforms.sync import SyncRunInProgress, SyncService
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    service = SyncService(database, settings)
+    with database.session() as session:
+        if account is not None:
+            record = session.get(ConnectedAccount, account)
+            if record is None:
+                raise typer.BadParameter(f"account {account} does not exist")
+            account_ids = [record.id]
+        else:
+            account_ids = list(
+                session.scalars(
+                    select(ConnectedAccount.id).where(ConnectedAccount.status == "connected")
+                ).all()
+            )
+    results: list[dict[str, object]] = []
+    for account_id in account_ids:
+        try:
+            run = service.run(int(account_id), trigger="manual")
+            results.append(
+                {
+                    "account_id": account_id,
+                    "run_id": run.id,
+                    "status": run.status,
+                    "items_fetched": run.items_fetched,
+                    "error_summary": run.error_summary,
+                }
+            )
+        except SyncRunInProgress as exc:
+            results.append({"account_id": account_id, "status": "skipped", "detail": str(exc)})
+    typer.echo(json.dumps(results, indent=2, default=str))
 
 
 def main() -> None:

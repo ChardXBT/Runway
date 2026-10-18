@@ -2,6 +2,181 @@
   "contract": {
     "contract_version": "runway-schema-contract-v1",
     "tables": {
+      "account_metric_days": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "day",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATE"
+          },
+          {
+            "default": null,
+            "name": "fetched_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "metric",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(60)"
+          },
+          {
+            "default": null,
+            "name": "source",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(60)"
+          },
+          {
+            "default": null,
+            "name": "value",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "FLOAT"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_account_metric_days_account_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "account_id",
+              "day",
+              "metric"
+            ],
+            "name": "uq_account_metric_day"
+          }
+        ]
+      },
+      "account_metric_snapshots": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "captured_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "content_count",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "followers",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "following",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "metrics_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "total_likes",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "total_views",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_account_metric_snapshots_account_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
       "active_learning_batches": {
         "check_constraints": [],
         "columns": [
@@ -3515,6 +3690,241 @@
           }
         ]
       },
+      "comment_records": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "author_avatar_url",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "author_external_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "author_is_owner",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BOOLEAN"
+          },
+          {
+            "default": null,
+            "name": "author_name",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "content_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "external_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "first_seen_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "has_owner_reply",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BOOLEAN"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_seen_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "like_count",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "parent_external_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "permalink",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "platform",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "platform_updated_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "published_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "raw_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "reply_count",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "status",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "text",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "content_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "platform_content"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_comment_records_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "account_id",
+              "published_at"
+            ],
+            "name": "ix_comment_records_account_published",
+            "unique": false
+          },
+          {
+            "columns": [
+              "content_id"
+            ],
+            "name": "ix_comment_records_content_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "has_owner_reply"
+            ],
+            "name": "ix_comment_records_has_owner_reply",
+            "unique": false
+          },
+          {
+            "columns": [
+              "parent_external_id"
+            ],
+            "name": "ix_comment_records_parent_external_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "platform"
+            ],
+            "name": "ix_comment_records_platform",
+            "unique": false
+          },
+          {
+            "columns": [
+              "status"
+            ],
+            "name": "ix_comment_records_status",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "account_id",
+              "external_id"
+            ],
+            "name": "uq_comment_record_external"
+          }
+        ]
+      },
       "composed_retrieval_examples": {
         "check_constraints": [],
         "columns": [
@@ -3702,6 +4112,508 @@
               "target_media_asset_id"
             ],
             "name": "uq_composed_retrieval_example"
+          }
+        ]
+      },
+      "connected_accounts": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_type",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(60)"
+          },
+          {
+            "default": null,
+            "name": "avatar_url",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "connected_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "display_name",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "external_account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "granted_scopes_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "handle",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "last_sync_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "last_sync_status",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(30)"
+          },
+          {
+            "default": null,
+            "name": "last_verified_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "metadata_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "platform",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "profile_url",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "status",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(30)"
+          },
+          {
+            "default": null,
+            "name": "token_ref",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(64)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [
+          {
+            "columns": [
+              "platform"
+            ],
+            "name": "ix_connected_accounts_platform",
+            "unique": false
+          },
+          {
+            "columns": [
+              "status"
+            ],
+            "name": "ix_connected_accounts_status",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "token_ref"
+            ],
+            "name": ""
+          },
+          {
+            "columns": [
+              "platform",
+              "external_account_id"
+            ],
+            "name": "uq_connected_account_external"
+          }
+        ]
+      },
+      "content_drafts": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "body",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "media_kind",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "media_path",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "notes",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "scheduled_for",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "status",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(30)"
+          },
+          {
+            "default": null,
+            "name": "title",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [
+          {
+            "columns": [
+              "scheduled_for"
+            ],
+            "name": "ix_content_drafts_scheduled_for",
+            "unique": false
+          },
+          {
+            "columns": [
+              "status"
+            ],
+            "name": "ix_content_drafts_status",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
+      "content_groups": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "note",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "title",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [],
+        "unique_constraints": []
+      },
+      "content_metric_snapshots": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "captured_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "content_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "metrics_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "content_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "platform_content"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "content_id",
+              "captured_at"
+            ],
+            "name": "ix_content_metric_snapshots_content_captured",
+            "unique": false
+          },
+          {
+            "columns": [
+              "content_id"
+            ],
+            "name": "ix_content_metric_snapshots_content_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
+      "draft_targets": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "caption_override",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "draft_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "platform",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "published_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "published_content_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "published_url",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "settings_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "status",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(30)"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "draft_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "content_drafts"
+          },
+          {
+            "columns": [
+              "published_content_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "platform_content"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_draft_targets_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "draft_id"
+            ],
+            "name": "ix_draft_targets_draft_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "draft_id",
+              "platform",
+              "account_id"
+            ],
+            "name": "uq_draft_target"
           }
         ]
       },
@@ -5931,6 +6843,77 @@
         ],
         "unique_constraints": []
       },
+      "oauth_states": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "code_verifier",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "consumed_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "expires_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "platform",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "redirect_uri",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "state",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [],
+        "unique_constraints": [
+          {
+            "columns": [
+              "state"
+            ],
+            "name": ""
+          }
+        ]
+      },
       "pairwise_preferences": {
         "check_constraints": [],
         "columns": [
@@ -6386,6 +7369,401 @@
               "idempotency_key"
             ],
             "name": "uq_pairwise_preference_idempotency"
+          }
+        ]
+      },
+      "platform_actions": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "action_type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "attempted_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "external_result_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "request_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "response_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "state",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "target_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "target_type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "verified_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_platform_actions_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "action_type"
+            ],
+            "name": "ix_platform_actions_action_type",
+            "unique": false
+          },
+          {
+            "columns": [
+              "state"
+            ],
+            "name": "ix_platform_actions_state",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
+      "platform_content": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "caption",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "comment_count",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "content_group_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "content_type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(30)"
+          },
+          {
+            "default": null,
+            "name": "duration_seconds",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "external_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "first_seen_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_seen_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "like_count",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "metrics_fetched_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "metrics_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "permalink",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "platform",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "privacy_status",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(30)"
+          },
+          {
+            "default": null,
+            "name": "published_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "raw_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "share_count",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "thumbnail_url",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "title",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "view_count",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "content_group_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "content_groups"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_platform_content_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "comment_count"
+            ],
+            "name": "ix_platform_content_comment_count",
+            "unique": false
+          },
+          {
+            "columns": [
+              "content_group_id"
+            ],
+            "name": "ix_platform_content_content_group_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "content_type"
+            ],
+            "name": "ix_platform_content_content_type",
+            "unique": false
+          },
+          {
+            "columns": [
+              "like_count"
+            ],
+            "name": "ix_platform_content_like_count",
+            "unique": false
+          },
+          {
+            "columns": [
+              "platform"
+            ],
+            "name": "ix_platform_content_platform",
+            "unique": false
+          },
+          {
+            "columns": [
+              "platform",
+              "published_at"
+            ],
+            "name": "ix_platform_content_platform_published",
+            "unique": false
+          },
+          {
+            "columns": [
+              "share_count"
+            ],
+            "name": "ix_platform_content_share_count",
+            "unique": false
+          },
+          {
+            "columns": [
+              "view_count"
+            ],
+            "name": "ix_platform_content_view_count",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "account_id",
+              "external_id"
+            ],
+            "name": "uq_platform_content_external"
           }
         ]
       },
@@ -8120,6 +9498,60 @@
           }
         ]
       },
+      "reply_drafts": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "comment_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "text",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "comment_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "comment_records"
+          }
+        ],
+        "indexes": [],
+        "unique_constraints": [
+          {
+            "columns": [
+              "comment_id"
+            ],
+            "name": ""
+          }
+        ]
+      },
       "representation_records": {
         "check_constraints": [],
         "columns": [
@@ -9576,11 +11008,185 @@
             "name": ""
           }
         ]
+      },
+      "sync_cursors": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "cursor_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "scope",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_sync_cursors_account_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "account_id",
+              "scope"
+            ],
+            "name": "uq_sync_cursor_scope"
+          }
+        ]
+      },
+      "sync_runs": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "error_summary",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "items_fetched",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "quota_units_estimate",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "started_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "status",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "steps_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "trigger",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_sync_runs_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "status"
+            ],
+            "name": "ix_sync_runs_status",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
       }
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "320403dfd84fa4f4e1b489082756b45a819cbdd7f1cc96adacdbc7006ad1ac04",
-  "migration": "0011_runtime_performance",
-  "table_count": 52
+  "fingerprint": "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be",
+  "migration": "0012_creator_platforms",
+  "table_count": 66
 }

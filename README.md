@@ -2,16 +2,61 @@
 
 [![CI](https://github.com/ChardXBT/Runway/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ChardXBT/Runway/actions/workflows/ci.yml)
 
-Runway is a local editorial desk for planning image posts on a YouTube channel's Community tab.
-Posting every day keeps a channel alive, but doing it by hand every morning is a grind, and the
-quality drifts. Runway studies the channel's own history, finds candidate images, drafts captions
-that are checked against what is actually in the picture, and presents one option at a time for a
-human to accept, edit, or reject. Accepted posts go into a Lineup calendar, at most one Runway
-post per day.
+Runway is a local creator desk. It began as an editorial conveyor for a YouTube channel's
+Community tab and is growing into one place to see and run a creator's accounts: a dashboard
+across YouTube, Instagram, and TikTok, per-platform analytics, a unified comment inbox, a content
+library that links the published versions of one idea, and cross-platform drafts, all beside the
+original review desk and Lineup calendar.
+
+The editorial engine is unchanged. Posting every day keeps a channel alive, but doing it by hand
+every morning is a grind, and the quality drifts. Runway studies the channel's own history, finds
+candidate images, drafts captions that are checked against what is actually in the picture, and
+presents one option at a time for a human to accept, edit, or reject. Accepted posts go into a
+Lineup calendar, at most one Runway post per day.
 
 It was built for one channel (Qlob) and runs entirely on the creator's own machine: a FastAPI
 backend and a Next.js frontend, both bound to `127.0.0.1`. There is no cloud account, no data
 leaving the machine, and nothing is published unless the creator explicitly asks for it.
+
+## Creator desk
+
+The newer surfaces consolidate what used to live in YouTube Studio, Instagram, and TikTok Studio.
+Each platform connects through its official API; what Runway can do for each is stated per
+capability and verified per account rather than hidden behind a single "connected" badge.
+
+| Surface | What it does | Source of truth |
+| --- | --- | --- |
+| **Dashboard** `/dashboard` | One card per connected account (subscribers or followers, content count, 28-day views where the platform reports them), unanswered comments, the next Community posts and scheduled drafts, recent performance per platform, sync activity. Nothing is summed across platforms. | `GET /api/overview` |
+| **Accounts** `/accounts` | Connect, reconnect, disconnect, and sync accounts. Shows identity, granted permissions, freshness, errors, and a capability list that says Ready, Needs permission, Off by setting, Not implemented, Approval required, or Unsupported. | `GET /api/platforms` |
+| **Analytics** `/analytics` | Per-account KPIs with period deltas, daily series (YouTube Analytics, Instagram Insights), audience-over-time from Runway's own sync snapshots, top content. Always one platform at a time. | `GET /api/analytics/accounts/{id}` |
+| **Inbox** `/inbox` | Comments across accounts with unanswered, platform, status, and text filters; threads; status (read, escalated, ignored, answered); local reply drafts. Reply sending is off by default and interlocked. | `GET /api/inbox` |
+| **Content** `/content` | Imported videos, Shorts, Reels, posts, and TikToks with metrics, search, sorting, metric history, and groups that link the versions of one original. | `GET /api/content` |
+| **Drafts** `/drafts` | One idea, several destinations, a caption per platform, an optional date. Publishing to video platforms is not implemented; a disabled control states why, and "Mark as published" links the native post after the next sync. | `GET /api/drafts` |
+
+Platform access is honest by construction:
+
+- YouTube: OAuth, channel and video inventory, YouTube Analytics daily reports, comments. Replies
+  need the `force-ssl` scope and an explicit setting. Community posts still have no API.
+- Instagram (professional accounts, Instagram Login): OAuth or an imported long-lived token,
+  media inventory, insights, comments. Publishing requires public media hosting that loopback
+  Runway does not have.
+- TikTok (Login Kit + Display API): profile stats and public videos. Comments and publishing need
+  separate TikTok for Business products and audits, so they are shown as unavailable.
+
+Screenshots below are from `RUNWAY_PLATFORM_PROVIDER=mock` (fictional "Northwind Studio"
+accounts), so no creator data is shown.
+
+![Dashboard across connected accounts](docs/media/runway/shot-creator-dashboard.png)
+![Per-platform analytics](docs/media/runway/shot-creator-analytics.png)
+![Unified inbox with a selected comment](docs/media/runway/shot-creator-inbox.png)
+![Accounts and capability states](docs/media/runway/shot-creator-accounts.png)
+
+None of these integrations has been exercised against a live account yet; see
+[docs/PLATFORM_CAPABILITIES.md](docs/PLATFORM_CAPABILITIES.md) for the exact state of each
+capability, [docs/PLATFORM_RESEARCH.md](docs/PLATFORM_RESEARCH.md) for the API and competitor
+research, and [docs/CREATOR_OS_SETUP.md](docs/CREATOR_OS_SETUP.md) to configure the platform
+apps. `RUNWAY_PLATFORM_PROVIDER=mock` serves fictional demo accounts behind a visible banner so the
+whole desk can be explored without credentials.
 
 ## Demo
 
@@ -114,7 +159,7 @@ challenge handling.
 
 ### Supporting surfaces
 
-- **Archive / Library.** The full captured history plus every rejected generator option,
+- **Archive.** The full captured Community history plus every rejected generator option,
   searchable and filterable. Rejections are learning signals, not trash.
 - **Connector.** Verifies the channel, the active identity, and posting capability with a real
   browser check, and reports last-known status honestly. It never claims more than the check
@@ -172,7 +217,7 @@ schema-validated and treated as data, never trusted blindly. More detail is in
 
 | Layer | Technology |
 | --- | --- |
-| Backend | Python 3.13, FastAPI, Pydantic 2, SQLAlchemy 2, Alembic, SQLite, Typer, httpx, Pillow, NumPy |
+| Backend | Python 3.13, FastAPI, Pydantic 2, SQLAlchemy 2, Alembic, SQLite, Typer, httpx, cryptography, Pillow, NumPy |
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
 | Models | OpenAI Codex CLI (version pinned in `package.json`); a mock runtime for tests and demos |
 | Browser | Playwright: bundled Chromium for capture, installed Google Chrome for the publisher |
@@ -225,7 +270,8 @@ npm run web:build
 powershell -NoProfile -ExecutionPolicy Bypass -File .\run-runway.ps1
 ```
 
-Then open <http://127.0.0.1:3000/review>. The launcher never kills a process it did not start,
+Then open <http://127.0.0.1:3000/dashboard> (<http://127.0.0.1:3000/review> still opens the
+review desk directly). The launcher never kills a process it did not start,
 refuses to share a port with an unrelated program, and only reports success once both services
 answer their health checks. To start Runway at logon and restart a crashed component, install the
 scheduled task:
@@ -268,6 +314,10 @@ contacts YouTube. CI runs all of the above, plus the PowerShell launcher contrac
 
 - Both servers bind to loopback and only answer loopback `Host` headers, which blocks DNS
   rebinding. The API also refuses state-changing requests from other origins.
+- Platform accounts connect through official OAuth only. Tokens are encrypted at rest under
+  `data/secrets/` (ignored by Git) and never appear in the database, logs, URLs, or API
+  responses. The only external write, a comment reply, is off by default and verified after
+  posting.
 - Third-party image downloads accept only public addresses, revalidate every redirect, and are
   limited in bytes, time, and decoded pixels.
 - Codex subprocesses run without API-key credentials, in a read-only sandbox, one at a time.
@@ -281,6 +331,7 @@ expiring exception. Production dependencies have no known advisories. Details ar
 
 ```text
 src/runway/      Python package: API, CLI, services, database models, providers
+src/runway/platforms/  YouTube, Instagram, TikTok providers, sync, inbox, content, drafts
 apps/web/        Next.js frontend
 alembic/         Database migrations
 tests/           Unit, integration, and end-to-end tests

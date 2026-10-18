@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Instrument_Serif, Work_Sans } from "next/font/google";
 import type { ReactNode } from "react";
 
+import { DemoBanner } from "@/components/demo-banner";
 import { Nav } from "@/components/nav";
 import { apiGet } from "@/lib/api";
 import { isRecord } from "@/lib/guards";
@@ -22,7 +23,7 @@ const instrumentSerif = Instrument_Serif({
 
 export const metadata: Metadata = {
   title: {
-    default: "Runway · Qlob editorial desk",
+    default: "Runway · Creator desk",
     template: "%s · Runway",
   },
   description:
@@ -35,17 +36,25 @@ export default async function RootLayout({
   const settings = await apiGet<{
     publishing_mode: "assisted" | "authorized_browser";
     authorized_browser_ready: boolean;
+    platform_provider: "live" | "mock";
   }>(
     "/api/settings",
-    { publishing_mode: "assisted", authorized_browser_ready: false },
+    {
+      publishing_mode: "assisted",
+      authorized_browser_ready: false,
+      platform_provider: "live",
+    },
     (value): value is {
       publishing_mode: "assisted" | "authorized_browser";
       authorized_browser_ready: boolean;
+      platform_provider: "live" | "mock";
     } =>
       isRecord(value) &&
       (value.publishing_mode === "assisted" ||
         value.publishing_mode === "authorized_browser") &&
-      typeof value.authorized_browser_ready === "boolean",
+      typeof value.authorized_browser_ready === "boolean" &&
+      (value.platform_provider === "live" ||
+        value.platform_provider === "mock"),
   );
   return (
     <html lang="en">
@@ -59,6 +68,7 @@ export default async function RootLayout({
             publishingMode={settings.publishing_mode}
           />
           <main id="main-content" className="main" tabIndex={-1}>
+            {settings.platform_provider === "mock" ? <DemoBanner /> : null}
             <div className="page-frame">{children}</div>
           </main>
         </div>
