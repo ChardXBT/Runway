@@ -1,13 +1,3 @@
 {
-  "exceptions": [
-    {
-      "advisory": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "dependencyChain": "eslint-config-next > @next/eslint-plugin-next > fast-glob > micromatch > braces",
-      "scope": "development only",
-      "reason": "No patched braces release exists. The chain is lint tooling only and is absent from the production install (npm audit --omit=dev is clean). @next/eslint-plugin-next calls fast-glob only when ESLint settings.next.rootDir is configured, and Runway's eslint.config.mjs does not set it, so braces never receives input. Any pattern it could receive would come from the developer's own lint configuration. npm's suggested fix is a downgrade to eslint-config-next 14.",
-      "reviewed": "2026-10-12",
-      "expires": "2027-01-31"
-    }
-  ]
+  "exceptions": []
 }
