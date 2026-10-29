@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import json
+
+import httpx
+import pytest
+from sqlalchemy import select
+
 from runway.db.base import Database
-from runway.db.models import CommentRecord, ConnectedAccount, utcnow
+from runway.db.models import CommentRecord, ConnectedAccount, PlatformAction, utcnow
+from runway.platforms.base import TokenSet
+from runway.platforms.capabilities import YOUTUBE_ENGAGE_SCOPE, Platform
 from runway.platforms.inbox import InboxService
+from runway.platforms.mock import MockPlatformProvider
+from runway.platforms.registry import ProviderRegistry
 
 
 def _account(database: Database) -> ConnectedAccount:
@@ -98,3 +108,42 @@ def test_handoff_url_prefers_comment_then_content_permalink(
     view = service.get_comment(bare_id)
     assert view is not None
     assert view["reply_capability"]["handoff_url"] == "https://youtu.be/v1"
+
+
+def test_reply_transport_error_marks_action_failed(database: Database) -> None:
+    settings = database.settings.model_copy(
+        update={"inbox_replies_enabled": True, "youtube_engage_scopes": True}
+    )
+    registry = ProviderRegistry(database, settings)
+
+    class BrokenReply(MockPlatformProvider):
+        def reply_to_comment(self, token, *, comment_external_id, text):
+            raise httpx.ConnectError("connection refused")
+
+    registry.set_provider(Platform.youtube, BrokenReply(Platform.youtube, settings))
+    service = InboxService(database, settings, registry)
+
+    token_ref = registry.token_store.new_token_ref()
+    with database.session() as session:
+        account = ConnectedAccount(
+            platform="youtube",
+            external_account_id="UCx",
+            status="connected",
+            granted_scopes_json=json.dumps([YOUTUBE_ENGAGE_SCOPE]),
+            token_ref=token_ref,
+        )
+        session.add(account)
+        session.flush()
+        account_id = account.id
+    registry.token_store.store(token_ref, TokenSet(access_token="yt-access"))
+    comment_id = _comment(database, account_id, "c1")
+
+    with pytest.raises(httpx.ConnectError):
+        service.reply(comment_id, "hello")
+
+    with database.session() as session:
+        action = session.scalar(select(PlatformAction))
+        assert action is not None
+        assert action.state == "failed"
+        assert action.error
+        assert action.completed_at is not None

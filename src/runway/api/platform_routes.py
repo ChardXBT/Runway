@@ -38,14 +38,12 @@ from runway.platforms.drafts import DraftService
 from runway.platforms.inbox import InboxReplyForbidden, InboxService
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.oauth import OAuthStateError, OAuthStateService
-from runway.platforms.overview import OverviewService
+from runway.platforms.overview import OverviewService, account_freshness
 from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncRunInProgress, SyncService
 from runway.platforms.tokens import pkce_challenge
 
 logger = logging.getLogger(__name__)
-
-FRESHNESS_STALE_AFTER = timedelta(hours=24)
 
 _METRIC_LABELS = {
     "views": "Views",
@@ -137,17 +135,6 @@ class MarkPublishedRequest(BaseModel):
     confirmed: Literal[True]
 
 
-def _account_freshness(account: ConnectedAccount) -> str:
-    if account.last_sync_at is None:
-        return "never"
-    last_sync = account.last_sync_at
-    if last_sync.tzinfo is None:
-        last_sync = last_sync.replace(tzinfo=UTC)
-    if datetime.now(UTC) - last_sync > FRESHNESS_STALE_AFTER:
-        return "stale"
-    return "fresh"
-
-
 REQUIRED_ENV: dict[Platform, list[str]] = {
     Platform.youtube: ["RUNWAY_YOUTUBE_CLIENT_ID", "RUNWAY_YOUTUBE_CLIENT_SECRET"],
     Platform.instagram: ["RUNWAY_INSTAGRAM_APP_ID", "RUNWAY_INSTAGRAM_APP_SECRET"],
@@ -225,7 +212,7 @@ def _account_view(
         "last_sync_at": iso_utc(account.last_sync_at),
         "last_sync_status": account.last_sync_status,
         "last_error": account.last_error,
-        "freshness": _account_freshness(account),
+        "freshness": account_freshness(account.last_sync_at),
         "capabilities": [
             {
                 "capability": entry.capability.value,
@@ -903,5 +890,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             return draft_service.mark_published(draft_id, target_id, payload.published_url)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return router

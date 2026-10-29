@@ -315,16 +315,19 @@ contacts YouTube. CI runs all of the above, plus the PowerShell launcher contrac
 - Both servers bind to loopback and only answer loopback `Host` headers, which blocks DNS
   rebinding. The API also refuses state-changing requests from other origins.
 - Platform accounts connect through official OAuth only. Tokens are encrypted at rest under
-  `data/secrets/` (ignored by Git) and never appear in the database, logs, URLs, or API
-  responses. The only external write, a comment reply, is off by default and verified after
-  posting.
+  `data/secrets/` (ignored by Git) and never appear in the database, logs, or API responses.
+  Routine platform calls send them as `Authorization: Bearer` headers; the only tokens in
+  URLs are the parameters a provider's documented OAuth grant endpoint requires (see
+  [docs/SECURITY.md](docs/SECURITY.md)). The only external write, a comment reply, is off by
+  default and verified after posting.
 - Third-party image downloads accept only public addresses, revalidate every redirect, and are
   limited in bytes, time, and decoded pixels.
 - Codex subprocesses run without API-key credentials, in a read-only sandbox, one at a time.
 - `.env`, databases, media, and browser profiles are ignored by Git.
 
-One development-only npm advisory (`braces`, no patched release) is accepted under a documented,
-expiring exception. Production dependencies have no known advisories. Details are in
+No npm audit exceptions are currently recorded in `apps/web/audit-exceptions.json`; the
+previously accepted `braces` exception was retired once a patched release resolved that
+advisory. Production dependencies have no known advisories. Details are in
 [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Repository layout

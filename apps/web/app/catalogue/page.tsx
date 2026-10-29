@@ -216,7 +216,7 @@ export default async function CataloguePage({
               <div className="catalog-copy">
                 <div className="meta-row">
                   <span className="record-id">#{post.id}</span>
-                  <span>{post.post_type.replace("_", " ")}</span>
+                  <span>{post.post_type.replaceAll("_", " ")}</span>
                   <span>{post.date_precision}</span>
                   {post.is_training_eligible && <span className="pill">Profile</span>}
                 </div>

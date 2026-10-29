@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import cast
@@ -22,10 +22,17 @@ from runway.db.models import (
     Post,
     PostAnnotation,
     PostMedia,
+    RepresentationRecord,
     SimilarityEdge,
     utcnow,
 )
 from runway.db.repositories import audit, get_channel
+from runway.intelligence.embeddings import (
+    RepresentationResult,
+    RepresentationStore,
+    configuration_hash,
+    content_hash,
+)
 from runway.media.service import prepare_model_image
 
 CORRECTION_OUTPUT_ALIASES = {
@@ -36,6 +43,25 @@ CORRECTION_OUTPUT_ALIASES = {
 }
 
 SIMILARITY_INSERT_BATCH_SIZE = 2_000
+
+# Caption edge vectors persist as representation records so incremental
+# refreshes reuse them instead of re-embedding every post caption.
+_CAPTION_EDGE_PROVIDER = "runway-local"
+_CAPTION_EDGE_MODEL = "caption-hash-embedding"
+_CAPTION_EDGE_VERSION = "1"
+_CAPTION_EDGE_PURPOSE = "similarity_edge_caption"
+_CAPTION_EDGE_CONFIGURATION = configuration_hash(
+    {
+        "algorithm": "signed-blake2b-unigram-bigram",
+        "dimensions": 128,
+        "normalization": "l2",
+        "source": "runway.analysis.features.text_embedding",
+    }
+)
+
+# Parsed concept sets keyed by annotation content so changed rows recompute.
+_CONCEPT_CACHE_LIMIT = 8192
+_CONCEPT_VALUES_CACHE: OrderedDict[tuple[int, str], frozenset[object]] = OrderedDict()
 
 
 def _media_assets_by_post(
@@ -66,6 +92,35 @@ def _normalized_media_vector(media: MediaAsset | None) -> np.ndarray | None:
         return None
     norm = float(np.linalg.norm(vector))
     return vector / norm if norm else vector
+
+
+def _concept_fingerprint(annotation: PostAnnotation) -> str:
+    """Fingerprint every raw field _concept_values can consume."""
+    return content_hash(
+        "\x00".join(
+            value if isinstance(value, str) else str(value)
+            for value in (
+                annotation.original_output_json,
+                annotation.characters_json,
+                annotation.reviewed_fields_json,
+                annotation.franchise,
+                annotation.composition,
+            )
+        )
+    )
+
+
+def _cached_concept_values(annotation: PostAnnotation) -> frozenset[object]:
+    key = (annotation.id, _concept_fingerprint(annotation))
+    cached = _CONCEPT_VALUES_CACHE.get(key)
+    if cached is not None:
+        _CONCEPT_VALUES_CACHE.move_to_end(key)
+        return cached
+    values = frozenset(AnalysisService._concept_values(annotation))
+    _CONCEPT_VALUES_CACHE[key] = values
+    while len(_CONCEPT_VALUES_CACHE) > _CONCEPT_CACHE_LIMIT:
+        _CONCEPT_VALUES_CACHE.popitem(last=False)
+    return values
 
 
 def effective_annotation_fields(annotation: PostAnnotation) -> dict[str, object]:
@@ -347,6 +402,26 @@ class AnalysisService:
                 .order_by(Post.id)
             ).all()
             eligible_ids = {post.id for post in posts}
+
+            full_rebuild = changed_post_ids is None
+            changed_ids = (
+                set(channel_post_ids)
+                if changed_post_ids is None
+                else set(changed_post_ids) & set(channel_post_ids)
+            )
+            if changed_ids:
+                session.execute(
+                    delete(SimilarityEdge).where(
+                        (SimilarityEdge.source_post_id.in_(changed_ids))
+                        | (SimilarityEdge.target_post_id.in_(changed_ids))
+                    )
+                )
+            # Only pairs touching an eligible changed post are recomputed; when
+            # no changed post is eligible there is nothing left to refresh.
+            recompute_ids = changed_ids & eligible_ids
+            if not full_rebuild and not recompute_ids:
+                return self._similarity_edge_count()
+
             annotation_map = (
                 {
                     annotation.post_id: annotation
@@ -363,35 +438,21 @@ class AnalysisService:
             media_rows = _media_assets_by_post(session, list(eligible_ids))
             media_map = {post_id: rows[0] for post_id, rows in media_rows.items() if rows}
 
-            full_rebuild = changed_post_ids is None
-            changed_ids = (
-                set(channel_post_ids)
-                if changed_post_ids is None
-                else set(changed_post_ids) & set(channel_post_ids)
-            )
-            if changed_ids:
-                session.execute(
-                    delete(SimilarityEdge).where(
-                        (SimilarityEdge.source_post_id.in_(changed_ids))
-                        | (SimilarityEdge.target_post_id.in_(changed_ids))
-                    )
-                )
-
-            caption_vectors = {post.id: text_embedding(post.caption or "") for post in posts}
+            caption_vectors = self._caption_similarity_vectors(session, channel.id, posts)
             image_vectors = {
                 post_id: vector
                 for post_id, media in media_map.items()
                 if (vector := _normalized_media_vector(media)) is not None
             }
             concept_values = {
-                post_id: self._concept_values(annotation)
+                post_id: _cached_concept_values(annotation)
                 for post_id, annotation in annotation_map.items()
             }
             calculated_at = utcnow()
             batch: list[dict[str, object]] = []
             for index, source in enumerate(posts):
                 for target in posts[index + 1 :]:
-                    if not full_rebuild and not ({source.id, target.id} & changed_ids):
+                    if not full_rebuild and not ({source.id, target.id} & recompute_ids):
                         continue
                     source_media = image_vectors.get(source.id)
                     target_media = image_vectors.get(target.id)
@@ -404,8 +465,8 @@ class AnalysisService:
                         visual = float(np.dot(source_media, target_media))
                     caption = float(np.dot(caption_vectors[source.id], caption_vectors[target.id]))
                     concept = self._jaccard(
-                        concept_values.get(source.id, set()),
-                        concept_values.get(target.id, set()),
+                        concept_values.get(source.id, frozenset()),
+                        concept_values.get(target.id, frozenset()),
                     )
                     batch.append(
                         {
@@ -423,6 +484,62 @@ class AnalysisService:
             if batch:
                 session.execute(insert(SimilarityEdge), batch)
         return self._similarity_edge_count()
+
+    @staticmethod
+    def _caption_similarity_vectors(
+        session: Session,
+        channel_id: int,
+        posts: Sequence[Post],
+    ) -> dict[int, np.ndarray]:
+        """Caption vectors for edge math, reusing persisted representations."""
+        hashes = {post.id: content_hash(post.caption or "") for post in posts}
+        records = (
+            {
+                (record.entity_id, record.source_content_hash): record
+                for record in session.scalars(
+                    select(RepresentationRecord).where(
+                        RepresentationRecord.channel_id == channel_id,
+                        RepresentationRecord.entity_type == "post",
+                        RepresentationRecord.entity_id.in_(hashes),
+                        RepresentationRecord.field == "caption",
+                        RepresentationRecord.purpose == _CAPTION_EDGE_PURPOSE,
+                        RepresentationRecord.provider == _CAPTION_EDGE_PROVIDER,
+                        RepresentationRecord.model == _CAPTION_EDGE_MODEL,
+                        RepresentationRecord.model_version == _CAPTION_EDGE_VERSION,
+                        RepresentationRecord.configuration_hash == _CAPTION_EDGE_CONFIGURATION,
+                    )
+                ).all()
+            }
+            if hashes
+            else {}
+        )
+        vectors: dict[int, np.ndarray] = {}
+        for post in posts:
+            record = records.get((post.id, hashes[post.id]))
+            if record is not None:
+                vectors[post.id] = RepresentationStore.vectors(record)[0]
+                continue
+            vector = text_embedding(post.caption or "")
+            vectors[post.id] = vector
+            RepresentationStore.persist_in_session(
+                session,
+                channel_id=channel_id,
+                entity_type="post",
+                entity_id=post.id,
+                field="caption",
+                modality="text",
+                result=RepresentationResult(
+                    provider=_CAPTION_EDGE_PROVIDER,
+                    model=_CAPTION_EDGE_MODEL,
+                    version=_CAPTION_EDGE_VERSION,
+                    purpose=_CAPTION_EDGE_PURPOSE,
+                    vectors=(tuple(float(value) for value in vector),),
+                    normalized=True,
+                    configuration_hash=_CAPTION_EDGE_CONFIGURATION,
+                ),
+                source_content_hash=hashes[post.id],
+            )
+        return vectors
 
     def _similarity_edge_count(self) -> int:
         with self.database.session() as session:
@@ -671,8 +788,8 @@ class AnalysisService:
         if first is None or second is None:
             return 0.0
         return AnalysisService._jaccard(
-            AnalysisService._concept_values(first),
-            AnalysisService._concept_values(second),
+            _cached_concept_values(first),
+            _cached_concept_values(second),
         )
 
     @staticmethod
@@ -689,7 +806,7 @@ class AnalysisService:
         return values
 
     @staticmethod
-    def _jaccard(first_values: set[object], second_values: set[object]) -> float:
+    def _jaccard(first_values: frozenset[object], second_values: frozenset[object]) -> float:
         union = first_values | second_values
         return len(first_values & second_values) / len(union) if union else 0.0
 

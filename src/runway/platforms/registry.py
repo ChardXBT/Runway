@@ -8,7 +8,7 @@ from sqlalchemy import select
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
-from runway.platforms.base import PlatformProvider
+from runway.platforms.base import PlatformProvider, TokenSet
 from runway.platforms.capabilities import (
     DEFAULT_PLATFORM_SCOPES,
     Platform,
@@ -72,6 +72,7 @@ class ProviderRegistry:
         if self.settings.platform_provider != "mock":
             return
         created_ids: list[int] = []
+        pending_tokens: list[tuple[str, TokenSet]] = []
         with self.database.session() as session:
             for platform in Platform:
                 existing = session.scalar(
@@ -98,7 +99,11 @@ class ProviderRegistry:
                 session.add(account)
                 session.flush()
                 created_ids.append(account.id)
-                self.token_store.store(str(account.token_ref), token)
+                pending_tokens.append((str(account.token_ref), token))
+        # Token files are written only after the account rows commit, so a
+        # failed commit never leaves orphaned secrets on disk.
+        for token_ref, token in pending_tokens:
+            self.token_store.store(token_ref, token)
         if not created_ids:
             return
         from runway.platforms.sync import SyncService

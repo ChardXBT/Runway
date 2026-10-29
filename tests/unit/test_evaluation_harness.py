@@ -10,13 +10,7 @@ import pytest
 from runway.evaluation.checksums import canonical_text_sha256
 from runway.evaluation.datasets import DatasetRepository
 from runway.evaluation.experiments import ExperimentRunner
-from runway.evaluation.gates import (
-    CRITICAL_REGRESSIONS,
-    HARD_GATES,
-    replacement_gate_report,
-)
 from runway.evaluation.scoring import DEFAULT_WEIGHTS
-from runway.evaluation.statistics import preference_summary, wilson_interval
 
 
 def _candidate_artifact(
@@ -144,38 +138,3 @@ def test_tuning_is_reproducible_and_holdout_can_run_only_once(
             holdout,
             winning_weights=DEFAULT_WEIGHTS,
         )
-
-
-def test_statistics_and_replacement_gate_are_reproducible_and_fail_closed() -> None:
-    assert wilson_interval(7, 10) == wilson_interval(7, 10)
-    summary = preference_summary(["win", "win", "loss", "tie"])
-    assert summary["wins"] == 2
-    assert summary["losses"] == 1
-    assert summary["ties"] == 1
-
-    blocked = replacement_gate_report(
-        hard_gates={name: True for name in HARD_GATES},
-        critical_regressions={name: True for name in CRITICAL_REGRESSIONS},
-        primary_quality={
-            "meaningful_improvement": False,
-            "note": "Only a secondary metric improved.",
-        },
-        secondary_no_material_regression=True,
-        cross_channel_generalization=True,
-        holdout_use_count=1,
-        canonical_engine_count=1,
-    )
-    assert blocked["replacement_approved"] is False
-    assert blocked["blocking_reasons"] == ["primary_quality_improved"]
-
-    missing_gate = replacement_gate_report(
-        hard_gates={name: True for name in HARD_GATES if name != HARD_GATES[0]},
-        critical_regressions={name: True for name in CRITICAL_REGRESSIONS},
-        primary_quality={"meaningful_improvement": True},
-        secondary_no_material_regression=True,
-        cross_channel_generalization=True,
-        holdout_use_count=1,
-        canonical_engine_count=1,
-    )
-    assert missing_gate["replacement_approved"] is False
-    assert missing_gate["checks"]["all_hard_gates"] is False

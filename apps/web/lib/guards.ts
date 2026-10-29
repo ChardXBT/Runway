@@ -74,6 +74,8 @@ export function isProposal(value: unknown): value is Proposal {
   const candidateValid =
     value.candidate === null ||
     (isRecord(value.candidate) &&
+      (value.candidate.original_url === null ||
+        typeof value.candidate.original_url === "string") &&
       (value.candidate.preview_url === null ||
         typeof value.candidate.preview_url === "string") &&
       isRecord(value.candidate.detected_topic) &&
@@ -100,6 +102,13 @@ export function isProposal(value: unknown): value is Proposal {
     ) &&
     typeof value.final_caption === "string" &&
     typeof value.recommended_caption === "string" &&
+    typeof value.caption_rationale === "string" &&
+    typeof value.selection_reason === "string" &&
+    (value.caption_confidence === null ||
+      isFiniteNumber(value.caption_confidence)) &&
+    (value.rejected_at === undefined ||
+      value.rejected_at === null ||
+      isDateString(value.rejected_at)) &&
     Array.isArray(value.alternative_captions) &&
     value.alternative_captions.every((item) => typeof item === "string") &&
     Array.isArray(value.warnings) &&
@@ -292,6 +301,10 @@ export function isAccountView(value: unknown): value is AccountView {
     (value.display_name === null || typeof value.display_name === "string") &&
     Array.isArray(value.granted_scopes) &&
     value.granted_scopes.every((scope) => typeof scope === "string") &&
+    (value.connected_at === null || typeof value.connected_at === "string") &&
+    (value.last_sync_at === null || typeof value.last_sync_at === "string") &&
+    (value.last_verified_at === null ||
+      typeof value.last_verified_at === "string") &&
     Array.isArray(value.capabilities) &&
     value.capabilities.every(isCapabilityView) &&
     typeof value.freshness === "string"

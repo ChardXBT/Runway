@@ -12,6 +12,11 @@ export function AvatarImage({
   size?: number;
 }) {
   const [failed, setFailed] = useState(false);
+  const [prevSrc, setPrevSrc] = useState(src);
+  if (prevSrc !== src) {
+    setPrevSrc(src);
+    setFailed(false);
+  }
   if (src && !failed) {
     return (
       // eslint-disable-next-line @next/next/no-img-element

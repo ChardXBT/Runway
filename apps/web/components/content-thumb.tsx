@@ -19,6 +19,11 @@ export function ContentThumb({
   height?: number;
 }) {
   const [failed, setFailed] = useState(false);
+  const [prevSrc, setPrevSrc] = useState(src);
+  if (prevSrc !== src) {
+    setPrevSrc(src);
+    setFailed(false);
+  }
   const w = width ?? size;
   const h = height ?? size;
   if (src && !failed) {

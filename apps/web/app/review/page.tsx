@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { ReviewWorkspace } from "@/components/review-workspace";
 import { apiGetRequired } from "@/lib/api";
 import { isEditorialEnvelope } from "@/lib/guards";
@@ -29,7 +31,7 @@ export default async function ReviewPage({
         <section className="panel empty">
           <div>
             <strong>Requested Generator option is invalid.</strong>
-            <a href="/review">Return to the current Generator option</a>
+            <Link href="/review">Return to the current Generator option</Link>
           </div>
         </section>
       );
@@ -51,7 +53,7 @@ export default async function ReviewPage({
           <span>
             It may already have been accepted, rejected, or removed from review.
           </span>
-          <a href="/review">Return to the current Generator option</a>
+          <Link href="/review">Return to the current Generator option</Link>
         </div>
       </section>
     );

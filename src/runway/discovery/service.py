@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from runway.analysis.runtime import AgentRuntime, AgentTerminalError, runtime_for
@@ -205,6 +205,9 @@ class DiscoveryService:
         rejected = 0
         nsfw_source_blocked = 0
         errors: list[str] = []
+        # Parse each stored provider payload once per run; new candidates extend
+        # this index as they persist instead of re-reading every JSON blob.
+        archive_fingerprints = self._load_archive_fingerprints()
         for result in page.results:
             if is_known_adult_result(result):
                 nsfw_source_blocked += 1
@@ -221,7 +224,11 @@ class DiscoveryService:
                     )
                 continue
             try:
-                hard_rejected = await self._process_result(run_id, result)
+                hard_rejected = await self._process_result(
+                    run_id,
+                    result,
+                    archive_fingerprints,
+                )
             except Exception as exc:
                 errors.append(f"rank {result.result_rank}: {type(exc).__name__}: {exc}")
                 with self.database.session() as session:
@@ -329,7 +336,23 @@ class DiscoveryService:
             if accepted_only:
                 statement = statement.where(CandidateImage.hard_rejection_reason.is_(None))
             rows = session.scalars(statement.limit(limit)).all()
-            return [self._candidate_dict(session, row) for row in rows]
+            asset_ids = {
+                asset_id
+                for row in rows
+                for asset_id in (row.media_asset_id, row.preview_asset_id)
+                if asset_id is not None
+            }
+            media_by_id = (
+                {
+                    asset.id: asset
+                    for asset in session.scalars(
+                        select(MediaAsset).where(MediaAsset.id.in_(asset_ids))
+                    ).all()
+                }
+                if asset_ids
+                else {}
+            )
+            return [self._candidate_dict(session, row, media_by_id=media_by_id) for row in rows]
 
     def detail(self, candidate_id: int) -> dict[str, object]:
         with self.database.session() as session:
@@ -414,14 +437,24 @@ class DiscoveryService:
             )
         return self.detail(candidate_id)
 
-    async def _process_result(self, run_id: int, result: ImageSearchResult) -> bool:
+    async def _process_result(
+        self,
+        run_id: int,
+        result: ImageSearchResult,
+        archive_fingerprints: list[tuple[str, str, int]] | None = None,
+    ) -> bool:
         source = await self._resolve_result(result)
         features = inspect_image(source)
         duplicate = self.detector.inspect(features, source_url=result.direct_image_url)
         preflight_rejection = self._preflight_rejection(
             features,
             duplicate.hard_block,
-            archive_adjacent=self._is_archive_adjacent_frame(result),
+            archive_adjacent=self._is_archive_adjacent_frame(
+                result,
+                archive_fingerprints
+                if archive_fingerprints is not None
+                else self._load_archive_fingerprints(),
+            ),
         )
         if preflight_rejection is None:
             analysis_started = utcnow()
@@ -586,6 +619,10 @@ class DiscoveryService:
                     "source_page_url": result.source_page_url,
                 },
             )
+        if archive_fingerprints is not None:
+            fingerprint = self._archive_fingerprint(result.provider_metadata)
+            if fingerprint is not None:
+                archive_fingerprints.append(fingerprint)
         return ranking.hard_rejection_reason is not None
 
     @staticmethod
@@ -641,16 +678,8 @@ class DiscoveryService:
             return "adjacent_archive_frame"
         return None
 
-    def _is_archive_adjacent_frame(
-        self,
-        result: ImageSearchResult,
-        *,
-        window_ms: int = 15_000,
-    ) -> bool:
-        identity = self._archive_frame_identity(result)
-        if identity is None:
-            return False
-        adapter, episode, timestamp = identity
+    def _load_archive_fingerprints(self) -> list[tuple[str, str, int]]:
+        """Extract archive frame identities from every stored provider payload."""
         with self.database.session() as session:
             channel_id = get_channel(session, self.settings.channel_handle).id
             rows = session.scalars(
@@ -658,6 +687,7 @@ class DiscoveryService:
                 .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
                 .where(SearchRun.channel_id == channel_id)
             ).all()
+        fingerprints: list[tuple[str, str, int]] = []
         for raw in rows:
             try:
                 payload = json.loads(raw)
@@ -665,26 +695,45 @@ class DiscoveryService:
                 continue
             if not isinstance(payload, dict):
                 continue
-            metadata = payload.get("provider_metadata")
-            if not isinstance(metadata, dict):
-                continue
-            if (
-                str(metadata.get("source_adapter") or "") != adapter
-                or str(metadata.get("episode") or "") != episode
-            ):
-                continue
-            prior_timestamp = metadata.get("timestamp")
-            if (
-                isinstance(prior_timestamp, int)
-                and not isinstance(prior_timestamp, bool)
-                and self._timestamps_share_archive_scene(
-                    prior_timestamp,
-                    timestamp,
-                    window_ms=window_ms,
-                )
-            ):
-                return True
-        return False
+            fingerprint = self._archive_fingerprint(payload.get("provider_metadata"))
+            if fingerprint is not None:
+                fingerprints.append(fingerprint)
+        return fingerprints
+
+    @staticmethod
+    def _archive_fingerprint(metadata: object) -> tuple[str, str, int] | None:
+        if not isinstance(metadata, dict):
+            return None
+        timestamp = metadata.get("timestamp")
+        if not isinstance(timestamp, int) or isinstance(timestamp, bool):
+            return None
+        return (
+            str(metadata.get("source_adapter") or ""),
+            str(metadata.get("episode") or ""),
+            timestamp,
+        )
+
+    def _is_archive_adjacent_frame(
+        self,
+        result: ImageSearchResult,
+        fingerprints: list[tuple[str, str, int]],
+        *,
+        window_ms: int = 15_000,
+    ) -> bool:
+        identity = self._archive_frame_identity(result)
+        if identity is None:
+            return False
+        adapter, episode, timestamp = identity
+        return any(
+            prior_adapter == adapter
+            and prior_episode == episode
+            and self._timestamps_share_archive_scene(
+                prior_timestamp,
+                timestamp,
+                window_ms=window_ms,
+            )
+            for prior_adapter, prior_episode, prior_timestamp in fingerprints
+        )
 
     @staticmethod
     def _timestamps_share_archive_scene(
@@ -1193,13 +1242,14 @@ class DiscoveryService:
     def _provider_run_count(self, provider_name: str) -> int:
         with self.database.session() as session:
             channel_id = get_channel(session, self.settings.channel_handle).id
-            return len(
-                session.scalars(
-                    select(SearchRun.id).where(
+            return int(
+                session.scalar(
+                    select(func.count(SearchRun.id)).where(
                         SearchRun.channel_id == channel_id,
                         SearchRun.provider == provider_name,
                     )
-                ).all()
+                )
+                or 0
             )
 
     def _record_model_run(
@@ -1228,13 +1278,22 @@ class DiscoveryService:
                 )
             )
 
-    def _candidate_dict(self, session: Session, candidate: CandidateImage) -> dict[str, object]:
-        media = session.get(MediaAsset, candidate.media_asset_id)
-        preview = (
-            session.get(MediaAsset, candidate.preview_asset_id)
-            if candidate.preview_asset_id
-            else None
-        )
+    def _candidate_dict(
+        self,
+        session: Session,
+        candidate: CandidateImage,
+        *,
+        media_by_id: dict[int, MediaAsset] | None = None,
+    ) -> dict[str, object]:
+        def _media(asset_id: int | None) -> MediaAsset | None:
+            if asset_id is None:
+                return None
+            if media_by_id is not None:
+                return media_by_id.get(asset_id)
+            return session.get(MediaAsset, asset_id)
+
+        media = _media(candidate.media_asset_id)
+        preview = _media(candidate.preview_asset_id)
         display_media = preview or media
         return {
             "id": candidate.id,

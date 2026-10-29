@@ -20,6 +20,7 @@ from runway.platforms.base import (
     RateLimited,
     ReplyResult,
     TokenSet,
+    provider_request,
 )
 from runway.platforms.capabilities import (
     TIKTOK_SCOPES,
@@ -79,7 +80,10 @@ class TikTokProvider(PlatformProvider):
         redirect_uri: str,
         code_verifier: str | None,
     ) -> TokenSet:
-        response = self.client.post(
+        response = provider_request(
+            self.client,
+            "TikTok",
+            "POST",
             f"{API_BASE}/oauth/token/",
             data={
                 "client_key": self.settings.tiktok_client_key or "",
@@ -96,7 +100,10 @@ class TikTokProvider(PlatformProvider):
     def refresh(self, token: TokenSet) -> TokenSet:
         if not token.refresh_token:
             raise AuthorizationExpired("TikTok refresh token is missing", status=401)
-        response = self.client.post(
+        response = provider_request(
+            self.client,
+            "TikTok",
+            "POST",
             f"{API_BASE}/oauth/token/",
             data={
                 "client_key": self.settings.tiktok_client_key or "",
@@ -111,7 +118,10 @@ class TikTokProvider(PlatformProvider):
         return self._token_from_response(data)
 
     def revoke(self, token: TokenSet) -> bool:
-        response = self.client.post(
+        response = provider_request(
+            self.client,
+            "TikTok",
+            "POST",
             f"{API_BASE}/oauth/revoke/",
             data={
                 "client_key": self.settings.tiktok_client_key or "",
@@ -200,7 +210,10 @@ class TikTokProvider(PlatformProvider):
         return data
 
     def _api_get(self, token: TokenSet, path: str, params: dict[str, Any]) -> dict[str, Any]:
-        response = self.client.get(
+        response = provider_request(
+            self.client,
+            "TikTok",
+            "GET",
             f"{API_BASE}/{path.lstrip('/')}",
             params=params,
             headers={"Authorization": f"Bearer {token.access_token}"},
@@ -252,7 +265,10 @@ class TikTokProvider(PlatformProvider):
         body: dict[str, Any] = {"max_count": min(max(limit, 1), 20)}
         if cursor and cursor.get("cursor") is not None:
             body["cursor"] = cursor["cursor"]
-        response = self.client.post(
+        response = provider_request(
+            self.client,
+            "TikTok",
+            "POST",
             f"{API_BASE}/video/list/",
             params={
                 "fields": (

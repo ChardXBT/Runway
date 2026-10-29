@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import math
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, cast
 
+import numpy as np
 from sqlalchemy import select
 
 from runway.analysis.features import (
@@ -80,6 +82,7 @@ from runway.intelligence.embeddings import (
     TextEmbeddingProvider,
     configuration_hash,
     content_hash,
+    cosine,
 )
 from runway.intelligence.policies import PolicySnapshot
 from runway.intelligence.reranking import JointMultimodalReranker
@@ -923,6 +926,10 @@ class CaptionService:
         pool = list(generated.candidates)
         normalized_prior = {normalize_caption(value) for value in prior_candidate_texts or []}
         seen: set[str] = set(normalized_prior)
+        # Embed every comparison text once per slate; resolver caching also
+        # deduplicates texts shared across these maps.
+        existing_vectors = self._text_vectors(channel_id, existing)
+        candidate_vectors: dict[str, np.ndarray] = {}
         prepared: list[tuple[int, CaptionCandidate, list[str]]] = []
         for generation_index, raw in enumerate(
             pool[: self.generation_configuration["candidate_limit"]],
@@ -941,7 +948,8 @@ class CaptionService:
             taxonomy = analyze_caption(text, language=raw.language)
             candidate = raw.model_copy(update={"structure": taxonomy.structure, "text": text})
             if any(
-                self._semantic_similarity(channel_id, text, other) >= 0.94 for other in existing
+                cosine(self._caption_vector(channel_id, text, candidate_vectors), other) >= 0.94
+                for other in existing_vectors.values()
             ):
                 exclusion_reasons.append("too_similar_to_existing_caption")
             prepared.append((generation_index, candidate, exclusion_reasons))
@@ -983,6 +991,15 @@ class CaptionService:
                 context.get("caption_style_examples", []),
             )[:10]
         ]
+        recent_vectors = self._text_vectors(
+            channel_id,
+            [text for text in recent_captions if text.strip()],
+        )
+        novelty_vectors = {
+            text: vector
+            for text, vector in {**existing_vectors, **recent_vectors}.items()
+            if text.strip()
+        }
         rows: list[dict[str, Any]] = []
         for generation_index, candidate, exclusion_reasons in prepared:
             grounding_assessment = normalize_open_question_answer_uncertainty(
@@ -1013,12 +1030,13 @@ class CaptionService:
                 grounding_assessment.grounding_score,
             )
             style = channel_style_score(candidate.text, stats)
-            novelty = self._novelty(
+            candidate_vector = self._caption_vector(
                 channel_id,
                 candidate.text,
-                [*existing, *recent_captions],
+                candidate_vectors,
             )
-            rotation = self._novelty(channel_id, candidate.text, recent_captions)
+            novelty = self._novelty_score(candidate_vector, novelty_vectors.values())
+            rotation = self._novelty_score(candidate_vector, recent_vectors.values())
             positive = max(
                 0.0,
                 self.feedback.positive_similarity(channel_id, candidate.text, feedback),
@@ -1154,6 +1172,11 @@ class CaptionService:
             if policy.question_first
             else ranked[0]
         )
+        # One vector per distinct slate text; reused across all diversity checks.
+        slate_vectors = self._text_vectors(
+            channel_id,
+            [cast(CaptionCandidate, row["candidate"]).text for row in ranked],
+        )
         selected = [policy_lead]
         for target_structure in policy.preferred_structures:
             if len(selected) >= 3:
@@ -1166,7 +1189,7 @@ class CaptionService:
                     for row in ranked
                     if row not in selected
                     and row["candidate"].structure == target_structure
-                    and self._is_diverse(channel_id, row["candidate"].text, selected)
+                    and self._is_diverse(row["candidate"].text, selected, slate_vectors)
                 ),
                 None,
             )
@@ -1176,9 +1199,9 @@ class CaptionService:
             if len(selected) >= 3:
                 break
             if row not in selected and self._is_diverse(
-                channel_id,
                 row["candidate"].text,
                 selected,
+                slate_vectors,
             ):
                 selected.append(row)
         if len(selected) < 3:
@@ -1737,38 +1760,49 @@ class CaptionService:
             "final_score": round(float(row["final_score"]), 6),
         }
 
-    def _is_diverse(
+    def _caption_vector(
         self,
         channel_id: int,
         text: str,
-        selected: list[dict[str, Any]],
-    ) -> bool:
-        threshold = float(self.generation_configuration["diversity_similarity_threshold"])
-        return all(
-            self._semantic_similarity(
+        vectors: dict[str, np.ndarray],
+    ) -> np.ndarray:
+        vector = vectors.get(text)
+        if vector is None:
+            vector, _resolution = self.representations.text_vector(
                 channel_id,
                 text,
-                cast(CaptionCandidate, row["candidate"]).text,
+                score_purpose="caption_semantics",
             )
-            < threshold
+            vectors[text] = vector
+        return vector
+
+    def _text_vectors(self, channel_id: int, texts: list[str]) -> dict[str, np.ndarray]:
+        vectors: dict[str, np.ndarray] = {}
+        for text in texts:
+            if text not in vectors:
+                self._caption_vector(channel_id, text, vectors)
+        return vectors
+
+    def _is_diverse(
+        self,
+        text: str,
+        selected: list[dict[str, Any]],
+        vectors: dict[str, np.ndarray],
+    ) -> bool:
+        threshold = float(self.generation_configuration["diversity_similarity_threshold"])
+        text_vector = vectors[text]
+        return all(
+            cosine(text_vector, vectors[cast(CaptionCandidate, row["candidate"]).text]) < threshold
             for row in selected
         )
 
-    def _semantic_similarity(self, channel_id: int, first: str, second: str) -> float:
-        return self.representations.text_similarity(
-            channel_id,
-            first,
-            second,
-            score_purpose="caption_semantics",
-        ).score
-
-    def _novelty(self, channel_id: int, text: str, comparison: list[str]) -> float:
+    @staticmethod
+    def _novelty_score(
+        vector: np.ndarray,
+        comparisons: Iterable[np.ndarray],
+    ) -> float:
         highest = max(
-            (
-                max(0.0, self._semantic_similarity(channel_id, text, other))
-                for other in comparison
-                if other.strip()
-            ),
+            (max(0.0, cosine(vector, other)) for other in comparisons),
             default=0.0,
         )
         return max(0.0, min(1.0, 1.0 - highest))

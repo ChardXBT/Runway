@@ -4,6 +4,7 @@
 
 import { useMemo, useState } from "react";
 
+import { StatePanel } from "@/components/state-panel";
 import { API_URL } from "@/lib/api";
 import { localDate, localTime } from "@/lib/datetime";
 import type { AssistedPublishingWorkspace as Workspace } from "@/lib/types";
@@ -19,16 +20,41 @@ export function AssistedPublishingWorkspace({
   const [completed, setCompleted] = useState<Set<number>>(() => new Set());
   const [copyState, setCopyState] = useState("Copy caption");
   const [downloadState, setDownloadState] = useState("Download exact image");
-  const item = workspace.items[index];
-  const imageUrl = `${API_URL}${item.image_url}`;
-  const date = localDate(item.planned_publish_at, workspace.timezone) ?? "Invalid date";
-  const time = localTime(item.planned_publish_at, workspace.timezone) ?? "Invalid time";
   const completedCount = completed.size;
-  const isCompleted = completed.has(item.proposal_id);
   const progressLabel = useMemo(
     () => `${completedCount} of ${workspace.items.length} marked done this session`,
     [completedCount, workspace.items.length],
   );
+
+  if (workspace.items.length === 0) {
+    return (
+      <section
+        className="assisted-workspace"
+        aria-labelledby="assisted-workspace-title"
+      >
+        <header>
+          <div>
+            <p className="eyebrow">Assisted publishing · {workspace.channel_name}</p>
+            <h2 id="assisted-workspace-title">Native YouTube posting workspace</h2>
+          </div>
+          <button type="button" className="button secondary" onClick={onClose}>
+            Close workspace
+          </button>
+        </header>
+        <StatePanel
+          variant="empty"
+          title="No prepared posts"
+          body="Runway returned no prepared posts in this workspace. Close it and prepare the Lineup again."
+        />
+      </section>
+    );
+  }
+
+  const item = workspace.items[index];
+  const imageUrl = `${API_URL}${item.image_url}`;
+  const date = localDate(item.planned_publish_at, workspace.timezone) ?? "Invalid date";
+  const time = localTime(item.planned_publish_at, workspace.timezone) ?? "Invalid time";
+  const isCompleted = completed.has(item.proposal_id);
 
   async function copyCaption() {
     try {
@@ -59,7 +85,7 @@ export function AssistedPublishingWorkspace({
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(objectUrl);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
       setDownloadState("Image downloaded");
     } catch {
       setDownloadState("Download failed — open image");
@@ -156,8 +182,8 @@ export function AssistedPublishingWorkspace({
 
           {item.warnings.length > 0 && (
             <ul className="assisted-warnings" aria-label="Publishing warnings">
-              {item.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
+              {item.warnings.map((warning, warningIndex) => (
+                <li key={`${warningIndex}-${warning}`}>{warning}</li>
               ))}
             </ul>
           )}

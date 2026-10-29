@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
+import numpy as np
 import pytest
 from sqlalchemy import func, select
 
@@ -11,10 +13,14 @@ from runway.db.base import Database
 from runway.db.models import RepresentationRecord
 from runway.db.repositories import get_channel
 from runway.generation.providers import ImageGenerationProviderRegistry
+from runway.intelligence import embeddings as embeddings_module
 from runway.intelligence.embeddings import (
+    ActiveRepresentationResolver,
+    DeterministicImageEmbeddingProvider,
     DeterministicTextEmbeddingProvider,
     RepresentationProviderRegistry,
     RepresentationStore,
+    bump_representation_set_epoch,
     content_hash,
 )
 from runway.intelligence.fusion import (
@@ -67,6 +73,101 @@ def test_tokenless_text_still_produces_a_valid_normalized_representation() -> No
     assert first == second
     assert vectors.shape == (1, provider.dimensions)
     assert float((vectors[0] ** 2).sum()) == pytest.approx(1.0)
+
+
+def test_resolver_memoizes_resolution_and_text_vectors(
+    database: Database,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolver = ActiveRepresentationResolver(database, RepresentationProviderRegistry())
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+
+    active_set_calls = 0
+    real_active_set = resolver.store.active_set
+
+    def counting_active_set(**kwargs: object) -> object:
+        nonlocal active_set_calls
+        active_set_calls += 1
+        return real_active_set(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(resolver.store, "active_set", counting_active_set)
+
+    embed_calls = 0
+    provider = resolver.registry.text("runway-local")
+    real_embed = provider.embed_text
+
+    def counting_embed(text: str, *, purpose: str) -> object:
+        nonlocal embed_calls
+        embed_calls += 1
+        return real_embed(text, purpose=purpose)
+
+    monkeypatch.setattr(provider, "embed_text", counting_embed)
+
+    resolver.resolve(channel_id, modality="text")
+    resolver.resolve(channel_id, modality="text")
+    assert active_set_calls == 1
+
+    resolver.text_vector(channel_id, "repeat me", score_purpose="caption_semantics")
+    resolver.text_vector(channel_id, "repeat me", score_purpose="caption_semantics")
+    resolver.text_vector(channel_id, "repeat me", score_purpose="feedback_topic")
+    assert embed_calls == 2
+
+    bump_representation_set_epoch()
+    resolver.resolve(channel_id, modality="text")
+    assert active_set_calls == 2
+
+
+def test_image_embeddings_cache_by_file_state_and_persisted_entity(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspect_calls = 0
+
+    class FakeFeatures:
+        embedding = np.array([1.0, 0.0], dtype=np.float32)
+
+    def counting_inspect(_path: Path) -> FakeFeatures:
+        nonlocal inspect_calls
+        inspect_calls += 1
+        return FakeFeatures()
+
+    monkeypatch.setattr(embeddings_module, "inspect_image", counting_inspect)
+    provider = DeterministicImageEmbeddingProvider()
+    image = tmp_path / "frame.png"
+    image.write_bytes(b"one")
+
+    provider.embed_image(image, purpose="test")
+    provider.embed_image(image, purpose="test")
+    assert inspect_calls == 1
+
+    image.write_bytes(b"larger replacement content")
+    provider.embed_image(image, purpose="test")
+    assert inspect_calls == 2
+
+    resolver = ActiveRepresentationResolver(database, RepresentationProviderRegistry())
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    kwargs = {
+        "entity_type": "media_asset",
+        "entity_id": 77,
+        "field": "image",
+        "source_content_hash": "fake-sha",
+        "path": image,
+        "score_purpose": "candidate_slate_semantic_diversity",
+    }
+    first, _resolution = resolver.image_vector_for_entity(channel_id, **kwargs)  # type: ignore[arg-type]
+    assert inspect_calls == 3
+
+    # A second resolver on the same database serves the persisted record
+    # without re-inspecting the file.
+    other = ActiveRepresentationResolver(database, RepresentationProviderRegistry())
+    second, _resolution = other.image_vector_for_entity(channel_id, **kwargs)  # type: ignore[arg-type]
+    assert inspect_calls == 3
+    assert np.array_equal(first, second)
 
 
 def test_provider_registries_never_fall_back_to_unrequested_paid_services() -> None:

@@ -27,6 +27,7 @@ export function ContentDetailView({ detail }: { detail: ContentDetail }) {
   const [matches, setMatches] = useState<ContentItem[]>([]);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
 
   const viewPoints = detail.metric_history
     .map((entry) => ({
@@ -63,6 +64,8 @@ export function ContentDetailView({ detail }: { detail: ContentDetail }) {
   };
 
   const linkCandidate = async (candidate: ContentItem) => {
+    if (linkBusy) return;
+    setLinkBusy(true);
     setLinkError(null);
     try {
       if (group === null) {
@@ -125,10 +128,14 @@ export function ContentDetailView({ detail }: { detail: ContentDetail }) {
       setMatches((current) => current.filter((item) => item.id !== candidate.id));
     } catch (err) {
       setLinkError(actionError(err, "Could not link the version."));
+    } finally {
+      setLinkBusy(false);
     }
   };
 
   const unlinkMember = async (memberId: number) => {
+    if (linkBusy) return;
+    setLinkBusy(true);
     setLinkError(null);
     try {
       const response = await fetch(`${API_URL}/api/content/${memberId}/group`, {
@@ -149,6 +156,8 @@ export function ContentDetailView({ detail }: { detail: ContentDetail }) {
       }
     } catch (err) {
       setLinkError(actionError(err, "Could not unlink the version."));
+    } finally {
+      setLinkBusy(false);
     }
   };
 
@@ -276,6 +285,7 @@ export function ContentDetailView({ detail }: { detail: ContentDetail }) {
                   type="button"
                   className="button secondary"
                   onClick={() => unlinkMember(member.id)}
+                  disabled={linkBusy}
                 >
                   Unlink
                 </button>
@@ -331,6 +341,7 @@ export function ContentDetailView({ detail }: { detail: ContentDetail }) {
                       type="button"
                       className="button secondary"
                       onClick={() => linkCandidate(candidate)}
+                      disabled={linkBusy}
                     >
                       Link
                     </button>

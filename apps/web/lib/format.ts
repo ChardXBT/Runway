@@ -3,6 +3,7 @@ export function parseApiDate(value: string | Date | null | undefined): Date | nu
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value;
   }
+  if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
   // API timestamps may arrive naive (no offset); they are UTC by contract.

@@ -219,7 +219,10 @@ export function Nav({
   }, [menuOpen]);
 
   const isActive = (href: string) => {
-    const current = HREF_ALIASES[pathname] ?? pathname;
+    const aliasKey = Object.keys(HREF_ALIASES).find(
+      (key) => pathname === key || pathname.startsWith(`${key}/`),
+    );
+    const current = aliasKey ? HREF_ALIASES[aliasKey] : pathname;
     return current === href || current.startsWith(`${href}/`);
   };
 

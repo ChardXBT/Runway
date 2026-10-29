@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     capture_scroll_delay_ms: int = 1800
     capture_idle_cycles_before_stop: int = Field(default=30, ge=3, le=300)
     capture_idle_seconds_before_stop: int = Field(default=90, ge=15, le=900)
-    capture_checkpoint_every: int = 10
+    capture_checkpoint_every: int = Field(default=10, ge=1)
 
     data_dir: Path = Path("data")
     host: str = "127.0.0.1"

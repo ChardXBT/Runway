@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -225,6 +226,10 @@ class DraftService:
     def mark_published(
         self, draft_id: int, target_id: int, published_url: str
     ) -> dict[str, object]:
+        # published_url is persisted and may later be rendered as a link;
+        # only http(s) targets may be stored.
+        if urlsplit(published_url).scheme not in {"http", "https"}:
+            raise ValueError("published_url must use http or https")
         with self.database.session() as session:
             draft = session.get(ContentDraft, draft_id)
             if draft is None:

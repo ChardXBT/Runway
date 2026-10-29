@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -53,3 +54,27 @@ def test_unknown_state_is_rejected(database: Database) -> None:
     service = OAuthStateService(database)
     with pytest.raises(OAuthStateError, match="invalid_state"):
         service.consume(Platform.youtube, state="never-issued")
+
+
+def test_concurrent_consume_only_succeeds_once(database: Database) -> None:
+    service = OAuthStateService(database)
+    issued = service.issue(Platform.youtube, redirect_uri="http://x/cb", use_pkce=False)
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def _consume() -> None:
+        barrier.wait()
+        try:
+            service.consume(Platform.youtube, state=issued.state)
+            outcomes.append("consumed")
+        except OAuthStateError:
+            outcomes.append("rejected")
+
+    threads = [threading.Thread(target=_consume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    # The conditional UPDATE claims the state atomically; at most one callback
+    # can consume it, and the loser sees invalid_state.
+    assert sorted(outcomes) == ["consumed", "rejected"]

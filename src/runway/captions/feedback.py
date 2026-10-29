@@ -6,6 +6,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
+import numpy as np
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
@@ -21,7 +22,7 @@ from runway.db.models import (
     SearchRun,
 )
 from runway.db.repositories import audit, get_channel
-from runway.intelligence.embeddings import ActiveRepresentationResolver
+from runway.intelligence.embeddings import ActiveRepresentationResolver, cosine
 from runway.intelligence.policies import ChannelPolicyService
 
 POSITIVE_VERDICTS = {"accepted", "edited", "preferred", "selected"}
@@ -418,6 +419,17 @@ class CaptionFeedbackService:
                 raise LookupError(f"candidate {candidate_id} has no search run")
             channel_id = search_run.channel_id
             current_topic = self._topic(candidate)
+            # The current candidate's topic fields are fixed for this loop;
+            # embed them once instead of re-deriving them per feedback row.
+            current_vectors = {
+                key: self.representations.text_vector(
+                    channel_id,
+                    text,
+                    score_purpose="feedback_topic",
+                )[0]
+                for key in ("scene_archetype", "emotion", "composition")
+                if (text := str(current_topic.get(key) or ""))
+            }
             rows = session.scalars(
                 select(FeedbackSignal)
                 .where(
@@ -461,6 +473,7 @@ class CaptionFeedbackService:
                 score = self._topic_relevance(
                     channel_id,
                     current_topic,
+                    current_vectors,
                     self._topic(other) if other else {},
                 )
                 structure = caption_structure(row.value_text) if row.value_text else None
@@ -592,6 +605,7 @@ class CaptionFeedbackService:
         self,
         channel_id: int,
         current: dict[str, Any],
+        current_vectors: dict[str, np.ndarray],
         other: dict[str, Any],
     ) -> float:
         score = 0.0
@@ -602,16 +616,15 @@ class CaptionFeedbackService:
         if current_characters and other_characters:
             score += 0.5 * len(current_characters & other_characters)
         for key in ("scene_archetype", "emotion", "composition"):
-            first = str(current.get(key) or "")
+            first_vector = current_vectors.get(key)
             second = str(other.get(key) or "")
-            if first and second:
-                similarity = self.representations.text_similarity(
+            if first_vector is not None and second:
+                second_vector = self.representations.text_vector(
                     channel_id,
-                    first,
                     second,
                     score_purpose="feedback_topic",
-                )
-                score += 0.25 * max(similarity.score, 0.0)
+                )[0]
+                score += 0.25 * max(cosine(first_vector, second_vector), 0.0)
         return score
 
     def _semantic_similarity(self, channel_id: int, first: str, second: str) -> float:

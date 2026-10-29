@@ -21,6 +21,7 @@ from runway.platforms.base import (
     RateLimited,
     ReplyResult,
     TokenSet,
+    provider_request,
 )
 from runway.platforms.capabilities import (
     YOUTUBE_ANALYTICS_SCOPE,
@@ -146,14 +147,17 @@ class YouTubeProvider(PlatformProvider):
         }
         if code_verifier:
             payload["code_verifier"] = code_verifier
-        response = self.client.post(TOKEN_URL, data=payload)
+        response = provider_request(self.client, "YouTube", "POST", TOKEN_URL, data=payload)
         data = self._json_or_raise(response)
         return self._token_from_response(data, fallback_scopes=self._scopes())
 
     def refresh(self, token: TokenSet) -> TokenSet:
         if not token.refresh_token:
             raise AuthorizationExpired("YouTube refresh token is missing", status=401)
-        response = self.client.post(
+        response = provider_request(
+            self.client,
+            "YouTube",
+            "POST",
             TOKEN_URL,
             data={
                 "client_id": self.settings.youtube_client_id or "",
@@ -168,9 +172,13 @@ class YouTubeProvider(PlatformProvider):
         return refreshed
 
     def revoke(self, token: TokenSet) -> bool:
-        response = self.client.post(
+        # RFC 7009: the token is sent in the form-encoded body, never in the URL.
+        response = provider_request(
+            self.client,
+            "YouTube",
+            "POST",
             REVOKE_URL,
-            params={"token": token.access_token},
+            data={"token": token.access_token},
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         return response.is_success
@@ -259,7 +267,10 @@ class YouTubeProvider(PlatformProvider):
         *,
         quota_units: int,
     ) -> tuple[dict[str, Any], int]:
-        response = self.client.get(
+        response = provider_request(
+            self.client,
+            "YouTube",
+            "GET",
             url,
             params=params,
             headers={"Authorization": f"Bearer {token.access_token}"},
@@ -600,7 +611,10 @@ class YouTubeProvider(PlatformProvider):
     ) -> ReplyResult:
         if not self.settings.inbox_replies_enabled:
             raise CapabilityUnsupported("comment replies require RUNWAY_INBOX_REPLIES_ENABLED=true")
-        response = self.client.post(
+        response = provider_request(
+            self.client,
+            "YouTube",
+            "POST",
             f"{API_BASE}/comments",
             params={"part": "snippet"},
             json={"snippet": {"parentId": comment_external_id, "textOriginal": text}},

@@ -149,8 +149,11 @@ function AccountNotice({
 function SyncHistory({ accountId }: { accountId: number }) {
   const [runs, setRuns] = useState<SyncRunView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
 
   const load = async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       const response = await fetch(
         `${API_URL}/api/platforms/accounts/${accountId}/sync-runs?limit=5`,
@@ -164,6 +167,8 @@ function SyncHistory({ accountId }: { accountId: number }) {
       setError(null);
     } catch (err) {
       setError(actionError(err, "Could not load sync history."));
+    } finally {
+      loadingRef.current = false;
     }
   };
 
@@ -237,11 +242,17 @@ function AccountCard({
   const [message, setMessage] = useState<string | null>(null);
   const [messageTone, setMessageTone] = useState<"status-tone-success" | "status-tone-danger" | "status-tone-warning">("status-tone-success");
   const [run, setRun] = useState<SyncRunView | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<{
+    timer: ReturnType<typeof setTimeout> | null;
+    cancelled: boolean;
+  } | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) {
-      clearInterval(pollRef.current);
+      pollRef.current.cancelled = true;
+      if (pollRef.current.timer !== null) {
+        clearTimeout(pollRef.current.timer);
+      }
       pollRef.current = null;
     }
   }, []);
@@ -251,7 +262,21 @@ function AccountCard({
   const pollRun = useCallback(
     (runId: number) => {
       stopPolling();
-      pollRef.current = setInterval(async () => {
+      const poll: {
+        timer: ReturnType<typeof setTimeout> | null;
+        cancelled: boolean;
+      } = { timer: null, cancelled: false };
+      pollRef.current = poll;
+      const finish = (
+        tone: "status-tone-success" | "status-tone-danger" | "status-tone-warning",
+        text: string,
+      ) => {
+        stopPolling();
+        setBusy(null);
+        setMessageTone(tone);
+        setMessage(text);
+      };
+      const tick = async () => {
         try {
           const response = await fetch(
             `${API_URL}/api/platforms/sync-runs/${runId}`,
@@ -261,31 +286,33 @@ function AccountCard({
             validate: isSyncRunView,
             failureMessage: "Could not read sync progress.",
           });
+          if (poll.cancelled) return;
           setRun(payload);
           if (payload.status !== "running" && payload.status !== "queued") {
-            stopPolling();
-            setBusy(null);
-            setMessageTone(
+            finish(
               payload.status === "completed"
                 ? "status-tone-success"
                 : payload.status === "partial"
                   ? "status-tone-warning"
                   : "status-tone-danger",
-            );
-            setMessage(
               payload.status === "completed"
                 ? `Sync completed — ${payload.items_fetched} items fetched.`
                 : `Sync ${payload.status}${payload.error_summary ? ` — ${payload.error_summary}` : ""}.`,
             );
             onChanged();
+            return;
           }
         } catch {
-          stopPolling();
-          setBusy(null);
-          setMessageTone("status-tone-danger");
-          setMessage("Lost track of the sync run. Refresh to see its result.");
+          if (poll.cancelled) return;
+          finish(
+            "status-tone-danger",
+            "Lost track of the sync run. Refresh to see its result.",
+          );
+          return;
         }
-      }, 1500);
+        poll.timer = setTimeout(tick, 1500);
+      };
+      poll.timer = setTimeout(tick, 1500);
     },
     [onChanged, stopPolling],
   );
@@ -329,9 +356,10 @@ function AccountCard({
       );
       window.location.assign(payload.authorization_url);
     } catch (err) {
-      setBusy(null);
       setMessageTone("status-tone-danger");
       setMessage(actionError(err, "Could not start reconnection."));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -612,11 +640,12 @@ export function AccountsManager({
       );
       window.location.assign(payload.authorization_url);
     } catch (err) {
-      setConnectBusy(null);
       setConnectError((current) => ({
         ...current,
         [platform]: actionError(err, "Could not start the connection."),
       }));
+    } finally {
+      setConnectBusy(null);
     }
   };
 

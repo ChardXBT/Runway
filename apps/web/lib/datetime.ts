@@ -1,5 +1,20 @@
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function cachedFormatter(
+  locale: string,
+  options: Intl.DateTimeFormatOptions,
+) {
+  const key = `${locale}|${JSON.stringify(options)}`;
+  let formatter = formatterCache.get(key);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    formatterCache.set(key, formatter);
+  }
+  return formatter;
+}
+
 function dateParts(value: Date, timeZone: string) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
+  const formatter = cachedFormatter("en-CA", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -17,7 +32,7 @@ function dateParts(value: Date, timeZone: string) {
 
 export function isValidTimeZone(value: string) {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    cachedFormatter("en-US", { timeZone: value }).format();
     return true;
   } catch {
     return false;
@@ -39,7 +54,7 @@ export function localTime(value: string | Date, timeZone: string) {
   try {
     const date = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(date.getTime()) || !isValidTimeZone(timeZone)) return null;
-    return new Intl.DateTimeFormat("en-GB", {
+    return cachedFormatter("en-GB", {
       hour: "2-digit",
       minute: "2-digit",
       hourCycle: "h23",
@@ -51,7 +66,7 @@ export function localTime(value: string | Date, timeZone: string) {
 }
 
 function zonedPartsAsUtc(value: Date, timeZone: string) {
-  const formatter = new Intl.DateTimeFormat("en-US", {
+  const formatter = cachedFormatter("en-US", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -103,7 +118,7 @@ export function scheduleInstant(
 
   const resolved = new Date(instant);
   const resolvedDate = localDate(resolved, timeZone);
-  const resolvedTime = new Intl.DateTimeFormat("en-GB", {
+  const resolvedTime = cachedFormatter("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",

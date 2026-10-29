@@ -283,6 +283,15 @@ export function LineupCalendar({
   );
   const selected =
     allPosts.find((proposal) => proposal.id === selectedId) ?? null;
+  const [prevSelected, setPrevSelected] = useState<Proposal | null>(selected);
+  if (prevSelected !== selected) {
+    setPrevSelected(selected);
+    if (selected === null && dialog !== null && dialog !== "publish") {
+      setDialog(null);
+      setDialogError("");
+      setDialogOutcomeUncertain(false);
+    }
+  }
   const integrityConflicts = useMemo(
     () => conflictingLineupDates(lineup),
     [lineup],
@@ -1744,7 +1753,7 @@ export function LineupCalendar({
         {message}
       </p>
 
-      {dialog && selected && (
+      {dialog !== null && (dialog === "publish" || selected !== null) && (
         <div
           className="dialog-backdrop"
           onMouseDown={(event) => {

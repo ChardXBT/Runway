@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ContentThumb } from "@/components/content-thumb";
 import { PlatformBadge, platformLabel } from "@/components/platform-badge";
@@ -59,12 +59,21 @@ export function InboxWorkspace({
   const [detailFor, setDetailFor] = useState<number | null>(selectedId);
   const [qInput, setQInput] = useState(filters.q);
   const [prevList, setPrevList] = useState(list);
+  const [prevQ, setPrevQ] = useState(filters.q);
+  const currentList = useRef(list);
+
+  useEffect(() => {
+    currentList.current = list;
+  }, [list]);
 
   if (prevList !== list) {
     setPrevList(list);
     setExtraItems([]);
     setOverrides({});
     setListError(null);
+  }
+  if (prevQ !== filters.q) {
+    setPrevQ(filters.q);
     setQInput(filters.q);
   }
   if (detailFor !== selectedId) {
@@ -130,6 +139,7 @@ export function InboxWorkspace({
   const loadMore = async () => {
     setLoadingMore(true);
     setListError(null);
+    const requestedList = currentList.current;
     try {
       const query = new URLSearchParams();
       if (filters.platform) query.set("platform", filters.platform);
@@ -146,6 +156,7 @@ export function InboxWorkspace({
         validate: isInboxListResponse,
         failureMessage: "Could not load more comments.",
       });
+      if (currentList.current !== requestedList) return;
       setExtraItems((current) => [...current, ...payload.items]);
     } catch (err) {
       setListError(actionError(err, "Could not load more comments."));
@@ -465,9 +476,10 @@ function CommentDetail({
   const clearDraft = async () => {
     setDraftState("saving");
     try {
-      await fetch(`${API_URL}/api/inbox/${comment.id}/draft`, {
+      const response = await fetch(`${API_URL}/api/inbox/${comment.id}/draft`, {
         method: "DELETE",
       });
+      if (!response.ok) throw new ApiError("Could not clear the draft.");
       setSavedDraft("");
       setDraftText("");
       setDraftState("saved");
@@ -640,7 +652,12 @@ function CommentDetail({
                   : ""}
           </span>
           {draftText !== "" || savedDraft !== "" ? (
-            <button type="button" className="button secondary" onClick={clearDraft}>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={clearDraft}
+              disabled={draftState === "saving"}
+            >
               Clear
             </button>
           ) : null}

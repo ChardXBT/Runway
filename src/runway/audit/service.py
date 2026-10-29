@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import and_, desc, func, not_, or_, select
+from sqlalchemy import and_, desc, not_, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from runway.db.base import Database
@@ -57,8 +57,11 @@ class AuditService:
         offset: int = 0,
     ) -> list[dict[str, object]]:
         with self.database.session() as session:
+            # SQLite stores DateTime values as ISO-ordered strings, so ordering
+            # on the column directly uses ix_audit_events_created; julianday()
+            # forced a scan.
             statement = select(AuditEvent).order_by(
-                desc(func.julianday(AuditEvent.created_at)), desc(AuditEvent.id)
+                desc(AuditEvent.created_at), desc(AuditEvent.id)
             )
             if event_type:
                 statement = statement.where(AuditEvent.event_type == event_type)

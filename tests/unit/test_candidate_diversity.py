@@ -369,14 +369,29 @@ def test_slate_uses_approved_secondary_topics_when_primary_supply_is_empty(
         candidate.detected_topic_json = json.dumps(analysis)
         candidate.diversity_fingerprint_json = "{}"
 
+    class FakeAsset:
+        def __init__(self, asset_id: int) -> None:
+            self.id = asset_id
+            self.sha256 = f"sha256-{asset_id}"
+
+        def __str__(self) -> str:
+            return str(self.id)
+
     class FakeRepresentations:
         @staticmethod
-        def image_vector(
+        def image_vector_for_entity(
             _channel_id: int,
-            path: Path,
             *,
+            entity_type: str,
+            entity_id: int,
+            field: str,
+            source_content_hash: str,
+            path: Path,
             score_purpose: str,
         ) -> tuple[np.ndarray, object]:
+            assert entity_type == "media_asset"
+            assert field == "image"
+            assert source_content_hash.startswith("sha256-")
             assert score_purpose == "candidate_slate_semantic_diversity"
             vector = (
                 np.array([1.0, 0.0], dtype=np.float32)
@@ -396,7 +411,7 @@ def test_slate_uses_approved_secondary_topics_when_primary_supply_is_empty(
     monkeypatch.setattr(
         optimizer,
         "_validated_media",
-        lambda _candidates: (1, {401: 401, 402: 402}),
+        lambda _candidates: (1, {401: FakeAsset(401), 402: FakeAsset(402)}),
     )
     monkeypatch.setattr(optimizer, "_media_path", lambda media: Path(str(media)))
     monkeypatch.setattr(optimizer, "_recent_fatigue", lambda _channel_id: Counter())

@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,10 +20,27 @@ from runway.db.models import (
     RepresentationSet,
     RepresentationSetItem,
 )
-from runway.media.service import inspect_image
+from runway.media.service import ImageFeatures, inspect_image
 
 TOKEN_RE = re.compile(r"[\w']+", re.UNICODE)
 ProviderT = TypeVar("ProviderT")
+
+# Activation, rollback, and staleness updates change which representation set is
+# canonical. A process-local epoch lets long-lived resolvers memoize resolution
+# and invalidate exactly when a set transition commits, instead of opening a
+# session for every semantic call.
+_ACTIVE_REPRESENTATION_EPOCH = 0
+
+
+def representation_set_epoch() -> int:
+    return _ACTIVE_REPRESENTATION_EPOCH
+
+
+def bump_representation_set_epoch() -> None:
+    global _ACTIVE_REPRESENTATION_EPOCH
+    _ACTIVE_REPRESENTATION_EPOCH += 1
+
+
 CONCEPT_GROUPS = (
     frozenset({"excited", "eager", "thrilled", "delighted", "enthusiastic"}),
     frozenset({"surprised", "shocked", "astonished", "startled"}),
@@ -200,9 +217,27 @@ class DeterministicImageEmbeddingProvider:
         "normalization": "l2",
     }
     configuration_fingerprint = configuration_hash(_configuration)
+    _inspection_cache_limit = 2048
+
+    def __init__(self) -> None:
+        self._inspections: OrderedDict[tuple[str, int, int], ImageFeatures] = OrderedDict()
+
+    def _inspection(self, path: Path) -> ImageFeatures:
+        """Memoize image inspection per file state; edits produce a new key."""
+        stat = path.stat()
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        cached = self._inspections.get(key)
+        if cached is not None:
+            self._inspections.move_to_end(key)
+            return cached
+        features = inspect_image(path)
+        self._inspections[key] = features
+        while len(self._inspections) > self._inspection_cache_limit:
+            self._inspections.popitem(last=False)
+        return features
 
     def embed_image(self, path: Path, *, purpose: str) -> RepresentationResult:
-        values = _normalize(np.asarray(inspect_image(path).embedding, dtype=np.float32))
+        values = _normalize(np.asarray(self._inspection(path).embedding, dtype=np.float32))
         return RepresentationResult(
             provider=self.name,
             model=self.model,
@@ -343,9 +378,14 @@ class RepresentationProviderRegistry:
     ) -> None:
         if not name.strip():
             raise ValueError("provider name cannot be empty")
-        if name in providers and not replace:
+        replaced = name in providers
+        if replaced and not replace:
             raise ValueError(f"representation provider {name!r} is already registered")
         providers[name] = provider
+        if replaced:
+            # A replaced provider changes resolution for resolvers already
+            # holding this registry; force their memos to refresh.
+            bump_representation_set_epoch()
 
     def register_text(
         self,
@@ -478,6 +518,8 @@ class ActiveRepresentationResolver:
         "multimodal": ("historical_multimodal", "historical_pair_semantics"),
     }
 
+    _vector_cache_limit = 4096
+
     def __init__(
         self,
         database: Database,
@@ -492,6 +534,40 @@ class ActiveRepresentationResolver:
             registry = configured_provider_registry(database.settings)
         self.registry = registry
         self.store = RepresentationStore(database)
+        self._resolution_epoch = representation_set_epoch()
+        self._resolutions: dict[
+            tuple[int, str, str, str],
+            tuple[
+                TextEmbeddingProvider | ImageEmbeddingProvider | MultimodalEmbeddingProvider,
+                RepresentationResolution,
+            ],
+        ] = {}
+        self._text_vectors: OrderedDict[tuple[object, ...], np.ndarray] = OrderedDict()
+        self._image_vectors: OrderedDict[tuple[object, ...], np.ndarray] = OrderedDict()
+        self._pair_vectors: OrderedDict[tuple[object, ...], np.ndarray] = OrderedDict()
+        self._entity_vectors: OrderedDict[tuple[object, ...], np.ndarray] = OrderedDict()
+
+    @staticmethod
+    def _cache_put(
+        cache: OrderedDict[tuple[object, ...], np.ndarray],
+        key: tuple[object, ...],
+        vector: np.ndarray,
+    ) -> None:
+        cache[key] = vector
+        cache.move_to_end(key)
+        while len(cache) > ActiveRepresentationResolver._vector_cache_limit:
+            cache.popitem(last=False)
+
+    @staticmethod
+    def _provider_key(
+        provider: TextEmbeddingProvider | ImageEmbeddingProvider | MultimodalEmbeddingProvider,
+    ) -> tuple[object, ...]:
+        return (
+            provider.name,
+            provider.model,
+            provider.version,
+            provider.configuration_fingerprint,
+        )
 
     def resolve(
         self,
@@ -507,6 +583,14 @@ class ActiveRepresentationResolver:
         default_scope, default_purpose = self.DEFAULTS[modality]
         effective_scope = scope or default_scope
         effective_purpose = purpose or default_purpose
+        epoch = representation_set_epoch()
+        if epoch != self._resolution_epoch:
+            self._resolutions.clear()
+            self._resolution_epoch = epoch
+        key = (channel_id, modality, effective_scope, effective_purpose)
+        cached = self._resolutions.get(key)
+        if cached is not None:
+            return cached
         active_set = self.store.active_set(
             channel_id=channel_id,
             scope=effective_scope,
@@ -529,7 +613,7 @@ class ActiveRepresentationResolver:
                 "configured provider identity does not match active representation "
                 f"set {active_set.id}; no fallback was attempted"
             )
-        return provider, RepresentationResolution(
+        resolution = RepresentationResolution(
             modality=modality,
             scope=effective_scope,
             purpose=effective_purpose,
@@ -540,6 +624,85 @@ class ActiveRepresentationResolver:
             representation_set_id=active_set.id if active_set is not None else None,
             resolution=("active_set" if active_set is not None else "deterministic_baseline"),
         )
+        resolved = (provider, resolution)
+        self._resolutions[key] = resolved
+        return resolved
+
+    def _cached_text_vector(
+        self,
+        provider: TextEmbeddingProvider,
+        purpose: str,
+        text: str,
+    ) -> np.ndarray:
+        key = (*self._provider_key(provider), purpose, content_hash(text))
+        cached = self._text_vectors.get(key)
+        if cached is not None:
+            self._text_vectors.move_to_end(key)
+            return cached
+        vector = cast(np.ndarray, provider.embed_text(text, purpose=purpose).as_array()[0])
+        self._cache_put(self._text_vectors, key, vector)
+        return vector
+
+    def _cached_image_vector(
+        self,
+        provider: ImageEmbeddingProvider,
+        purpose: str,
+        path: Path,
+    ) -> np.ndarray:
+        stat = path.stat()
+        key = (
+            *self._provider_key(provider),
+            purpose,
+            str(path),
+            stat.st_mtime_ns,
+            stat.st_size,
+        )
+        cached = self._image_vectors.get(key)
+        if cached is not None:
+            self._image_vectors.move_to_end(key)
+            return cached
+        vector = cast(np.ndarray, provider.embed_image(path, purpose=purpose).as_array()[0])
+        self._cache_put(self._image_vectors, key, vector)
+        return vector
+
+    def _cached_pair_vector(
+        self,
+        provider: MultimodalEmbeddingProvider,
+        purpose: str,
+        path: Path,
+        text: str,
+    ) -> np.ndarray:
+        stat = path.stat()
+        key = (
+            *self._provider_key(provider),
+            purpose,
+            str(path),
+            stat.st_mtime_ns,
+            stat.st_size,
+            content_hash(text),
+        )
+        cached = self._pair_vectors.get(key)
+        if cached is not None:
+            self._pair_vectors.move_to_end(key)
+            return cached
+        if isinstance(provider, DeterministicMultimodalEmbeddingProvider):
+            # Splitting lets repeated calls against the same image reuse the
+            # cached image component instead of re-inspecting the file once
+            # per caption row.
+            image = self._cached_image_vector(provider.image_provider, purpose, path)
+            text_vector = self._cached_text_vector(provider.text_provider, purpose, text)
+            vector = _normalize(
+                np.concatenate(
+                    [provider.image_weight * image, provider.text_weight * text_vector]
+                ).astype(np.float32)
+            )
+        else:
+            vector = cast(
+                np.ndarray,
+                provider.embed_image_text(path, text, purpose=purpose).as_array()[0],
+            )
+        self._cache_put(self._pair_vectors, key, vector)
+        return vector
 
     def text_similarity(
         self,
@@ -551,8 +714,8 @@ class ActiveRepresentationResolver:
     ) -> SemanticSimilarity:
         raw_provider, resolution = self.resolve(channel_id, modality="text")
         provider = cast(TextEmbeddingProvider, raw_provider)
-        first_vector = provider.embed_text(first, purpose=score_purpose).as_array()[0]
-        second_vector = provider.embed_text(second, purpose=score_purpose).as_array()[0]
+        first_vector = self._cached_text_vector(provider, score_purpose, first)
+        second_vector = self._cached_text_vector(provider, score_purpose, second)
         return SemanticSimilarity(
             score=cosine(first_vector, second_vector),
             representation=resolution,
@@ -567,7 +730,7 @@ class ActiveRepresentationResolver:
     ) -> tuple[np.ndarray, RepresentationResolution]:
         raw_provider, resolution = self.resolve(channel_id, modality="text")
         provider = cast(TextEmbeddingProvider, raw_provider)
-        return provider.embed_text(text, purpose=score_purpose).as_array()[0], resolution
+        return self._cached_text_vector(provider, score_purpose, text), resolution
 
     def image_vector(
         self,
@@ -578,7 +741,68 @@ class ActiveRepresentationResolver:
     ) -> tuple[np.ndarray, RepresentationResolution]:
         raw_provider, resolution = self.resolve(channel_id, modality="image")
         provider = cast(ImageEmbeddingProvider, raw_provider)
-        return provider.embed_image(path, purpose=score_purpose).as_array()[0], resolution
+        return self._cached_image_vector(provider, score_purpose, path), resolution
+
+    def image_vector_for_entity(
+        self,
+        channel_id: int,
+        *,
+        entity_type: str,
+        entity_id: int,
+        field: str,
+        source_content_hash: str,
+        path: Path,
+        score_purpose: str,
+    ) -> tuple[np.ndarray, RepresentationResolution]:
+        """Image vector that prefers representations persisted for the entity.
+
+        Assets already embedded under the active set are served from the store
+        instead of being re-inspected; other assets are embedded once and
+        persisted under the scoring purpose so later calls reuse them.
+        """
+        raw_provider, resolution = self.resolve(channel_id, modality="image")
+        provider = cast(ImageEmbeddingProvider, raw_provider)
+        key = (
+            *self._provider_key(provider),
+            entity_type,
+            entity_id,
+            field,
+            score_purpose,
+            source_content_hash,
+        )
+        cached = self._entity_vectors.get(key)
+        if cached is not None:
+            self._entity_vectors.move_to_end(key)
+            return cached, resolution
+        record = None
+        if resolution.representation_set_id is not None:
+            record = self.store.get_active(
+                channel_id=channel_id,
+                scope=resolution.scope,
+                purpose=resolution.purpose,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                field=field,
+                source_content_hash=source_content_hash,
+            )
+        if record is None:
+            record = self.store.get_or_create(
+                channel_id=channel_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                field=field,
+                modality="image",
+                purpose=score_purpose,
+                provider=provider.name,
+                model=provider.model,
+                model_version=provider.version,
+                source_content_hash=source_content_hash,
+                configuration_hash=provider.configuration_fingerprint,
+                producer=lambda: provider.embed_image(path, purpose=score_purpose),
+            )
+        vector = self.store.vectors(record)[0]
+        self._cache_put(self._entity_vectors, key, vector)
+        return vector, resolution
 
     def multimodal_vector(
         self,
@@ -590,10 +814,7 @@ class ActiveRepresentationResolver:
     ) -> tuple[np.ndarray, RepresentationResolution]:
         raw_provider, resolution = self.resolve(channel_id, modality="multimodal")
         provider = cast(MultimodalEmbeddingProvider, raw_provider)
-        return (
-            provider.embed_image_text(path, text, purpose=score_purpose).as_array()[0],
-            resolution,
-        )
+        return self._cached_pair_vector(provider, score_purpose, path, text), resolution
 
     def snapshot(self, channel_id: int) -> dict[str, object]:
         result: dict[str, object] = {}
@@ -615,6 +836,9 @@ class RepresentationStore:
     def __init__(self, database: Database):
         self.database = database
         self._cache_diagnostics: Counter[str] = Counter()
+        self._active_set_epoch = representation_set_epoch()
+        self._active_sets: dict[tuple[int, str, str], RepresentationSet | None] = {}
+        self._set_matrices: dict[int, tuple[tuple[int, int], np.ndarray]] = {}
 
     def reset_diagnostics(self) -> None:
         self._cache_diagnostics.clear()
@@ -752,6 +976,13 @@ class RepresentationStore:
         scope: str,
         purpose: str,
     ) -> RepresentationSet | None:
+        epoch = representation_set_epoch()
+        if epoch != self._active_set_epoch:
+            self._active_sets.clear()
+            self._active_set_epoch = epoch
+        key = (channel_id, scope, purpose)
+        if key in self._active_sets:
+            return self._active_sets[key]
         with self.database.session() as session:
             rows = session.scalars(
                 select(RepresentationSet)
@@ -769,7 +1000,9 @@ class RepresentationStore:
                 "multiple active representation sets violate the canonical resolver "
                 f"for channel={channel_id}, scope={scope!r}, purpose={purpose!r}"
             )
-        return rows[0] if rows else None
+        active = rows[0] if rows else None
+        self._active_sets[key] = active
+        return active
 
     def get_active(
         self,
@@ -994,6 +1227,9 @@ class RepresentationStore:
                 )
                 representation_set.status = "stale"
                 representation_set.active = False
+        if items:
+            # Deactivating a set changes canonical resolution for resolvers.
+            bump_representation_set_epoch()
         return len(items)
 
     def latest(
@@ -1024,6 +1260,31 @@ class RepresentationStore:
         if record.dimensions <= 0 or values.size != record.dimensions * record.vector_count:
             raise ValueError(f"representation {record.id} has inconsistent dimensions")
         return values.reshape(record.vector_count, record.dimensions)
+
+    def vector_matrix_for_set(self, representation_set_id: int) -> np.ndarray:
+        """Primary vectors for a set, cached while its complete items are unchanged."""
+        with self.database.session() as session:
+            row = session.execute(
+                select(
+                    func.count(RepresentationSetItem.id),
+                    func.max(RepresentationSetItem.id),
+                ).where(
+                    RepresentationSetItem.representation_set_id == representation_set_id,
+                    RepresentationSetItem.status == "complete",
+                )
+            ).one()
+        marker = (int(row[0]), int(row[1] or 0))
+        cached = self._set_matrices.get(representation_set_id)
+        if cached is not None and cached[0] == marker:
+            return cached[1]
+        records = self.records_for_set(representation_set_id)
+        matrix = (
+            np.stack([self.vectors(record)[0] for record in records])
+            if records
+            else np.zeros((0, 0), dtype=np.float32)
+        )
+        self._set_matrices[representation_set_id] = (marker, matrix)
+        return matrix
 
 
 def cosine(first: np.ndarray, second: np.ndarray) -> float:

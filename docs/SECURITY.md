@@ -70,9 +70,13 @@
   database holds only an opaque `token_ref`, so database backups contain no usable credential.
   `data/secrets/` is ignored by Git. Disconnecting revokes the token where the platform supports
   it and deletes it locally.
-- Tokens are sent only as `Authorization: Bearer` headers to the platform hosts, never in URLs,
-  frontend responses, logs, or persisted JSON; `redact_payload` strips token-like fields from
-  anything written to `platform_actions`.
+- Tokens are sent only as `Authorization: Bearer` headers to the platform hosts, never in
+  URLs, frontend responses, logs, or persisted JSON; `redact_payload` strips token-like
+  fields from anything written to `platform_actions`. The only exceptions are the providers'
+  own OAuth grant endpoints: Meta's `access_token` grant requires the held token as a query
+  parameter, and every provider's token endpoint sends `client_secret`/`refresh_token` in the
+  form-encoded request body, as each platform documents. YouTube revocation follows RFC 7009
+  and sends the revoked token in the request body, not the URL.
 - The OAuth callback is an ordinary top-level `GET` on the loopback API, so the existing
   `LocalRequestGuard` still applies: only loopback `Host` headers are served. TikTok requires
   an HTTPS redirect, which means a tunnel that rewrites the Host header; the guard is not
@@ -94,11 +98,8 @@ CI runs `pip-audit`, a strict `npm audit --omit=dev` for the web app, and
 is not recorded in `apps/web/audit-exceptions.json`, reachable from production dependencies, or
 past its expiry date, and it prints each accepted exception on every run.
 
-One exception is currently recorded: `braces` (GHSA-vfj7-8cjw-p6xm, stack exhaustion through
-deeply nested patterns), which has no patched release. It reaches Runway only through
-`eslint-config-next > @next/eslint-plugin-next > fast-glob > micromatch`, a development-only lint
-chain that is absent from the production install. The plugin globs only when ESLint
-`settings.next.rootDir` is set, which Runway's configuration does not do, so the vulnerable
-code receives no input. The only fix npm offers is a downgrade to `eslint-config-next` 14. The
-exception expires on 2027-01-31 and must be reviewed again then, or earlier if a patched
-release appears.
+No exceptions are currently recorded: `apps/web/audit-exceptions.json` is an empty list. The
+previously accepted `braces` exception (GHSA-vfj7-8cjw-p6xm, stack exhaustion through deeply
+nested patterns, reachable only through the development-only ESLint toolchain) was retired
+once a patched `braces` release resolved the advisory and the dependency tree upgraded. New
+exceptions must follow the same documented, expiring review process.

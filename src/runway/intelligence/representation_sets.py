@@ -29,6 +29,7 @@ from runway.intelligence.embeddings import (
     RepresentationResult,
     RepresentationStore,
     TextEmbeddingProvider,
+    bump_representation_set_epoch,
     configuration_hash,
     content_hash,
 )
@@ -391,6 +392,7 @@ class RepresentationSetService:
                     ),
                 )
             )
+        bump_representation_set_epoch()
         return self.status(representation_set_id)
 
     @staticmethod
@@ -469,6 +471,7 @@ class RepresentationSetService:
                     ),
                 )
             )
+        bump_representation_set_epoch()
         return self.status(target_id)
 
     def status(self, representation_set_id: int) -> dict[str, object]:

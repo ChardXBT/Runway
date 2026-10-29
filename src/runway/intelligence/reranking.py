@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
@@ -127,10 +128,12 @@ class JointMultimodalReranker:
             scope="historical_multimodal",
             purpose="historical_pair_semantics",
         )
-        historical_pairs = (
-            self.representations.store.records_for_set(active_pair_set.id)
+        # One deserialization pass per set (cached by item marker) instead of
+        # re-reading every record for each caption row.
+        pair_matrix = (
+            self.representations.store.vector_matrix_for_set(active_pair_set.id)
             if active_pair_set is not None
-            else []
+            else np.zeros((0, 0), dtype=np.float32)
         )
         scores: dict[int, JointRerankScores] = {}
         representations: dict[str, object] = self.representations.snapshot(channel_id)
@@ -142,10 +145,7 @@ class JointMultimodalReranker:
                 score_purpose="joint_rerank_pair",
             )
             similarities = sorted(
-                (
-                    max(0.0, cosine(pair_vector, self.representations.store.vectors(record)[0]))
-                    for record in historical_pairs
-                ),
+                (max(0.0, cosine(pair_vector, record_vector)) for record_vector in pair_matrix),
                 reverse=True,
             )
             historical_compatibility = (
@@ -270,6 +270,15 @@ class JointMultimodalReranker:
     ) -> list[int]:
         selected: list[CaptionCandidateRecord] = []
         remaining = list(rows)
+        # One vector per caption text, reused for every pairwise check.
+        text_vectors = {
+            row.id: self.representations.text_vector(
+                channel_id,
+                row.text,
+                score_purpose="slate_caption_diversity",
+            )[0]
+            for row in remaining
+        }
         while remaining and len(selected) < 3:
             best: CaptionCandidateRecord | None = None
             best_utility = float("-inf")
@@ -278,12 +287,7 @@ class JointMultimodalReranker:
                     (
                         max(
                             0.0,
-                            self.representations.text_similarity(
-                                channel_id,
-                                row.text,
-                                prior.text,
-                                score_purpose="slate_caption_diversity",
-                            ).score,
+                            cosine(text_vectors[row.id], text_vectors[prior.id]),
                         )
                         for prior in selected
                     ),

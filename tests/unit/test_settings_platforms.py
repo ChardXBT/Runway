@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from runway.config import Settings
 
 
@@ -34,3 +37,9 @@ def test_public_dict_never_exposes_secret_values(tmp_path) -> None:
         assert not isinstance(value, str) or not any(
             marker in key for marker in ("secret", "token", "api_key")
         ), f"string value under suspicious key {key}"
+
+
+def test_capture_checkpoint_every_must_be_positive(tmp_path) -> None:
+    # 0 would ZeroDivisionError at `posts_seen % capture_checkpoint_every`.
+    with pytest.raises(ValidationError):
+        Settings(data_dir=tmp_path / "data", capture_checkpoint_every=0)

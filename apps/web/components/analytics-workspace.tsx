@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ContentThumb } from "@/components/content-thumb";
 import { MetricTile } from "@/components/metric-tile";
@@ -94,7 +94,32 @@ function SeriesBody({
   return <TrendChart compact={compact} label={label} points={points} />;
 }
 
+const SHORT_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+function isDayOnly(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
 function shortDay(value: string) {
+  const dayMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (dayMatch) {
+    const month = SHORT_MONTHS[Number(dayMatch[2]) - 1];
+    if (month !== undefined) return `${month} ${Number(dayMatch[3])}`;
+    return value;
+  }
   const parsed = parseApiDate(value);
   if (parsed === null) return value.slice(5, 10);
   return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -119,6 +144,13 @@ export function AnalyticsWorkspace({
   const [sortKey, setSortKey] = useState<SortKey>("view_count");
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const syncPoll = useRef<{ cancelled: boolean } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (syncPoll.current !== null) syncPoll.current.cancelled = true;
+    };
+  }, []);
 
   const series = analytics?.series ?? [];
   const snapshotSeries = analytics?.snapshot_series ?? [];
@@ -173,6 +205,8 @@ export function AnalyticsWorkspace({
     if (account === null || syncing) return;
     setSyncing(true);
     setSyncMessage(null);
+    const poll = { cancelled: false };
+    syncPoll.current = poll;
     try {
       const start = await fetch(
         `${API_URL}/api/platforms/accounts/${account.id}/sync`,
@@ -183,28 +217,40 @@ export function AnalyticsWorkspace({
         failureMessage: "Could not start the sync.",
       });
       let status = run.status;
-      while (status === "running") {
+      let attempts = 0;
+      while (
+        (status === "running" || status === "queued") &&
+        attempts < 120 &&
+        !poll.cancelled
+      ) {
         await new Promise((resolve) => setTimeout(resolve, 1500));
-        const poll = await fetch(
+        if (poll.cancelled) return;
+        const check = await fetch(
           `${API_URL}/api/platforms/sync-runs/${run.id}`,
           { cache: "no-store" },
         );
-        const updated = await readApiJson(poll, {
+        const updated = await readApiJson(check, {
           validate: isSyncRunView,
           failureMessage: "Could not read sync progress.",
         });
         status = updated.status;
+        attempts += 1;
       }
+      if (poll.cancelled) return;
       setSyncMessage(
         status === "completed"
           ? "Sync complete. Refreshing analytics."
-          : `Sync finished with status ${status}. Refreshing analytics.`,
+          : status === "running" || status === "queued"
+            ? "Sync is still in progress. Refresh shortly to see updated analytics."
+            : `Sync finished with status ${status}. Refreshing analytics.`,
       );
       router.refresh();
     } catch (err) {
-      setSyncMessage(actionError(err, "Could not start the sync."));
+      if (!poll.cancelled) {
+        setSyncMessage(actionError(err, "Could not start the sync."));
+      }
     } finally {
-      setSyncing(false);
+      if (!poll.cancelled) setSyncing(false);
     }
   };
 
@@ -222,6 +268,13 @@ export function AnalyticsWorkspace({
     return dated[dated.length - 1] ?? null;
   })();
 
+  const latestPointLabel =
+    latestPoint === null
+      ? null
+      : isDayOnly(latestPoint)
+        ? shortDay(latestPoint)
+        : formatAbsoluteTime(latestPoint);
+
   const hasData = series.length > 0 || snapshotSeries.length > 0;
 
   return (
@@ -235,10 +288,10 @@ export function AnalyticsWorkspace({
             never blended across platforms.
           </p>
         </div>
-        {latestPoint !== null ? (
+        {latestPointLabel !== null ? (
           <div className="conveyor-stats">
             <span>
-              Data through {formatAbsoluteTime(latestPoint)}
+              Data through {latestPointLabel}
             </span>
           </div>
         ) : null}
@@ -278,9 +331,7 @@ export function AnalyticsWorkspace({
           title="Analytics could not be loaded"
           body="The analytics API did not answer. Refresh to try again."
         />
-      ) : analytics === null ? (
-        <StatePanel variant="loading" title="Loading analytics" body="" />
-      ) : !hasData ? (
+      ) : analytics === null || !hasData ? (
         <StatePanel
           variant="empty"
           title="No data yet"

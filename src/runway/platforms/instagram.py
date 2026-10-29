@@ -20,6 +20,7 @@ from runway.platforms.base import (
     RateLimited,
     ReplyResult,
     TokenSet,
+    provider_request,
 )
 from runway.platforms.capabilities import (
     INSTAGRAM_SCOPES,
@@ -103,7 +104,10 @@ class InstagramProvider(PlatformProvider):
         redirect_uri: str,
         code_verifier: str | None,
     ) -> TokenSet:
-        response = self.client.post(
+        response = provider_request(
+            self.client,
+            "Instagram",
+            "POST",
             TOKEN_URL,
             data={
                 "client_id": self.settings.instagram_app_id or "",
@@ -144,7 +148,12 @@ class InstagramProvider(PlatformProvider):
         )
 
     def exchange_long_lived(self, token: TokenSet) -> TokenSet:
-        response = self.client.get(
+        # Meta documents grant_type/client_secret/access_token as required query
+        # params for this grant endpoint; it does not accept a Bearer header.
+        response = provider_request(
+            self.client,
+            "Instagram",
+            "GET",
             LONG_LIVED_URL,
             params={
                 "grant_type": "ig_exchange_token",
@@ -169,12 +178,15 @@ class InstagramProvider(PlatformProvider):
         )
 
     def refresh(self, token: TokenSet) -> TokenSet:
-        response = self.client.get(
+        # ig_refresh_token accepts Authorization: Bearer, so the held token stays
+        # out of the request URL; grant_type remains a documented query param.
+        response = provider_request(
+            self.client,
+            "Instagram",
+            "GET",
             REFRESH_URL,
-            params={
-                "grant_type": "ig_refresh_token",
-                "access_token": token.access_token,
-            },
+            params={"grant_type": "ig_refresh_token"},
+            headers={"Authorization": f"Bearer {token.access_token}"},
         )
         data = self._json_or_raise(response)
         access_token = data.get("access_token")
@@ -247,8 +259,14 @@ class InstagramProvider(PlatformProvider):
         path: str,
         params: dict[str, Any],
     ) -> dict[str, Any]:
-        merged = {**params, "access_token": token.access_token}
-        response = self.client.get(f"{GRAPH_BASE}/{path.lstrip('/')}", params=merged)
+        response = provider_request(
+            self.client,
+            "Instagram",
+            "GET",
+            f"{GRAPH_BASE}/{path.lstrip('/')}",
+            params=params,
+            headers={"Authorization": f"Bearer {token.access_token}"},
+        )
         return self._json_or_raise(response)
 
     # --------------------------------------------------------------- identity
@@ -559,9 +577,13 @@ class InstagramProvider(PlatformProvider):
     ) -> ReplyResult:
         if not self.settings.inbox_replies_enabled:
             raise CapabilityUnsupported("comment replies require RUNWAY_INBOX_REPLIES_ENABLED=true")
-        response = self.client.post(
+        response = provider_request(
+            self.client,
+            "Instagram",
+            "POST",
             f"{GRAPH_BASE}/{comment_external_id}/replies",
-            data={"message": text, "access_token": token.access_token},
+            data={"message": text},
+            headers={"Authorization": f"Bearer {token.access_token}"},
         )
         data = self._json_or_raise(response)
         reply_id = str(data.get("id") or "")

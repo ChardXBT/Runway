@@ -35,6 +35,7 @@ class CandidateSlateOptimizer:
     neural_cluster_threshold = 0.82
     semantic_suppression_threshold = 0.93
     deterministic_suppression_threshold = 0.88
+    greedy_pool_limit = 128
 
     def __init__(
         self,
@@ -79,19 +80,27 @@ class CandidateSlateOptimizer:
                 candidates=(),
                 diagnostics=self._empty_diagnostics(session_key),
             )
-        maximum = len(ordered_pool) if limit is None else max(1, min(limit, len(ordered_pool)))
-        channel_id, media = self._validated_media([*ordered_pool, *anchors])
+        # The greedy loop is quadratic in pool size; bound it to the strongest
+        # candidates under the existing rank ordering.
+        candidate_count = len(ordered_pool)
+        bounded_pool = ordered_pool[: self.greedy_pool_limit]
+        maximum = len(bounded_pool) if limit is None else max(1, min(limit, len(bounded_pool)))
+        channel_id, media = self._validated_media([*bounded_pool, *anchors])
         vectors: dict[int, np.ndarray] = {}
         vector_failures: dict[str, str] = {}
         resolution: dict[str, object] = {}
-        for candidate in [*ordered_pool, *anchors]:
+        for candidate in [*bounded_pool, *anchors]:
             if candidate.id in vectors:
                 continue
             asset = media[candidate.media_asset_id]
             try:
-                vector, representation = self.representations.image_vector(
+                vector, representation = self.representations.image_vector_for_entity(
                     channel_id,
-                    self._media_path(asset),
+                    entity_type="media_asset",
+                    entity_id=asset.id,
+                    field="image",
+                    source_content_hash=asset.sha256,
+                    path=self._media_path(asset),
                     score_purpose="candidate_slate_semantic_diversity",
                 )
             except (FileNotFoundError, ValueError) as exc:
@@ -99,7 +108,7 @@ class CandidateSlateOptimizer:
                 continue
             vectors[candidate.id] = vector
             resolution = representation.as_dict()
-        eligible = [candidate for candidate in ordered_pool if candidate.id in vectors]
+        eligible = [candidate for candidate in bounded_pool if candidate.id in vectors]
         neural_guardrail_active = bool(resolution and resolution.get("provider") != "runway-local")
         neural_clusters = self._semantic_clusters(eligible, vectors)
         recent_fatigue = self._recent_fatigue(channel_id)
@@ -119,7 +128,7 @@ class CandidateSlateOptimizer:
                 "representation_available": candidate.id in vectors,
                 "suppression_reasons": [],
             }
-            for candidate in ordered_pool
+            for candidate in bounded_pool
         }
         anchor_vector_failures: dict[str, str] = {}
         for candidate_id, error in vector_failures.items():
@@ -230,7 +239,7 @@ class CandidateSlateOptimizer:
             "version": self.version,
             "session_key": session_key,
             "status": "completed" if selected else "abstained_no_safe_semantic_slate",
-            "candidate_count": len(ordered_pool),
+            "candidate_count": candidate_count,
             "represented_candidate_count": len(eligible),
             "selected_ids": [row.id for row in selected],
             "candidate_diagnostics": candidate_diagnostics,

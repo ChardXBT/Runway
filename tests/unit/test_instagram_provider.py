@@ -8,6 +8,7 @@ import pytest
 from runway.config import Settings
 from runway.platforms.base import (
     AuthorizationExpired,
+    ProviderError,
     RateLimited,
     TokenSet,
 )
@@ -93,18 +94,43 @@ def test_exchange_code_falls_back_to_requested_scopes_when_permissions_omitted()
     ]
 
 
-def test_refresh_uses_refresh_endpoint() -> None:
+def test_refresh_uses_refresh_endpoint_with_bearer_token() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         query = parse_qs(urlparse(str(request.url)).query)
         assert request.url.path == "/refresh_access_token"
         assert query["grant_type"] == ["ig_refresh_token"]
-        assert query["access_token"] == ["ig-access"]
+        assert "access_token" not in query
+        assert request.headers["Authorization"] == "Bearer ig-access"
         return httpx.Response(200, json={"access_token": "refreshed", "expires_in": 5184000})
 
     provider = _provider(handler)
     token = provider.refresh(_token())
     assert token.access_token == "refreshed"
     assert token.expires_at is not None
+
+
+def test_graph_get_sends_bearer_token_never_in_query() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = parse_qs(urlparse(str(request.url)).query)
+        assert "access_token" not in query
+        assert request.headers["Authorization"] == "Bearer ig-access"
+        return httpx.Response(
+            200,
+            json={"user_id": "17841400923817", "username": "northwindstudio"},
+        )
+
+    provider = _provider(handler)
+    identity = provider.fetch_identity(_token())
+    assert identity.external_account_id == "17841400923817"
+
+
+def test_transport_error_raises_provider_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network unreachable", request=request)
+
+    provider = _provider(handler)
+    with pytest.raises(ProviderError):
+        provider.fetch_identity(_token())
 
 
 def test_identity_parses_me() -> None:

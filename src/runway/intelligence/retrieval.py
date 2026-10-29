@@ -203,7 +203,11 @@ class RetrievalService:
         started = time.perf_counter()
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
-            channel_media_ids = self._channel_media_ids(session, channel.id)
+            channel_media_ids = self._channel_media_subset(
+                session,
+                channel.id,
+                set(query.reference_media_ids),
+            )
             missing_references = sorted(set(query.reference_media_ids) - channel_media_ids)
             if missing_references:
                 raise LookupError(
@@ -476,7 +480,11 @@ class RetrievalService:
             media = session.get(MediaAsset, media_asset_id)
             if media is None:
                 raise LookupError(f"candidate media {media_asset_id} was not found")
-            if media_asset_id not in self._channel_media_ids(session, channel.id):
+            if media_asset_id not in self._channel_media_subset(
+                session,
+                channel.id,
+                {media_asset_id},
+            ):
                 raise LookupError(f"candidate media {media_asset_id} is outside @{channel.handle}")
             candidate: CandidateImage | None = None
             if candidate_id is not None:
@@ -536,29 +544,43 @@ class RetrievalService:
             return context
 
     @staticmethod
-    def _channel_media_ids(session: Any, channel_id: int) -> set[int]:
-        historical = set(
+    def _channel_media_subset(
+        session: Any,
+        channel_id: int,
+        media_asset_ids: set[int],
+    ) -> set[int]:
+        """Channel-scoped membership for a bounded id list (no full-table scan)."""
+        if not media_asset_ids:
+            return set()
+        found = set(
             session.scalars(
                 select(PostMedia.media_asset_id)
                 .join(Post, Post.id == PostMedia.post_id)
-                .where(Post.channel_id == channel_id)
-            )
-        )
-        candidates = set(
-            session.scalars(
-                select(CandidateImage.media_asset_id)
-                .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
-                .where(SearchRun.channel_id == channel_id)
-            )
-        )
-        generated = set(
-            session.scalars(
-                select(GeneratedAssetLineage.media_asset_id).where(
-                    GeneratedAssetLineage.channel_id == channel_id
+                .where(
+                    Post.channel_id == channel_id,
+                    PostMedia.media_asset_id.in_(media_asset_ids),
                 )
             )
         )
-        return historical | candidates | generated
+        found |= set(
+            session.scalars(
+                select(CandidateImage.media_asset_id)
+                .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
+                .where(
+                    SearchRun.channel_id == channel_id,
+                    CandidateImage.media_asset_id.in_(media_asset_ids),
+                )
+            )
+        )
+        found |= set(
+            session.scalars(
+                select(GeneratedAssetLineage.media_asset_id).where(
+                    GeneratedAssetLineage.channel_id == channel_id,
+                    GeneratedAssetLineage.media_asset_id.in_(media_asset_ids),
+                )
+            )
+        )
+        return found
 
     def _post_pools(
         self,

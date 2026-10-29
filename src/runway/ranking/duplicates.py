@@ -57,15 +57,10 @@ class DuplicateDetector:
                 .join(SearchRun, SearchRun.id == CandidateImage.search_run_id)
                 .where(SearchRun.channel_id == channel_id)
             )
-            statement = select(MediaAsset).where(
-                or_(
-                    MediaAsset.id.in_(historical_asset_ids),
-                    MediaAsset.id.in_(candidate_asset_ids),
-                )
+            indexed_assets = or_(
+                MediaAsset.id.in_(historical_asset_ids),
+                MediaAsset.id.in_(candidate_asset_ids),
             )
-            if exclude_asset_id is not None:
-                statement = statement.where(MediaAsset.id != exclude_asset_id)
-            assets = session.scalars(statement).all()
             same_source = False
             if source_url:
                 same_source = bool(
@@ -73,10 +68,7 @@ class DuplicateDetector:
                         select(MediaAsset.id)
                         .where(
                             MediaAsset.original_url == source_url,
-                            or_(
-                                MediaAsset.id.in_(historical_asset_ids),
-                                MediaAsset.id.in_(candidate_asset_ids),
-                            ),
+                            indexed_assets,
                         )
                         .limit(1)
                     )
@@ -91,14 +83,70 @@ class DuplicateDetector:
                     )
                 )
 
+            exact_query = (
+                select(MediaAsset)
+                .where(MediaAsset.sha256 == features.sha256, indexed_assets)
+                .order_by(MediaAsset.id.desc())
+                .limit(5)
+            )
+            if exclude_asset_id is not None:
+                exact_query = exact_query.where(MediaAsset.id != exclude_asset_id)
+            exact_matches = session.scalars(exact_query).all()
+            if exact_matches:
+                # Identical bytes produce identical features: every per-asset
+                # similarity component is 1.0 for the matched rows.
+                highest_semantic = max(
+                    cosine_similarity(asset.embedding_vector, features.embedding)
+                    if asset.embedding_vector
+                    else 0.0
+                    for asset in exact_matches
+                )
+                closest = [asset.id for asset in exact_matches]
+                within_window, date_warning = self._within_window(
+                    session,
+                    closest,
+                    reference_time or datetime.now(UTC),
+                    channel_id,
+                )
+                exact_warnings = []
+                if date_warning:
+                    exact_warnings.append(date_warning)
+                if same_source:
+                    exact_warnings.append("source URL was already used")
+                if (
+                    highest_semantic >= self.settings.duplicate_semantic_threshold
+                    and within_window is False
+                ):
+                    exact_warnings.append(
+                        "strong conceptual similarity is outside the hard 180-day window"
+                    )
+                return DuplicateResult(
+                    is_exact=True,
+                    is_transformed_duplicate=True,
+                    highest_visual_similarity=1.0,
+                    highest_semantic_similarity=round(highest_semantic, 6),
+                    closest_asset_ids=closest,
+                    within_180_day_window=within_window,
+                    hard_block=True,
+                    warnings=exact_warnings,
+                )
+
+            statement = select(
+                MediaAsset.id,
+                MediaAsset.perceptual_hash,
+                MediaAsset.crop_resistant_hash,
+                MediaAsset.embedding_vector,
+            ).where(indexed_assets)
+            if exclude_asset_id is not None:
+                statement = statement.where(MediaAsset.id != exclude_asset_id)
+            assets = session.execute(statement).all()
+
             is_exact = False
             transformed = False
             highest_visual = 0.0
             highest_semantic = -1.0
             scored: list[tuple[float, int, float, float, float]] = []
             for asset in assets:
-                if asset.sha256 == features.sha256:
-                    is_exact = True
                 phash = hamming_similarity(asset.perceptual_hash, features.perceptual_hash)
                 crop = crop_descriptor_similarity(
                     asset.crop_resistant_hash, features.crop_resistant_hash

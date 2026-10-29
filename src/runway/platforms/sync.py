@@ -8,7 +8,6 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
 
 from runway.config import Settings
 from runway.db.base import Database
@@ -34,6 +33,7 @@ from runway.platforms.base import (
     RateLimited,
     TokenSet,
     iso_utc,
+    safe_error_summary,
 )
 from runway.platforms.capabilities import Platform
 from runway.platforms.drafts import external_id_candidates
@@ -152,11 +152,29 @@ class SyncService:
             finally:
                 lock.release()
 
-        threading.Thread(
-            target=worker,
-            name=f"runway-sync-account-{account_id}",
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=worker,
+                name=f"runway-sync-account-{account_id}",
+                daemon=True,
+            ).start()
+        except Exception:
+            # The worker never started, so nothing else will release the lock
+            # or finish the run; unwind both before surfacing the failure.
+            lock.release()
+            try:
+                self._finish_run(
+                    run_id,
+                    account_id,
+                    status="failed",
+                    steps=[],
+                    items_fetched=0,
+                    quota_units=0,
+                    error_summary="sync worker thread failed to start",
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("could not record failed start for sync run %s", run_id)
+            raise
         return self.get_run(run_id)
 
     def get_run(self, run_id: int) -> SyncRun:
@@ -168,94 +186,115 @@ class SyncService:
             return run
 
     def _execute(self, run_id: int, account_id: int) -> None:
+        # Every path out of this method must finish the run; an exception that
+        # escapes before a step records its own failure (e.g. a transport error
+        # in ensure_fresh or a provider construction failure) would otherwise
+        # leave the run "running" and wedge the account behind
+        # _has_recent_running_run until the stale-run sweeper fires.
         steps: list[dict[str, Any]] = []
         items_fetched = 0
         quota_units = 0
-        final_status = "completed"
-        error_summary: str | None = None
-
-        provider = self.registry.provider(Platform(self._account_platform(account_id)))
-
         try:
-            token = self.ensure_fresh(account_id)
-        except AuthorizationExpired as exc:
-            self._finish_account_needs_reauth(account_id, exc.detail)
+            final_status = "completed"
+            error_summary: str | None = None
+
+            provider = self.registry.provider(Platform(self._account_platform(account_id)))
+
+            try:
+                token = self.ensure_fresh(account_id)
+            except AuthorizationExpired as exc:
+                detail = safe_error_summary(exc)
+                self._finish_account_needs_reauth(account_id, detail)
+                self._finish_run(
+                    run_id,
+                    account_id,
+                    status="failed",
+                    steps=steps,
+                    items_fetched=items_fetched,
+                    quota_units=quota_units,
+                    error_summary=detail,
+                )
+                return
+
+            steps_to_run: list[tuple[str, Callable[[], dict[str, int]]]] = [
+                ("identity", lambda: self._step_identity(provider, account_id, token)),
+                ("content", lambda: self._step_content(provider, account_id, token)),
+                (
+                    "content_metrics",
+                    lambda: self._step_content_metrics(provider, account_id, token),
+                ),
+                (
+                    "account_daily_metrics",
+                    lambda: self._step_daily_metrics(provider, account_id, token),
+                ),
+                ("comments", lambda: self._step_comments(provider, account_id, token)),
+            ]
+            for name, step in steps_to_run:
+                record: dict[str, Any] = {
+                    "step": name,
+                    "status": "completed",
+                    "items": 0,
+                    "error": None,
+                    "quota_units": 0,
+                }
+                try:
+                    result = step()
+                    record["items"] = result.get("items", 0)
+                    record["quota_units"] = result.get("quota_units", 0)
+                    items_fetched += int(result.get("items", 0))
+                    quota_units += int(result.get("quota_units", 0))
+                except AuthorizationExpired as exc:
+                    record["status"] = "failed"
+                    record["error"] = safe_error_summary(exc)
+                    final_status = "failed"
+                    error_summary = record["error"]
+                    steps.append(record)
+                    self._finish_account_needs_reauth(account_id, record["error"])
+                    break
+                except CapabilityUnsupported as exc:
+                    record["status"] = "skipped"
+                    record["error"] = safe_error_summary(exc)
+                except RateLimited as exc:
+                    record["status"] = "failed"
+                    record["error"] = f"{safe_error_summary(exc)} (retryable)"
+                    final_status = "partial"
+                    error_summary = record["error"]
+                except ProviderError as exc:
+                    record["status"] = "failed"
+                    record["error"] = safe_error_summary(exc)
+                    final_status = "partial"
+                    error_summary = record["error"]
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("sync step %s failed for account %s", name, account_id)
+                    record["status"] = "failed"
+                    record["error"] = safe_error_summary(exc)
+                    final_status = "partial"
+                    error_summary = record["error"]
+                steps.append(record)
+
             self._finish_run(
                 run_id,
                 account_id,
-                status="failed",
+                status=final_status,
                 steps=steps,
                 items_fetched=items_fetched,
                 quota_units=quota_units,
-                error_summary=exc.detail,
+                error_summary=error_summary,
             )
-            return
-
-        steps_to_run: list[tuple[str, Callable[[], dict[str, int]]]] = [
-            ("identity", lambda: self._step_identity(provider, account_id, token)),
-            ("content", lambda: self._step_content(provider, account_id, token)),
-            (
-                "content_metrics",
-                lambda: self._step_content_metrics(provider, account_id, token),
-            ),
-            (
-                "account_daily_metrics",
-                lambda: self._step_daily_metrics(provider, account_id, token),
-            ),
-            ("comments", lambda: self._step_comments(provider, account_id, token)),
-        ]
-        for name, step in steps_to_run:
-            record: dict[str, Any] = {
-                "step": name,
-                "status": "completed",
-                "items": 0,
-                "error": None,
-                "quota_units": 0,
-            }
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("sync run %s failed for account %s", run_id, account_id)
             try:
-                result = step()
-                record["items"] = result.get("items", 0)
-                record["quota_units"] = result.get("quota_units", 0)
-                items_fetched += int(result.get("items", 0))
-                quota_units += int(result.get("quota_units", 0))
-            except AuthorizationExpired as exc:
-                record["status"] = "failed"
-                record["error"] = exc.detail
-                final_status = "failed"
-                error_summary = exc.detail
-                steps.append(record)
-                self._finish_account_needs_reauth(account_id, exc.detail)
-                break
-            except CapabilityUnsupported as exc:
-                record["status"] = "skipped"
-                record["error"] = exc.detail
-            except RateLimited as exc:
-                record["status"] = "failed"
-                record["error"] = f"{exc.detail} (retryable)"
-                final_status = "partial"
-                error_summary = record["error"]
-            except ProviderError as exc:
-                record["status"] = "failed"
-                record["error"] = exc.detail
-                final_status = "partial"
-                error_summary = exc.detail
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("sync step %s failed for account %s", name, account_id)
-                record["status"] = "failed"
-                record["error"] = str(exc)
-                final_status = "partial"
-                error_summary = str(exc)
-            steps.append(record)
-
-        self._finish_run(
-            run_id,
-            account_id,
-            status=final_status,
-            steps=steps,
-            items_fetched=items_fetched,
-            quota_units=quota_units,
-            error_summary=error_summary,
-        )
+                self._finish_run(
+                    run_id,
+                    account_id,
+                    status="failed",
+                    steps=steps,
+                    items_fetched=items_fetched,
+                    quota_units=quota_units,
+                    error_summary=safe_error_summary(exc),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("could not record failure for sync run %s", run_id)
 
     def ensure_fresh(self, account_id: int) -> TokenSet:
         with self.database.session() as session:
@@ -394,6 +433,7 @@ class SyncService:
         head_next = page.next_cursor
 
         if stored.get("complete"):
+            self._link_published_targets(provider.platform.value)
             return {"items": items, "quota_units": quota}
 
         # Phase b: backfill. Resume from the stored page token, or continue from
@@ -429,39 +469,49 @@ class SyncService:
             )
         else:
             self._store_cursor(account_id, scope, {"resume": cursor})
+        self._link_published_targets(provider.platform.value)
         return {"items": items, "quota_units": quota}
 
     def _store_content_page(self, account_id: int, platform: str, items: list[ContentItem]) -> None:
         now = utcnow()
+        external_ids = [item.external_id for item in items]
         with self.database.session() as session:
-            for item in items:
-                existing = session.scalar(
+            # One IN query prefetches every existing row for this page; the
+            # per-item scalar lookup this replaces was the sync hot path.
+            existing_by_external_id = {
+                row.external_id: row
+                for row in session.scalars(
                     select(PlatformContent).where(
                         PlatformContent.account_id == account_id,
-                        PlatformContent.external_id == item.external_id,
+                        PlatformContent.external_id.in_(external_ids),
                     )
-                )
+                ).all()
+            }
+            for item in items:
+                existing = existing_by_external_id.get(item.external_id)
                 if existing is None:
-                    session.add(
-                        PlatformContent(
-                            account_id=account_id,
-                            platform=platform,
-                            external_id=item.external_id,
-                            content_type=item.content_type,
-                            title=item.title,
-                            caption=item.caption,
-                            permalink=item.permalink,
-                            thumbnail_url=item.thumbnail_url,
-                            published_at=item.published_at,
-                            duration_seconds=item.duration_seconds,
-                            privacy_status=item.privacy_status,
-                            metrics_json=json.dumps(item.metrics),
-                            first_seen_at=now,
-                            last_seen_at=now,
-                            raw_json=json.dumps(item.raw),
-                            **self._metric_columns(item.metrics),
-                        )
+                    existing = PlatformContent(
+                        account_id=account_id,
+                        platform=platform,
+                        external_id=item.external_id,
+                        content_type=item.content_type,
+                        title=item.title,
+                        caption=item.caption,
+                        permalink=item.permalink,
+                        thumbnail_url=item.thumbnail_url,
+                        published_at=item.published_at,
+                        duration_seconds=item.duration_seconds,
+                        privacy_status=item.privacy_status,
+                        metrics_json=json.dumps(item.metrics),
+                        first_seen_at=now,
+                        last_seen_at=now,
+                        raw_json=json.dumps(item.raw),
+                        **self._metric_columns(item.metrics),
                     )
+                    session.add(existing)
+                    # Register immediately so a duplicated external_id within
+                    # the same page updates rather than double-inserting.
+                    existing_by_external_id[item.external_id] = existing
                 else:
                     existing.content_type = item.content_type
                     existing.title = item.title
@@ -474,33 +524,46 @@ class SyncService:
                     existing.raw_json = json.dumps(item.raw)
                     existing.last_seen_at = now
                     self._apply_metric_columns(existing, item.metrics)
-            self._link_published_targets(session, platform)
 
-    @staticmethod
-    def _link_published_targets(session: Session, platform: str) -> None:
-        pending = session.scalars(
-            select(DraftTarget).where(
-                DraftTarget.platform == platform,
-                DraftTarget.status == "published",
-                DraftTarget.published_content_id.is_(None),
-                DraftTarget.published_url.is_not(None),
-            )
-        ).all()
-        if not pending:
-            return
-        for target in pending:
-            candidates = external_id_candidates(platform, target.published_url or "")
-            match = session.scalar(
+    def _link_published_targets(self, platform: str) -> None:
+        """Link pending published draft targets once per run, not per page."""
+        with self.database.session() as session:
+            pending = session.scalars(
+                select(DraftTarget).where(
+                    DraftTarget.platform == platform,
+                    DraftTarget.status == "published",
+                    DraftTarget.published_content_id.is_(None),
+                    DraftTarget.published_url.is_not(None),
+                )
+            ).all()
+            if not pending:
+                return
+            urls = [target.published_url or "" for target in pending]
+            external_ids = {
+                candidate
+                for target in pending
+                for candidate in external_id_candidates(platform, target.published_url or "")
+            }
+            rows = session.scalars(
                 select(PlatformContent).where(
                     PlatformContent.platform == platform,
                     or_(
-                        PlatformContent.permalink == target.published_url,
-                        PlatformContent.external_id.in_(candidates),
+                        PlatformContent.permalink.in_(urls),
+                        PlatformContent.external_id.in_(external_ids),
                     ),
                 )
-            )
-            if match is not None:
-                target.published_content_id = match.id
+            ).all()
+            by_permalink = {row.permalink: row for row in rows if row.permalink is not None}
+            for target in pending:
+                match = by_permalink.get(target.published_url or "")
+                if match is None:
+                    candidates = external_id_candidates(platform, target.published_url or "")
+                    match = next(
+                        (row for row in rows if row.external_id in candidates),
+                        None,
+                    )
+                if match is not None:
+                    target.published_content_id = match.id
 
     @staticmethod
     def _metric_columns(metrics: dict[str, int | float | None]) -> dict[str, int | None]:

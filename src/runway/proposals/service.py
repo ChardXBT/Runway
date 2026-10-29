@@ -695,23 +695,31 @@ class ProposalService:
                 audit(session, "caption_edited", "proposal", proposal.id, {})
         if unchanged:
             return self.detail(proposal_id)
-        self.exposures.record_decision(
+        self._record_secondary_evidence(
             proposal_id,
-            decision_type="edited",
-            final_caption=cleaned,
-            original_caption=old,
-            reason_codes=reason_codes or ["human_edit"],
-            source_event_id=decision_event_id,
+            "edited caption exposure",
+            lambda: self.exposures.record_decision(
+                proposal_id,
+                decision_type="edited",
+                final_caption=cleaned,
+                original_caption=old,
+                reason_codes=reason_codes or ["human_edit"],
+                source_event_id=decision_event_id,
+            ),
         )
-        self.feedback.record(
+        self._record_secondary_evidence(
             proposal_id,
-            verdict="edited",
-            generated_caption=old,
-            preferred_caption=cleaned,
-            reason_codes=reason_codes or ["human_edit"],
-            image_verdict=image_verdict,
-            note=note,
-            source_event_id=decision_event_id,
+            "edited caption feedback",
+            lambda: self.feedback.record(
+                proposal_id,
+                verdict="edited",
+                generated_caption=old,
+                preferred_caption=cleaned,
+                reason_codes=reason_codes or ["human_edit"],
+                image_verdict=image_verdict,
+                note=note,
+                source_event_id=decision_event_id,
+            ),
         )
         return self.detail(proposal_id)
 
@@ -751,21 +759,29 @@ class ProposalService:
             )
             decision_event_id = event.id
             selected = proposal.final_caption
-        self.exposures.record_decision(
+        self._record_secondary_evidence(
             proposal_id,
-            decision_type="selected",
-            final_caption=selected,
-            original_caption=old,
-            reason_codes=["selected_alternative"],
-            source_event_id=decision_event_id,
+            "selected caption exposure",
+            lambda: self.exposures.record_decision(
+                proposal_id,
+                decision_type="selected",
+                final_caption=selected,
+                original_caption=old,
+                reason_codes=["selected_alternative"],
+                source_event_id=decision_event_id,
+            ),
         )
-        self.feedback.record(
+        self._record_secondary_evidence(
             proposal_id,
-            verdict="selected",
-            generated_caption=old,
-            preferred_caption=selected,
-            reason_codes=["selected_alternative"],
-            source_event_id=decision_event_id,
+            "selected caption feedback",
+            lambda: self.feedback.record(
+                proposal_id,
+                verdict="selected",
+                generated_caption=old,
+                preferred_caption=selected,
+                reason_codes=["selected_alternative"],
+                source_event_id=decision_event_id,
+            ),
         )
         return self.detail(proposal_id)
 
@@ -800,6 +816,8 @@ class ProposalService:
                 proposal.approved_at = datetime.now(UTC)
                 proposal.rejected_at = None
                 source = self.settings.resolved_data_dir / media.local_path
+                if not source.is_file():
+                    raise ValueError("approved media file is missing")
                 extension = Path(media.local_path).suffix
                 relative = Path("media") / "approved" / f"{media.sha256}{extension}"
                 destination = self.settings.resolved_data_dir / relative
@@ -821,27 +839,39 @@ class ProposalService:
                 )
                 generated_caption = proposal.recommended_caption
                 final_caption = proposal.final_caption
-        self.exposures.record_decision(
+        self._record_secondary_evidence(
             proposal_id,
-            decision_type="accepted",
-            final_caption=final_caption,
-            original_caption=generated_caption,
-            reason_codes=["approved"],
-            source_event_id=decision_event_id,
+            "accepted caption exposure",
+            lambda: self.exposures.record_decision(
+                proposal_id,
+                decision_type="accepted",
+                final_caption=final_caption,
+                original_caption=generated_caption,
+                reason_codes=["approved"],
+                source_event_id=decision_event_id,
+            ),
         )
-        self.feedback.record(
+        self._record_secondary_evidence(
             proposal_id,
-            verdict="accepted",
-            generated_caption=generated_caption,
-            preferred_caption=final_caption,
-            reason_codes=["approved"],
-            image_verdict="good",
-            source_event_id=decision_event_id,
+            "accepted caption feedback",
+            lambda: self.feedback.record(
+                proposal_id,
+                verdict="accepted",
+                generated_caption=generated_caption,
+                preferred_caption=final_caption,
+                reason_codes=["approved"],
+                image_verdict="good",
+                source_event_id=decision_event_id,
+            ),
         )
-        self.candidate_exposures.record_proposal_event(
+        self._record_secondary_evidence(
             proposal_id,
-            event_type="accepted",
-            reason="creator approved the image-caption proposal",
+            "accepted candidate feedback",
+            lambda: self.candidate_exposures.record_proposal_event(
+                proposal_id,
+                event_type="accepted",
+                reason="creator approved the image-caption proposal",
+            ),
         )
         return self.detail(proposal_id)
 
@@ -1072,27 +1102,39 @@ class ProposalService:
             decision_event_id = event.id
             audit(session, "proposal_rejected", "proposal", proposal.id, {"reason": reason})
             rejected_caption = proposal.final_caption
-        self.exposures.record_decision(
+        self._record_secondary_evidence(
             proposal_id,
-            decision_type="rejected",
-            final_caption=None,
-            original_caption=rejected_caption,
-            reason_codes=inferred_reasons,
-            source_event_id=decision_event_id,
+            "rejected caption exposure",
+            lambda: self.exposures.record_decision(
+                proposal_id,
+                decision_type="rejected",
+                final_caption=None,
+                original_caption=rejected_caption,
+                reason_codes=inferred_reasons,
+                source_event_id=decision_event_id,
+            ),
         )
-        self.feedback.record(
+        self._record_secondary_evidence(
             proposal_id,
-            verdict="rejected",
-            generated_caption=rejected_caption,
-            reason_codes=inferred_reasons,
-            image_verdict=image_verdict,
-            note=reason,
-            source_event_id=decision_event_id,
+            "rejected caption feedback",
+            lambda: self.feedback.record(
+                proposal_id,
+                verdict="rejected",
+                generated_caption=rejected_caption,
+                reason_codes=inferred_reasons,
+                image_verdict=image_verdict,
+                note=reason,
+                source_event_id=decision_event_id,
+            ),
         )
-        self.candidate_exposures.record_proposal_event(
+        self._record_secondary_evidence(
             proposal_id,
-            event_type="rejected",
-            reason=reason,
+            "rejected candidate feedback",
+            lambda: self.candidate_exposures.record_proposal_event(
+                proposal_id,
+                event_type="rejected",
+                reason=reason,
+            ),
         )
         return self.detail(proposal_id)
 
@@ -1121,21 +1163,29 @@ class ProposalService:
                 },
             )
             source_event_id = event.id
-        self.feedback.record(
+        self._record_secondary_evidence(
             proposal_id,
-            verdict=verdict,
-            preferred_caption=preferred_caption,
-            preferred_structure=preferred_structure,
-            reason_codes=reason_codes,
-            image_verdict=image_verdict,
-            note=note,
-            source_event_id=source_event_id,
+            "creator caption feedback",
+            lambda: self.feedback.record(
+                proposal_id,
+                verdict=verdict,
+                preferred_caption=preferred_caption,
+                preferred_structure=preferred_structure,
+                reason_codes=reason_codes,
+                image_verdict=image_verdict,
+                note=note,
+                source_event_id=source_event_id,
+            ),
         )
         if "fewer_like_this" in (reason_codes or []):
-            self.candidate_exposures.record_proposal_event(
+            self._record_secondary_evidence(
                 proposal_id,
-                event_type="fewer_like_this",
-                reason=note or "creator requested fewer candidates like this",
+                "fewer_like_this candidate feedback",
+                lambda: self.candidate_exposures.record_proposal_event(
+                    proposal_id,
+                    event_type="fewer_like_this",
+                    reason=note or "creator requested fewer candidates like this",
+                ),
             )
         return self.detail(proposal_id)
 
@@ -1226,7 +1276,11 @@ class ProposalService:
                     "final_caption_preserved": final_was_user_edited,
                 },
             )
-        self.exposures.record_display(proposal_id)
+        self._record_secondary_evidence(
+            proposal_id,
+            "display recording",
+            lambda: self.exposures.record_display(proposal_id),
+        )
         return self.detail(proposal_id)
 
     async def replace_image(
@@ -1363,18 +1417,30 @@ class ProposalService:
                 {"candidate_image_id": selected_id},
             )
             audit(session, "proposal_image_replaced", "proposal", proposal.id, {})
-        self.exposures.record_display(proposal_id)
-        self.candidate_exposures.record_proposal_event(
+        self._record_secondary_evidence(
             proposal_id,
-            event_type="replaced",
-            reason="creator replaced this image with another candidate",
-            candidate_image_id=old_candidate,
+            "display recording",
+            lambda: self.exposures.record_display(proposal_id),
         )
-        self.candidate_exposures.record_proposal_event(
+        self._record_secondary_evidence(
             proposal_id,
-            event_type="shown",
-            reason="replacement image presented in the creator review interface",
-            candidate_image_id=selected_id,
+            "replacement recording",
+            lambda: self.candidate_exposures.record_proposal_event(
+                proposal_id,
+                event_type="replaced",
+                reason="creator replaced this image with another candidate",
+                candidate_image_id=old_candidate,
+            ),
+        )
+        self._record_secondary_evidence(
+            proposal_id,
+            "replacement shown recording",
+            lambda: self.candidate_exposures.record_proposal_event(
+                proposal_id,
+                event_type="shown",
+                reason="replacement image presented in the creator review interface",
+                candidate_image_id=selected_id,
+            ),
         )
         return self.detail(proposal_id)
 

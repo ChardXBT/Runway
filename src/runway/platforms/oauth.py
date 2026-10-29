@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 
 from runway.db.base import Database
 from runway.db.models import OAuthState, utcnow
@@ -52,19 +54,36 @@ class OAuthStateService:
         return IssuedState(state=state, code_verifier=verifier)
 
     def consume(self, platform: Platform, *, state: str) -> OAuthState:
-        """Validate and consume a state value; each state may be used exactly once."""
+        """Validate and consume a state value; each state may be used exactly once.
+
+        The check-then-set is a single conditional UPDATE, so two concurrent
+        callbacks cannot both pass the unconsumed/unexpired gate: only the
+        transaction whose statement matches all conditions reports rowcount 1.
+        """
+        now = utcnow()
         with self.database.session() as session:
+            result = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(OAuthState)
+                    .where(
+                        OAuthState.state == state,
+                        OAuthState.platform == platform.value,
+                        OAuthState.consumed_at.is_(None),
+                        OAuthState.expires_at > now,
+                    )
+                    .values(consumed_at=now)
+                ),
+            )
             record = session.scalar(select(OAuthState).where(OAuthState.state == state))
-            if record is None or record.platform != platform.value:
-                raise OAuthStateError("invalid_state")
-            if record.consumed_at is not None:
-                raise OAuthStateError("invalid_state")
-            expires_at = record.expires_at
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=UTC)
-            if expires_at <= datetime.now(UTC):
+            if result.rowcount != 1:
+                if (
+                    record is None
+                    or record.platform != platform.value
+                    or record.consumed_at is not None
+                ):
+                    raise OAuthStateError("invalid_state")
                 raise OAuthStateError("expired_state")
-            record.consumed_at = utcnow()
-            session.flush()
+            assert record is not None
             session.expunge(record)
             return record

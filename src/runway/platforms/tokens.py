@@ -7,6 +7,8 @@ import os
 import secrets
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,41 @@ class TokenStore:
         self.secrets_dir = secrets_dir
         self.key_path = secrets_dir / "token.key"
         self.store_path = secrets_dir / "platform-tokens.json"
+        self.lock_path = secrets_dir / "token.lock"
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Serialize read-modify-write cycles across threads and processes.
+
+        ``os.replace`` keeps each write atomic for readers, but without this
+        lock two processes can read the same blob, mutate different keys, and
+        silently overwrite each other's token updates. A sidecar
+        ``token.lock`` file is held exclusively for the whole sequence.
+        """
+        self.secrets_dir.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a+b") as handle:
+            if sys.platform == "win32":
+                import msvcrt
+
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _load_key(self) -> bytes:
         if self.key_path.is_file():
@@ -91,10 +128,11 @@ class TokenStore:
             raise
 
     def store(self, token_ref: str, token: TokenSet) -> None:
-        fernet = Fernet(self._load_key())
-        payload = self._read_store(fernet)
-        payload[token_ref] = serialize_token(token)
-        self._write_store(fernet, payload)
+        with self._locked():
+            fernet = Fernet(self._load_key())
+            payload = self._read_store(fernet)
+            payload[token_ref] = serialize_token(token)
+            self._write_store(fernet, payload)
 
     def load(self, token_ref: str) -> TokenSet | None:
         fernet = Fernet(self._load_key())
@@ -107,11 +145,12 @@ class TokenStore:
         return deserialize_token(entry)
 
     def delete(self, token_ref: str) -> None:
-        fernet = Fernet(self._load_key())
-        payload = self._read_store(fernet)
-        if token_ref in payload:
-            del payload[token_ref]
-            self._write_store(fernet, payload)
+        with self._locked():
+            fernet = Fernet(self._load_key())
+            payload = self._read_store(fernet)
+            if token_ref in payload:
+                del payload[token_ref]
+                self._write_store(fernet, payload)
 
     def new_token_ref(self) -> str:
         return secrets.token_hex(16)

@@ -22,7 +22,7 @@ work**, so every platform integration below is verified offline only.
 | Windows launcher contract | `python -m pytest tests/unit/test_windows_launcher.py` | 3 passed |
 | Dependency audit (Python) | `python -m pip_audit` | no known vulnerabilities |
 | Frontend | `npm run check` (ESLint, `tsc --noEmit`, Vitest, `next build`) | pass; Vitest 27 files / 154 tests |
-| Dependency audit (npm) | `npm audit`; `npm --prefix apps/web audit --omit=dev`; `node scripts/audit_web_dependencies.mjs` | 0 vulnerabilities; 0 vulnerabilities; clean with the one pre-existing reviewed dev-only exception |
+| Dependency audit (npm) | `npm audit`; `npm --prefix apps/web audit --omit=dev`; `node scripts/audit_web_dependencies.mjs` | 0 vulnerabilities; 0 vulnerabilities; clean with no recorded exceptions (the reviewed dev-only `braces` exception was retired after a patched release resolved the advisory) |
 | Existing fixture workflow | `python scripts/e2e_demo.py` | exit 0, proof report written under `data/proofs/` |
 
 New backend tests (offline, `httpx.MockTransport` for live providers): capability matrix and

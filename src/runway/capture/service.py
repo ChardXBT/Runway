@@ -102,20 +102,21 @@ class CaptureService:
                 batch.diagnostics,
                 save_all_snapshots=save_all_snapshots,
             )
+            seen = set(cursor.get("seen_keys", []))
             for index in range(start, limit):
                 self._process_post(session, run, batch.posts[index], fixture_assets)
                 cursor["fixture_index"] = index + 1
-                cursor["seen_keys"] = sorted(
-                    set(cursor.get("seen_keys", [])) | {batch.posts[index].stable_key()}
-                )
-                run.posts_seen = len([key for key in cursor["seen_keys"] if key])
-                run.last_cursor_json = json.dumps(cursor, sort_keys=True)
+                seen.add(batch.posts[index].stable_key())
+                run.posts_seen = len([key for key in seen if key])
                 if run.posts_seen and run.posts_seen % self.settings.capture_checkpoint_every == 0:
+                    cursor["seen_keys"] = sorted(seen)
+                    run.last_cursor_json = json.dumps(cursor, sort_keys=True)
                     session.flush()
                     session.commit()
             complete = limit >= len(batch.posts)
             run.status = RunStatus.COMPLETED if complete else RunStatus.PAUSED
             run.completed_at = utcnow() if complete else None
+            cursor["seen_keys"] = sorted(seen)
             run.last_cursor_json = json.dumps(cursor, sort_keys=True)
             audit(
                 session,

@@ -26,7 +26,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("backstage forms", () => {
+describe("backstage components", () => {
   it("locks duplicate annotation saves and confirms only validated data", async () => {
     let resolveSave!: (value: unknown) => void;
     const pendingSave = new Promise((resolve) => {

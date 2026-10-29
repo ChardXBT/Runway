@@ -62,7 +62,6 @@ function toLocalInput(value: string | null) {
 export function DraftsWorkspace({
   platforms,
   drafts: initialDrafts,
-  timezone,
 }: {
   platforms: PlatformsResponse;
   drafts: DraftView[];
@@ -118,7 +117,6 @@ export function DraftsWorkspace({
       <div className="drafts-body">
         <NewDraftForm
           connectedAccounts={connectedAccounts}
-          timezone={timezone}
           onCreated={(draft) => setDrafts((current) => [draft, ...current])}
           onError={setError}
         />
@@ -148,7 +146,6 @@ export function DraftsWorkspace({
                     <DraftCard
                       key={draft.id}
                       draft={draft}
-                      timezone={timezone}
                       accountHandle={accountHandle}
                       onChange={replaceDraft}
                       onArchived={(id) =>
@@ -170,12 +167,10 @@ export function DraftsWorkspace({
 
 function NewDraftForm({
   connectedAccounts,
-  timezone,
   onCreated,
   onError,
 }: {
   connectedAccounts: Map<PlatformKind, { id: number; handle: string | null; display_name: string | null } | null>;
-  timezone: string;
   onCreated: (draft: DraftView) => void;
   onError: (message: string | null) => void;
 }) {
@@ -273,7 +268,9 @@ function NewDraftForm({
             value={scheduledFor}
             onChange={(event) => setScheduledFor(event.target.value)}
           />
-          <span className="field-hint">Times use your {timezone} timezone.</span>
+          <span className="field-hint">
+            Times are interpreted in your browser’s local timezone.
+          </span>
         </label>
         <fieldset className="draft-targets">
           <legend>Targets</legend>
@@ -340,13 +337,11 @@ function NewDraftForm({
 
 function DraftCard({
   draft,
-  timezone,
   accountHandle,
   onChange,
   onArchived,
 }: {
   draft: DraftView;
-  timezone: string;
   accountHandle: (accountId: number | null) => string | null;
   onChange: (draft: DraftView) => void;
   onArchived: (id: number) => void;
@@ -389,6 +384,8 @@ function DraftCard({
   };
 
   const archive = async () => {
+    if (saving) return;
+    setSaving(true);
     setError(null);
     try {
       const response = await fetch(`${API_URL}/api/drafts/${draft.id}`, {
@@ -398,6 +395,8 @@ function DraftCard({
       onArchived(draft.id);
     } catch (err) {
       setError(actionError(err, "Could not archive the draft."));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -411,7 +410,8 @@ function DraftCard({
       </div>
       {draft.scheduled_for !== null ? (
         <p className="draft-scheduled">
-          Scheduled {formatAbsoluteTime(draft.scheduled_for)} ({timezone})
+          Scheduled {formatAbsoluteTime(draft.scheduled_for)} (browser local
+          time)
         </p>
       ) : null}
       {draft.body !== "" ? <p className="draft-body">{draft.body}</p> : null}
@@ -459,7 +459,9 @@ function DraftCard({
                 value={scheduledFor}
                 onChange={(event) => setScheduledFor(event.target.value)}
               />
-              <span className="field-hint">{timezone}. Clear to unschedule.</span>
+              <span className="field-hint">
+                Times use your browser’s local timezone. Clear to unschedule.
+              </span>
             </label>
             <div className="draft-edit-actions">
               <button
@@ -495,13 +497,19 @@ function DraftCard({
         )}
         {confirmArchive ? (
           <span className="draft-archive-confirm" role="group" aria-label="Confirm archive">
-            <button type="button" className="button" onClick={archive}>
-              Confirm archive
+            <button
+              type="button"
+              className="button"
+              onClick={archive}
+              disabled={saving}
+            >
+              {saving ? "Archiving…" : "Confirm archive"}
             </button>
             <button
               type="button"
               className="button secondary"
               onClick={() => setConfirmArchive(false)}
+              disabled={saving}
             >
               Cancel
             </button>

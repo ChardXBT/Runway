@@ -708,6 +708,7 @@ class CodexAgentRuntime:
         "temporarily overloaded",
     )
     _capacity_retry_delays = (5.0, 15.0, 30.0)
+    _login_status_ttl_seconds = 60.0
 
     def __init__(
         self,
@@ -722,6 +723,8 @@ class CodexAgentRuntime:
         self.prompts = Path(__file__).resolve().parent / "prompts"
         self.last_token_usage: dict[str, object] = {}
         self.command_prefix = command_prefix or self.resolve_command(settings)
+        self._login_status_detail: str | None = None
+        self._login_status_checked_at = 0.0
 
     @staticmethod
     def resolve_command(settings: Settings) -> list[str]:
@@ -762,7 +765,20 @@ class CodexAgentRuntime:
             and not _SECRET_ENVIRONMENT_NAME.search(name)
         }
 
-    def login_status(self) -> str:
+    def login_status(self, *, force: bool = False) -> str:
+        """Login status with a short TTL; auth failures force a fresh probe."""
+        if (
+            not force
+            and self._login_status_detail is not None
+            and time.monotonic() - self._login_status_checked_at < self._login_status_ttl_seconds
+        ):
+            return self._login_status_detail
+        detail = self._probe_login_status()
+        self._login_status_detail = detail
+        self._login_status_checked_at = time.monotonic()
+        return detail
+
+    def _probe_login_status(self) -> str:
         try:
             result = subprocess.run(
                 [*self.command_prefix, "login", "status"],
@@ -928,6 +944,11 @@ class CodexAgentRuntime:
                     ):
                         time.sleep(self._capacity_retry_delays[attempt])
                         continue
+                    if any(marker in combined.lower() for marker in self._authentication_markers):
+                        # The cached status may be stale; force the next call to
+                        # re-probe instead of trusting a logged-in snapshot.
+                        self._login_status_detail = None
+                        self._login_status_checked_at = 0.0
                     self._raise_classified_error(combined)
                 if result is None:
                     raise AgentTerminalError("Codex did not start; batch stopped")

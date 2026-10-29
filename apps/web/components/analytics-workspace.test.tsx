@@ -1,4 +1,9 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AnalyticsWorkspace } from "./analytics-workspace";
@@ -36,6 +41,13 @@ const tiktokAccount: AccountView = {
   platform: "tiktok",
   handle: "northwind.tt",
 };
+
+function jsonResponse(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 const analytics: AccountAnalytics = {
   account: { id: 7, platform: "youtube", handle: "northwindstudio" },
@@ -150,5 +162,155 @@ describe("AnalyticsWorkspace", () => {
     expect(
       screen.getByRole("button", { name: "Sync now" }),
     ).toBeInTheDocument();
+  });
+
+  it("renders the empty state, not a permanent loader, for a 404", () => {
+    render(
+      <AnalyticsWorkspace
+        accounts={[youtubeAccount]}
+        account={youtubeAccount}
+        analytics={null}
+        analyticsFailed={false}
+        range="28"
+      />,
+    );
+    expect(screen.getByText("No data yet")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Sync now" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loading analytics")).toBeNull();
+  });
+
+  it("renders the error state when the analytics request failed", () => {
+    render(
+      <AnalyticsWorkspace
+        accounts={[youtubeAccount]}
+        account={youtubeAccount}
+        analytics={null}
+        analyticsFailed={true}
+        range="28"
+      />,
+    );
+    expect(
+      screen.getByText("Analytics could not be loaded"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loading analytics")).toBeNull();
+    expect(screen.queryByText("No data yet")).toBeNull();
+  });
+
+  it("labels the latest day-only point without a fake time", () => {
+    render(
+      <AnalyticsWorkspace
+        accounts={[youtubeAccount]}
+        account={youtubeAccount}
+        analytics={analytics}
+        analyticsFailed={false}
+        range="28"
+      />,
+    );
+    expect(screen.getByText("Data through Jul 2")).toBeInTheDocument();
+  });
+
+  it("polls a queued sync run until it completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const run = {
+        id: 3,
+        account_id: 7,
+        trigger: "manual",
+        status: "queued",
+        started_at: null,
+        completed_at: null,
+        steps: [],
+        items_fetched: 0,
+        quota_units_estimate: 0,
+        error_summary: null,
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(run))
+        .mockResolvedValueOnce(jsonResponse({ ...run, status: "running" }))
+        .mockResolvedValueOnce(jsonResponse({ ...run, status: "completed" }));
+      vi.stubGlobal("fetch", fetchMock);
+      const empty: AccountAnalytics = {
+        ...analytics,
+        series: [],
+        snapshot_series: [],
+        top_content: [],
+        kpis: [],
+      };
+      render(
+        <AnalyticsWorkspace
+          accounts={[youtubeAccount]}
+          account={youtubeAccount}
+          analytics={empty}
+          analyticsFailed={false}
+          range="28"
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+
+      await vi.advanceTimersByTimeAsync(1600);
+      await vi.advanceTimersByTimeAsync(1600);
+      await vi.waitFor(() =>
+        expect(
+          screen.getByText("Sync complete. Refreshing analytics."),
+        ).toBeInTheDocument(),
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock.mock.calls[1][0]).toContain("/api/platforms/sync-runs/3");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("stops polling a sync run after unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      const run = {
+        id: 3,
+        account_id: 7,
+        trigger: "manual",
+        status: "queued",
+        started_at: null,
+        completed_at: null,
+        steps: [],
+        items_fetched: 0,
+        quota_units_estimate: 0,
+        error_summary: null,
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(run))
+        .mockResolvedValue(jsonResponse({ ...run, status: "running" }));
+      vi.stubGlobal("fetch", fetchMock);
+      const empty: AccountAnalytics = {
+        ...analytics,
+        series: [],
+        snapshot_series: [],
+        top_content: [],
+        kpis: [],
+      };
+      const { unmount } = render(
+        <AnalyticsWorkspace
+          accounts={[youtubeAccount]}
+          account={youtubeAccount}
+          analytics={empty}
+          analyticsFailed={false}
+          range="28"
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+
+      await vi.advanceTimersByTimeAsync(1600);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      unmount();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 });

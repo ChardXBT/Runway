@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Literal
 
 from sqlalchemy import and_, func, or_, select
@@ -17,7 +18,12 @@ from runway.db.models import (
     ReplyDraft,
     utcnow,
 )
-from runway.platforms.base import ProviderError, iso_utc, redact_payload
+from runway.platforms.base import (
+    ProviderError,
+    iso_utc,
+    redact_payload,
+    safe_error_summary,
+)
 from runway.platforms.capabilities import (
     Capability,
     Platform,
@@ -27,12 +33,15 @@ from runway.platforms.capabilities import (
 from runway.platforms.content import content_view
 from runway.platforms.registry import ProviderRegistry
 
+logger = logging.getLogger(__name__)
+
 CommentStatus = Literal["new", "read", "answered", "escalated", "ignored"]
 COMMENT_STATUSES = ("new", "read", "answered", "escalated", "ignored")
 UNANSWERED_STATUSES = ("new", "read", "escalated")
 
 
-def _unanswered_clause() -> ColumnElement[bool]:
+def unanswered_clause() -> ColumnElement[bool]:
+    """Canonical "needs a reply" predicate, shared with the overview service."""
     return and_(
         CommentRecord.has_owner_reply.is_(False),
         CommentRecord.status.in_(UNANSWERED_STATUSES),
@@ -108,7 +117,7 @@ class InboxService:
                 statement = statement.where(CommentRecord.status == status)
                 count_statement = count_statement.where(CommentRecord.status == status)
             if unanswered:
-                clause = _unanswered_clause()
+                clause = unanswered_clause()
                 statement = statement.where(clause)
                 count_statement = count_statement.where(clause)
             if content_id is not None:
@@ -138,7 +147,7 @@ class InboxService:
                 .select_from(CommentRecord)
                 .where(
                     CommentRecord.parent_external_id.is_(None),
-                    _unanswered_clause(),
+                    unanswered_clause(),
                 )
             )
             new_count = session.scalar(
@@ -325,7 +334,18 @@ class InboxService:
             with self.database.session() as session:
                 record = _action(session)
                 record.state = "failed"
-                record.error = exc.detail
+                record.error = safe_error_summary(exc)
+                record.completed_at = utcnow()
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # Transport errors (httpx timeouts, connection failures) are not
+            # ProviderError; without this branch the action stays "attempted"
+            # forever even though it can never complete.
+            logger.exception("comment reply action %s failed", action_id)
+            with self.database.session() as session:
+                record = _action(session)
+                record.state = "failed"
+                record.error = safe_error_summary(exc)
                 record.completed_at = utcnow()
             raise
         with self.database.session() as session:

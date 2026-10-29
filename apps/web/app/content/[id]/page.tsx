@@ -19,7 +19,7 @@ export default async function ContentDetailPage({
 }) {
   const { id } = await params;
   const detail = await apiGetOptional<ContentDetail>(
-    `/api/content/${id}`,
+    `/api/content/${encodeURIComponent(id)}`,
     isContentDetail,
   );
   if (detail === null) notFound();

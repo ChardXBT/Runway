@@ -77,12 +77,15 @@ function splitCaption(caption: string | null) {
 
 export default async function CatalogueDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const post = await apiGetOptional<Detail>(`/api/catalog/${id}`, isDetail);
+  const post = await apiGetOptional<Detail>(
+    `/api/catalog/${encodeURIComponent(id)}`,
+    isDetail,
+  );
   if (!post) {
     return <section className="panel empty"><div><strong>Post not found.</strong><Link href="/catalogue">Back to catalogue</Link></div></section>;
   }
   const similar = await apiGetRequired<Similar[]>(
-    `/api/catalog/${id}/similar`,
+    `/api/catalog/${encodeURIComponent(id)}/similar`,
     isSimilarList,
   );
   const caption = splitCaption(post.caption);

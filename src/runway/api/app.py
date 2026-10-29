@@ -20,7 +20,6 @@ from runway.db import initialize_database
 from runway.db.base import Database
 from runway.logging import configure_logging
 from runway.platforms.sync import PlatformSyncScheduler, SyncService
-from runway.services.dashboard import DashboardService
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +101,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.get("/api/settings", tags=["settings"])
     def settings_view() -> dict[str, object]:
         return active_settings.public_dict()
-
-    @application.get("/api/dashboard", tags=["dashboard"])
-    def dashboard() -> dict[str, object]:
-        return DashboardService(database).summary()
 
     return application
 

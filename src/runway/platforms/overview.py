@@ -19,14 +19,15 @@ from runway.db.models import (
 from runway.db.repositories import get_channel
 from runway.platforms.base import iso_utc
 from runway.platforms.capabilities import Platform
+from runway.platforms.inbox import unanswered_clause
 from runway.proposals.service import ProposalService
 from runway.services.dashboard import DashboardService
 
 FRESHNESS_STALE_AFTER = timedelta(hours=24)
-UNANSWERED_STATUSES = ("new", "read", "escalated")
 
 
-def _freshness(last_sync_at: datetime | None) -> str:
+def account_freshness(last_sync_at: datetime | None) -> str:
+    """Canonical sync freshness for an account: never / stale / fresh."""
     if last_sync_at is None:
         return "never"
     value = last_sync_at
@@ -63,7 +64,7 @@ class OverviewService:
         with self.database.session() as session:
             accounts = session.scalars(select(ConnectedAccount)).all()
             snapshots = {
-                row.id: row
+                row.account_id: row
                 for row in session.scalars(
                     select(AccountMetricSnapshot).where(
                         AccountMetricSnapshot.id.in_(
@@ -129,7 +130,7 @@ class OverviewService:
                             "display_name": account.display_name,
                             "avatar_url": account.avatar_url,
                             "state": state,
-                            "freshness": _freshness(account.last_sync_at),
+                            "freshness": account_freshness(account.last_sync_at),
                             "followers_label": (
                                 "Subscribers" if platform is Platform.youtube else "Followers"
                             ),
@@ -162,8 +163,7 @@ class OverviewService:
                 select(CommentRecord)
                 .where(
                     CommentRecord.parent_external_id.is_(None),
-                    CommentRecord.has_owner_reply.is_(False),
-                    CommentRecord.status.in_(UNANSWERED_STATUSES),
+                    unanswered_clause(),
                 )
                 .order_by(CommentRecord.published_at.desc())
             ).all()

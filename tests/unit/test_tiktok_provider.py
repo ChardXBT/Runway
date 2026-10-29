@@ -11,6 +11,7 @@ from runway.platforms.base import (
     AuthorizationExpired,
     CapabilityUnsupported,
     PermissionMissing,
+    ProviderError,
     RateLimited,
     TokenSet,
 )
@@ -202,3 +203,12 @@ def test_revoke_returns_false_on_error() -> None:
 
     provider = _provider(handler)
     assert provider.revoke(_token()) is False
+
+
+def test_transport_error_raises_provider_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network unreachable", request=request)
+
+    provider = _provider(handler)
+    with pytest.raises(ProviderError):
+        provider.fetch_identity(_token())

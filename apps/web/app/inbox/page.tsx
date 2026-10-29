@@ -44,6 +44,12 @@ export default async function InboxPage({
     isInboxListResponse,
   );
 
+  let selectedId: number | null = null;
+  if (params.id) {
+    const parsed = Number(params.id);
+    selectedId = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
   return (
     <InboxWorkspace
       accounts={accounts}
@@ -55,7 +61,7 @@ export default async function InboxPage({
         unanswered,
         q: params.q ?? "",
       }}
-      selectedId={params.id ? Number(params.id) : null}
+      selectedId={selectedId}
     />
   );
 }

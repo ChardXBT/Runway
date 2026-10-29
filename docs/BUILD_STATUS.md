@@ -38,7 +38,8 @@ Last validated: 2026-10-12 (local Windows run; CI results are on the GitHub Acti
 - Vitest: 101 passed across 15 frontend test files
 - `pip-audit`: no known vulnerabilities
 - `npm audit` (root) and `npm --prefix apps/web audit --omit=dev`: zero vulnerabilities
-- Full web audit: one accepted development-only advisory (`braces`, see `SECURITY.md`)
+- Full web audit: clean with no recorded exceptions (the former dev-only `braces` advisory
+  was retired after a patched release; see `SECURITY.md`)
 - Launcher scenarios on the built stack with an isolated data directory: cold start,
   idempotent rerun, API crash recovery, unrelated process on port 8000, concurrent launches
 - `git diff --check`: passed

@@ -9,6 +9,7 @@ import pytest
 from runway.config import Settings
 from runway.platforms.base import (
     AuthorizationExpired,
+    ProviderError,
     RateLimited,
     TokenSet,
 )
@@ -329,6 +330,28 @@ def test_exchange_code_includes_verifier_and_scopes() -> None:
     assert token.refresh_token == "new-refresh"
     assert token.scopes == ["scope.a", "scope.b"]
     assert token.expires_at is not None
+
+
+def test_revoke_posts_token_in_form_body_not_url() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = parse_qs(urlparse(str(request.url)).query)
+        assert "token" not in query
+        form = parse_qs(request.content.decode())
+        assert form["token"] == ["yt-access"]
+        assert request.headers["Content-Type"].startswith("application/x-www-form-urlencoded")
+        return httpx.Response(200)
+
+    provider = _provider(handler)
+    assert provider.revoke(_token()) is True
+
+
+def test_transport_error_raises_provider_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network unreachable", request=request)
+
+    provider = _provider(handler)
+    with pytest.raises(ProviderError):
+        provider.fetch_identity(_token())
 
 
 def test_exchange_code_falls_back_to_requested_scopes_when_omitted() -> None:

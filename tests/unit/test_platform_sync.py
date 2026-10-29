@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
@@ -254,6 +255,39 @@ def test_stale_running_run_marked_failed_on_startup(sync_env) -> None:
         assert stale_run is not None and stale_run.status == "failed"
         assert stale_run.error_summary == "interrupted"
         assert fresh_run is not None and fresh_run.status == "running"
+
+
+def test_ensure_fresh_transport_error_fails_run_and_does_not_wedge(
+    sync_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _settings, database, registry, service = sync_env
+
+    def _broken_load(token_ref: str):
+        raise httpx.ConnectError("network unreachable")
+
+    monkeypatch.setattr(registry.token_store, "load", _broken_load)
+    account = _account(database, "youtube")
+    run = service.run(account.id)
+    assert run.status == "failed"
+    assert run.error_summary
+    # The run is finished, so the account is not wedged behind the
+    # recent-running-run guard: a follow-up run can start immediately.
+    assert not service._has_recent_running_run(account.id)
+    second = service.run(account.id)
+    assert second.status == "failed"
+
+
+def test_provider_construction_failure_fails_run(sync_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    _settings, database, registry, service = sync_env
+
+    def _broken_provider(platform: Platform):
+        raise ValueError("provider misconfigured")
+
+    monkeypatch.setattr(registry, "provider", _broken_provider)
+    account = _account(database, "youtube")
+    run = service.run(account.id)
+    assert run.status == "failed"
+    assert "provider misconfigured" in (run.error_summary or "")
 
 
 def test_tiktok_comments_step_is_skipped_not_failed(sync_env) -> None:

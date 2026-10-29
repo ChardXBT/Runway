@@ -47,8 +47,25 @@ describe("AssistedPublishingWorkspace", () => {
 
     await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
     expect(createObjectURL).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:runway-image");
+    await waitFor(
+      () => expect(revokeObjectURL).toHaveBeenCalledWith("blob:runway-image"),
+      { timeout: 3000 },
+    );
     expect(screen.getByRole("button", { name: "Image downloaded" })).toBeEnabled();
+  });
+
+  it("renders an empty state instead of crashing when no items were prepared", () => {
+    const onClose = vi.fn();
+    render(
+      <AssistedPublishingWorkspace
+        workspace={{ ...workspace, items: [] }}
+        onClose={onClose}
+      />,
+    );
+
+    expect(screen.getByText("No prepared posts")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close workspace" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("labels the native destination truthfully", () => {
