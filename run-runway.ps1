@@ -47,8 +47,16 @@ function Test-Ready([string]$Component) {
 
 function Get-Listener([int]$Port) {
     # A failed process/port query must not be mistaken for a free port.
-    return @(Get-NetTCPConnection -State Listen -ErrorAction Stop |
-        Where-Object { $_.LocalPort -eq $Port })
+    # Since KB5127936/KB5132402 (2026-10-29) Windows reports listening sockets
+    # with a blank State, so -State Listen finds nothing. A listener is an
+    # endpoint with no remote port whose State is blank or Listen; Bound and
+    # closing rows are other apps' outbound sockets.
+    $notListening = @('Bound', 'Closed', 'SynSent', 'SynReceived', 'Established', 'FinWait1',
+        'FinWait2', 'CloseWait', 'Closing', 'LastAck', 'TimeWait', 'DeleteTCB')
+    return @(Get-NetTCPConnection -ErrorAction Stop |
+        Where-Object {
+            $_.LocalPort -eq $Port -and [int]$_.RemotePort -eq 0 -and "$($_.State)" -notin $notListening
+        })
 }
 
 function Test-Contains([string]$Text, [string]$Value) {
