@@ -35,6 +35,22 @@ function Write-Diagnostic([string]$Message) {
     Write-Host $line
 }
 
+function Get-LaunchSummary([string]$Root, [bool]$Api, [bool]$Web, [int]$Timeout) {
+    # One line naming the code and request behind every launch. The commit is
+    # best-effort: a missing git never blocks starting Runway.
+    $revision = 'unknown'
+    try {
+        $git = Get-Command git.exe -ErrorAction Stop
+        $output = & $git.Source -C $Root rev-parse --short=12 HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and "$output".Trim()) { $revision = "$output".Trim() }
+    } catch { }
+    $components = @()
+    if ($Api) { $components += 'api' }
+    if ($Web) { $components += 'web' }
+    return 'Launch requested: git={0} components={1} timeout={2}s pid={3}' -f $revision,
+        ($components -join ','), $Timeout, $PID
+}
+
 function Test-Ready([string]$Component) {
     try {
         $port = if ($Component -eq 'api') { 8000 } else { 3000 }
@@ -158,6 +174,7 @@ try {
     } while ($null -eq $lock)
     # Scheduled watchdog runs append a line every few minutes; cap the log at about 1 MB.
     Save-PreviousLog 'launcher' 1MB
+    Write-Diagnostic (Get-LaunchSummary $root (-not $WebOnly) (-not $ApiOnly) $TimeoutSeconds)
     if (-not $WebOnly -and -not (Test-Path -LiteralPath $python -PathType Leaf)) {
         throw 'Missing .venv/Scripts/python.exe. Install the documented Python environment first.'
     }

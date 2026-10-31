@@ -183,3 +183,74 @@ def test_restart_preserves_previous_component_logs(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "log rotation contracts passed" in result.stdout
+
+
+DIAGNOSTICS_SCRIPT = r"""
+param([string]$Launcher, [string]$Repo, [string]$NotRepo)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Launcher, [ref]$null, [ref]$null)
+$ast.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+}, $false) | ForEach-Object { Invoke-Expression $_.Extent.Text }
+function Assert($Value, $Label) { if (-not $Value) { throw $Label } }
+$line = Get-LaunchSummary $Repo $true $true 90
+Assert ($line -match '^Launch requested: git=[0-9a-f]{12} components=api,web timeout=90s pid=\d+$') "summary: $line"
+$line = Get-LaunchSummary $NotRepo $false $true 45
+Assert ($line -match '^Launch requested: git=unknown components=web timeout=45s pid=\d+$') "no repo: $line"
+# Since KB5127936/KB5132402 a listener can report a blank State. Only rows with
+# no remote port whose State is blank or Listen are listeners on that port.
+function Get-NetTCPConnection {
+    return @(
+        [pscustomobject]@{ LocalPort = 8000; RemotePort = 0; State = ''; OwningProcess = 11 },
+        [pscustomobject]@{ LocalPort = 8000; RemotePort = 0; State = 'Listen'; OwningProcess = 12 },
+        [pscustomobject]@{ LocalPort = 8000; RemotePort = 0; State = 'Bound'; OwningProcess = 13 },
+        [pscustomobject]@{ LocalPort = 8000; RemotePort = 51234; State = 'Established'; OwningProcess = 14 },
+        [pscustomobject]@{ LocalPort = 8000; RemotePort = 51235; State = ''; OwningProcess = 15 },
+        [pscustomobject]@{ LocalPort = 8000; RemotePort = 0; State = 'TimeWait'; OwningProcess = 16 },
+        [pscustomobject]@{ LocalPort = 3000; RemotePort = 0; State = 'Listen'; OwningProcess = 17 }
+    )
+}
+$owners = @(Get-Listener 8000 | ForEach-Object { $_.OwningProcess }) -join ','
+Assert ($owners -eq '11,12') "listeners on 8000: $owners"
+$owners = @(Get-Listener 3000 | ForEach-Object { $_.OwningProcess }) -join ','
+Assert ($owners -eq '17') "listeners on 3000: $owners"
+Assert (@(Get-Listener 4000).Count -eq 0) 'a port nobody listens on is free'
+function Get-NetTCPConnection { throw 'query failed' }
+$failed = $false
+try { Get-Listener 8000 | Out-Null } catch { $failed = $true }
+Assert $failed 'a failed port query must not look like a free port'
+Write-Output 'launcher diagnostics contracts passed'
+"""
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows launcher contract")
+def test_launch_summary_and_listener_detection(tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[2]
+    launcher = repo / "run-runway.ps1"
+    script = tmp_path / "diagnostics.ps1"
+    script.write_text(DIAGNOSTICS_SCRIPT, encoding="utf-8")
+    not_repo = tmp_path / "not-a-repo"
+    not_repo.mkdir()
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-Launcher",
+            str(launcher),
+            "-Repo",
+            str(repo),
+            "-NotRepo",
+            str(not_repo),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "launcher diagnostics contracts passed" in result.stdout
