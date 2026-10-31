@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from runway.db.base import Database
 from runway.db.models import CommentRecord, ConnectedAccount, PlatformAction, utcnow
-from runway.platforms.base import TokenSet
+from runway.platforms.base import ProviderError, TokenSet, provider_request
 from runway.platforms.capabilities import YOUTUBE_ENGAGE_SCOPE, Platform
 from runway.platforms.inbox import InboxService
 from runway.platforms.mock import MockPlatformProvider
@@ -147,3 +147,77 @@ def test_reply_transport_error_marks_action_failed(database: Database) -> None:
         assert action.state == "failed"
         assert action.error
         assert action.completed_at is not None
+
+
+def _reply_service(database: Database, provider_class: type[MockPlatformProvider]):
+    settings = database.settings.model_copy(
+        update={"inbox_replies_enabled": True, "youtube_engage_scopes": True}
+    )
+    registry = ProviderRegistry(database, settings)
+    registry.set_provider(Platform.youtube, provider_class(Platform.youtube, settings))
+    service = InboxService(database, settings, registry)
+    token_ref = registry.token_store.new_token_ref()
+    with database.session() as session:
+        account = ConnectedAccount(
+            platform="youtube",
+            external_account_id="UCx",
+            status="connected",
+            granted_scopes_json=json.dumps([YOUTUBE_ENGAGE_SCOPE]),
+            token_ref=token_ref,
+        )
+        session.add(account)
+        session.flush()
+        account_id = account.id
+    registry.token_store.store(token_ref, TokenSet(access_token="yt-access"))
+    return service, _comment(database, account_id, "c1")
+
+
+@pytest.mark.parametrize("raw", [False, True])
+def test_reply_timeout_after_sending_is_uncertain_not_failed(database: Database, raw: bool) -> None:
+    # A read timeout means the POST may already have created the public reply.
+    # "failed" invites a second click and a duplicate reply on the platform.
+    class TimedOutReply(MockPlatformProvider):
+        def reply_to_comment(self, token, *, comment_external_id, text):
+            request = httpx.Request("POST", "https://www.googleapis.com/youtube/v3/comments")
+            if raw:
+                raise httpx.ReadTimeout("read timed out", request=request)
+
+            def handler(_: httpx.Request) -> httpx.Response:
+                raise httpx.ReadTimeout("read timed out", request=request)
+
+            with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+                provider_request(client, "YouTube", "POST", str(request.url))
+            raise AssertionError("unreachable")
+
+    service, comment_id = _reply_service(database, TimedOutReply)
+
+    with pytest.raises(ProviderError) as caught:
+        service.reply(comment_id, "hello")
+
+    assert "may have been posted" in caught.value.detail
+    assert caught.value.retryable is False
+    with database.session() as session:
+        action = session.scalar(select(PlatformAction))
+        assert action is not None
+        assert action.state == "uncertain"
+        assert action.error
+        assert action.completed_at is not None
+        comment = session.get(CommentRecord, comment_id)
+        assert comment is not None
+        assert comment.status == "new"
+
+
+def test_reply_rejected_by_the_platform_is_still_failed(database: Database) -> None:
+    class Rejected(MockPlatformProvider):
+        def reply_to_comment(self, token, *, comment_external_id, text):
+            raise ProviderError("YouTube rejected the reply", status=400)
+
+    service, comment_id = _reply_service(database, Rejected)
+
+    with pytest.raises(ProviderError, match="rejected"):
+        service.reply(comment_id, "hello")
+
+    with database.session() as session:
+        action = session.scalar(select(PlatformAction))
+        assert action is not None
+        assert action.state == "failed"

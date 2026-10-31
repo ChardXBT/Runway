@@ -307,6 +307,25 @@ def test_reply_posts_correct_body_and_verifies() -> None:
     assert seen["body"] == {"snippet": {"parentId": "thread1", "textOriginal": "hello"}}
 
 
+@pytest.mark.parametrize("failure", ["timeout", "server_error"])
+def test_reply_that_posted_is_not_reported_failed_when_verification_fails(failure: str) -> None:
+    # The POST already created the public reply. A failed read-back used to
+    # raise, the inbox recorded the action as failed and left the comment
+    # unanswered, and replying again posted a duplicate.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/youtube/v3/comments":
+            return httpx.Response(200, json={"id": "reply99"})
+        if failure == "timeout":
+            raise httpx.ReadTimeout("read timed out", request=request)
+        return httpx.Response(503, json={"error": {"message": "backend error"}})
+
+    provider = _provider(handler)
+    result = provider.reply_to_comment(_token(), comment_external_id="thread1", text="hello")
+    assert result.external_id == "reply99"
+    assert result.verified is False
+    assert result.detail == "reply posted but not yet visible"
+
+
 def test_exchange_code_includes_verifier_and_scopes() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         form = parse_qs(request.content.decode())

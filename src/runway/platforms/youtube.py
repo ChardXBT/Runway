@@ -624,12 +624,18 @@ class YouTubeProvider(PlatformProvider):
         reply_id = str(data.get("id") or "")
         verified = False
         if reply_id:
-            check, _ = self._api_get(
-                token,
-                f"{API_BASE}/comments",
-                {"part": "snippet", "id": reply_id},
-                quota_units=1,
-            )
+            # The reply is already public. A failed read-back makes it
+            # unverified; raising here recorded a posted reply as failed and
+            # invited a duplicate.
+            try:
+                check, _ = self._api_get(
+                    token,
+                    f"{API_BASE}/comments",
+                    {"part": "snippet", "id": reply_id},
+                    quota_units=1,
+                )
+            except ProviderError:
+                check = {}
             items = check.get("items")
             verified = isinstance(items, list) and any(
                 isinstance(item, dict) and str(item.get("id")) == reply_id for item in items

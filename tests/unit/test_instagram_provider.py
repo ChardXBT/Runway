@@ -283,6 +283,18 @@ def test_reply_posts_form_and_verifies() -> None:
     assert result.verified is True
 
 
+def test_reply_that_posted_is_not_reported_failed_when_verification_times_out() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/v25.0/c1/replies":
+            return httpx.Response(200, json={"id": "r9"})
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    provider = _provider(handler)
+    result = provider.reply_to_comment(_token(), comment_external_id="c1", text="hey")
+    assert result.external_id == "r9"
+    assert result.verified is False
+
+
 def test_code_190_raises_authorization_expired() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"error": {"message": "token expired", "code": 190}})

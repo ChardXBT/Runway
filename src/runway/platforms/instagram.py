@@ -589,7 +589,12 @@ class InstagramProvider(PlatformProvider):
         reply_id = str(data.get("id") or "")
         verified = False
         if reply_id:
-            check = self._graph_get(token, reply_id, {"fields": "id,text,timestamp"})
+            # The reply is already public; a failed read-back only leaves it
+            # unverified.
+            try:
+                check = self._graph_get(token, reply_id, {"fields": "id,text,timestamp"})
+            except ProviderError:
+                check = {}
             verified = str(check.get("id") or "") == reply_id
         return ReplyResult(
             external_id=reply_id,

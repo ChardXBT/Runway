@@ -111,11 +111,16 @@ class ProviderError(Exception):
         *,
         retryable: bool = False,
         status: int | None = None,
+        delivery_unknown: bool = False,
     ) -> None:
         super().__init__(detail)
         self.detail = detail
         self.retryable = retryable
         self.status = status
+        # True when the request may have reached the platform before the
+        # failure (a read timeout, a dropped connection). For a write such as
+        # a comment reply the outcome is then unknown, not failed.
+        self.delivery_unknown = delivery_unknown
 
 
 class AuthorizationExpired(ProviderError):
@@ -180,6 +185,24 @@ def safe_error_summary(exc: BaseException) -> str:
     return text[:_PERSISTED_ERROR_LIMIT]
 
 
+# Transport failures that happen before any request byte can reach the
+# platform. Every other failure (read and write timeouts, a connection dropped
+# mid-exchange) may follow a request the platform already acted on.
+_NOT_SENT_ERRORS: tuple[type[Exception], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.UnsupportedProtocol,
+)
+
+
+def request_may_have_been_delivered(exc: BaseException) -> bool:
+    """False only when the failure provably happened before sending."""
+    if isinstance(exc, ProviderError):
+        return exc.delivery_unknown
+    return not isinstance(exc, _NOT_SENT_ERRORS)
+
+
 def provider_request(
     client: httpx.Client,
     provider: str,
@@ -201,6 +224,7 @@ def provider_request(
         raise ProviderError(
             f"{provider} request failed: {safe_error_summary(exc)}",
             retryable=True,
+            delivery_unknown=request_may_have_been_delivered(exc),
         ) from exc
 
 

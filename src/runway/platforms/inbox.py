@@ -22,6 +22,7 @@ from runway.platforms.base import (
     ProviderError,
     iso_utc,
     redact_payload,
+    request_may_have_been_delivered,
     safe_error_summary,
 )
 from runway.platforms.capabilities import (
@@ -330,23 +331,34 @@ class InboxService:
             result = provider.reply_to_comment(
                 token, comment_external_id=comment_external_id, text=text
             )
-        except ProviderError as exc:
-            with self.database.session() as session:
-                record = _action(session)
-                record.state = "failed"
-                record.error = safe_error_summary(exc)
-                record.completed_at = utcnow()
-            raise
         except Exception as exc:  # noqa: BLE001
-            # Transport errors (httpx timeouts, connection failures) are not
-            # ProviderError; without this branch the action stays "attempted"
-            # forever even though it can never complete.
-            logger.exception("comment reply action %s failed", action_id)
+            # A reply is a public, non-idempotent write. When the failure may
+            # have followed the request reaching the platform (a read timeout,
+            # a dropped connection), the reply may be live: record the outcome
+            # as uncertain, never as a failure that invites a second reply.
+            uncertain = request_may_have_been_delivered(exc)
+            if not isinstance(exc, ProviderError):
+                # Transport errors (httpx timeouts, connection failures) are
+                # not ProviderError; without this branch the action stays
+                # "attempted" forever even though it can never complete.
+                logger.exception("comment reply action %s failed", action_id)
             with self.database.session() as session:
                 record = _action(session)
-                record.state = "failed"
+                record.state = "uncertain" if uncertain else "failed"
                 record.error = safe_error_summary(exc)
                 record.completed_at = utcnow()
+            if uncertain:
+                logger.warning(
+                    "comment reply action %s outcome unknown: %s",
+                    action_id,
+                    safe_error_summary(exc),
+                )
+                raise ProviderError(
+                    "The reply may have been posted before the connection failed. "
+                    "Check the comment on the platform before replying again.",
+                    retryable=False,
+                    delivery_unknown=True,
+                ) from exc
             raise
         with self.database.session() as session:
             action = _action(session)
