@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,11 +26,46 @@ from runway.platforms.sync import PlatformSyncScheduler, SyncService
 logger = logging.getLogger(__name__)
 
 
+def _checkout_revision() -> str:
+    """Short commit of the checkout serving this API, or "unknown"."""
+    repo = Path(__file__).resolve().parents[3]
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    revision = result.stdout.strip()
+    return revision if result.returncode == 0 and revision else "unknown"
+
+
+def _startup_summary(settings: Settings) -> str:
+    # Mode switches only. Client ids, secrets and API keys are never logged.
+    return (
+        "runway api start "
+        f"version={__version__} git={_checkout_revision()} "
+        f"platform_provider={settings.platform_provider} "
+        f"publishing_enabled={settings.publishing_enabled} "
+        f"publishing_mode={settings.publishing_mode} "
+        f"youtube_automation_authorized={settings.youtube_automation_authorized} "
+        f"inbox_replies_enabled={settings.inbox_replies_enabled} "
+        f"agent_runtime={settings.agent_runtime} "
+        f"sync_interval_minutes={settings.platform_sync_interval_minutes} "
+        f"data_dir={settings.resolved_data_dir}"
+    )
+
+
 def _lifespan(
     database: Database, settings: Settings
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        logger.info(_startup_summary(settings), extra={"event_type": "api_start"})
         sync_service = SyncService(database, settings)
         try:
             sync_service.mark_stale_runs_failed()
@@ -43,14 +80,18 @@ def _lifespan(
         finally:
             if scheduler is not None:
                 scheduler.stop()
+            logger.info("runway api stop", extra={"event_type": "api_stop"})
 
     return lifespan
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     active_settings = settings or get_settings()
-    configure_logging()
     database = initialize_database(active_settings)
+    # The migration runner loads alembic.ini, which installs its own root
+    # handler and WARNING level; configure the application's logging last so
+    # the JSON configuration is the one that survives startup.
+    configure_logging()
 
     application = FastAPI(
         title="Runway API",
