@@ -3,6 +3,9 @@
 A summary of the "Evaluate creator startup direction" planning session (Codex, 2026-10-19),
 followed by Claude's own take on direction. Written 2026-10-29.
 
+Market and vendor details reflect the research snapshot from 2026-10-19. Prices and feature sets
+can change; verify them with the linked vendors before making a purchase decision.
+
 The starting question: Runway works, but is not itself a good startup. What adjacent idea has
 real revenue and a business behind it, and how much of Runway carries over?
 
@@ -61,19 +64,26 @@ one buyer, one recurring task, one measurable benefit.
 
 ### The market is already crowded at every layer
 
-- **General social management:** Buffer (publishing + analytics + AI + approvals, ~$5/channel/mo),
-  Hootsuite, Metricool. A shared dashboard competes on price with these.
-- **Connector infrastructure:** Ayrshare (publishing, analytics, MCP; $299/mo for 10 profiles) and
-  Phyllo (normalized creator data). This is probably the "big channels connector company" that
-  was half-remembered. The connection layer can be bought, not built.
-- **Creative intelligence:** Motion's Runneth (briefs, hooks, brand memory; from $750/mo),
-  Foreplay (research → analytics → briefs + MCP; $175/mo), Billo (results → UGC briefs),
-  Dash Social (brand-specific creative analysis). "AI that understands your content" is
-  **not** a differentiator on its own.
-- **Creator-program ops:** Shortimize (tracking, payments, API/MCP; from $99/mo).
+- **General social management:** [Buffer](https://buffer.com/pricing) (publishing + analytics + AI +
+  approvals, ~$5/channel/mo), [Hootsuite](https://www.hootsuite.com/), and
+  [Metricool](https://metricool.com/). A shared dashboard competes on price with these.
+- **Connector infrastructure:** [Ayrshare](https://www.ayrshare.com/pricing/) (publishing,
+  analytics, MCP; $299/mo for 10 profiles) and
+  [Phyllo](https://www.getphyllo.com/social-data-api) (normalized creator data). This is probably
+  the "big channels connector company" that was half-remembered. The connection layer can be
+  bought, not built.
+- **Creative intelligence:** Motion's [Runneth](https://help.motionapp.com/en/articles/15484035-getting-started-with-runneth)
+  (briefs, hooks, brand memory; from $750/mo), [Foreplay](https://www.foreplay.co/pricing)
+  (research → analytics → briefs + MCP; $175/mo), [Billo](https://billo.app/blog/billo-creative-analytics/)
+  (results → UGC briefs), and [Dash Social](https://www.dashsocial.com/solutions/ai)
+  (brand-specific creative analysis). "AI that understands your content" is **not** a
+  differentiator on its own.
+- **Creator-program ops:** [Shortimize](https://www.shortimize.com/pricing) (tracking, payments,
+  API/MCP; from $99/mo).
 
-The market thesis is real (IAB: ~$37B US creator ad spend in 2025, +26% YoY, with measurement and
-ops tooling called out as weak spots), but that is ad spend, not proof of demand for a product.
+The market thesis has support: [IAB projected](https://www.iab.com/insights/2025-creator-economy-ad-spend-strategy-report/)
+about $37B in US creator ad spend in 2025, up 26% year over year, and called out measurement and
+operational tools as opportunities. That is ad spend, not proof of demand for this product.
 
 ### Ranked starting points
 
@@ -116,12 +126,13 @@ causation.
 
 ### Platform reality checks
 
-1. Adding Runway as a YouTube Studio editor **does not grant API access** — that needs a proper
-   OAuth flow.
-2. TikTok's Display API exposes limited profile/video data; Direct Post is separate, and unaudited
-   clients are restricted to private posting.
-3. YouTube restricts derived/combined metrics across platforms, so a universal engagement score
-   needs care.
+1. Adding Runway as a [YouTube Studio editor](https://support.google.com/youtube/answer/9481328?hl=en)
+   **does not grant API access** — that needs a proper OAuth flow.
+2. TikTok's [Display API](https://developers.tiktok.com/doc/display-api-overview) exposes limited
+   profile/video data; [Direct Post](https://developers.tiktok.com/doc/content-sharing-guidelines/)
+   is separate, and unaudited clients are restricted to private posting.
+3. [YouTube's developer policy](https://developers.google.com/youtube/terms/developer-policies-guide)
+   restricts derived/combined metrics across platforms, so a universal engagement score needs care.
 4. MCP exposes tools to an agent; it does not expand platform permissions.
 
 So the pilot should run on **customer-provided assets and standard performance exports**, not
@@ -223,8 +234,9 @@ data start accumulating, move this planning into a private repo or doc.
 
 ## Completeness note
 
-Reviewed against the startup notes, the linked Runway conversation, the follow-up that there is no
-clear customer access yet, and the research summary in this chat. The original media thesis,
+Reviewed against the startup notes, the [linked Runway conversation](https://chatgpt.com/c/6a85a109-cfa0-83ea-b68e-8999d4689dc9),
+the follow-up that there is no clear customer access yet, and the research summary in this chat.
+The original media thesis,
 four-layer framing, known competitors, connector/MCP idea, Runway workflow and setup ideas,
 platform access limits, candidate wedge, unvalidated pricing, customer interview plan, and open
 risks are captured above. This is an organized expansion of the discussion, not a verbatim chat
