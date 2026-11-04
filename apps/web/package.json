@@ -33,6 +33,9 @@
     "next": {
       "postcss": "^8.5.22"
     },
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
   }
 }
