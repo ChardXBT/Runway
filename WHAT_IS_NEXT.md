@@ -1,4 +1,4 @@
-# What Is Next
+# Runway Startup Expansion
 
 A summary of the "Evaluate creator startup direction" planning session (Codex, 2026-10-19),
 followed by Claude's own take on direction. Written 2026-10-29.
@@ -20,6 +20,31 @@ longer need to look like ads, and trend/stat awareness is what wins. The sketch 
 - **Operations** — a content manager (likes, comments, what a client like Muse is doing on
   Qlob) and a multi-platform scheduler/poster.
 - An "OpenCode-style" product that combines existing tech rather than reinventing it.
+
+### Runway as described in the original notes
+
+Runway was already built as a database intelligence engine. The startup question was whether that
+work could support a larger media business. The original product outline was:
+
+- **Generator:** discover an image, generate a primary caption and alternatives, then let a person
+  reject, edit, or accept. Optional actions were to regenerate the image or regenerate the captions.
+- **Scheduler / Lineup:** organize accepted posts in a calendar and upcoming list; show image and
+  caption previews, scheduled time, and YouTube sync status; move a post, swap two posts, edit a
+  scheduled caption, remove a post, and retry or verify failed YouTube actions.
+- **Supporting sections:** Archive for historical posted and possibly rejected posts, Activity
+  History, and Settings for platform connections.
+- **YouTube setup idea:** the channel owner would invite Runway as an Editor in YouTube Studio.
+  This is not the same as authorizing the YouTube APIs. Channel permissions do not grant API
+  access to a delegate; API data access needs the channel owner’s authorized OAuth connection.
+- **Data question:** collect enough useful history quickly to power the database intelligence
+  layer. The later recommendation is to start with one customer's linked briefs, assets, results,
+  revisions, and decisions, with consent, rather than gather unrelated social data.
+- **Account setup idea:** use a dedicated, detailed email address for future platform accounts.
+  No address, domain, or account-ownership policy was selected in the conversation.
+
+These bullets record the initial proposal. They do not claim that each item was implemented in
+Runway. The current product behavior and platform status are documented in the README and the
+platform capability documents.
 
 ### Core finding: the idea is four businesses at once
 
@@ -193,3 +218,30 @@ adapt rather than rewrite.
 
 One caution: this repository is **public**. If customer names, pricing conversations, or pilot
 data start accumulating, move this planning into a private repo or doc.
+
+---
+
+## Completeness note
+
+Reviewed against the startup notes, the linked Runway conversation, the follow-up that there is no
+clear customer access yet, and the research summary in this chat. The original media thesis,
+four-layer framing, known competitors, connector/MCP idea, Runway workflow and setup ideas,
+platform access limits, candidate wedge, unvalidated pricing, customer interview plan, and open
+risks are captured above. This is an organized expansion of the discussion, not a verbatim chat
+transcript. Product claims about the current repository should be checked against its linked
+product and capability documentation.
+
+Related implementation and research detail already lives in this repository:
+
+- [`README.md`](README.md) and [`docs/PRODUCT.md`](docs/PRODUCT.md) describe the current creator
+  desk and Runway's implemented product behavior.
+- [`docs/CREATOR_OS_SETUP.md`](docs/CREATOR_OS_SETUP.md),
+  [`docs/PLATFORM_RESEARCH.md`](docs/PLATFORM_RESEARCH.md), and
+  [`docs/PLATFORM_CAPABILITIES.md`](docs/PLATFORM_CAPABILITIES.md) hold setup, competitor/API
+  research, and platform-specific status.
+- [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md),
+  [`docs/INTELLIGENCE_DATA_FLYWHEEL.md`](docs/INTELLIGENCE_DATA_FLYWHEEL.md), and
+  [`docs/INTELLIGENCE_DATA_FLYWHEEL_REPORT.md`](docs/INTELLIGENCE_DATA_FLYWHEEL_REPORT.md) cover
+  the database and learning-loop work behind Runway.
+
+Last checked against the conversation: 2026-11-04.
