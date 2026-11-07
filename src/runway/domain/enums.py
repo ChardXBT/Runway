@@ -60,3 +60,20 @@ class ProposalStatus(StrEnum):
     PUBLISHED = "published"
     PUBLISH_FAILED = "publish_failed"
     CANCELLED = "cancelled"
+
+
+class PublishAttemptStatus(StrEnum):
+    PREPARED = "prepared"
+    QUEUED = "queued"
+    SUBMITTING = "submitting"
+    BLOCKED_SESSION = "blocked_session"
+    VERIFIED = "verified"
+    SUBMITTED_UNVERIFIED = "submitted_unverified"
+    FAILED_BEFORE_SUBMISSION = "failed_before_submission"
+    EXPIRED = "expired"
+    INVALIDATED = "invalidated"
+    SUPERSEDED = "superseded"
+    # Resolved only at read time for rows the machine did not write (unknown
+    # strings or status/timestamp combos that violate the record invariants).
+    # UNKNOWN is inert: it is in no active, pending, or transitionable set.
+    UNKNOWN = "unknown"

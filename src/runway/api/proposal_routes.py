@@ -11,6 +11,7 @@ from runway.audit.service import AuditService
 from runway.config import Settings
 from runway.db.base import Database
 from runway.discovery.service import DiscoveryService
+from runway.domain.enums import PublishAttemptStatus
 from runway.editorial.service import EditorialService
 from runway.proposals.service import ProposalService
 from runway.publishing.internal import InternalPublisher
@@ -619,7 +620,8 @@ def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
             if (
                 proposal["status"] != "publish_failed"
                 or latest_attempt is None
-                or latest_attempt.get("status") != "failed_before_submission"
+                or latest_attempt.get("status")
+                != PublishAttemptStatus.FAILED_BEFORE_SUBMISSION.value
             ):
                 raise ValueError(
                     "only a confirmed failed-before-submission YouTube action can be retried"

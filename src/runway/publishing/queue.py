@@ -6,7 +6,8 @@ import threading
 from sqlalchemy import func, select
 
 from runway.db.models import Proposal, PublishAttempt
-from runway.domain.enums import ProposalStatus
+from runway.domain.enums import ProposalStatus, PublishAttemptStatus
+from runway.domain.state_machine import ATTEMPT_ACTIVE_STATUSES, attempt_status_of
 from runway.publishing.youtube import StalePublishAttempt, YouTubeBrowserPublisher
 
 
@@ -128,16 +129,26 @@ class PublisherQueueCoordinator:
 
     def _persisted_queue_state(self) -> tuple[int, str | None, list[int]]:
         with self.publisher.database.session() as session:
-            active_attempts = session.scalars(
-                select(PublishAttempt)
-                .where(
-                    PublishAttempt.publisher == self.publisher.publisher_name,
-                    PublishAttempt.status.in_(["queued", "submitting", "blocked_session"]),
-                )
-                .order_by(PublishAttempt.id)
-            ).all()
+            self.publisher.recover_interrupted_attempts(session)
+            active_attempts = [
+                attempt
+                for attempt in session.scalars(
+                    select(PublishAttempt)
+                    .where(
+                        PublishAttempt.publisher == self.publisher.publisher_name,
+                        PublishAttempt.status.in_(
+                            [state.value for state in ATTEMPT_ACTIVE_STATUSES]
+                        ),
+                    )
+                    .order_by(PublishAttempt.id)
+                ).all()
+                if attempt_status_of(attempt) in ATTEMPT_ACTIVE_STATUSES
+            ]
             proposal_ids = list(dict.fromkeys(attempt.proposal_id for attempt in active_attempts))
-            value = sum(attempt.status == "queued" for attempt in active_attempts)
+            value = sum(
+                attempt_status_of(attempt) is PublishAttemptStatus.QUEUED
+                for attempt in active_attempts
+            )
             latest_ids = (
                 select(
                     PublishAttempt.proposal_id.label("proposal_id"),
@@ -154,13 +165,16 @@ class PublisherQueueCoordinator:
                 .join(latest_ids, PublishAttempt.id == latest_ids.c.attempt_id)
                 .join(Proposal, Proposal.id == PublishAttempt.proposal_id)
                 .where(
-                    PublishAttempt.status == "blocked_session",
+                    PublishAttempt.status == PublishAttemptStatus.BLOCKED_SESSION.value,
                     Proposal.status == ProposalStatus.INTERNALLY_SCHEDULED.value,
                 )
                 .order_by(PublishAttempt.id.desc())
                 .limit(1)
             )
-            if blocked is not None:
+            if (
+                blocked is not None
+                and attempt_status_of(blocked) is PublishAttemptStatus.BLOCKED_SESSION
+            ):
                 return (
                     int(value or 0),
                     (

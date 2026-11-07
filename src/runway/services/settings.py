@@ -10,6 +10,7 @@ from runway.db.base import Database
 from runway.db.models import BlockedSource, Proposal, PublishAttempt
 from runway.db.repositories import audit, get_channel
 from runway.domain.enums import ProposalStatus
+from runway.domain.state_machine import ATTEMPT_UNFINISHED_STATUSES, attempt_status_of
 
 
 class SettingsService:
@@ -86,16 +87,23 @@ class SettingsService:
                     )
                     .limit(1)
                 )
-                active_attempt = session.scalar(
-                    select(PublishAttempt.id)
+                unfinished_attempts = session.scalars(
+                    select(PublishAttempt)
                     .join(Proposal, Proposal.id == PublishAttempt.proposal_id)
                     .where(
                         Proposal.channel_id == channel.id,
                         PublishAttempt.status.in_(
-                            ["prepared", "queued", "blocked_session", "submitting"]
+                            [state.value for state in ATTEMPT_UNFINISHED_STATUSES]
                         ),
                     )
-                    .limit(1)
+                ).all()
+                active_attempt = next(
+                    (
+                        attempt.id
+                        for attempt in unfinished_attempts
+                        if attempt_status_of(attempt) in ATTEMPT_UNFINISHED_STATUSES
+                    ),
+                    None,
                 )
                 if active_proposal is not None or active_attempt is not None:
                     raise ValueError(

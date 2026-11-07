@@ -1010,3 +1010,200 @@ def test_queue_resume_requires_a_fresh_saved_session_check(
 
     with pytest.raises(ValueError, match="fresh successful saved-session check"):
         coordinator.resume()
+
+
+def _simulate_crash_mid_submit(
+    database: Database,
+    attempt_id: int,
+    proposal_id: int,
+) -> None:
+    """Leave the row a process crash would: submitting with no recorded result."""
+    with database.session() as session:
+        attempt = session.get(PublishAttempt, attempt_id)
+        assert attempt is not None
+        attempt.status = "submitting"
+        # Backdated past the live-submission window a recovery sweep respects.
+        attempt.submitted_at = datetime.now(UTC) - timedelta(minutes=30)
+        attempt.completed_at = None
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        proposal.status = "publishing"
+
+
+@pytest.mark.asyncio
+async def test_interrupted_submission_recovers_as_unverified_without_resubmitting(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    queued = publisher.queue_attempt(proposal_id)
+    _simulate_crash_mid_submit(database, int(queued["id"]), proposal_id)
+
+    coordinator = PublisherQueueCoordinator(publisher)
+    snapshot = coordinator.status()
+
+    # The stale row is settled as an unverified submission: it no longer counts
+    # as queue work, but it is never re-executed either.
+    assert publisher.attempt_status(int(queued["id"]))["status"] == ("submitted_unverified")
+    assert snapshot["proposal_ids"] == []
+    assert coordinator.status()["queued"] == 0
+    with database.session() as session:
+        attempt = session.get(PublishAttempt, int(queued["id"]))
+        assert attempt is not None
+        assert attempt.completed_at is not None
+        assert attempt.error_summary is not None
+        assert "interrupted" in attempt.error_summary
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        assert proposal.status == "publish_unverified"
+    assert adapter.schedule_calls == []
+
+    # The proposal cannot be silently re-queued (that would double-schedule a
+    # possibly submitted post); the only way forward is the verify path.
+    with pytest.raises(ValueError, match="internally scheduled proposal"):
+        publisher.queue_attempt(proposal_id)
+    assert adapter.schedule_calls == []
+
+    verification = await publisher.verify_scheduled_post(proposal_id)
+    assert verification.verified is True
+    assert verification.status == "externally_scheduled"
+
+
+@pytest.mark.asyncio
+async def test_recently_submitted_attempt_is_never_touched_by_recovery(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    queued = publisher.queue_attempt(proposal_id)
+
+    # A `submitting` row this fresh could belong to a live submission in
+    # another process, so the sweep leaves it and the proposal untouched.
+    with database.session() as session:
+        attempt = session.get(PublishAttempt, int(queued["id"]))
+        assert attempt is not None
+        attempt.status = "submitting"
+        attempt.submitted_at = datetime.now(UTC)
+        attempt.completed_at = None
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        proposal.status = "publishing"
+
+    snapshot = PublisherQueueCoordinator(publisher).status()
+
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "submitting"
+    assert snapshot["proposal_ids"] == [proposal_id]
+    assert adapter.schedule_calls == []
+
+
+@pytest.mark.asyncio
+async def test_interrupted_submission_does_not_stall_other_queued_work(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    adapter = FakeYouTubeAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    stale = publisher.queue_attempt(first_id)
+    queued = publisher.queue_attempt(second_id)
+    _simulate_crash_mid_submit(database, int(stale["id"]), first_id)
+
+    coordinator = PublisherQueueCoordinator(publisher)
+    coordinator.start()
+    for _ in range(600):
+        if publisher.attempt_status(int(queued["id"]))["status"] == "verified":
+            break
+        await asyncio.sleep(0.01)
+
+    assert coordinator.status()["paused"] is False, coordinator.status()
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "verified"
+    assert [post.proposal_id for post in adapter.schedule_calls] == [second_id]
+    assert publisher.attempt_status(int(stale["id"]))["status"] == ("submitted_unverified")
+    assert coordinator.status()["proposal_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_attempt_with_impossible_timestamps_is_never_executed_or_counted(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    now = datetime.now(UTC)
+    with database.session() as session:
+        corrupt = PublishAttempt(
+            proposal_id=proposal_id,
+            publisher=publisher.publisher_name,
+            status="queued",
+            confirmation_token_hash="c" * 64,
+            payload_hash="d" * 64,
+            planned_publish_at="2030-01-01T10:00:00-05:00",
+            expires_at=now + timedelta(days=1),
+            submitted_at=None,
+            completed_at=now,
+        )
+        session.add(corrupt)
+        session.flush()
+        corrupt_id = corrupt.id
+
+    # A row whose status string is queued but whose timestamps say finished is
+    # inert: it is never picked for execution and never counted as queue work.
+    assert publisher.next_queued_attempt_id() is None
+    snapshot = PublisherQueueCoordinator(publisher).status()
+    assert snapshot["queued"] == 0
+    assert snapshot["proposal_ids"] == []
+    assert publisher.attempt_status(corrupt_id)["status"] == "unknown"
+    with pytest.raises(ValueError, match="superseded before submission"):
+        await publisher.process_queued_attempt(corrupt_id)
+    assert adapter.schedule_calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_attempts_written_by_raw_string_code_load_into_declared_states(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    publisher = YouTubeBrowserPublisher(
+        database,
+        _authorized_settings(settings),
+        FakeYouTubeAdapter(),
+    )
+    now = datetime.now(UTC)
+    legacy_states = {
+        "prepared": {},
+        "queued": {},
+        "submitting": {"submitted_at": now},
+        "blocked_session": {"completed_at": now},
+        "verified": {"submitted_at": now, "completed_at": now},
+        "submitted_unverified": {"submitted_at": now, "completed_at": now},
+        "failed_before_submission": {"submitted_at": now, "completed_at": now},
+        "expired": {"completed_at": now},
+        "invalidated": {"completed_at": now},
+        "superseded": {"completed_at": now},
+    }
+    with database.session() as session:
+        attempts = [
+            PublishAttempt(
+                proposal_id=proposal_id,
+                publisher=publisher.publisher_name,
+                status=raw_status,
+                confirmation_token_hash=f"{index:064d}",
+                payload_hash="e" * 64,
+                planned_publish_at="2030-01-01T10:00:00-05:00",
+                expires_at=now + timedelta(days=1),
+                **fields,
+            )
+            for index, (raw_status, fields) in enumerate(legacy_states.items())
+        ]
+        session.add_all(attempts)
+        session.flush()
+        legacy_ids = [attempt.id for attempt in attempts]
+
+    for attempt_id, raw_status in zip(legacy_ids, legacy_states, strict=True):
+        assert publisher.attempt_status(attempt_id)["status"] == raw_status
