@@ -1207,3 +1207,367 @@ async def test_publish_attempts_written_by_raw_string_code_load_into_declared_st
 
     for attempt_id, raw_status in zip(legacy_ids, legacy_states, strict=True):
         assert publisher.attempt_status(attempt_id)["status"] == raw_status
+
+
+def _add_raw_attempt(
+    database: Database,
+    proposal_id: int,
+    publisher: YouTubeBrowserPublisher,
+    *,
+    status: str,
+    submitted_at: datetime | None,
+    completed_at: datetime | None,
+    tag: str,
+) -> int:
+    now = datetime.now(UTC)
+    with database.session() as session:
+        attempt = PublishAttempt(
+            proposal_id=proposal_id,
+            publisher=publisher.publisher_name,
+            status=status,
+            confirmation_token_hash=tag * 64,
+            payload_hash="d" * 64,
+            planned_publish_at="2030-01-01T10:00:00-05:00",
+            expires_at=now + timedelta(days=1),
+            submitted_at=submitted_at,
+            completed_at=completed_at,
+        )
+        session.add(attempt)
+        session.flush()
+        return attempt.id
+
+
+# (raw status, submitted_at set, completed_at set) for rows resolving to UNKNOWN
+_UNKNOWN_ROWS = {
+    # pending status string, timestamps say finished
+    "queued_completed": ("queued", False, True),
+    # in flight per status, but never crossed the submission boundary
+    "submitting_without_submitted_at": ("submitting", False, False),
+    # a status string the machine never writes
+    "unrecognized_status": ("mystery_status", False, False),
+    # settled status string with impossible timestamps
+    "verified_without_submitted_at": ("verified", False, True),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", list(_UNKNOWN_ROWS))
+async def test_unknown_attempt_blocks_queueing_a_duplicate_attempt(
+    database: Database,
+    settings: Settings,
+    row: str,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    status, submitted, completed = _UNKNOWN_ROWS[row]
+    now = datetime.now(UTC)
+    corrupt_id = _add_raw_attempt(
+        database,
+        proposal_id,
+        publisher,
+        status=status,
+        submitted_at=now if submitted else None,
+        completed_at=now if completed else None,
+        tag="u",
+    )
+    assert publisher.attempt_status(corrupt_id)["status"] == "unknown"
+
+    # Fail closed: the corrupt row may be a live submission, so no fresh
+    # queued attempt is created beside it (that could double-publish).
+    with pytest.raises(ValueError, match="unknown state"):
+        publisher.queue_attempt(proposal_id)
+    with pytest.raises(ValueError, match="unknown state"):
+        publisher.queue_attempts([proposal_id])
+    with database.session() as session:
+        rows = session.scalars(
+            select(PublishAttempt).where(PublishAttempt.proposal_id == proposal_id)
+        ).all()
+        assert [attempt.id for attempt in rows] == [corrupt_id]
+    assert publisher.next_queued_attempt_id() is None
+    assert adapter.schedule_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", list(_UNKNOWN_ROWS))
+async def test_timezone_guard_treats_unknown_attempt_as_unfinished(
+    database: Database,
+    settings: Settings,
+    row: str,
+) -> None:
+    from runway.services.settings import SettingsService
+
+    proposal_id = await _scheduled_proposal(database, settings)
+    publisher = YouTubeBrowserPublisher(
+        database,
+        _authorized_settings(settings),
+        FakeYouTubeAdapter(),
+    )
+    with database.session() as session:
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        # Take the proposal out of the active-Lineup arm of the guard so only
+        # the attempt arm decides.
+        proposal.status = "cancelled"
+    status, submitted, completed = _UNKNOWN_ROWS[row]
+    now = datetime.now(UTC)
+    corrupt_id = _add_raw_attempt(
+        database,
+        proposal_id,
+        publisher,
+        status=status,
+        submitted_at=now if submitted else None,
+        completed_at=now if completed else None,
+        tag="t",
+    )
+    service = SettingsService(database, settings)
+
+    with pytest.raises(ValueError, match="timezone cannot change"):
+        service.update({"timezone": "America/Vancouver"})
+
+    # Control: once the row is a provably settled attempt the guard opens.
+    with database.session() as session:
+        attempt = session.get(PublishAttempt, corrupt_id)
+        assert attempt is not None
+        attempt.status = "superseded"
+        attempt.submitted_at = None
+        attempt.completed_at = now
+    updated = service.update({"timezone": "America/Vancouver"})
+    assert updated["timezone"] == "America/Vancouver"
+
+
+class _CrossProcessRecoveryAdapter(FakeYouTubeAdapter):
+    """While the browser submits, another process recovers the row as stale."""
+
+    def __init__(self, database: Database, settings: Settings, *, fail: bool) -> None:
+        super().__init__()
+        self.database = database
+        self.settings = settings
+        self.fail = fail
+        self.schedule_receipt = BrowserScheduleReceipt(
+            submitted=True,
+            verified=True,
+            external_id="Uglate",
+            external_url="https://www.youtube.com/post/Uglate",
+            screenshot_paths=["late.png"],
+            detail="Late fixture receipt verified.",
+        )
+
+    async def schedule(self, post: PreparedPost) -> BrowserScheduleReceipt:
+        self.schedule_calls.append(post)
+        with self.database.session() as session:
+            attempt = session.scalar(
+                select(PublishAttempt).where(PublishAttempt.status == "submitting")
+            )
+            assert attempt is not None
+            attempt.submitted_at = datetime.now(UTC) - timedelta(minutes=30)
+        # A second publisher instance has its own lock, like the CLI process.
+        other = YouTubeBrowserPublisher(self.database, self.settings, FakeYouTubeAdapter())
+        with self.database.session() as session:
+            assert other.recover_interrupted_attempts(session) == 1
+        if self.fail:
+            raise RuntimeError("browser crashed after recovery")
+        return self.schedule_receipt
+
+
+@pytest.mark.asyncio
+async def test_receipt_after_cross_process_recovery_is_recorded_not_lost(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    authorized = _authorized_settings(settings)
+    adapter = _CrossProcessRecoveryAdapter(database, authorized, fail=False)
+    publisher = YouTubeBrowserPublisher(database, authorized, adapter)
+    queued = publisher.queue_attempt(proposal_id)
+
+    result = await publisher.process_queued_attempt(int(queued["id"]))
+
+    # No illegal transition: the recovered state stands and only the human
+    # verify path can move the proposal forward ...
+    assert result.status == "publish_unverified"
+    assert "Late fixture receipt verified." in result.detail
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "submitted_unverified"
+    with database.session() as session:
+        attempt = session.get(PublishAttempt, int(queued["id"]))
+        assert attempt is not None
+        assert attempt.completed_at is not None
+        # ... but the receipt detail and evidence are kept.
+        assert attempt.external_id == "Uglate"
+        assert attempt.external_url == "https://www.youtube.com/post/Uglate"
+        assert attempt.screenshot_paths_json == '["late.png"]'
+        assert attempt.error_summary is not None
+        assert "interrupted" in attempt.error_summary
+        assert "Late verified receipt" in attempt.error_summary
+        assert "Late fixture receipt verified." in attempt.error_summary
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        assert proposal.status == "publish_unverified"
+        late = session.scalars(
+            select(AuditEvent).where(AuditEvent.event_type == "youtube_late_receipt")
+        ).all()
+        assert len(late) == 1
+        assert "Late fixture receipt verified." in late[0].details_json
+        assert "Uglate" in late[0].details_json
+    assert len(adapter.schedule_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_failure_after_cross_process_recovery_keeps_detail_and_original_error(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    authorized = _authorized_settings(settings)
+    adapter = _CrossProcessRecoveryAdapter(database, authorized, fail=True)
+    publisher = YouTubeBrowserPublisher(database, authorized, adapter)
+    queued = publisher.queue_attempt(proposal_id)
+
+    with pytest.raises(RuntimeError, match="browser crashed after recovery"):
+        await publisher.process_queued_attempt(int(queued["id"]))
+
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "submitted_unverified"
+    with database.session() as session:
+        attempt = session.get(PublishAttempt, int(queued["id"]))
+        assert attempt is not None
+        assert attempt.error_summary is not None
+        assert "browser crashed after recovery" in attempt.error_summary
+        late = session.scalars(
+            select(AuditEvent).where(AuditEvent.event_type == "youtube_late_failure")
+        ).all()
+        assert len(late) == 1
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        assert proposal.status == "publish_unverified"
+
+
+@pytest.mark.asyncio
+async def test_rows_written_by_base_code_paths_load_into_declared_states(
+    database: Database,
+    settings: Settings,
+) -> None:
+    """Replay the exact raw-string writes of the pre-lifecycle publisher.
+
+    Each step copies the attribute assignments (and their order) that
+    origin/audit/implicit-state-machines `youtube.py` performed, one committed
+    session per publisher call, so the rows are the ones old code left behind.
+    """
+    from runway.db.repositories import publish_attempt_may_be_unsettled
+    from runway.domain.state_machine import attempt_blocks_new_work, attempt_status_of
+
+    proposal_id = await _scheduled_proposal(database, settings)
+    publisher = YouTubeBrowserPublisher(
+        database,
+        _authorized_settings(settings),
+        FakeYouTubeAdapter(),
+    )
+    counter = iter(range(10_000))
+
+    def create(status: str) -> int:
+        # prepare_schedule ("prepared") / _queue_preflight_in_session ("queued")
+        now = datetime.now(UTC)
+        with database.session() as session:
+            attempt = PublishAttempt(
+                proposal_id=proposal_id,
+                publisher=publisher.publisher_name,
+                status=status,
+                confirmation_token_hash=f"{next(counter):064d}",
+                payload_hash="e" * 64,
+                planned_publish_at="2030-01-01T10:00:00-05:00",
+                expires_at=now + timedelta(days=1),
+            )
+            session.add(attempt)
+            session.flush()
+            return attempt.id
+
+    def step(attempt_id: int, name: str) -> None:
+        now = datetime.now(UTC)
+        with database.session() as session:
+            attempt = session.get(PublishAttempt, attempt_id)
+            assert attempt is not None
+            if name == "supersede_prepared":  # re-prepare / queue over prepared
+                attempt.status = "superseded"
+                attempt.completed_at = now
+            elif name == "preflight_failure":  # _record_preflight_failure
+                attempt.status = "blocked_session"
+                attempt.error_summary = "session invalid"
+                attempt.completed_at = datetime.now(UTC)
+            elif name == "requeue":  # requeue_blocked_attempts
+                attempt.status = "queued"
+                attempt.error_summary = None
+                attempt.completed_at = None
+                attempt.expires_at = now + timedelta(days=1)
+            elif name == "lineup_invalidate":  # Lineup-change invalidation
+                attempt.status = "superseded"
+                attempt.error_summary = "Superseded by a confirmed Lineup change."
+                attempt.completed_at = now
+            elif name == "expire":  # _consume_confirmation, token expired
+                attempt.status = "expired"
+                attempt.completed_at = now
+            elif name == "invalidate":  # _consume_*, payload changed
+                attempt.status = "invalidated"
+                attempt.completed_at = now
+            elif name == "submit":  # _consume_*, accepted
+                attempt.status = "submitting"
+                attempt.submitted_at = now
+            elif name == "fail":  # _record_failure
+                attempt.status = "failed_before_submission"
+                attempt.error_summary = "browser failed"
+                attempt.completed_at = now
+            elif name in {"receipt_verified", "receipt_unverified"}:  # _record_receipt
+                verified = name == "receipt_verified"
+                attempt.status = "verified" if verified else "submitted_unverified"
+                attempt.external_id = "Uglegacy"
+                attempt.external_url = "https://www.youtube.com/post/Uglegacy"
+                attempt.screenshot_paths_json = "[]"
+                attempt.error_summary = None if verified else "unverified"
+                attempt.completed_at = now
+            else:  # pragma: no cover - test table typo
+                raise AssertionError(name)
+
+    paths: dict[tuple[str, ...], str] = {
+        ("prepared",): "prepared",
+        ("prepared", "supersede_prepared"): "superseded",
+        ("prepared", "expire"): "expired",
+        ("prepared", "invalidate"): "invalidated",
+        ("prepared", "lineup_invalidate"): "superseded",
+        ("prepared", "submit"): "submitting",
+        ("prepared", "submit", "receipt_verified"): "verified",
+        ("prepared", "submit", "receipt_unverified"): "submitted_unverified",
+        ("prepared", "submit", "fail"): "failed_before_submission",
+        ("queued",): "queued",
+        ("queued", "preflight_failure"): "blocked_session",
+        ("queued", "preflight_failure", "requeue"): "queued",
+        ("queued", "preflight_failure", "lineup_invalidate"): "superseded",
+        ("queued", "lineup_invalidate"): "superseded",
+        ("queued", "invalidate"): "invalidated",
+        ("queued", "submit", "receipt_verified"): "verified",
+        ("queued", "submit", "receipt_unverified"): "submitted_unverified",
+        ("queued", "submit", "fail"): "failed_before_submission",
+        ("queued", "preflight_failure", "requeue", "submit", "receipt_verified"): "verified",
+    }
+    built: dict[tuple[str, ...], int] = {}
+    for path in paths:
+        attempt_id = create(path[0])
+        for name in path[1:]:
+            step(attempt_id, name)
+        built[path] = attempt_id
+
+    for path, expected in paths.items():
+        assert publisher.attempt_status(built[path])["status"] == expected, path
+
+    # The fail-closed guards neither miss nor over-block legacy rows: exactly
+    # the unfinished ones count as unsettled work, and none resolves to UNKNOWN.
+    unfinished = {"prepared", "queued", "submitting", "blocked_session"}
+    with database.session() as session:
+        prefiltered = set(
+            session.scalars(
+                select(PublishAttempt.id).where(publish_attempt_may_be_unsettled())
+            ).all()
+        )
+        for path, attempt_id in built.items():
+            attempt = session.get(PublishAttempt, attempt_id)
+            assert attempt is not None
+            assert attempt_status_of(attempt).value != "unknown", path
+            assert attempt_blocks_new_work(attempt) is (paths[path] in unfinished), path
+            assert (attempt_id in prefiltered) is (paths[path] in unfinished), path

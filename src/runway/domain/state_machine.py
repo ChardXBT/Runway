@@ -139,6 +139,12 @@ ATTEMPT_UNFINISHED_STATUSES: frozenset[PublishAttemptStatus] = frozenset(
     }
 )
 
+# Attempts whose publisher work is provably over. Every other row, including
+# one that resolves to UNKNOWN, must be treated as possibly unfinished work.
+ATTEMPT_SETTLED_STATUSES: frozenset[PublishAttemptStatus] = ATTEMPT_COMPLETED_STATUSES - {
+    PublishAttemptStatus.BLOCKED_SESSION
+}
+
 ATTEMPT_TRANSITIONS: dict[PublishAttemptStatus, set[PublishAttemptStatus]] = {
     PublishAttemptStatus.PREPARED: {
         PublishAttemptStatus.SUBMITTING,
@@ -177,10 +183,7 @@ class InvalidAttemptTransition(ValueError):
     new: PublishAttemptStatus
 
     def __str__(self) -> str:
-        return (
-            f"publish attempt cannot transition from {self.old.value} "
-            f"to {self.new.value}"
-        )
+        return f"publish attempt cannot transition from {self.old.value} to {self.new.value}"
 
 
 def attempt_transition_allowed(
@@ -240,6 +243,17 @@ def attempt_status_of(attempt: AttemptStateFields) -> PublishAttemptStatus:
         submitted_at=attempt.submitted_at,
         completed_at=attempt.completed_at,
     )
+
+
+def attempt_blocks_new_work(attempt: AttemptStateFields) -> bool:
+    """Fail-closed guard predicate: unfinished or UNKNOWN rows block new work.
+
+    UNKNOWN is never executed, but its real phase is unknowable (it may be a
+    corrupt live submission), so guards that must not double-schedule or run
+    while a submission could be in flight treat it as unfinished.
+    """
+    state = attempt_status_of(attempt)
+    return state is PublishAttemptStatus.UNKNOWN or state in ATTEMPT_UNFINISHED_STATUSES
 
 
 def transition_attempt(

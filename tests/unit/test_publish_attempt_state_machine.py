@@ -65,24 +65,16 @@ def test_transition_table_covers_the_documented_lifecycle() -> None:
     assert attempt_transition_allowed(
         PublishAttemptStatus.PREPARED, PublishAttemptStatus.SUPERSEDED
     )
-    assert attempt_transition_allowed(
-        PublishAttemptStatus.PREPARED, PublishAttemptStatus.EXPIRED
-    )
+    assert attempt_transition_allowed(PublishAttemptStatus.PREPARED, PublishAttemptStatus.EXPIRED)
     assert attempt_transition_allowed(
         PublishAttemptStatus.PREPARED, PublishAttemptStatus.INVALIDATED
     )
-    assert attempt_transition_allowed(
-        PublishAttemptStatus.QUEUED, PublishAttemptStatus.SUBMITTING
-    )
+    assert attempt_transition_allowed(PublishAttemptStatus.QUEUED, PublishAttemptStatus.SUBMITTING)
     assert attempt_transition_allowed(
         PublishAttemptStatus.QUEUED, PublishAttemptStatus.BLOCKED_SESSION
     )
-    assert attempt_transition_allowed(
-        PublishAttemptStatus.QUEUED, PublishAttemptStatus.INVALIDATED
-    )
-    assert attempt_transition_allowed(
-        PublishAttemptStatus.QUEUED, PublishAttemptStatus.SUPERSEDED
-    )
+    assert attempt_transition_allowed(PublishAttemptStatus.QUEUED, PublishAttemptStatus.INVALIDATED)
+    assert attempt_transition_allowed(PublishAttemptStatus.QUEUED, PublishAttemptStatus.SUPERSEDED)
     assert attempt_transition_allowed(
         PublishAttemptStatus.SUBMITTING, PublishAttemptStatus.VERIFIED
     )
@@ -200,55 +192,74 @@ def test_attempt_status_of_resolves_every_legacy_row_encoding() -> None:
 def test_attempt_status_of_maps_unrepresentable_combos_to_unknown() -> None:
     assert attempt_status_of(_attempt("submitting")) is PublishAttemptStatus.UNKNOWN
     assert (
-        attempt_status_of(_attempt("verified", submitted_at=_NOW))
-        is PublishAttemptStatus.UNKNOWN
+        attempt_status_of(_attempt("verified", submitted_at=_NOW)) is PublishAttemptStatus.UNKNOWN
     )
-    assert (
-        attempt_status_of(_attempt("expired")) is PublishAttemptStatus.UNKNOWN
-    )
-    assert (
-        attempt_status_of(_attempt("queued", completed_at=_NOW))
-        is PublishAttemptStatus.UNKNOWN
-    )
-    assert (
-        attempt_status_of(_attempt("queued", submitted_at=_NOW))
-        is PublishAttemptStatus.UNKNOWN
-    )
+    assert attempt_status_of(_attempt("expired")) is PublishAttemptStatus.UNKNOWN
+    assert attempt_status_of(_attempt("queued", completed_at=_NOW)) is PublishAttemptStatus.UNKNOWN
+    assert attempt_status_of(_attempt("queued", submitted_at=_NOW)) is PublishAttemptStatus.UNKNOWN
     assert (
         attempt_status_of(_attempt("blocked_session", submitted_at=_NOW))
         is PublishAttemptStatus.UNKNOWN
     )
+    assert attempt_status_of(_attempt("made_up_state")) is PublishAttemptStatus.UNKNOWN
+
+
+def test_guards_fail_closed_on_unknown_and_open_only_on_settled_rows() -> None:
+    from runway.domain.state_machine import ATTEMPT_SETTLED_STATUSES, attempt_blocks_new_work
+
+    assert ATTEMPT_SETTLED_STATUSES.isdisjoint(ATTEMPT_UNFINISHED_STATUSES)
+    assert PublishAttemptStatus.UNKNOWN not in ATTEMPT_SETTLED_STATUSES
+    for unknown in (
+        _attempt("submitting"),
+        _attempt("queued", completed_at=_NOW),
+        _attempt("verified", completed_at=_NOW),
+        _attempt("made_up_state"),
+    ):
+        assert attempt_blocks_new_work(unknown) is True
+    assert attempt_blocks_new_work(_attempt("queued")) is True
+    assert attempt_blocks_new_work(_attempt("blocked_session", completed_at=_NOW)) is True
+    assert attempt_blocks_new_work(_attempt("superseded", completed_at=_NOW)) is False
     assert (
-        attempt_status_of(_attempt("made_up_state")) is PublishAttemptStatus.UNKNOWN
+        attempt_blocks_new_work(_attempt("verified", submitted_at=_NOW, completed_at=_NOW)) is False
     )
 
 
 def test_read_sets_keep_the_queue_coordinator_semantics() -> None:
-    assert frozenset(
-        {
-            PublishAttemptStatus.QUEUED,
-            PublishAttemptStatus.SUBMITTING,
-            PublishAttemptStatus.BLOCKED_SESSION,
-        }
-    ) == ATTEMPT_ACTIVE_STATUSES
-    assert frozenset(
-        {PublishAttemptStatus.QUEUED, PublishAttemptStatus.SUBMITTING}
-    ) == ATTEMPT_PENDING_STATUSES
-    assert frozenset(
-        {
-            PublishAttemptStatus.PREPARED,
-            PublishAttemptStatus.QUEUED,
-            PublishAttemptStatus.BLOCKED_SESSION,
-        }
-    ) == ATTEMPT_PRE_SUBMISSION_STATUSES
-    assert frozenset(
-        {
-            PublishAttemptStatus.PREPARED,
-            PublishAttemptStatus.QUEUED,
-            PublishAttemptStatus.SUBMITTING,
-            PublishAttemptStatus.BLOCKED_SESSION,
-        }
-    ) == ATTEMPT_UNFINISHED_STATUSES
+    assert (
+        frozenset(
+            {
+                PublishAttemptStatus.QUEUED,
+                PublishAttemptStatus.SUBMITTING,
+                PublishAttemptStatus.BLOCKED_SESSION,
+            }
+        )
+        == ATTEMPT_ACTIVE_STATUSES
+    )
+    assert (
+        frozenset({PublishAttemptStatus.QUEUED, PublishAttemptStatus.SUBMITTING})
+        == ATTEMPT_PENDING_STATUSES
+    )
+    assert (
+        frozenset(
+            {
+                PublishAttemptStatus.PREPARED,
+                PublishAttemptStatus.QUEUED,
+                PublishAttemptStatus.BLOCKED_SESSION,
+            }
+        )
+        == ATTEMPT_PRE_SUBMISSION_STATUSES
+    )
+    assert (
+        frozenset(
+            {
+                PublishAttemptStatus.PREPARED,
+                PublishAttemptStatus.QUEUED,
+                PublishAttemptStatus.SUBMITTING,
+                PublishAttemptStatus.BLOCKED_SESSION,
+            }
+        )
+        == ATTEMPT_UNFINISHED_STATUSES
+    )
     assert PublishAttemptStatus.UNKNOWN not in ATTEMPT_ACTIVE_STATUSES
     assert PublishAttemptStatus.UNKNOWN not in ATTEMPT_PENDING_STATUSES
     assert PublishAttemptStatus.UNKNOWN not in ATTEMPT_PRE_SUBMISSION_STATUSES

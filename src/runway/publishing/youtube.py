@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -32,7 +33,7 @@ from runway.db.models import (
     ProposalEvent,
     PublishAttempt,
 )
-from runway.db.repositories import audit, get_channel
+from runway.db.repositories import audit, get_channel, publish_attempt_may_be_unsettled
 from runway.domain.enums import ProposalStatus, PublishAttemptStatus
 from runway.domain.state_machine import (
     ATTEMPT_PENDING_STATUSES,
@@ -114,6 +115,8 @@ class PublishingPreflight(BaseModel):
 class StalePublishAttempt(ValueError):
     """A queued attempt was superseded before the browser touched YouTube."""
 
+
+logger = logging.getLogger(__name__)
 
 # A `submitting` row younger than this could still belong to a live submission
 # in another process (the CLI and the app share the database); older rows are
@@ -1485,19 +1488,41 @@ class YouTubeBrowserPublisher:
     ) -> PublishAttempt:
         proposal_id = preflight.post.proposal_id
         self.recover_interrupted_attempts(session)
-        existing = session.scalar(
+        unsettled = session.scalars(
             select(PublishAttempt)
             .where(
                 PublishAttempt.proposal_id == proposal_id,
                 PublishAttempt.publisher == self.publisher_name,
-                PublishAttempt.status.in_(
-                    [state.value for state in ATTEMPT_PENDING_STATUSES]
-                ),
+                publish_attempt_may_be_unsettled(),
             )
             .order_by(desc(PublishAttempt.id))
-            .limit(1)
+        ).all()
+        # Fail closed: a row resolving to UNKNOWN may be a corrupt pending or
+        # in-flight submission; queueing a fresh attempt beside it could
+        # double-schedule the post on YouTube.
+        unknown = next(
+            (
+                attempt
+                for attempt in unsettled
+                if attempt_status_of(attempt) is PublishAttemptStatus.UNKNOWN
+            ),
+            None,
         )
-        if existing is not None and attempt_status_of(existing) in ATTEMPT_PENDING_STATUSES:
+        if unknown is not None:
+            raise ValueError(
+                f"publish attempt {unknown.id} for proposal {proposal_id} is in an "
+                "unknown state; verify the post on YouTube and resolve that attempt "
+                "before scheduling it again"
+            )
+        existing = next(
+            (
+                attempt
+                for attempt in unsettled
+                if attempt_status_of(attempt) in ATTEMPT_PENDING_STATUSES
+            ),
+            None,
+        )
+        if existing is not None:
             return existing
         for prepared in session.scalars(
             select(PublishAttempt).where(
@@ -1635,19 +1660,14 @@ class YouTubeBrowserPublisher:
                     "verify the post on YouTube before retrying."
                 )
                 recovered += 1
-                if (
-                    proposal is not None
-                    and proposal.status == ProposalStatus.PUBLISHING.value
-                ):
+                if proposal is not None and proposal.status == ProposalStatus.PUBLISHING.value:
                     require_transition(proposal.status, ProposalStatus.PUBLISH_UNVERIFIED)
                     proposal.status = ProposalStatus.PUBLISH_UNVERIFIED.value
                     session.add(
                         ProposalEvent(
                             proposal_id=proposal.id,
                             event_type="youtube_submission_interrupted",
-                            old_value_json=json.dumps(
-                                {"status": ProposalStatus.PUBLISHING.value}
-                            ),
+                            old_value_json=json.dumps({"status": ProposalStatus.PUBLISHING.value}),
                             new_value_json=json.dumps(
                                 {
                                     "status": ProposalStatus.PUBLISH_UNVERIFIED.value,
@@ -2256,6 +2276,19 @@ class YouTubeBrowserPublisher:
             attempt = session.get(PublishAttempt, attempt_id)
             if attempt is None:
                 return
+            current = attempt_status_of(attempt)
+            if current is not PublishAttemptStatus.SUBMITTING:
+                # Another process (CLI vs app) already settled this attempt,
+                # e.g. interrupted-submission recovery. Keep the failure detail
+                # as evidence without writing an illegal state change.
+                self._record_late_outcome(
+                    session,
+                    attempt,
+                    current,
+                    kind="failure",
+                    detail=detail,
+                )
+                return
             proposal = session.get(Proposal, attempt.proposal_id)
             transition_attempt(
                 attempt,
@@ -2447,6 +2480,29 @@ class YouTubeBrowserPublisher:
             proposal = session.get(Proposal, attempt.proposal_id)
             if proposal is None:
                 raise LookupError(f"proposal {attempt.proposal_id} not found")
+            current = attempt_status_of(attempt)
+            if current is not PublishAttemptStatus.SUBMITTING:
+                # Another process (CLI vs app) settled this still-live
+                # submission first (interrupted-submission recovery). Its
+                # state stays as recorded; only the human verify path moves it
+                # forward. The receipt is kept as evidence instead of lost.
+                self._record_late_outcome(
+                    session,
+                    attempt,
+                    current,
+                    kind="receipt",
+                    detail=receipt.detail,
+                    receipt=receipt,
+                )
+                return PublishResult(
+                    proposal_id=proposal.id,
+                    status=proposal.status,
+                    external_id=receipt.external_id,
+                    detail=(
+                        f"publish attempt {attempt.id} was already {current.value} "
+                        f"when its receipt arrived; recorded for review: {receipt.detail}"
+                    ),
+                )
             target = (
                 ProposalStatus.EXTERNALLY_SCHEDULED
                 if receipt.verified
@@ -2511,6 +2567,67 @@ class YouTubeBrowserPublisher:
             status=target.value,
             external_id=receipt.external_id,
             detail=receipt.detail,
+        )
+
+    def _record_late_outcome(
+        self,
+        session: Session,
+        attempt: PublishAttempt,
+        current: PublishAttemptStatus,
+        *,
+        kind: str,
+        detail: str,
+        receipt: BrowserScheduleReceipt | None = None,
+    ) -> None:
+        """Keep a submission outcome that arrived after the attempt was settled.
+
+        Writes evidence only (an audit row, receipt fields the attempt lacks,
+        and a note appended to `error_summary`); the status and its derived
+        timestamps are never touched, so no illegal transition is recorded.
+        """
+        if receipt is None:
+            outcome = "failure"
+        else:
+            outcome = "verified receipt" if receipt.verified else "unverified receipt"
+        logger.warning(
+            "publish attempt %s was %s when its late %s arrived: %s",
+            attempt.id,
+            current.value,
+            outcome,
+            detail[:500],
+        )
+        if receipt is not None:
+            if attempt.external_id is None:
+                attempt.external_id = receipt.external_id
+            if attempt.external_url is None:
+                attempt.external_url = receipt.external_url
+            if receipt.screenshot_paths and not json.loads(attempt.screenshot_paths_json or "[]"):
+                attempt.screenshot_paths_json = json.dumps(receipt.screenshot_paths)
+        note = f"Late {outcome} after the attempt was {current.value}: {detail}"
+        attempt.error_summary = (
+            f"{attempt.error_summary} {note}" if attempt.error_summary else note
+        )[:2000]
+        details: dict[str, object] = {
+            "attempt_id": attempt.id,
+            "attempt_status": current.value,
+            "outcome": outcome,
+            "detail": detail[:2000],
+        }
+        if receipt is not None:
+            details.update(
+                {
+                    "verified": receipt.verified,
+                    "external_id": receipt.external_id,
+                    "external_url": receipt.external_url,
+                    "screenshots": receipt.screenshot_paths,
+                }
+            )
+        audit(
+            session,
+            f"youtube_late_{kind}",
+            "proposal",
+            attempt.proposal_id,
+            details,
         )
 
     def _require_enabled(self) -> None:
