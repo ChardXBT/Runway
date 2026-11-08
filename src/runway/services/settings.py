@@ -8,8 +8,9 @@ from sqlalchemy import select
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import BlockedSource, Proposal, PublishAttempt
-from runway.db.repositories import audit, get_channel
+from runway.db.repositories import audit, get_channel, publish_attempt_may_be_unsettled
 from runway.domain.enums import ProposalStatus
+from runway.domain.state_machine import attempt_blocks_new_work
 
 
 class SettingsService:
@@ -86,16 +87,23 @@ class SettingsService:
                     )
                     .limit(1)
                 )
-                active_attempt = session.scalar(
-                    select(PublishAttempt.id)
+                unfinished_attempts = session.scalars(
+                    select(PublishAttempt)
                     .join(Proposal, Proposal.id == PublishAttempt.proposal_id)
                     .where(
                         Proposal.channel_id == channel.id,
-                        PublishAttempt.status.in_(
-                            ["prepared", "queued", "blocked_session", "submitting"]
-                        ),
+                        publish_attempt_may_be_unsettled(),
                     )
-                    .limit(1)
+                ).all()
+                # Fail closed: a row resolving to UNKNOWN may be a corrupt
+                # in-flight submission, so it blocks like unfinished work.
+                active_attempt = next(
+                    (
+                        attempt.id
+                        for attempt in unfinished_attempts
+                        if attempt_blocks_new_work(attempt)
+                    ),
+                    None,
                 )
                 if active_proposal is not None or active_attempt is not None:
                     raise ValueError(

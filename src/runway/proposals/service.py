@@ -32,7 +32,7 @@ from runway.db.models import (
 )
 from runway.db.repositories import audit, get_channel
 from runway.domain.enums import ProposalStatus, RunStatus
-from runway.domain.state_machine import require_transition
+from runway.domain.state_machine import attempt_status_of, require_transition
 from runway.intelligence.exposure_bias import CandidateExposureService
 from runway.intelligence.retrieval import RetrievalService
 from runway.intelligence.slate_optimization import CandidateSlateOptimizer
@@ -1737,7 +1737,7 @@ class ProposalService:
             "latest_publish_attempt": (
                 {
                     "id": latest_publish_attempt.id,
-                    "status": latest_publish_attempt.status,
+                    "status": attempt_status_of(latest_publish_attempt).value,
                     "error_summary": latest_publish_attempt.error_summary,
                     "prepared_at": latest_publish_attempt.prepared_at.isoformat(),
                     "submitted_at": (
