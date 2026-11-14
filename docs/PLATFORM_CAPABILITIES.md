@@ -1,5 +1,9 @@
 # Platform capability matrix
 
+> **Update 2026-11-14:** parts of this document are out of date. See
+> [`expansion/01-AUDIT.md`](expansion/01-AUDIT.md) for corrections and
+> [`expansion/README.md`](expansion/README.md) for the expansion research and specifications.
+
 Status vocabulary (also used by `GET /api/platforms` and the Accounts page):
 
 | State | Meaning |
