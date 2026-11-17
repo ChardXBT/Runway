@@ -228,7 +228,8 @@ describe("AnalyticsWorkspace", () => {
       };
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce(jsonResponse(run))
+        // POST /sync answers 202 with only the new run's id.
+        .mockResolvedValueOnce(jsonResponse({ run_id: 3 }, 202))
         .mockResolvedValueOnce(jsonResponse({ ...run, status: "running" }))
         .mockResolvedValueOnce(jsonResponse({ ...run, status: "completed" }));
       vi.stubGlobal("fetch", fetchMock);
@@ -282,7 +283,7 @@ describe("AnalyticsWorkspace", () => {
       };
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce(jsonResponse(run))
+        .mockResolvedValueOnce(jsonResponse({ run_id: 3 }, 202))
         .mockResolvedValue(jsonResponse({ ...run, status: "running" }));
       vi.stubGlobal("fetch", fetchMock);
       const empty: AccountAnalytics = {

@@ -457,6 +457,11 @@ function CommentDetail({
   const saveDraft = async () => {
     const text = draftText;
     if (text === savedDraft) return;
+    // The API rejects an empty draft text; emptying the box means "no draft".
+    if (text === "") {
+      await clearDraft();
+      return;
+    }
     setDraftState("saving");
     try {
       const response = await fetch(`${API_URL}/api/inbox/${comment.id}/draft`, {

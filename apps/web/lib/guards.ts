@@ -340,6 +340,11 @@ export function isPlatformsResponse(
   );
 }
 
+/** The 202 body of POST /api/platforms/accounts/{id}/sync. */
+export function isRunId(value: unknown): value is { run_id: number } {
+  return isRecord(value) && isFiniteNumber(value.run_id);
+}
+
 export function isSyncRunView(value: unknown): value is SyncRunView {
   return (
     isRecord(value) &&

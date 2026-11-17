@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AvatarImage } from "@/components/account-avatar";
 import { PlatformBadge, platformLabel } from "@/components/platform-badge";
 import { StatePanel } from "@/components/state-panel";
+import { API_URL } from "@/lib/api";
 import {
   excerpt,
   formatAbsoluteTime,
@@ -233,7 +234,7 @@ export function DashboardOverview({ overview }: { overview: OverviewResponse }) 
                     <Link href="/lineup">
                       {item.image_url ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={item.image_url} alt="" width={40} height={40} />
+                        <img src={`${API_URL}${item.image_url}`} alt="" width={40} height={40} />
                       ) : (
                         <span className="dashboard-thumb-empty" aria-hidden="true" />
                       )}

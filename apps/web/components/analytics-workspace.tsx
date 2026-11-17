@@ -18,7 +18,7 @@ import {
   formatHandle,
   parseApiDate,
 } from "@/lib/format";
-import { isSyncRunView } from "@/lib/guards";
+import { isRunId, isSyncRunView } from "@/lib/guards";
 import type { AccountAnalytics, AccountView } from "@/lib/types";
 
 const RANGES = ["7", "28", "90"] as const;
@@ -212,11 +212,13 @@ export function AnalyticsWorkspace({
         `${API_URL}/api/platforms/accounts/${account.id}/sync`,
         { method: "POST" },
       );
-      const run = await readApiJson(start, {
-        validate: isSyncRunView,
+      // The start endpoint answers 202 with only the new run's id; its
+      // progress is read from the sync-run endpoint below.
+      const { run_id: runId } = await readApiJson(start, {
+        validate: isRunId,
         failureMessage: "Could not start the sync.",
       });
-      let status = run.status;
+      let status = "queued";
       let attempts = 0;
       while (
         (status === "running" || status === "queued") &&
@@ -226,7 +228,7 @@ export function AnalyticsWorkspace({
         await new Promise((resolve) => setTimeout(resolve, 1500));
         if (poll.cancelled) return;
         const check = await fetch(
-          `${API_URL}/api/platforms/sync-runs/${run.id}`,
+          `${API_URL}/api/platforms/sync-runs/${runId}`,
           { cache: "no-store" },
         );
         const updated = await readApiJson(check, {

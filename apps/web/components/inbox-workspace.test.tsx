@@ -185,6 +185,29 @@ describe("InboxWorkspace", () => {
     expect(JSON.parse(call[1].body as string).text).toBe("Thanks Mira!");
   });
 
+  it("clears the saved draft with DELETE when the textarea is emptied", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(makeDetail({ draft: "Old draft" })),
+    );
+    render(
+      <InboxWorkspace
+        accounts={[account]}
+        list={list}
+        filters={filters}
+        selectedId={42}
+      />,
+    );
+    const area = await screen.findByDisplayValue("Old draft");
+    fetchMock.mockResolvedValueOnce(jsonResponse({ comment_id: 42, text: null }));
+    fireEvent.change(area, { target: { value: "" } });
+    fireEvent.blur(area);
+    await screen.findByText("Saved");
+    const call = fetchMock.mock.calls.at(-1)!;
+    expect(call[0]).toContain("/api/inbox/42/draft");
+    expect(call[1].method).toBe("DELETE");
+    expect(call[1].body).toBeUndefined();
+  });
+
   it("patches status optimistically and rolls back on failure", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(makeDetail()));
     render(

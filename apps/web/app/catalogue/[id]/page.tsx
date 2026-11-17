@@ -22,7 +22,7 @@ type Detail = {
   media: { id: number; url: string; width: number; height: number; sha256: string }[];
 };
 
-type Similar = { post_id: number; caption: string; score: number };
+type Similar = { post_id: number; caption: string | null; score: number };
 
 function isDetail(value: unknown): value is Detail {
   return (
@@ -60,7 +60,7 @@ function isSimilarList(value: unknown): value is Similar[] {
       (item) =>
         isRecord(item) &&
         typeof item.post_id === "number" &&
-        typeof item.caption === "string" &&
+        (item.caption === null || typeof item.caption === "string") &&
         typeof item.score === "number",
     )
   );
@@ -124,7 +124,7 @@ export default async function CatalogueDetail({ params }: { params: Promise<{ id
         </aside>
       </section>
       <AnnotationEditor postId={post.id} />
-      <section className="panel"><p className="eyebrow">Closest local matches</p><div className="quote-list">{similar.length ? similar.map((match) => <Link href={`/catalogue/${match.post_id}`} key={match.post_id}><span>{Math.round(match.score * 100)}%</span><q>{match.caption}</q></Link>) : <p>Build similarity edges by running historical analysis.</p>}</div></section>
+      <section className="panel"><p className="eyebrow">Closest local matches</p><div className="quote-list">{similar.length ? similar.map((match) => <Link href={`/catalogue/${match.post_id}`} key={match.post_id}><span>{Math.round(match.score * 100)}%</span><q>{match.caption || "Caption unavailable"}</q></Link>) : <p>Build similarity edges by running historical analysis.</p>}</div></section>
     </>
   );
 }
