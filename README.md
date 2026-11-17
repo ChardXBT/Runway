@@ -228,7 +228,7 @@ schema-validated and treated as data, never trusted blindly. More detail is in
 - Windows 10 or 11 for the production launcher and scheduled task. The backend and tests also run
   on Linux and macOS.
 - Python 3.13
-- Node.js 20 or newer (CI uses Node 24)
+- Node.js 20.9 or newer, the minimum Next.js 16 accepts (CI uses Node 24)
 - Google Chrome, only for the YouTube publisher
 - A ChatGPT account signed in to Codex, only for real caption generation. Tests and the demo
   use the mock runtime.
@@ -302,6 +302,7 @@ History capture, the daily workflow, publisher setup, backups, and troubleshooti
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m pip_audit
 npm run check
+npm audit
 npm --prefix apps/web audit --omit=dev
 node scripts/audit_web_dependencies.mjs
 ```
