@@ -1571,3 +1571,232 @@ async def test_rows_written_by_base_code_paths_load_into_declared_states(
             assert attempt_status_of(attempt).value != "unknown", path
             assert attempt_blocks_new_work(attempt) is (paths[path] in unfinished), path
             assert (attempt_id in prefiltered) is (paths[path] in unfinished), path
+
+
+async def _wait_for_idle_queue(coordinator: PublisherQueueCoordinator) -> dict[str, object]:
+    status = coordinator.status()
+    for _ in range(300):
+        status = coordinator.status()
+        if not status["running"]:
+            break
+        await asyncio.sleep(0.01)
+    return status
+
+
+@pytest.mark.asyncio
+async def test_per_attempt_preflight_failure_settles_that_attempt_and_keeps_queue_moving(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    adapter = FakeYouTubeAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    attempts = publisher.queue_attempts([first_id, second_id])
+    # Before the worker reaches the first post its slot drifts inside the
+    # five-minute submission window.
+    too_close = datetime.now(ZoneInfo(settings.timezone)) + timedelta(minutes=2)
+    with database.session() as session:
+        proposal = session.get(Proposal, first_id)
+        assert proposal is not None
+        proposal.scheduled_publish_at = too_close.replace(microsecond=0).isoformat()
+
+    coordinator = PublisherQueueCoordinator(publisher)
+    coordinator.start()
+    status = await _wait_for_idle_queue(coordinator)
+
+    first = publisher.attempt_status(int(attempts[0]["id"]))
+    assert first["status"] == "invalidated"
+    assert first["submitted_at"] is None
+    assert "five minutes" in str(first["error_summary"])
+    assert publisher.attempt_status(int(attempts[1]["id"]))["status"] == "verified"
+    assert [post.proposal_id for post in adapter.schedule_calls] == [second_id]
+    assert status["paused"] is False
+    assert status["queued"] == 0
+    detail = ProposalService(database, settings).detail(first_id)
+    assert detail["status"] == "internally_scheduled"
+
+
+@pytest.mark.asyncio
+async def test_missing_image_settles_only_that_attempt_before_submission(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    adapter = FakeYouTubeAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    attempts = publisher.queue_attempts([first_id, second_id])
+    with database.session() as session:
+        proposal = session.get(Proposal, first_id)
+        assert proposal is not None
+        candidate = session.get(CandidateImage, proposal.candidate_image_id)
+        assert candidate is not None
+        media = session.get(MediaAsset, candidate.media_asset_id)
+        assert media is not None
+        media.local_path = "media/missing-after-queue.png"
+
+    with pytest.raises(ValueError, match="missing from local storage"):
+        await publisher.process_queued_attempt(int(attempts[0]["id"]))
+    assert publisher.attempt_status(int(attempts[0]["id"]))["status"] == "invalidated"
+    assert publisher.next_queued_attempt_id() == int(attempts[1]["id"])
+    assert adapter.schedule_calls == []
+
+
+class _ChallengeOnceAdapter(FakeYouTubeAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.challenge = True
+
+    async def validate_session(self) -> PublisherSessionStatus:
+        if self.challenge:
+            self.validate_calls += 1
+            raise RuntimeError("Google/YouTube challenge detected; resolve it manually and retry")
+        return await super().validate_session()
+
+
+@pytest.mark.asyncio
+async def test_session_check_challenge_is_persisted_and_resumable_after_manual_fix(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    adapter = _ChallengeOnceAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    coordinator = PublisherQueueCoordinator(publisher)
+    queued = coordinator.enqueue_many([first_id, second_id])
+    attempts = queued["attempts"]
+    assert isinstance(attempts, list)
+    status = await _wait_for_idle_queue(coordinator)
+
+    first_attempt_id = int(attempts[0]["id"])
+    assert publisher.attempt_status(first_attempt_id)["status"] == "blocked_session"
+    assert "challenge detected" in str(publisher.attempt_status(first_attempt_id)["error_summary"])
+    assert publisher.attempt_status(int(attempts[1]["id"]))["status"] == "queued"
+    assert status["paused"] is True
+    assert adapter.schedule_calls == []
+    # Runway never retries a challenge on its own; the queue stays paused.
+    restarted = PublisherQueueCoordinator(publisher)
+    assert restarted.start()["paused"] is True
+    with pytest.raises(ValueError, match="fresh successful saved-session check"):
+        coordinator.resume()
+    assert adapter.validate_calls == 1
+
+    # The operator resolves the challenge manually and runs a fresh check.
+    adapter.challenge = False
+    assert (await publisher.validate_session()).valid is True
+    resumed = coordinator.resume()
+    assert resumed["requeued"] == 1
+    await _wait_for_idle_queue(coordinator)
+
+    assert [post.proposal_id for post in adapter.schedule_calls] == [first_id, second_id]
+    assert publisher.attempt_status(first_attempt_id)["status"] == "verified"
+    assert coordinator.status()["paused"] is False
+
+
+@pytest.mark.asyncio
+async def test_resume_clears_worker_pause_after_blocked_post_is_removed(
+    database: Database,
+    settings: Settings,
+) -> None:
+    first_id, second_id = await _scheduled_proposal_pair(database, settings)
+    adapter = _ChallengeOnceAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    coordinator = PublisherQueueCoordinator(publisher)
+    queued = coordinator.enqueue_many([first_id, second_id])
+    attempts = queued["attempts"]
+    assert isinstance(attempts, list)
+    await _wait_for_idle_queue(coordinator)
+    assert coordinator.status()["paused"] is True
+
+    await publisher.remove_from_lineup(first_id)
+    assert publisher.attempt_status(int(attempts[0]["id"]))["status"] == "superseded"
+    adapter.challenge = False
+    assert (await publisher.validate_session()).valid is True
+    resumed = coordinator.resume()
+    assert resumed["requeued"] == 0
+    await _wait_for_idle_queue(coordinator)
+
+    assert [post.proposal_id for post in adapter.schedule_calls] == [second_id]
+    assert publisher.attempt_status(int(attempts[1]["id"]))["status"] == "verified"
+    assert coordinator.status()["paused"] is False
+    # Nothing left to resume is still reported as such.
+    with pytest.raises(ValueError, match="no session-blocked YouTube actions"):
+        coordinator.resume()
+
+
+@pytest.mark.asyncio
+async def test_unverified_post_can_be_verified_after_its_slot_is_close_or_past(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    adapter.schedule_receipt = BrowserScheduleReceipt(
+        submitted=True,
+        verified=False,
+        detail="Submission may have succeeded; fixture verification was inconclusive.",
+    )
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    queued = publisher.queue_attempt(proposal_id)
+    submitted = await publisher.process_queued_attempt(int(queued["id"]))
+    assert submitted.status == "publish_unverified"
+
+    timezone = ZoneInfo(settings.timezone)
+    past_slot = (datetime.now(timezone) - timedelta(hours=1)).replace(microsecond=0)
+    with database.session() as session:
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        proposal.scheduled_publish_at = past_slot.isoformat()
+        candidate = session.get(CandidateImage, proposal.candidate_image_id)
+        assert candidate is not None
+        media = session.get(MediaAsset, candidate.media_asset_id)
+        assert media is not None
+        image_path = settings.resolved_data_dir / media.local_path
+    image_path.unlink()
+
+    adapter.verify_receipt = BrowserScheduleReceipt(
+        submitted=True,
+        verified=True,
+        external_id="Uglate",
+        external_url="https://www.youtube.com/post/Uglate",
+        detail="Fixture scheduled post found.",
+    )
+    verification = await publisher.verify_scheduled_post(proposal_id)
+
+    assert verification.verified is True
+    assert verification.status == "externally_scheduled"
+    assert [post.planned_publish_at for post in adapter.verify_calls] == [past_slot.isoformat()]
+    assert len(adapter.schedule_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_still_rejects_a_timestamp_outside_the_channel_timezone(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    adapter.schedule_receipt = BrowserScheduleReceipt(
+        submitted=True,
+        verified=False,
+        detail="Submission may have succeeded; fixture verification was inconclusive.",
+    )
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    queued = publisher.queue_attempt(proposal_id)
+    await publisher.process_queued_attempt(int(queued["id"]))
+    with database.session() as session:
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        planned = datetime.fromisoformat(str(proposal.scheduled_publish_at))
+        proposal.scheduled_publish_at = planned.replace(tzinfo=None).isoformat()
+
+    with pytest.raises(ValueError, match="explicit UTC offset"):
+        await publisher.verify_scheduled_post(proposal_id)
+    assert adapter.verify_calls == []
+
+    with database.session() as session:
+        proposal = session.get(Proposal, proposal_id)
+        assert proposal is not None
+        proposal.status = "internally_scheduled"
+    with pytest.raises(ValueError, match="only a submitted YouTube action can be verified"):
+        await publisher.verify_scheduled_post(proposal_id)
+    assert adapter.verify_calls == []
