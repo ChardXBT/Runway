@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,24 @@ from runway.db.models import BlockedSource, Proposal, PublishAttempt
 from runway.db.repositories import audit, get_channel, publish_attempt_may_be_unsettled
 from runway.domain.enums import ProposalStatus
 from runway.domain.state_machine import attempt_blocks_new_work
+
+
+def _already_live(status: str, planned_publish_at: str, now: datetime) -> bool:
+    """A verified YouTube-scheduled post whose slot has passed is finished work.
+
+    Nothing moves such a post to ``published``, so counting it as active would
+    block a timezone change forever. Its instant is fixed on YouTube, so the
+    channel timezone no longer affects it.
+    """
+    if status != ProposalStatus.EXTERNALLY_SCHEDULED.value:
+        return False
+    try:
+        planned = datetime.fromisoformat(planned_publish_at)
+    except ValueError:
+        return False
+    if planned.tzinfo is None:
+        return False
+    return planned <= now
 
 
 class SettingsService:
@@ -79,13 +98,19 @@ class SettingsService:
                     ProposalStatus.PUBLISH_UNVERIFIED.value,
                     ProposalStatus.PUBLISH_FAILED.value,
                 }
-                active_proposal = session.scalar(
-                    select(Proposal.id)
-                    .where(
-                        Proposal.channel_id == channel.id,
-                        Proposal.status.in_(active_statuses),
-                    )
-                    .limit(1)
+                now = datetime.now(UTC)
+                active_proposal = next(
+                    (
+                        proposal_id
+                        for proposal_id, status, planned_publish_at in session.execute(
+                            select(Proposal.id, Proposal.status, Proposal.planned_publish_at).where(
+                                Proposal.channel_id == channel.id,
+                                Proposal.status.in_(active_statuses),
+                            )
+                        )
+                        if not _already_live(status, planned_publish_at, now)
+                    ),
+                    None,
                 )
                 unfinished_attempts = session.scalars(
                     select(PublishAttempt)

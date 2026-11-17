@@ -16,6 +16,7 @@ from runway.db.models import (
     CaptionExposure,
     GenerationRun,
     MediaAsset,
+    Proposal,
     ProposalEvent,
 )
 from runway.db.repositories import get_channel
@@ -420,9 +421,105 @@ async def test_timezone_change_is_blocked_while_lineup_work_is_active(
         SettingsService(database, settings).update({"timezone": "America/Vancouver"})
 
 
+@pytest.mark.asyncio
+async def test_timezone_change_is_not_blocked_by_a_post_youtube_already_published(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposals, rows = await _generated_proposal_service(database, settings, days=1)
+    proposal_id = int(rows[0]["id"])
+    proposals.accept_to_lineup(proposal_id, str(rows[0]["final_caption"]))
+    service = SettingsService(database, settings)
+
+    def mark_externally_scheduled(at: datetime) -> None:
+        with database.session() as session:
+            proposal = session.get(Proposal, proposal_id)
+            assert proposal is not None
+            proposal.status = "externally_scheduled"
+            proposal.planned_publish_at = at.isoformat()
+
+    # Still upcoming on YouTube: the channel timezone still matters, so block.
+    mark_externally_scheduled(datetime.now(UTC) + timedelta(days=2))
+    with pytest.raises(ValueError, match="timezone cannot change"):
+        service.update({"timezone": "America/Vancouver"})
+
+    # Its slot has passed. Nothing moves it to "published", so before the fix
+    # this one post blocked every future timezone change.
+    mark_externally_scheduled(datetime.now(UTC) - timedelta(days=30))
+    service.update({"timezone": "America/Vancouver"})
+    with database.session() as session:
+        assert get_channel(session, settings.channel_handle).timezone == "America/Vancouver"
+
+
 def test_channel_handle_is_not_a_general_editable_setting(
     database: Database,
     settings: Settings,
 ) -> None:
     with pytest.raises(ValueError, match="unsupported settings: handle"):
         SettingsService(database, settings).update({"handle": "AnotherChannel"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["regenerate_captions", "replace_image"])
+async def test_slow_generation_never_overwrites_a_post_accepted_meanwhile(
+    database: Database,
+    settings: Settings,
+    action: str,
+) -> None:
+    proposals, rows = await _generated_proposal_service(database, settings, days=2)
+    proposal_id = int(rows[0]["id"])
+    accepted_caption = str(rows[0]["final_caption"])
+    real_generate = proposals.caption_service.generate
+
+    async def generate_while_creator_accepts(candidate_id: int):  # type: ignore[no-untyped-def]
+        # The creator accepts the post (in another tab) while the model runs.
+        proposals.accept_to_lineup(proposal_id, accepted_caption)
+        return await real_generate(candidate_id)
+
+    proposals.caption_service.generate = generate_while_creator_accepts  # type: ignore[method-assign]
+    before = proposals.detail(proposal_id)
+    assert before["status"] == "needs_review"
+
+    with pytest.raises(ValueError, match="internally_scheduled|nothing was"):
+        await getattr(proposals, action)(proposal_id)
+
+    after = proposals.detail(proposal_id)
+    assert after["status"] == "internally_scheduled"
+    assert after["final_caption"] == accepted_caption
+    assert after["candidate_image_id"] == before["candidate_image_id"]
+
+
+@pytest.mark.asyncio
+async def test_rescheduling_onto_a_rejected_proposals_date_is_a_clear_error(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposals, rows = await _generated_proposal_service(database, settings, days=2)
+    first, second = (int(row["id"]) for row in rows[:2])
+    proposals.reject(first, "not this one", reason_codes=["too_similar"], image_verdict="bad")
+    rejected_date = datetime.fromisoformat(str(rows[0]["planned_publish_at"])).date()
+
+    # Before the fix this hit the (channel, planned_publish_at) unique
+    # constraint and surfaced as a 500.
+    with pytest.raises(ValueError, match="rejected proposal is recorded for that date"):
+        proposals.reschedule(second, rejected_date)
+    assert proposals.detail(second)["planned_publish_at"] == rows[1]["planned_publish_at"]
+
+
+def test_default_post_time_in_a_spring_forward_gap_is_a_real_instant(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposals = ProposalService(database, settings)
+    gap_day = date(2027, 3, 14)  # Toronto skips 02:00-03:00
+    slot = proposals._planned_datetime(gap_day, "America/Toronto", "02:30")
+    assert slot.isoformat() == "2027-03-14T03:30:00-04:00"
+    # Ordinary and fall-back wall times are unchanged.
+    assert (
+        proposals._planned_datetime(date(2026, 11, 20), "America/Toronto", "10:00").isoformat()
+        == "2026-11-20T10:00:00-05:00"
+    )
+    assert (
+        proposals._planned_datetime(date(2026, 11, 1), "America/Toronto", "01:30").isoformat()
+        == "2026-11-01T01:30:00-04:00"
+    )

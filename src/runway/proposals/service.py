@@ -1245,6 +1245,22 @@ class ProposalService:
             )
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            # Generation runs for minutes outside any transaction; the proposal
+            # may have been accepted, rejected, or given a new image meanwhile.
+            # Never overwrite a post the creator has already decided on.
+            self._require_status(
+                proposal,
+                {ProposalStatus.NEEDS_REVIEW},
+                "caption regeneration",
+            )
+            if proposal.candidate_image_id != candidate_id:
+                raise ValueError(
+                    "the proposal image changed during caption regeneration; nothing was saved"
+                )
+            # An edit made while generation ran is authoritative too.
+            if proposal.final_caption != final_before:
+                final_before = proposal.final_caption
+                final_was_user_edited = True
             proposal.caption_slate_id = captions.slate_id
             if captions.slate_id is not None:
                 slate = session.get(CaptionSlate, captions.slate_id)
@@ -1356,6 +1372,7 @@ class ProposalService:
                 raise ValueError("no accepted replacement candidate is available")
             selected_id = replacement.id
             old_candidate = proposal.candidate_image_id
+            status_before = proposal.status
         captions = await self.caption_service.generate(selected_id)
         if captions.abstained:
             raise ValueError(
@@ -1367,6 +1384,15 @@ class ProposalService:
         )
         with self.database.session() as session:
             proposal = self._get(session, proposal_id)
+            # Caption generation runs for minutes outside any transaction. If the
+            # proposal moved on meanwhile (accepted into the Lineup, scheduled on
+            # YouTube, or given another image), replacing its image now would
+            # change a post the creator already decided on.
+            if proposal.status != status_before or proposal.candidate_image_id != old_candidate:
+                raise ValueError(
+                    "the proposal changed while the replacement was prepared "
+                    f"(now {proposal.status}); nothing was replaced"
+                )
             if proposal.status == ProposalStatus.REJECTED.value:
                 self._transition(
                     session, proposal, ProposalStatus.NEEDS_REVIEW, "replacement_requested"
@@ -1454,17 +1480,21 @@ class ProposalService:
                 {ProposalStatus.NEEDS_REVIEW},
                 "rescheduling",
             )
+            # (channel_id, planned_publish_at) is unique across every status, so
+            # a rejected or cancelled proposal still holds its slot; checking
+            # only active ones let the insert hit the constraint and return 500.
             conflict = session.scalar(
-                select(Proposal.id).where(
+                select(Proposal.status).where(
                     Proposal.channel_id == proposal.channel_id,
                     Proposal.planned_publish_at == planned,
                     Proposal.id != proposal.id,
-                    Proposal.status.not_in(
-                        [ProposalStatus.REJECTED.value, ProposalStatus.CANCELLED.value]
-                    ),
                 )
             )
-            if conflict:
+            if conflict is not None:
+                if conflict in {ProposalStatus.REJECTED.value, ProposalStatus.CANCELLED.value}:
+                    raise ValueError(
+                        f"a {conflict} proposal is recorded for that date; choose another date"
+                    )
                 raise ValueError("another active proposal already occupies that date")
             old = proposal.planned_publish_at
             proposal.planned_publish_at = planned
@@ -1515,11 +1545,12 @@ class ProposalService:
         if timezone_name is None or default_time is None:
             timezone_name, default_time = self._schedule_config()
         hour, minute = (int(value) for value in default_time.split(":"))
-        return datetime.combine(
-            target_date,
-            time(hour=hour, minute=minute),
-            tzinfo=ZoneInfo(timezone_name),
-        )
+        zone = ZoneInfo(timezone_name)
+        wall_time = datetime.combine(target_date, time(hour=hour, minute=minute), tzinfo=zone)
+        # A post time inside a spring-forward gap (02:30 on a DST change day)
+        # does not exist; the UTC round trip moves it to the real instant
+        # (03:30 local) and leaves every existing wall time unchanged.
+        return wall_time.astimezone(UTC).astimezone(zone)
 
     def _schedule_config(self) -> tuple[str, str]:
         with self.database.session() as session:
