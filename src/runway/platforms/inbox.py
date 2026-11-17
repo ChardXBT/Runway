@@ -19,6 +19,7 @@ from runway.db.models import (
     utcnow,
 )
 from runway.platforms.base import (
+    AuthorizationExpired,
     ProviderError,
     iso_utc,
     redact_payload,
@@ -311,17 +312,38 @@ class InboxService:
             account_token_ref = account.token_ref
             comment_external_id = comment.external_id
             account_id = account.id
-        if not account_token_ref:
-            raise InboxReplyForbidden("account has no stored token")
-        token = registry.token_store.load(account_token_ref)
-        if token is None:
-            raise InboxReplyForbidden("account token is missing")
-        provider = registry.provider(platform)
 
         def _action(session: Session) -> PlatformAction:
             record = session.get(PlatformAction, action_id)
             assert record is not None
             return record
+
+        def _fail_before_sending(exc: BaseException) -> None:
+            # Nothing reached the platform, so the action is plainly failed.
+            with self.database.session() as session:
+                record = _action(session)
+                record.state = "failed"
+                record.error = safe_error_summary(exc)
+                record.completed_at = utcnow()
+
+        if not account_token_ref:
+            forbidden = InboxReplyForbidden("account has no stored token")
+            _fail_before_sending(forbidden)
+            raise forbidden
+        # YouTube access tokens last an hour; a reply long after the last sync
+        # must refresh first rather than send an expired token.
+        try:
+            token = registry.fresh_token(platform, account_token_ref)
+        except AuthorizationExpired as exc:
+            forbidden = InboxReplyForbidden(
+                f"account authorization expired; reconnect it ({safe_error_summary(exc)})"
+            )
+            _fail_before_sending(forbidden)
+            raise forbidden from exc
+        except ProviderError as exc:
+            _fail_before_sending(exc)
+            raise
+        provider = registry.provider(platform)
 
         with self.database.session() as session:
             record = _action(session)

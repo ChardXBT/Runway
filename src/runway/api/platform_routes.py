@@ -34,11 +34,11 @@ from runway.platforms.capabilities import (
     capability_ready,
 )
 from runway.platforms.content import ContentService
-from runway.platforms.drafts import DraftService
+from runway.platforms.drafts import DraftService, DuplicateDraftTarget
 from runway.platforms.inbox import InboxReplyForbidden, InboxService
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.oauth import OAuthStateError, OAuthStateService
-from runway.platforms.overview import OverviewService, account_freshness
+from runway.platforms.overview import OverviewService, account_freshness, metric_window_start
 from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncRunInProgress, SyncService
 from runway.platforms.tokens import pkce_challenge
@@ -312,6 +312,9 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                     token_ref=registry.token_store.new_token_ref(),
                 )
                 session.add(account)
+            if account.token_ref is None:
+                # Disconnect clears token_ref; a reconnect needs a fresh one.
+                account.token_ref = registry.token_store.new_token_ref()
             account.handle = identity.handle
             account.display_name = identity.display_name
             account.avatar_url = identity.avatar_url
@@ -604,7 +607,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         days = int(range)
         account = _account_or_404(account_id)
         with database.session() as session:
-            start_day = datetime.now(UTC).date() - timedelta(days=days)
+            start_day = metric_window_start(days)
             metric_rows = session.scalars(
                 select(AccountMetricDay)
                 .where(
@@ -852,13 +855,16 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
 
     @router.post("/drafts")
     def drafts_create(payload: DraftCreateRequest) -> dict[str, object]:
-        return draft_service.create_draft(
-            title=payload.title,
-            body=payload.body,
-            scheduled_for=payload.scheduled_for,
-            notes=payload.notes,
-            targets=[target.model_dump() for target in payload.targets],
-        )
+        try:
+            return draft_service.create_draft(
+                title=payload.title,
+                body=payload.body,
+                scheduled_for=payload.scheduled_for,
+                notes=payload.notes,
+                targets=[target.model_dump() for target in payload.targets],
+            )
+        except DuplicateDraftTarget as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.patch("/drafts/{draft_id}")
     def drafts_update(draft_id: int, payload: DraftUpdateRequest) -> dict[str, object]:

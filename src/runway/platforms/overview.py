@@ -38,6 +38,17 @@ def account_freshness(last_sync_at: datetime | None) -> str:
     return "fresh"
 
 
+def metric_window_start(days: int, today: date | None = None) -> date:
+    """First day of a ``days``-long window of daily metrics that ends today.
+
+    The window is inclusive of today, so it starts ``days - 1`` days earlier;
+    starting ``days`` earlier would count one extra day. Metric days are UTC
+    calendar days, as stored by sync.
+    """
+    end = today or datetime.now(UTC).date()
+    return end - timedelta(days=days - 1)
+
+
 class OverviewService:
     def __init__(self, database: Database, settings: Settings) -> None:
         self.database = database
@@ -112,7 +123,7 @@ class OverviewService:
                         select(func.sum(AccountMetricDay.value)).where(
                             AccountMetricDay.account_id == account.id,
                             AccountMetricDay.metric == "views",
-                            AccountMetricDay.day >= date.today() - timedelta(days=28),
+                            AccountMetricDay.day >= metric_window_start(28),
                         )
                     )
                     top_content = session.scalars(

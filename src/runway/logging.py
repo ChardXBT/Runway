@@ -24,6 +24,15 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+# httpx logs every request URL at INFO ("HTTP Request: GET https://..."). Some
+# provider grant endpoints require credentials as query parameters (Instagram's
+# ig_exchange_token takes client_secret and access_token), so those lines would
+# write secrets to the service logs. Request-level logs from the HTTP stack are
+# kept at WARNING and above; provider failures are logged through
+# safe_error_summary instead.
+URL_LOGGING_LIBRARIES = ("httpx", "httpcore")
+
+
 def configure_logging(level: int = logging.INFO) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
@@ -31,3 +40,5 @@ def configure_logging(level: int = logging.INFO) -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level)
+    for name in URL_LOGGING_LIBRARIES:
+        logging.getLogger(name).setLevel(max(level, logging.WARNING))

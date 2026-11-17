@@ -7,7 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DraftsWorkspace } from "./drafts-workspace";
+import { DraftsWorkspace, localInputToIso, toLocalInput } from "./drafts-workspace";
 import type { DraftView, PlatformsResponse } from "@/lib/types";
 
 const platforms: PlatformsResponse = {
@@ -241,5 +241,32 @@ describe("DraftsWorkspace", () => {
       ).toBeNull(),
     );
     expect(fetchMock.mock.calls.at(-1)![1].method).toBe("DELETE");
+  });
+});
+
+describe("draft schedule times", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("sends the browser-local wall time as a UTC instant", () => {
+    vi.stubEnv("TZ", "America/Toronto");
+    // 14:00 in Toronto in November is 19:00 UTC; the naive string used to be
+    // stored as 14:00 UTC and shown back as 09:00.
+    expect(localInputToIso("2026-11-20T14:00")).toBe("2026-11-20T19:00:00.000Z");
+    expect(localInputToIso("")).toBeNull();
+    expect(localInputToIso("not a date")).toBeNull();
+  });
+
+  it("round-trips through the API without drifting on each save", () => {
+    vi.stubEnv("TZ", "America/Toronto");
+    let field = "2026-11-20T14:00";
+    for (let save = 0; save < 3; save += 1) {
+      const sent = localInputToIso(field);
+      // The API returns the stored UTC instant with an explicit offset.
+      const returned = new Date(sent as string).toISOString().replace("Z", "+00:00");
+      field = toLocalInput(returned);
+    }
+    expect(field).toBe("2026-11-20T14:00");
   });
 });

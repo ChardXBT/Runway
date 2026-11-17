@@ -51,7 +51,15 @@ function isDraft(value: unknown): value is DraftView {
   return isDraftList([value]);
 }
 
-function toLocalInput(value: string | null) {
+// A datetime-local value ("2026-11-20T14:00") is browser-local wall time with no
+// offset; send it as a UTC instant so the API stores the moment the user meant.
+export function localInputToIso(value: string): string | null {
+  if (value === "") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function toLocalInput(value: string | null) {
   if (value === null) return "";
   const date = new Date(value.endsWith("Z") || /[+-]\d\d:?\d\d$/.test(value) ? value : `${value}Z`);
   if (Number.isNaN(date.getTime())) return "";
@@ -210,7 +218,7 @@ function NewDraftForm({
         body: JSON.stringify({
           title: title.trim(),
           body,
-          scheduled_for: scheduledFor || null,
+          scheduled_for: localInputToIso(scheduledFor),
           targets,
         }),
       });
@@ -366,7 +374,7 @@ function DraftCard({
         body: JSON.stringify({
           title: title.trim(),
           body,
-          scheduled_for: scheduledFor || null,
+          scheduled_for: localInputToIso(scheduledFor),
           clear_schedule: scheduledFor === "",
         }),
       });

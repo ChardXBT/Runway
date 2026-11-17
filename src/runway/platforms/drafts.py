@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 from sqlalchemy import or_, select
@@ -23,6 +23,24 @@ from runway.platforms.capabilities import (
     Platform,
     capability_matrix,
 )
+
+
+class DuplicateDraftTarget(ValueError):
+    """Two targets of one draft resolve to the same platform account."""
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalize a schedule time to UTC before storage.
+
+    SQLite keeps no offset, and stored values are read back as UTC (iso_utc), so
+    an offset-aware time must be converted, not stripped. A naive value is
+    already UTC by this API's contract.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _publish_capability(
@@ -139,12 +157,13 @@ class DraftService:
             draft = ContentDraft(
                 title=title,
                 body=body,
-                scheduled_for=scheduled_for,
+                scheduled_for=_as_utc(scheduled_for),
                 notes=notes,
                 status="scheduled" if scheduled_for else "draft",
             )
             session.add(draft)
             session.flush()
+            seen_targets: set[tuple[str, int | None]] = set()
             for target in targets or []:
                 raw_account_id = target.get("account_id")
                 account_id = raw_account_id if isinstance(raw_account_id, int) else None
@@ -157,6 +176,12 @@ class DraftService:
                     ).all()
                     if len(bound) == 1:
                         account_id = bound[0].id
+                key = (str(target["platform"]), account_id)
+                if key in seen_targets:
+                    raise DuplicateDraftTarget(
+                        f"draft already targets this {key[0]} account; list each account once"
+                    )
+                seen_targets.add(key)
                 session.add(
                     DraftTarget(
                         draft_id=draft.id,
@@ -194,7 +219,7 @@ class DraftService:
             if clear_schedule:
                 draft.scheduled_for = None
             elif scheduled_for is not None:
-                draft.scheduled_for = scheduled_for
+                draft.scheduled_for = _as_utc(scheduled_for)
             if notes is not None:
                 draft.notes = notes
             if status is not None:

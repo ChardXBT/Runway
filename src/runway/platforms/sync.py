@@ -43,7 +43,6 @@ from runway.platforms.registry import ProviderRegistry
 logger = logging.getLogger(__name__)
 
 STALE_RUN_AGE = timedelta(minutes=30)
-TOKEN_REFRESH_WINDOW = timedelta(minutes=5)
 COMMENT_PAGE_LIMIT = 5
 
 
@@ -215,6 +214,20 @@ class SyncService:
                     error_summary=detail,
                 )
                 return
+            except ProviderError as exc:
+                # A transient refresh failure (timeout, 5xx, rate limit) fails
+                # this run but leaves the account connected, so the next run
+                # retries instead of demanding a reconnect.
+                self._finish_run(
+                    run_id,
+                    account_id,
+                    status="failed",
+                    steps=steps,
+                    items_fetched=items_fetched,
+                    quota_units=quota_units,
+                    error_summary=safe_error_summary(exc),
+                )
+                return
 
             steps_to_run: list[tuple[str, Callable[[], dict[str, int]]]] = [
                 ("identity", lambda: self._step_identity(provider, account_id, token)),
@@ -305,27 +318,7 @@ class SyncService:
             platform = account.platform
         if not token_ref:
             raise AuthorizationExpired("account has no stored token", status=401)
-        token = self.registry.token_store.load(token_ref)
-        if token is None:
-            raise AuthorizationExpired("account token is missing", status=401)
-        if token.expires_at is None:
-            return token
-        expires_at = token.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)
-        if expires_at - datetime.now(UTC) > TOKEN_REFRESH_WINDOW:
-            return token
-        provider = self.registry.provider(Platform(platform))
-        try:
-            refreshed = provider.refresh(token)
-        except AuthorizationExpired:
-            raise
-        except ProviderError as exc:
-            raise AuthorizationExpired(
-                f"token refresh failed: {exc.detail}", status=exc.status
-            ) from exc
-        self.registry.token_store.store(token_ref, refreshed)
-        return refreshed
+        return self.registry.fresh_token(Platform(platform), token_ref)
 
     def _account_platform(self, account_id: int) -> str:
         with self.database.session() as session:
@@ -456,11 +449,14 @@ class SyncService:
             )
             quota += page.quota_units
             backfill_pages += 1
+            # Advance before the empty-page check: an empty page (a final page
+            # past the last item, or one whose videos were all filtered out)
+            # must not leave the backfill resuming from the same page forever.
+            cursor = page.next_cursor
             if not page.items:
                 break
             self._store_content_page(account_id, provider.platform.value, page.items)
             items += len(page.items)
-            cursor = page.next_cursor
         if cursor is None:
             self._store_cursor(
                 account_id,

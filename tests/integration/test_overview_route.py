@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,11 @@ from runway.db.models import (
     ConnectedAccount,
     PlatformContent,
 )
-from runway.platforms.overview import FRESHNESS_STALE_AFTER, account_freshness
+from runway.platforms.overview import (
+    FRESHNESS_STALE_AFTER,
+    account_freshness,
+    metric_window_start,
+)
 
 PLATFORMS = {"youtube", "instagram", "tiktok"}
 
@@ -236,7 +240,7 @@ def test_overview_mock_mode_reflects_seeded_platform_data(mock_settings: Setting
                     select(func.sum(AccountMetricDay.value)).where(
                         AccountMetricDay.account_id == summary["account_id"],
                         AccountMetricDay.metric == "views",
-                        AccountMetricDay.day >= date.today() - timedelta(days=28),
+                        AccountMetricDay.day >= metric_window_start(28),
                     )
                 )
             expected_unanswered = (

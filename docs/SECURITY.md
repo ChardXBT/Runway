@@ -76,7 +76,15 @@
   own OAuth grant endpoints: Meta's `access_token` grant requires the held token as a query
   parameter, and every provider's token endpoint sends `client_secret`/`refresh_token` in the
   form-encoded request body, as each platform documents. YouTube revocation follows RFC 7009
-  and sends the revoked token in the request body, not the URL.
+  and sends the revoked token in the request body, not the URL. Because that Meta grant URL
+  carries credentials, `configure_logging` keeps the `httpx`/`httpcore` request loggers at
+  `WARNING`: their per-request `INFO` lines include the full URL and would otherwise write the
+  app secret and token to the service logs.
+- Tokens are refreshed only through `ProviderRegistry.fresh_token`, used by both sync and
+  comment replies: YouTube and TikTok access tokens within five minutes of expiry, Instagram
+  long-lived tokens once fewer than 30 of their 60 days remain. Only a revoked or missing grant
+  marks an account `needs_reauth`; a timeout or 5xx during refresh fails that run and leaves the
+  account connected.
 - The OAuth callback is an ordinary top-level `GET` on the loopback API, so the existing
   `LocalRequestGuard` still applies: only loopback `Host` headers are served. TikTok requires
   an HTTPS redirect, which means a tunnel that rewrites the Host header; the guard is not
