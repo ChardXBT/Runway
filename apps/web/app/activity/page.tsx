@@ -9,6 +9,7 @@ import {
   activityTitle,
   isActivityCategory,
 } from "@/lib/activity";
+import { parseApiDate } from "@/lib/format";
 import { isRecord } from "@/lib/guards";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +35,7 @@ function isEventList(value: unknown): value is Event[] {
         (event.entity_id === null || typeof event.entity_id === "number") &&
         isRecord(event.details) &&
         typeof event.created_at === "string" &&
-        !Number.isNaN(new Date(event.created_at).getTime()),
+        parseApiDate(event.created_at) !== null,
     )
   );
 }
@@ -106,32 +107,37 @@ export default async function ActivityPage({
       </form>
       {events.length ? (
         <section className="activity-list" aria-label="Audit events">
-          {events.map((event) => (
-            <article key={event.id}>
-              <span className="activity-index">#{event.id}</span>
-              <time dateTime={event.created_at}>
-                {new Date(event.created_at).toLocaleString()}
-              </time>
-              <div className="activity-name">
-                <span className="activity-category">
-                  {activityCategory(event.event_type)}
-                </span>
-                <strong>{activityTitle(event.event_type)}</strong>
-                <p>{activitySummary(event.event_type, event.details)}</p>
-                <span>
-                  {event.entity_type}
-                  {event.entity_id ? ` #${event.entity_id}` : ""}
-                </span>
-                {activityTeachesModel(event.event_type) && (
-                  <span className="learning-label">Teaches Runway</span>
-                )}
-              </div>
-              <details>
-                <summary>Technical record</summary>
-                <pre>{JSON.stringify(event.details, null, 2)}</pre>
-              </details>
-            </article>
-          ))}
+          {events.map((event) => {
+            // Audit timestamps arrive naive and mean UTC; new Date() would
+            // read them as local time.
+            const createdAt = parseApiDate(event.created_at);
+            return (
+              <article key={event.id}>
+                <span className="activity-index">#{event.id}</span>
+                <time dateTime={createdAt?.toISOString() ?? event.created_at}>
+                  {createdAt?.toLocaleString()}
+                </time>
+                <div className="activity-name">
+                  <span className="activity-category">
+                    {activityCategory(event.event_type)}
+                  </span>
+                  <strong>{activityTitle(event.event_type)}</strong>
+                  <p>{activitySummary(event.event_type, event.details)}</p>
+                  <span>
+                    {event.entity_type}
+                    {event.entity_id ? ` #${event.entity_id}` : ""}
+                  </span>
+                  {activityTeachesModel(event.event_type) && (
+                    <span className="learning-label">Teaches Runway</span>
+                  )}
+                </div>
+                <details>
+                  <summary>Technical record</summary>
+                  <pre>{JSON.stringify(event.details, null, 2)}</pre>
+                </details>
+              </article>
+            );
+          })}
         </section>
       ) : (
         <section className="panel empty">

@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
 import { actionError, readApiJson } from "@/lib/client-api";
+import { parseApiDate } from "@/lib/format";
 import {
   isPublisherConnectionStatus,
   isPublisherQueueStatus,
@@ -18,8 +19,10 @@ import type { StatusTone } from "./status-glyph";
 
 function connectionTime(value: string | null) {
   if (!value) return "Not recorded";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Unverified time" : date.toLocaleString();
+  // Naive API timestamps mean UTC; parseApiDate keeps them from being read
+  // as local time.
+  const date = parseApiDate(value);
+  return date === null ? "Unverified time" : date.toLocaleString();
 }
 
 function friendlyCheckLabel(value: string) {

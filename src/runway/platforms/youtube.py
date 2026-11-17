@@ -169,6 +169,9 @@ class YouTubeProvider(PlatformProvider):
         data = self._json_or_raise(response)
         refreshed = self._token_from_response(data, fallback_scopes=token.scopes)
         refreshed.refresh_token = token.refresh_token
+        # The refresh response carries no account context; keep the channel id
+        # and uploads playlist recorded at connect time.
+        refreshed.extra = {**token.extra, **refreshed.extra}
         return refreshed
 
     def revoke(self, token: TokenSet) -> bool:

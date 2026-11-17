@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { API_URL, apiGetRequired } from "@/lib/api";
+import { parseApiDate } from "@/lib/format";
 import { isRecord, proposalList } from "@/lib/guards";
 import type { Proposal } from "@/lib/types";
 
@@ -148,7 +149,7 @@ export default async function CataloguePage({
                 <small>
                   Rejected{" "}
                   {proposal.rejected_at
-                    ? new Date(proposal.rejected_at).toLocaleDateString()
+                    ? parseApiDate(proposal.rejected_at)?.toLocaleDateString()
                     : `as look ${proposal.id}`}
                 </small>
               </article>
@@ -221,7 +222,7 @@ export default async function CataloguePage({
                   {post.is_training_eligible && <span className="pill">Profile</span>}
                 </div>
                 <h2>{post.caption || "Caption unavailable"}</h2>
-                <small>{post.published_at ? new Date(post.published_at).toLocaleDateString() : "Source date unresolved"}</small>
+                <small>{parseApiDate(post.published_at)?.toLocaleDateString() ?? "Source date unresolved"}</small>
               </div>
             </Link>
           ))}

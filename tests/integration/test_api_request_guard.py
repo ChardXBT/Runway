@@ -66,3 +66,21 @@ def test_non_browser_clients_and_safe_reads_are_unaffected(client: TestClient) -
     assert client.get("/api/settings", headers={"origin": "https://attacker.example"}).is_success
     response = client.post("/api/candidates/999999/reject", json={"reason": "user_rejected"})
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "PATCH", "DELETE"])
+def test_web_origin_preflight_allows_every_route_method(client: TestClient, method: str) -> None:
+    # The inbox reply-draft autosave uses PUT; a rejected preflight makes the
+    # browser refuse the cross-origin request before it reaches the route.
+    response = client.options(
+        "/api/inbox/1/draft",
+        headers={
+            "origin": WEB_ORIGIN,
+            "access-control-request-method": method,
+            "access-control-request-headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == WEB_ORIGIN
+    assert method in response.headers["access-control-allow-methods"]

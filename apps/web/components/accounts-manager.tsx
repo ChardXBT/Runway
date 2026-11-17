@@ -7,7 +7,7 @@ import { ApiError, actionError, readApiJson } from "@/lib/client-api";
 import { AvatarImage } from "@/components/account-avatar";
 import { PlatformBadge, platformLabel } from "@/components/platform-badge";
 import { StatePanel } from "@/components/state-panel";
-import { isPlatformsResponse, isSyncRunView } from "@/lib/guards";
+import { isPlatformsResponse, isRunId, isSyncRunView } from "@/lib/guards";
 import { formatAbsoluteTime, formatHandle, formatRelativeTime } from "@/lib/format";
 import type {
   AccountView,
@@ -96,14 +96,6 @@ function isAuthorizationUrl(value: unknown): value is { authorization_url: strin
     value !== null &&
     typeof (value as { authorization_url?: unknown }).authorization_url ===
       "string"
-  );
-}
-
-function isRunId(value: unknown): value is { run_id: number } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { run_id?: unknown }).run_id === "number"
   );
 }
 

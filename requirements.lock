@@ -1,4 +1,4 @@
-# Exact Python 3.13 environment for Runway, including the [dev] tools (verified 2026-10-29).
+# Exact Python 3.13 environment for Runway, including the [dev] tools (verified 2026-11-17).
 # Install with: python -m pip install -r requirements.lock && python -m pip install --no-deps -e .
 alembic==1.18.5
 annotated-doc==0.0.4
@@ -67,7 +67,7 @@ ruff==0.15.22
 shellingham==1.5.4
 sniffio==1.3.1
 sortedcontainers==2.4.0
-soupsieve==2.9
+soupsieve==4.1.1
 SQLAlchemy==2.0.51
 starlette==1.3.1
 tomli==2.4.1

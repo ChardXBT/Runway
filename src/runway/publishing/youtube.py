@@ -116,6 +116,14 @@ class StalePublishAttempt(ValueError):
     """A queued attempt was superseded before the browser touched YouTube."""
 
 
+class QueuedAttemptInvalidated(StalePublishAttempt):
+    """A queued attempt failed its own preflight and was settled as `invalidated`.
+
+    Nothing was sent to YouTube, and the outcome is persisted on that attempt
+    only, so the serialized queue may continue with the next attempt.
+    """
+
+
 logger = logging.getLogger(__name__)
 
 # A `submitting` row younger than this could still belong to a live submission
@@ -1702,7 +1710,15 @@ class YouTubeBrowserPublisher:
                     raise StalePublishAttempt(
                         f"publish attempt {attempt_id} was superseded before submission"
                     )
-            session_status = await self._validated_adapter_session(source="queue_preflight")
+            try:
+                session_status = await self._validated_adapter_session(source="queue_preflight")
+            except Exception as exc:
+                # A failed session check (including a Google challenge, which
+                # Runway never handles itself) happens before the composer is
+                # touched. Persist it as a session block so the queue stays
+                # paused until a human resolves it and explicitly resumes.
+                self._record_preflight_failure(attempt_id, f"{type(exc).__name__}: {exc}")
+                raise
             if not session_status.valid:
                 self._record_preflight_failure(attempt_id, session_status.detail)
                 raise ValueError(session_status.detail)
@@ -2003,14 +2019,7 @@ class YouTubeBrowserPublisher:
 
     async def verify_scheduled_post(self, proposal_id: int) -> VerificationResult:
         self._require_enabled()
-        post, _payload_hash = self._prepared_post(
-            proposal_id,
-            allowed_statuses={
-                ProposalStatus.PUBLISHING.value,
-                ProposalStatus.PUBLISH_UNVERIFIED.value,
-                ProposalStatus.EXTERNALLY_SCHEDULED.value,
-            },
-        )
+        post = self._verification_post(proposal_id)
         receipt = await self.adapter.verify(post)
         with self.database.session() as session:
             proposal = session.get(Proposal, proposal_id)
@@ -2167,6 +2176,43 @@ class YouTubeBrowserPublisher:
             allowed_statuses=allowed_statuses,
         )
         return result.post, result.payload_hash
+
+    def _verification_post(self, proposal_id: int) -> PreparedPost:
+        """Describe an already-submitted post for the read-only Scheduled-tab check.
+
+        Verification writes nothing to YouTube, so the submit-only gates of
+        `_publishing_preflight` (slot at least five minutes away, readable local
+        image bytes) do not apply: an unverified post must stay verifiable once
+        its slot is near or past. The proposal-status gate and the channel
+        timestamp check that the Scheduled-tab date/time match relies on stay.
+        """
+        allowed_statuses = {
+            ProposalStatus.PUBLISHING.value,
+            ProposalStatus.PUBLISH_UNVERIFIED.value,
+            ProposalStatus.EXTERNALLY_SCHEDULED.value,
+        }
+        with self.database.session() as session:
+            proposal = session.get(Proposal, proposal_id)
+            if proposal is None:
+                raise LookupError(f"proposal {proposal_id} not found")
+            if proposal.status not in allowed_statuses:
+                raise ValueError("only a submitted YouTube action can be verified")
+            if not proposal.scheduled_publish_at:
+                raise ValueError("proposal has no assigned daily schedule slot")
+            planned = datetime.fromisoformat(proposal.scheduled_publish_at)
+            channel = get_channel(session, self.settings.channel_handle)
+            self._validate_channel_timestamp(planned, ZoneInfo(channel.timezone))
+            candidate = session.get(CandidateImage, proposal.candidate_image_id)
+            media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
+            local_image_path = (
+                str(self.settings.resolved_data_dir / media.local_path) if media else ""
+            )
+            return PreparedPost(
+                proposal_id=proposal.id,
+                planned_publish_at=proposal.scheduled_publish_at,
+                caption=proposal.final_caption,
+                local_image_path=local_image_path,
+            )
 
     def _publishing_preflight(
         self,
@@ -2417,20 +2463,39 @@ class YouTubeBrowserPublisher:
                 raise ValueError(
                     f"publish attempt is {attempt_status_of(attempt).value}, not queued"
                 )
-            post, current_payload_hash = self._prepared_post(
-                proposal.id,
-                allowed_statuses={
-                    ProposalStatus.INTERNALLY_SCHEDULED.value,
-                    ProposalStatus.PUBLISH_FAILED.value,
-                },
-            )
-            if not hmac.compare_digest(attempt.payload_hash, current_payload_hash):
+            current_payload_hash: str | None = None
+            try:
+                post, current_payload_hash = self._prepared_post(
+                    proposal.id,
+                    allowed_statuses={
+                        ProposalStatus.INTERNALLY_SCHEDULED.value,
+                        ProposalStatus.PUBLISH_FAILED.value,
+                    },
+                )
+            except ValueError as exc:
+                # This post can no longer be submitted (slot inside the
+                # five-minute window, image missing or blocked, ...). Nothing
+                # was sent, so settle only this attempt instead of leaving it
+                # queued behind a memory-only pause of the whole queue.
+                terminal_error = str(exc)
+            if current_payload_hash is not None and not hmac.compare_digest(
+                attempt.payload_hash, current_payload_hash
+            ):
+                terminal_error = "proposal changed after it entered the scheduling queue"
+            if terminal_error is not None:
                 transition_attempt(
                     attempt,
                     PublishAttemptStatus.INVALIDATED,
                     now=datetime.now(UTC),
                 )
-                terminal_error = "proposal changed after it entered the scheduling queue"
+                attempt.error_summary = terminal_error[:2000]
+                audit(
+                    session,
+                    "youtube_queue_attempt_invalidated",
+                    "proposal",
+                    proposal.id,
+                    {"attempt_id": attempt.id, "error": terminal_error[:500]},
+                )
             else:
                 require_transition(proposal.status, ProposalStatus.PUBLISHING)
                 old_status = proposal.status
@@ -2461,8 +2526,8 @@ class YouTubeBrowserPublisher:
                     proposal.id,
                     {"attempt_id": attempt.id, "trigger": "explicit_lineup_action"},
                 )
-        if terminal_error:
-            raise ValueError(terminal_error)
+        if terminal_error is not None:
+            raise QueuedAttemptInvalidated(terminal_error)
         if post is None:
             raise RuntimeError("queued publish attempt did not produce a prepared post")
         return post

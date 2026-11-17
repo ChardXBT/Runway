@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import re
 import shutil
 import socket
 import sqlite3
@@ -1607,6 +1608,20 @@ def _command_version(command: str, *args: str) -> str | None:
     return output[0] if output else "available"
 
 
+# Next.js 16 refuses to build or start below this release (its package.json engines field).
+MINIMUM_NODE_VERSION = (20, 9, 0)
+
+
+def _node_version_supported(version: str | None) -> bool:
+    """Return whether a ``node --version`` string meets the frontend's minimum."""
+    if version is None:
+        return False
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)\S*", version.strip())
+    if match is None:
+        return False
+    return tuple(int(part) for part in match.groups()) >= MINIMUM_NODE_VERSION
+
+
 def _port_available(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         try:
@@ -1640,7 +1655,20 @@ def doctor() -> None:
     checks: list[tuple[str, bool, str]] = []
     checks.append(("Python", sys.version_info >= (3, 11), sys.version.split()[0]))
     node_version = _command_version("node", "--version")
-    checks.append(("Node", node_version is not None, node_version or "missing"))
+    minimum_node = ".".join(str(part) for part in MINIMUM_NODE_VERSION)
+    checks.append(
+        (
+            "Node",
+            _node_version_supported(node_version),
+            (
+                "missing"
+                if node_version is None
+                else node_version
+                if _node_version_supported(node_version)
+                else f"{node_version}; Next.js needs Node {minimum_node} or newer"
+            ),
+        )
+    )
     npm_version = _command_version("npm", "--version")
     checks.append(("npm", npm_version is not None, npm_version or "missing"))
     checks.append(

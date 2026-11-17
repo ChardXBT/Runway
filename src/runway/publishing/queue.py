@@ -63,10 +63,14 @@ class PublisherQueueCoordinator:
                 "run a fresh successful saved-session check before resuming blocked actions"
             )
         requeued = self.publisher.requeue_blocked_session_attempts()
-        if requeued == 0:
-            raise ValueError("no session-blocked YouTube actions are available to resume")
         with self._guard:
+            # The worker pause is memory-only; clearing it is safe because the
+            # worker only ever picks `queued` attempts, never one that may
+            # already have reached YouTube.
+            was_paused = self._paused_reason is not None
             self._paused_reason = None
+        if requeued == 0 and not was_paused:
+            raise ValueError("no session-blocked YouTube actions are available to resume")
         self._start_if_ready()
         return {
             **self.status(),

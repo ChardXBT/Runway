@@ -68,6 +68,36 @@ describe("PlatformConnection", () => {
     expect(screen.getByText("Qlob Editor session is ready.")).toBeInTheDocument();
   });
 
+  it("shows naive last-verified timestamps as UTC, not local time", () => {
+    vi.stubEnv("TZ", "America/New_York");
+    try {
+      render(
+        <PlatformConnection
+          publishingEnabled
+          channelId="UCxxxxxxxxxxxxxxxxxxxxxx"
+          connectorEmail="tryrunwaytoday@gmail.com"
+          browserChannel="chrome"
+          initialConnection={{
+            ...initialConnection,
+            last_verified_publish_at: "2026-07-20T11:56:00",
+          }}
+          initialQueue={{
+            running: false,
+            queued: 0,
+            paused: false,
+            paused_reason: null,
+            proposal_ids: [],
+          }}
+        />,
+      );
+      expect(
+        screen.getByText(new Date("2026-07-20T11:56:00Z").toLocaleString()),
+      ).toBeInTheDocument();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("shows the real setup flow without a fake connect control", () => {
     render(
       <PlatformConnection

@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DashboardOverview } from "./dashboard-overview";
+import { API_URL } from "@/lib/api";
 import type { OverviewResponse } from "@/lib/types";
 
 const baseOverview: OverviewResponse = {
@@ -139,6 +140,13 @@ describe("DashboardOverview", () => {
     expect(screen.getByText("Launch teaser")).toBeInTheDocument();
     expect(screen.getByText("Studio tour")).toBeInTheDocument();
     expect(screen.getByText(/YouTube 3/)).toBeInTheDocument();
+  });
+
+  it("loads up-next thumbnails from the API origin", () => {
+    const { container } = render(<DashboardOverview overview={baseOverview} />);
+    const thumb = container.querySelector(".dashboard-upnext img");
+    expect(thumb).not.toBeNull();
+    expect(thumb).toHaveAttribute("src", `${API_URL}/media/preview.png`);
   });
 
   it("shows the all-caught-up empty state when nothing needs attention", () => {

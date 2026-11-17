@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
-from runway.platforms.base import PlatformProvider, TokenSet
+from runway.platforms.base import AuthorizationExpired, PlatformProvider, TokenSet
 from runway.platforms.capabilities import (
     DEFAULT_PLATFORM_SCOPES,
     Platform,
@@ -20,6 +21,21 @@ from runway.platforms.tokens import TokenStore
 from runway.platforms.youtube import YouTubeProvider
 
 logger = logging.getLogger(__name__)
+
+# Short-lived OAuth access tokens (YouTube, TikTok) are refreshed just before
+# they expire, from their refresh token.
+TOKEN_REFRESH_WINDOW = timedelta(minutes=5)
+# Instagram long-lived tokens last 60 days and have no refresh token: they can
+# only be refreshed while still valid (and once at least 24 hours old). A
+# five-minute window would almost never coincide with a sync, so refresh once
+# half of the lifetime has passed; any sync in the second half keeps it alive.
+INSTAGRAM_TOKEN_REFRESH_WINDOW = timedelta(days=30)
+
+
+def token_refresh_window(platform: Platform) -> timedelta:
+    if platform is Platform.instagram:
+        return INSTAGRAM_TOKEN_REFRESH_WINDOW
+    return TOKEN_REFRESH_WINDOW
 
 
 class UnknownPlatformError(ValueError):
@@ -59,6 +75,28 @@ class ProviderRegistry:
 
     def set_provider(self, platform: Platform, provider: PlatformProvider) -> None:
         self._providers[platform] = provider
+
+    def fresh_token(self, platform: Platform, token_ref: str) -> TokenSet:
+        """Load an account token, refreshing and re-storing it when it is near expiry.
+
+        Raises AuthorizationExpired only when the account must be re-authorized
+        (no stored token, a revoked grant). Transient refresh failures (timeouts,
+        5xx, rate limits) propagate as their own ProviderError so callers do not
+        mistake a network blip for a revoked account.
+        """
+        token = self.token_store.load(token_ref)
+        if token is None:
+            raise AuthorizationExpired("account token is missing", status=401)
+        if token.expires_at is None:
+            return token
+        expires_at = token.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at - datetime.now(UTC) > token_refresh_window(platform):
+            return token
+        refreshed = self.provider(platform).refresh(token)
+        self.token_store.store(token_ref, refreshed)
+        return refreshed
 
     def platforms(self) -> list[Platform]:
         return list(Platform)
