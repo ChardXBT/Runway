@@ -80,11 +80,26 @@ function Test-Contains([string]$Text, [string]$Value) {
     return $Text.IndexOf($Value, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
+function Get-ParentProcess($Process) {
+    if (-not $Process.PSObject.Properties['ParentProcessId']) { return $null }
+    return Get-CimInstance Win32_Process -Filter "ProcessId = $($Process.ParentProcessId)" -ErrorAction SilentlyContinue
+}
+
 function Test-Owned($Process, [string]$Component) {
     if (-not $Process -or -not $Process.CommandLine) { return $false }
     if ($Component -eq 'api') {
-        return (Test-Contains $Process.CommandLine $python) -and
-            (Test-Contains $Process.CommandLine 'runway.api.app:app')
+        if (-not (Test-Contains $Process.CommandLine 'runway.api.app:app')) { return $false }
+        if (Test-Contains $Process.CommandLine $python) { return $true }
+        # The venv python.exe is a redirector. On python.org installs it starts the
+        # base interpreter, whose command line names the base path, not this
+        # checkout. That listener is ours only if its parent is our venv redirector
+        # running the same API module.
+        $parent = Get-ParentProcess $Process
+        if (-not $parent -or -not $parent.PSObject.Properties['CommandLine'] -or -not $parent.CommandLine) {
+            return $false
+        }
+        return (Test-Contains $parent.CommandLine $python) -and
+            (Test-Contains $parent.CommandLine 'runway.api.app:app')
     }
     return $Process.Name -eq 'node.exe' -and (Test-Contains $Process.CommandLine $next)
 }

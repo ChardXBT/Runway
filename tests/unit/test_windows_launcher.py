@@ -35,6 +35,21 @@ Assert (Test-Owned $api 'api') 'path casing must not disown a running Runway API
 $api.CommandLine = '"' + $python + '" -m uvicorn runway.api.app:app'
 $api.CommandLine = 'python -m uvicorn other:app'
 Assert (-not (Test-Owned $api 'api')) 'unrelated Python must not be owned'
+# Python 3.12 python.org venv: the listener is the base interpreter, its parent the redirector.
+$base = [pscustomobject]@{
+    Name='python.exe'; ParentProcessId=42
+    CommandLine='"C:\Python312\python.exe" -m uvicorn runway.api.app:app --port 8000'
+}
+$parentProcess = [pscustomobject]@{ CommandLine='"' + $python + '" -m uvicorn runway.api.app:app --port 8000' }
+function Get-ParentProcess { return $script:parentProcess }
+Assert (Test-Owned $base 'api') 'base interpreter started by our venv redirector must be owned'
+$parentProcess = [pscustomobject]@{ CommandLine='"C:\other\.venv\Scripts\python.exe" -m uvicorn runway.api.app:app' }
+Assert (-not (Test-Owned $base 'api')) 'another checkout''s redirector must not be owned'
+$parentProcess = $null
+Assert (-not (Test-Owned $base 'api')) 'orphaned base interpreter must not be owned'
+$base.CommandLine = '"C:\Python312\python.exe" -m uvicorn other:app'
+$parentProcess = [pscustomobject]@{ CommandLine='"' + $python + '" -m uvicorn runway.api.app:app' }
+Assert (-not (Test-Owned $base 'api')) 'base interpreter running another app must not be owned'
 $web = [pscustomobject]@{ Name='node.exe'; CommandLine='node "' + $next + '" start' }
 Assert (Test-Owned $web 'web') 'absolute Next entry point must be recognized'
 $web.CommandLine = 'node C:\other\server.js'
