@@ -220,6 +220,33 @@ def test_disconnect_requires_confirmation(mock_settings: Settings) -> None:
         assert response.status_code == 422
 
 
+def test_sync_of_disconnected_account_is_refused_and_status_kept(
+    mock_settings: Settings,
+) -> None:
+    app = create_app(mock_settings)
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        account = client.get("/api/platforms/accounts").json()[0]
+        disconnect = client.post(
+            f"/api/platforms/accounts/{account['id']}/disconnect",
+            json={"confirmed": True},
+        )
+        assert disconnect.status_code == 200
+        runs_before = client.get(f"/api/platforms/accounts/{account['id']}/sync-runs").json()
+
+        response = client.post(f"/api/platforms/accounts/{account['id']}/sync")
+
+        assert response.status_code == 409
+        assert "reconnect" in response.json()["detail"]
+        database: Database = app.state.database
+        with database.session() as session:
+            record = session.get(ConnectedAccount, account["id"])
+            assert record is not None
+            assert record.status == "disconnected"
+            assert record.last_error is None
+        runs_after = client.get(f"/api/platforms/accounts/{account['id']}/sync-runs").json()
+        assert runs_after == runs_before
+
+
 def test_sync_endpoint_returns_202_and_run_completes(
     mock_settings: Settings,
 ) -> None:

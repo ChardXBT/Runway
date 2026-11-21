@@ -40,7 +40,7 @@ from runway.platforms.instagram import InstagramProvider
 from runway.platforms.oauth import OAuthStateError, OAuthStateService
 from runway.platforms.overview import OverviewService, account_freshness, metric_window_start
 from runway.platforms.registry import ProviderRegistry, parse_platform
-from runway.platforms.sync import SyncRunInProgress, SyncService
+from runway.platforms.sync import SyncAccountDisconnected, SyncRunInProgress, SyncService
 from runway.platforms.tokens import pkce_challenge
 
 logger = logging.getLogger(__name__)
@@ -518,7 +518,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         _account_or_404(account_id)
         try:
             run = sync_service.start_background(account_id, trigger="manual")
-        except SyncRunInProgress as exc:
+        except (SyncRunInProgress, SyncAccountDisconnected) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return Response(
             content=json.dumps({"run_id": run.id}),

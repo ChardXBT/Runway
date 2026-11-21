@@ -54,6 +54,10 @@ class SyncAccountMissing(Exception):
     pass
 
 
+class SyncAccountDisconnected(Exception):
+    """The owner disconnected this account; syncing it needs a reconnect, not a reauth."""
+
+
 class SyncService:
     def __init__(
         self,
@@ -124,6 +128,12 @@ class SyncService:
                 account = session.get(ConnectedAccount, account_id)
                 if account is None:
                     raise SyncAccountMissing(f"account {account_id} does not exist")
+                if account.status == "disconnected":
+                    # Without this a sync finds no token and relabels a deliberate
+                    # disconnect as needs_reauth.
+                    raise SyncAccountDisconnected(
+                        f"account {account_id} is disconnected; reconnect it before syncing"
+                    )
                 run = SyncRun(account_id=account_id, trigger=trigger, status="running")
                 session.add(run)
                 session.flush()
