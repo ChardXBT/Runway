@@ -99,6 +99,42 @@ Playwright against a running API + Next.js dev server on temporary data director
   tested against a Settings instance with fake secrets).
 - Mock fixtures are fictional ("Northwind Studio") with no media URLs.
 
+## Acceptance run on Windows (2026-11-21)
+
+A fresh checkout of `main` (after the 2026-11-17 readiness audit, PR #4) was installed and run on
+the owner's Windows 11 PC: python.org Python 3.12.10 `.venv`, Node 24.16.0 / npm 11.13.0. That
+machine had no `.env`, so no platform credentials were available and no real account was
+connected. Everything that could run without the owner's accounts was run:
+
+| Check | Result |
+| --- | --- |
+| `pip install -r requirements.lock`, `npm ci`, `npm run web:build` | clean; production build written |
+| `runway init`, `runway doctor` | all `[OK]` (Node 24.16.0, Playwright Chromium, migration `0012_creator_platforms`) |
+| `scripts/e2e_demo.py` | exit 0, fixture proof written |
+| `run-runway.ps1` | **failed before the fix below**, then API and web ready |
+| `ruff check`, `ruff format --check`, `mypy src/runway` | pass; 213 files formatted; no issues in 126 files |
+| Windows launcher contracts + platform route/regression suites | 22 passed |
+| Mock mode: all 16 pages | 200, no error panels |
+| Mock mode: sync, inbox reply (Instagram), disconnect, reconnect | sync 202 then `completed`; reply recorded and verified with no network call; disconnect clears the token; reconnect refused with 400 in mock mode |
+| Live mode, no credentials | `/api/platforms` reports `configured: false` with the required variables; YouTube and TikTok connect return 409 |
+| Live mode, Instagram token import with a fake token | Meta's real endpoint rejected it (400 `Failed to decrypt`); neither the token nor a `graph.instagram.com` URL appeared in the service logs (audit fix #9 holds against the real endpoint) |
+
+Defects found and fixed in this run:
+
+1. `run-runway.ps1` rejected its own API on python.org Python 3.12. The venv `python.exe` is a
+   redirector that starts the base interpreter, so the listener's command line names
+   `...\Python312\python.exe`, not the checkout. Every launch ended with "Port 8000 is occupied
+   by an unrelated or unverifiable process". The launcher now accepts that listener only when
+   its parent is this checkout's venv redirector running `runway.api.app:app`.
+2. Syncing a disconnected account (possible from Analytics "Sync now") relabelled it
+   `needs_reauth` with "account has no stored token". It now returns 409 asking for a reconnect,
+   records no run, and leaves the status alone.
+
+Still outstanding, because it needs the owner's credentials and accounts: connecting,
+disconnecting and reconnecting a real YouTube channel; a sync and a reply more than an hour after
+connecting (token refresh); importing and syncing a real Instagram token; and a TikTok connection
+through an HTTPS tunnel. These are tracked as GitHub issues.
+
 ## Verified live capabilities
 
 None. Every YouTube, Instagram, and TikTok capability marked *implemented* in
