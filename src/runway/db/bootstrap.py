@@ -40,8 +40,14 @@ class MigrationStatus:
 
 def alembic_config(settings: Settings) -> Config:
     config = Config(str(settings.project_root / "alembic.ini"))
-    config.set_main_option("script_location", str(settings.project_root / "alembic"))
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+
+    # Config values go through configparser interpolation, where a bare `%` in
+    # a path (for example a data directory named "100%") is a syntax error.
+    def option(value: str) -> str:
+        return value.replace("%", "%%")
+
+    config.set_main_option("script_location", option(str(settings.project_root / "alembic")))
+    config.set_main_option("sqlalchemy.url", option(settings.database_url))
     # Read by 0013_workspaces to name workspace 1 after the configured channel.
     config.attributes["runway_channel_name"] = settings.channel_name
     return config

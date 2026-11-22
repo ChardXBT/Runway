@@ -208,3 +208,21 @@ def test_the_api_runs_no_sync_thread_even_with_an_interval(tmp_path: Path) -> No
 
     # Scheduled sync is produced and executed by `runway worker` (audit C8).
     assert "runway-platform-sync" not in names
+
+
+@pytest.mark.parametrize(
+    "directory_name",
+    ["run#way", "per%20cent %41"] + ([] if sys.platform == "win32" else ["what?mode=rw"]),
+)
+def test_a_data_directory_with_uri_characters_reads_as_migrated(
+    tmp_path: Path, directory_name: str
+) -> None:
+    settings = Settings(data_dir=tmp_path / directory_name / "data")
+    initialize_database(settings).engine.dispose()
+
+    status = migration_status(settings)
+
+    assert status.current == status.head
+    require_database_at_head(settings)
+    # Reading never created a stray database next to the real one.
+    assert sorted(path.name for path in (tmp_path / directory_name).iterdir()) == ["data"]
