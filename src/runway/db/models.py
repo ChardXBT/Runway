@@ -18,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from runway.db.base import Base
+from runway.domain.enums import CommentStatus, DraftStatus, PlatformActionState, TargetState
 
 
 def utcnow() -> datetime:
@@ -1605,7 +1606,7 @@ class CommentRecord(Base):
     reply_count: Mapped[int | None] = mapped_column(Integer)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     platform_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    status: Mapped[str] = mapped_column(String(20), index=True, default="new")
+    status: Mapped[str] = mapped_column(String(20), index=True, default=CommentStatus.NEW.value)
     has_owner_reply: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     permalink: Mapped[str | None] = mapped_column(Text)
     raw_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -1632,7 +1633,9 @@ class PlatformAction(Base):
     action_type: Mapped[str] = mapped_column(String(40), index=True)
     target_type: Mapped[str] = mapped_column(String(40))
     target_id: Mapped[int | None] = mapped_column(Integer)
-    state: Mapped[str] = mapped_column(String(20), index=True, default="proposed")
+    state: Mapped[str] = mapped_column(
+        String(20), index=True, default=PlatformActionState.PROPOSED.value
+    )
     request_json: Mapped[str] = mapped_column(Text, default="{}")
     response_json: Mapped[str] = mapped_column(Text, default="{}")
     external_result_id: Mapped[str | None] = mapped_column(String(200))
@@ -1680,7 +1683,7 @@ class ContentDraft(Base, TimestampMixin):
     media_path: Mapped[str | None] = mapped_column(Text)
     media_kind: Mapped[str | None] = mapped_column(String(20))
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-    status: Mapped[str] = mapped_column(String(30), index=True, default="draft")
+    status: Mapped[str] = mapped_column(String(30), index=True, default=DraftStatus.DRAFT.value)
     notes: Mapped[str | None] = mapped_column(Text)
 
 
@@ -1696,7 +1699,7 @@ class DraftTarget(Base):
     account_id: Mapped[int | None] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
     caption_override: Mapped[str | None] = mapped_column(Text)
     settings_json: Mapped[str] = mapped_column(Text, default="{}")
-    status: Mapped[str] = mapped_column(String(30), default="pending")
+    status: Mapped[str] = mapped_column(String(30), default=TargetState.DRAFT.value)
     published_content_id: Mapped[int | None] = mapped_column(ForeignKey("platform_content.id"))
     published_url: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

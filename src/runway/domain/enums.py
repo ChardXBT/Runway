@@ -77,3 +77,61 @@ class PublishAttemptStatus(StrEnum):
     # strings or status/timestamp combos that violate the record invariants).
     # UNKNOWN is inert: it is in no active, pending, or transitionable set.
     UNKNOWN = "unknown"
+
+
+class DraftStatus(StrEnum):
+    """`ContentDraft.status`. The spec 03 post status will be derived from targets."""
+
+    DRAFT = "draft"
+    SCHEDULED = "scheduled"
+    PARTIALLY_PUBLISHED = "partially_published"
+    PUBLISHED = "published"
+    ARCHIVED = "archived"
+
+
+class TargetState(StrEnum):
+    """`DraftTarget.status`, named with the spec 03 section 2 vocabulary.
+
+    Stored values are unchanged from before the machine existed. The only
+    renamed value is DRAFT, stored as the legacy "pending" (a target that has
+    not been sent). Every other member stores its own spec name.
+    """
+
+    DRAFT = "pending"
+    READY = "ready"
+    RELEASED = "released"
+    QUEUED = "queued"
+    SENDING = "sending"
+    PROCESSING = "processing"
+    PUBLISHED = "published"
+    VERIFIED = "verified"
+    NEEDS_USER = "needs_user"
+    FAILED_RETRYABLE = "failed_retryable"
+    FAILED_FINAL = "failed_final"
+    UNCERTAIN = "uncertain"
+    CANCELLED = "cancelled"
+
+
+class PlatformActionState(StrEnum):
+    """`PlatformAction.state` for comment replies (stored values unchanged).
+
+    Correspondence with the spec 03 vocabulary: proposed ~ queued,
+    attempted ~ sending, completed ~ verified (written only after the platform
+    confirmed the reply), failed ~ failed_final, uncertain = uncertain.
+    """
+
+    PROPOSED = "proposed"
+    ATTEMPTED = "attempted"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    UNCERTAIN = "uncertain"
+
+
+class CommentStatus(StrEnum):
+    """`CommentRecord.status`: the owner's moderation label for a comment."""
+
+    NEW = "new"
+    READ = "read"
+    ANSWERED = "answered"
+    ESCALATED = "escalated"
+    IGNORED = "ignored"

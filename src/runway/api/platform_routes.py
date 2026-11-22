@@ -881,6 +881,10 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            # The draft state machine refused the status (e.g. a published
+            # draft back to draft, or scheduled without a time).
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.delete("/drafts/{draft_id}")
     def drafts_archive(draft_id: int) -> dict[str, object]:

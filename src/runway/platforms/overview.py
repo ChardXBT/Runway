@@ -17,6 +17,7 @@ from runway.db.models import (
     SyncRun,
 )
 from runway.db.repositories import get_channel
+from runway.domain.enums import DraftStatus
 from runway.platforms.base import iso_utc
 from runway.platforms.capabilities import Platform
 from runway.platforms.inbox import unanswered_clause
@@ -200,7 +201,7 @@ class OverviewService:
                 select(ContentDraft)
                 .where(
                     ContentDraft.scheduled_for.is_not(None),
-                    ContentDraft.status != "archived",
+                    ContentDraft.status != DraftStatus.ARCHIVED.value,
                 )
                 .order_by(ContentDraft.scheduled_for.asc())
                 .limit(5)

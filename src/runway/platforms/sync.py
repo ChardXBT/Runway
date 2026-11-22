@@ -23,6 +23,8 @@ from runway.db.models import (
     SyncRun,
     utcnow,
 )
+from runway.domain.enums import CommentStatus
+from runway.domain.state_machine import COMMENT_STATUS_MACHINE, TARGET_DELIVERED_STATES
 from runway.platforms.base import (
     AuthorizationExpired,
     CapabilityUnsupported,
@@ -537,7 +539,7 @@ class SyncService:
             pending = session.scalars(
                 select(DraftTarget).where(
                     DraftTarget.platform == platform,
-                    DraftTarget.status == "published",
+                    DraftTarget.status.in_([state.value for state in TARGET_DELIVERED_STATES]),
                     DraftTarget.published_content_id.is_(None),
                     DraftTarget.published_url.is_not(None),
                 )
@@ -762,7 +764,7 @@ class SyncService:
                             reply_count=item.reply_count,
                             published_at=item.published_at,
                             platform_updated_at=item.platform_updated_at,
-                            status="new",
+                            status=COMMENT_STATUS_MACHINE.start(CommentStatus.NEW),
                             has_owner_reply=False,
                             permalink=item.permalink,
                             raw_json=json.dumps(item.raw),
