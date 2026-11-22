@@ -194,3 +194,17 @@ def test_uvicorn_exits_non_zero_with_a_clear_error_when_not_migrated(tmp_path: P
     assert result.returncode != 0
     assert "runway db upgrade" in result.stderr + result.stdout
     assert not (data_dir / "runway.db").exists()
+
+
+def test_the_api_runs_no_sync_thread_even_with_an_interval(tmp_path: Path) -> None:
+    import threading
+
+    settings = Settings(data_dir=tmp_path / "data", platform_sync_interval_minutes=5)
+    initialize_database(settings).engine.dispose()
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
+        assert client.get("/health").status_code == 200
+        names = {thread.name for thread in threading.enumerate()}
+
+    # Scheduled sync is produced and executed by `runway worker` (audit C8).
+    assert "runway-platform-sync" not in names

@@ -8,7 +8,6 @@ import re
 import secrets
 import sys
 import tempfile
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,6 +15,7 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from runway.locks import LockTimeout, exclusive_file_lock
 from runway.platforms.base import TokenSet, deserialize_token, serialize_token
 
 
@@ -30,57 +30,6 @@ class TokenRefreshBusy(TokenStoreError):
 _TOKEN_REF_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 # Longer than one provider round trip (20 s client timeout) plus the store write.
 REFRESH_LOCK_TIMEOUT_SECONDS = 90.0
-_LOCK_POLL_SECONDS = 0.05
-
-
-@contextmanager
-def _exclusive_file_lock(path: Path, *, timeout: float | None) -> Iterator[None]:
-    """Hold an exclusive OS lock on ``path`` across threads and processes.
-
-    Each call opens its own handle, so two threads of one process exclude each
-    other as well (Windows byte-range locks and POSIX ``flock`` are per open
-    file). ``timeout=None`` waits forever.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    deadline = None if timeout is None else time.monotonic() + timeout
-    with path.open("a+b") as handle:
-        if sys.platform == "win32":
-            import msvcrt
-
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-            while True:
-                handle.seek(0)
-                try:
-                    # LK_NBLCK fails at once; LK_LOCK would give up after ~10 s.
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError:
-                    if deadline is not None and time.monotonic() >= deadline:
-                        raise TokenRefreshBusy(f"timed out waiting for {path.name}") from None
-                    time.sleep(_LOCK_POLL_SECONDS)
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            while True:
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if deadline is not None and time.monotonic() >= deadline:
-                        raise TokenRefreshBusy(f"timed out waiting for {path.name}") from None
-                    time.sleep(_LOCK_POLL_SECONDS)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 class TokenStore:
@@ -106,7 +55,7 @@ class TokenStore:
         silently overwrite each other's token updates. A sidecar
         ``token.lock`` file is held exclusively for the whole sequence.
         """
-        with _exclusive_file_lock(self.lock_path, timeout=None):
+        with exclusive_file_lock(self.lock_path, timeout=None):
             yield
 
     @contextmanager
@@ -121,8 +70,11 @@ class TokenStore:
         """
         if not _TOKEN_REF_PATTERN.match(token_ref):
             raise TokenStoreError("token reference is not a safe lock name")
-        with _exclusive_file_lock(self.refresh_lock_dir / f"{token_ref}.lock", timeout=timeout):
-            yield
+        try:
+            with exclusive_file_lock(self.refresh_lock_dir / f"{token_ref}.lock", timeout=timeout):
+                yield
+        except LockTimeout as exc:
+            raise TokenRefreshBusy(str(exc)) from exc
 
     def _load_key(self) -> bytes:
         if self.key_path.is_file():

@@ -23,7 +23,7 @@ from runway.config import Settings, get_settings
 from runway.db.base import Database
 from runway.db.bootstrap import DatabaseNotCurrent, require_database_at_head
 from runway.logging import configure_logging
-from runway.platforms.sync import PlatformSyncScheduler, SyncService
+from runway.platforms.sync import SyncService
 
 logger = logging.getLogger(__name__)
 
@@ -75,20 +75,15 @@ def _lifespan(
             logger.error(str(exc), extra={"event_type": "api_refused"})
             raise
         logger.info(_startup_summary(settings), extra={"event_type": "api_start"})
-        sync_service = SyncService(database, settings)
         try:
-            sync_service.mark_stale_runs_failed()
+            SyncService(database, settings).mark_stale_runs_failed()
         except Exception:  # noqa: BLE001
             logger.exception("stale sync-run cleanup failed during startup")
-        scheduler: PlatformSyncScheduler | None = None
-        if settings.platform_sync_interval_minutes > 0:
-            scheduler = PlatformSyncScheduler(sync_service, settings.platform_sync_interval_minutes)
-            scheduler.start()
+        # Scheduled platform sync is produced and run by `runway worker`; the
+        # API process runs no timer thread (audit C8).
         try:
             yield
         finally:
-            if scheduler is not None:
-                scheduler.stop()
             logger.info("runway api stop", extra={"event_type": "api_stop"})
 
     return lifespan

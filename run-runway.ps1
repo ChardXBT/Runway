@@ -87,19 +87,20 @@ function Get-ParentProcess($Process) {
 
 function Test-Owned($Process, [string]$Component) {
     if (-not $Process -or -not $Process.CommandLine) { return $false }
-    if ($Component -eq 'api') {
-        if (-not (Test-Contains $Process.CommandLine 'runway.api.app:app')) { return $false }
+    if ($Component -eq 'api' -or $Component -eq 'worker') {
+        $module = if ($Component -eq 'api') { 'runway.api.app:app' } else { 'runway.cli.main worker' }
+        if (-not (Test-Contains $Process.CommandLine $module)) { return $false }
         if (Test-Contains $Process.CommandLine $python) { return $true }
         # The venv python.exe is a redirector. On python.org installs it starts the
         # base interpreter, whose command line names the base path, not this
-        # checkout. That listener is ours only if its parent is our venv redirector
-        # running the same API module.
+        # checkout. That process is ours only if its parent is our venv redirector
+        # running the same module.
         $parent = Get-ParentProcess $Process
         if (-not $parent -or -not $parent.PSObject.Properties['CommandLine'] -or -not $parent.CommandLine) {
             return $false
         }
         return (Test-Contains $parent.CommandLine $python) -and
-            (Test-Contains $parent.CommandLine 'runway.api.app:app')
+            (Test-Contains $parent.CommandLine $module)
     }
     return $Process.Name -eq 'node.exe' -and (Test-Contains $Process.CommandLine $next)
 }
@@ -142,6 +143,42 @@ function Invoke-DatabaseUpgrade {
         throw "Database upgrade failed with code $($upgrade.ExitCode). Inspect data/runtime/db-upgrade.log; the API was not started."
     }
     Write-Diagnostic 'Database is at the migration head.'
+}
+
+function Get-OwnedWorker {
+    # A failed process query must not look like "no worker", or a second one starts.
+    return @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction Stop |
+        Where-Object { Test-Owned $_ 'worker' })
+}
+
+function Start-Worker {
+    # The worker runs scheduled platform sync and queued jobs. It has no port or
+    # health endpoint, and it refuses to run twice for one data directory.
+    $running = @(Get-OwnedWorker)
+    if ($running.Count -gt 0) {
+        Write-Diagnostic "worker already running (PID $($running[0].ProcessId))."
+        return
+    }
+    Save-PreviousLog 'worker'
+    $log = Join-Path $runtime 'worker.log'
+    Write-Diagnostic "Starting worker using $python."
+    $command = '/d /s /c ""{0}" -m runway.cli.main worker 1>"{1}" 2>&1"' -f $python, $log
+    $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
+        -ArgumentList $command -WorkingDirectory $root -WindowStyle Hidden -PassThru
+    $null = $child.Handle # Retain the handle so rapid exits still have an exit code.
+    $script:started += $child
+    # A worker that is still running after the grace period passed its startup
+    # checks (database at head, single-instance lock).
+    $deadline = (Get-Date).AddSeconds(5)
+    while ((Get-Date) -lt $deadline) {
+        $child.Refresh()
+        if ($child.HasExited) {
+            $child.WaitForExit()
+            throw "worker exited with code $($child.ExitCode). Inspect data/runtime/worker.log."
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    Write-Diagnostic "worker running (PID $($child.Id))."
 }
 
 function Start-Component([string]$Component, [int]$Port) {
@@ -231,7 +268,10 @@ try {
     # Check both ports before creating either child; never disturb another application.
     if (-not $WebOnly) { Assert-PortOwner 'api' 8000 }
     if (-not $ApiOnly) { Assert-PortOwner 'web' 3000 }
-    if (-not $WebOnly) { Start-Component 'api' 8000 }
+    if (-not $WebOnly) {
+        Start-Component 'api' 8000
+        Start-Worker
+    }
     if (-not $ApiOnly) { Start-Component 'web' 3000 }
     if ((-not $WebOnly -and -not (Test-Ready 'api')) -or
         (-not $ApiOnly -and -not (Test-Ready 'web'))) { throw 'Stack readiness was lost during startup.' }

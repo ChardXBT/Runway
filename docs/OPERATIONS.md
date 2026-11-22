@@ -5,6 +5,30 @@ Use `runway init` once, `runway doctor` after dependency or configuration change
 development launcher: it starts the API and the Next.js development server, not the production
 build.
 
+## Database migrations and the worker
+
+The API never migrates the database. Importing or starting it against a database that is behind
+(or ahead of) the migration head fails with an error naming `runway db upgrade`, and uvicorn
+exits non-zero. Migrate explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe -m runway.cli.main db current   # read-only: current and head
+.\.venv\Scripts\python.exe -m runway.cli.main db upgrade   # upgrade to head, seed defaults
+```
+
+Back up the production database first (see `docs/INTELLIGENCE_OPERATIONS.md`). `run-runway.ps1`
+runs `db upgrade` with the venv Python before it starts the API (output in
+`data/runtime/db-upgrade.log`) and never kills a migration in progress.
+
+`runway worker` runs queued jobs from the `publish_jobs` table. Today that is scheduled platform
+sync: with `RUNWAY_PLATFORM_SYNC_INTERVAL_MINUTES` above zero it enqueues one `sync_account` job
+per connected account per interval and runs it with the existing sync code. The API no longer
+runs a sync thread. The worker sleeps until the next due job (at most 30 seconds), stops cleanly
+on Ctrl+C, Ctrl+Break or SIGTERM, and refuses to start a second copy for the same data directory
+(exit code 3). The launcher starts it right after the API, logs it to `data/runtime/worker.log`,
+and starts it again on the next watchdog run if it is not running. Stopping Runway by hand now
+means stopping the worker too.
+
 ## Windows production startup
 
 Install the Python environment and run `npm ci` followed by `npm run check` before

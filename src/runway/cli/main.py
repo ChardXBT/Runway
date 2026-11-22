@@ -25,6 +25,7 @@ from runway.capture.browser import BrowserCaptureService, CapturePaused
 from runway.capture.service import CaptureService
 from runway.catalog.service import CatalogService
 from runway.cli.db_commands import db_app
+from runway.cli.worker_commands import worker_command
 from runway.config import get_settings
 from runway.db import initialize_database
 from runway.discovery.service import DiscoveryService
@@ -110,6 +111,7 @@ intelligence_app.add_typer(neural_app, name="neural")
 intelligence_app.add_typer(composed_app, name="composed-retrieval")
 app.add_typer(platforms_app, name="platforms")
 app.add_typer(db_app, name="db")
+app.command("worker")(worker_command)
 
 
 @app.callback()

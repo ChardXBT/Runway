@@ -25,6 +25,8 @@ from runway.db.models import (
 )
 from runway.domain.enums import CommentStatus
 from runway.domain.state_machine import COMMENT_STATUS_MACHINE, TARGET_DELIVERED_STATES
+from runway.jobs.queue import Job, JobQueue
+from runway.jobs.worker import PermanentJobError
 from runway.platforms.base import (
     AuthorizationExpired,
     CapabilityUnsupported,
@@ -834,47 +836,65 @@ class SyncService:
                 row.updated_at = utcnow()
 
 
+SYNC_ACCOUNT_JOB = "sync_account"
+
+
 class PlatformSyncScheduler:
-    """Background thread syncing connected accounts on a fixed interval."""
+    """Producer of scheduled `sync_account` jobs; `runway worker` runs them.
 
-    def __init__(self, service: SyncService, interval_minutes: int) -> None:
-        self.service = service
-        self.interval_seconds = max(interval_minutes, 1) * 60
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+    Time is cut into fixed slots of the configured interval. Each connected
+    account gets one job per slot, keyed `sync_account:<account>:<slot>`, so
+    producing again (or from a restarted worker) never duplicates a sync.
+    The API process no longer syncs on a timer.
+    """
 
-    def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(
-            target=self._loop,
-            name="runway-platform-sync",
-            daemon=True,
-        )
-        self._thread.start()
+    def __init__(self, database: Database, queue: JobQueue, interval_minutes: int) -> None:
+        if interval_minutes < 1:
+            raise ValueError("scheduled sync needs an interval of at least one minute")
+        self.database = database
+        self.queue = queue
+        self.interval = timedelta(minutes=interval_minutes)
 
-    def stop(self, timeout: float = 5.0) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=timeout)
-            self._thread = None
+    def _slot(self, now: datetime) -> int:
+        return int(now.timestamp() // self.interval.total_seconds())
 
-    def _loop(self) -> None:
-        while not self._stop.wait(self.interval_seconds):
-            try:
-                self._tick()
-            except Exception:  # noqa: BLE001
-                logger.exception("platform sync scheduler tick failed")
+    def next_due(self, now: datetime) -> datetime:
+        return datetime.fromtimestamp((self._slot(now) + 1) * self.interval.total_seconds(), tz=UTC)
 
-    def _tick(self) -> None:
-        with self.service.database.session() as session:
-            account_ids = session.scalars(
-                select(ConnectedAccount.id).where(ConnectedAccount.status == "connected")
+    def produce(self, now: datetime) -> None:
+        slot = self._slot(now)
+        with self.database.session() as session:
+            accounts = session.execute(
+                select(ConnectedAccount.id, ConnectedAccount.workspace_id).where(
+                    ConnectedAccount.status == "connected"
+                )
             ).all()
-        for account_id in account_ids:
-            try:
-                self.service.run(int(account_id), trigger="scheduled")
-            except SyncRunInProgress:
-                continue
-            except Exception:  # noqa: BLE001
-                logger.exception("scheduled sync failed for account %s", account_id)
+        for account_id, workspace_id in accounts:
+            self.queue.enqueue(
+                SYNC_ACCOUNT_JOB,
+                idempotency_key=f"{SYNC_ACCOUNT_JOB}:{account_id}:{slot}",
+                run_at=now,
+                payload={"account_id": int(account_id), "trigger": "scheduled"},
+                workspace_id=int(workspace_id),
+                # A missed slot is covered by the next one; do not pile up retries.
+                max_attempts=1,
+            )
+
+
+def run_sync_account_job(service: SyncService, job: Job) -> None:
+    """Worker handler for `sync_account`: the existing sync code, unchanged."""
+    account_id = job.payload.get("account_id")
+    if not isinstance(account_id, int):
+        raise PermanentJobError("sync_account job has no integer account_id")
+    trigger = str(job.payload.get("trigger") or "scheduled")
+    try:
+        run = service.run(account_id, trigger=trigger)
+    except SyncRunInProgress:
+        logger.info("account %s is already syncing; scheduled sync skipped", account_id)
+        return
+    except (SyncAccountMissing, SyncAccountDisconnected) as exc:
+        logger.info("scheduled sync skipped: %s", exc)
+        return
+    # A failed or partial run is recorded on the run and the account; the next
+    # slot tries again, so the job itself is done.
+    logger.info("scheduled sync of account %s finished %s", account_id, run.status)
