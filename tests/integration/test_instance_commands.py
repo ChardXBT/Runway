@@ -389,13 +389,13 @@ def test_init_creates_the_layout_and_migrates_the_plain_key_into_encrypted_secre
     legacy = TokenStore(machine.root / "data" / "secrets")
     legacy.store("legacy-ref", TokenSet(access_token="legacy-access"))
     legacy_key = legacy.key_path.read_text().strip()
-    client_secret = "GOCSPX-fixture-client-secret-value"
+    fixture_secret = "GOCSPX-fixture-client-secret-value"
 
     result = ops.init(
         machine.context(
             monkeypatch,
             youtube_client_id="fixture-client-id",
-            youtube_client_secret=client_secret,
+            youtube_client_secret=fixture_secret,
         ),
         PRIVATE_REPO,
     )
@@ -408,7 +408,7 @@ def test_init_creates_the_layout_and_migrates_the_plain_key_into_encrypted_secre
     assert result["age_recipient"] in (instance_dir / ".sops.yaml").read_text()
     secrets_bytes = (instance_dir / "secrets.enc.env").read_bytes()
     assert legacy_key.encode() not in secrets_bytes
-    assert client_secret.encode() not in secrets_bytes
+    assert fixture_secret.encode() not in secrets_bytes
     lease = read_lease(instance_dir)
     assert lease is not None and lease.holder == "machine-a"
     # Committed and pushed to the private remote.
@@ -417,13 +417,13 @@ def test_init_creates_the_layout_and_migrates_the_plain_key_into_encrypted_secre
     # Nothing secret on any command line.
     for call in fake_github.calls:
         assert legacy_key not in " ".join(call)
-        assert client_secret not in " ".join(call)
+        assert fixture_secret not in " ".join(call)
 
     settings = machine.settings()
     assert settings.instance_repository == PRIVATE_REPO
     assert settings.token_key is not None
     assert settings.token_key.get_secret_value() == legacy_key
-    assert settings.youtube_client_secret == client_secret
+    assert settings.youtube_client_secret == fixture_secret
     token = TokenStore.from_settings(settings).load("legacy-ref")
     assert token is not None and token.access_token == "legacy-access"
     # The only plain key file is the pre-existing legacy one, which init leaves for the owner.
