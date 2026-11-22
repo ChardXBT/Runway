@@ -53,7 +53,7 @@ class ProviderRegistry:
     def __init__(self, database: Database, settings: Settings) -> None:
         self.database = database
         self.settings = settings
-        self.token_store = TokenStore(settings.resolved_data_dir / "secrets")
+        self.token_store = TokenStore.from_settings(settings)
         self._providers: dict[Platform, PlatformProvider] = {}
 
     @property
@@ -94,6 +94,9 @@ class ProviderRegistry:
             expires_at = expires_at.replace(tzinfo=UTC)
         if expires_at - datetime.now(UTC) > token_refresh_window(platform):
             return token
+        # Before the refresh call: TikTok rotates refresh tokens, so a standby
+        # machine must not even ask, or it invalidates the active machine's token.
+        self.token_store.ensure_writable()
         refreshed = self.provider(platform).refresh(token)
         self.token_store.store(token_ref, refreshed)
         return refreshed

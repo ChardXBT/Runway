@@ -4,8 +4,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+from runway.config.instance import TOKENS_DIR_NAME, instance_settings_sources, resolve_instance_dir
 
 
 class Settings(BaseSettings):
@@ -98,6 +100,45 @@ class Settings(BaseSettings):
     platform_sync_comment_content_limit: int = Field(default=10, ge=0, le=100)
     platform_sync_analytics_days: int = Field(default=90, ge=7, le=365)
 
+    # Private instance data (spec 07). Unset means today's single-checkout behaviour.
+    instance_dir: Path | None = None
+    instance_repository: str | None = None
+    machine_id: str | None = None
+    token_key: SecretStr | None = None
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        instance_layers = instance_settings_sources(
+            settings_cls,
+            Path(__file__).resolve().parents[3],
+            init_settings,
+            env_settings,
+            dotenv_settings,
+        )
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            *instance_layers,
+            file_secret_settings,
+        )
+
+    @field_validator(
+        "instance_dir", "instance_repository", "machine_id", "token_key", mode="before"
+    )
+    @classmethod
+    def blank_instance_setting(cls, value: object) -> object | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
     @field_validator("host")
     @classmethod
     def loopback_only(cls, value: str) -> str:
@@ -186,6 +227,19 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path.as_posix()}"
+
+    @property
+    def resolved_instance_dir(self) -> Path | None:
+        if self.instance_dir is None:
+            return None
+        return resolve_instance_dir(self.instance_dir, self.project_root)
+
+    @property
+    def token_store_dir(self) -> Path:
+        instance_dir = self.resolved_instance_dir
+        if instance_dir is None:
+            return self.resolved_data_dir / "secrets"
+        return instance_dir / TOKENS_DIR_NAME
 
     @property
     def browser_profile_dir(self) -> Path:
