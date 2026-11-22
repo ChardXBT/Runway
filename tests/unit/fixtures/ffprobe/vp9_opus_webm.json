@@ -1,0 +1,78 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "vp9",
+      "profile": "Profile 0",
+      "codec_type": "video",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "width": 640,
+      "height": 360,
+      "coded_width": 640,
+      "coded_height": 360,
+      "closed_captions": 0,
+      "film_grain": 0,
+      "has_b_frames": 0,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "16:9",
+      "pix_fmt": "yuv420p",
+      "level": -99,
+      "color_range": "tv",
+      "field_order": "progressive",
+      "refs": 1,
+      "r_frame_rate": "25/1",
+      "avg_frame_rate": "25/1",
+      "time_base": "1/1000",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "disposition": {
+        "attached_pic": 0
+      },
+      "tags": {
+        "ENCODER": "Lavc61.19.101 libvpx-vp9",
+        "DURATION": "00:00:02.000000000"
+      }
+    },
+    {
+      "index": 1,
+      "codec_name": "opus",
+      "codec_type": "audio",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "sample_fmt": "fltp",
+      "sample_rate": "48000",
+      "channels": 1,
+      "channel_layout": "mono",
+      "bits_per_sample": 0,
+      "initial_padding": 312,
+      "r_frame_rate": "0/0",
+      "avg_frame_rate": "0/0",
+      "time_base": "1/1000",
+      "start_pts": -7,
+      "start_time": "-0.007000",
+      "disposition": {
+        "attached_pic": 0
+      },
+      "tags": {
+        "ENCODER": "Lavc61.19.101 libopus",
+        "DURATION": "00:00:02.008000000"
+      }
+    }
+  ],
+  "format": {
+    "filename": "file:upload.bin",
+    "nb_streams": 2,
+    "nb_programs": 0,
+    "nb_stream_groups": 0,
+    "format_name": "matroska,webm",
+    "start_time": "-0.007000",
+    "duration": "2.008000",
+    "size": "196875",
+    "bit_rate": "784362",
+    "probe_score": 100,
+    "tags": {
+      "ENCODER": "Lavf61.7.100"
+    }
+  }
+}

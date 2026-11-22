@@ -1,0 +1,40 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "png",
+      "codec_type": "video",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "width": 800,
+      "height": 600,
+      "coded_width": 800,
+      "coded_height": 600,
+      "closed_captions": 0,
+      "film_grain": 0,
+      "has_b_frames": 0,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "4:3",
+      "pix_fmt": "rgb24",
+      "level": -99,
+      "color_range": "pc",
+      "color_space": "gbr",
+      "refs": 1,
+      "r_frame_rate": "25/1",
+      "avg_frame_rate": "25/1",
+      "time_base": "1/25",
+      "disposition": {
+        "attached_pic": 0
+      }
+    }
+  ],
+  "format": {
+    "filename": "file:upload.bin",
+    "nb_streams": 1,
+    "nb_programs": 0,
+    "nb_stream_groups": 0,
+    "format_name": "png_pipe",
+    "size": "61530",
+    "probe_score": 99
+  }
+}

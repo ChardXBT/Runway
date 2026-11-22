@@ -26,6 +26,17 @@ from runway.mediastore.keys import (
     workspace_prefix,
 )
 from runway.mediastore.local import LocalDiskStore
+from runway.mediastore.probe import (
+    MediaKind,
+    MediaProber,
+    MediaToolMissing,
+    MediaTools,
+    ProbeError,
+    ProbeResult,
+    ProbeTimeout,
+    default_poster_time_ms,
+    parse_ffprobe,
+)
 from runway.mediastore.r2 import R2Config, R2Store
 from runway.mediastore.store import (
     MediaStore,
@@ -44,11 +55,18 @@ __all__ = [
     "InvalidUploadRequest",
     "LocalDiskStore",
     "MediaKey",
+    "MediaKind",
+    "MediaProber",
     "MediaStore",
     "MediaStoreError",
+    "MediaToolMissing",
+    "MediaTools",
     "ObjectExists",
     "ObjectNotFound",
     "PartReceipt",
+    "ProbeError",
+    "ProbeResult",
+    "ProbeTimeout",
     "R2Config",
     "R2Store",
     "SizeMismatch",
@@ -60,7 +78,9 @@ __all__ = [
     "UploadNotFound",
     "UploadPlan",
     "UploadProgress",
+    "default_poster_time_ms",
     "make_media_key",
+    "parse_ffprobe",
     "parse_media_key",
     "safe_extension",
     "workspace_prefix",
