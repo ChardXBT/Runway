@@ -103,8 +103,10 @@ class Settings(BaseSettings):
     # Private instance data (spec 07). Unset means today's single-checkout behaviour.
     instance_dir: Path | None = None
     instance_repository: str | None = None
+    # Environment only (never instance.toml); default: an id kept in the user profile.
     machine_id: str | None = None
     token_key: SecretStr | None = None
+    instance_snapshot_keep: int = Field(default=5, ge=1, le=100)
 
     @classmethod
     def settings_customise_sources(
