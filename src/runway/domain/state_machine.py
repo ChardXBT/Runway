@@ -461,8 +461,10 @@ def derive_draft_status(
     delivered = sum(1 for target in targets if target in TARGET_DELIVERED_STATES)
     if targets and delivered == len(targets):
         return DraftStatus.PUBLISHED
-    if delivered:
-        return DraftStatus.PARTIALLY_PUBLISHED
-    if state in {DraftStatus.PARTIALLY_PUBLISHED, DraftStatus.PUBLISHED}:
+    # Checked before the partial case: a published draft that gains an unsent
+    # target stays published rather than moving back to partially_published.
+    if state is DraftStatus.PUBLISHED:
         return state
+    if delivered or state is DraftStatus.PARTIALLY_PUBLISHED:
+        return DraftStatus.PARTIALLY_PUBLISHED
     return DraftStatus.SCHEDULED if scheduled else DraftStatus.DRAFT

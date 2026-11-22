@@ -246,3 +246,26 @@ def test_machine_columns_are_never_written_as_string_literals() -> None:
                     ):
                         offenders.append(f"{relative}:{node.lineno} .{target.attr} =")
     assert offenders == []
+
+
+ORDER = {"draft": 0, "scheduled": 0, "partially_published": 1, "published": 2, "archived": 3}
+
+
+@pytest.mark.parametrize("current", ["draft", "scheduled", "partially_published", "published"])
+@pytest.mark.parametrize("scheduled", [True, False])
+@pytest.mark.parametrize(
+    "targets",
+    [[], ["pending"], ["published"], ["published", "pending"], ["published", "published"]],
+)
+def test_derived_draft_status_never_moves_backwards(current, scheduled, targets) -> None:
+    derived = derive_draft_status(current, scheduled=scheduled, target_states=targets)
+    assert ORDER[derived.value] >= ORDER[current]
+    # Every derived status is a legal transition from the current one.
+    assert DRAFT_STATUS_MACHINE.allowed(current, derived)
+
+
+def test_a_published_draft_that_gains_an_unsent_target_stays_published() -> None:
+    assert (
+        derive_draft_status("published", scheduled=True, target_states=["published", "pending"])
+        == "published"
+    )

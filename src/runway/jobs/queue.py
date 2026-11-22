@@ -17,7 +17,7 @@ import json
 import logging
 from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
@@ -68,6 +68,14 @@ JOB_STATE_MACHINE: StateMachine[JobState] = StateMachine(
 )
 
 
+class UndecodableJob(ValueError):
+    """A job row whose stored payload cannot be turned into a Job."""
+
+
+# A claim fails at most this many corrupt rows before giving up for this round.
+_MAX_UNDECODABLE_PER_CLAIM = 20
+
+
 class LeaseLost(RuntimeError):
     """The job is no longer leased to this worker (expired and recovered)."""
 
@@ -88,7 +96,12 @@ class Job:
 
     @classmethod
     def of(cls, row: PublishJob) -> Job:
-        payload = json.loads(row.payload_json or "{}")
+        try:
+            payload = json.loads(row.payload_json or "{}")
+        except json.JSONDecodeError as exc:
+            raise UndecodableJob(f"payload_json is not valid JSON ({exc.msg})") from exc
+        if not isinstance(payload, dict):
+            raise UndecodableJob("payload_json is not a JSON object")
         return cls(
             id=row.id,
             kind=row.kind,
@@ -99,7 +112,7 @@ class Job:
             max_attempts=row.max_attempts,
             run_at=_aware(row.run_at),
             idempotency_key=row.idempotency_key,
-            payload=payload if isinstance(payload, dict) else {},
+            payload=payload,
             last_error=row.last_error,
         )
 
@@ -255,15 +268,27 @@ class JobQueue:
         with self._exclusive() as session:
             now = self.clock()
             self._recover_expired(session, now)
-            row = session.scalar(claim_statement(self.dialect, now, kinds))
-            if row is None:
-                return None
-            JOB_STATE_MACHINE.apply(row, JobState.RUNNING)
-            row.attempts += 1
-            row.locked_by = worker_id
-            row.locked_until = now + timedelta(seconds=lease_seconds)
-            session.flush()
-            return Job.of(row)
+            for _ in range(_MAX_UNDECODABLE_PER_CLAIM):
+                row = session.scalar(claim_statement(self.dialect, now, kinds))
+                if row is None:
+                    return None
+                JOB_STATE_MACHINE.apply(row, JobState.RUNNING)
+                row.attempts += 1
+                try:
+                    job = Job.of(row)
+                except UndecodableJob as exc:
+                    # Retrying cannot repair the row; fail it once, with the
+                    # reason, instead of tripping over it on every claim.
+                    JOB_STATE_MACHINE.apply(row, JobState.FAILED)
+                    row.last_error = f"job row cannot be decoded: {exc}"[:_ERROR_LIMIT]
+                    session.flush()
+                    logger.error("job %s (%s) failed: %s", row.id, row.kind, exc)
+                    continue
+                row.locked_by = worker_id
+                row.locked_until = now + timedelta(seconds=lease_seconds)
+                session.flush()
+                return replace(job, state=row.state)
+            return None
 
     def _recover_expired(self, session: Session, now: datetime) -> None:
         expired = session.scalars(

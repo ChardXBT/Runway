@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -430,3 +431,83 @@ def test_hourly_purge_removes_only_expired_keys_and_events(
     with database.session() as session:
         assert list(session.scalars(select(EventRecord.id))) == [fresh_event]
         assert list(session.scalars(select(IdempotencyKey.key))) == ["fresh"]
+
+
+# ------------------------------------------------------- review fixes (item 6)
+
+
+def test_a_corrupt_job_row_is_failed_once_and_the_next_job_still_runs(
+    queue: JobQueue, database: Database
+) -> None:
+    corrupt = queue.enqueue("purge", idempotency_key="corrupt", run_at=START - timedelta(minutes=2))
+    good = queue.enqueue("purge", idempotency_key="good", run_at=START - timedelta(minutes=1))
+    with database.session() as session:
+        row = session.get(PublishJob, corrupt.id)
+        assert row is not None
+        row.payload_json = "{not json"
+
+    claimed = queue.claim("w1", {"purge"})
+
+    assert claimed is not None and claimed.id == good.id
+    failed = _row(database, corrupt.id)
+    assert failed.state == "failed"
+    assert "cannot be decoded" in (failed.last_error or "")
+    assert failed.locked_by is None
+    # Never offered again.
+    queue.complete(good.id, "w1")
+    assert queue.claim("w1", {"purge"}) is None
+
+
+def test_a_non_object_payload_is_undecodable(queue: JobQueue, database: Database) -> None:
+    job = queue.enqueue("purge", idempotency_key="list")
+    with database.session() as session:
+        row = session.get(PublishJob, job.id)
+        assert row is not None
+        row.payload_json = "[1, 2]"
+    assert queue.claim("w1", {"purge"}) is None
+    assert _row(database, job.id).state == "failed"
+
+
+def test_the_worker_survives_a_failing_idle_query_and_backs_off(
+    queue: JobQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ran: list[int] = []
+    worker = _worker(queue, {"purge": lambda job: ran.append(job.id)}, max_idle_seconds=0.05)
+    calls = {"n": 0}
+    real_next_run_at = queue.next_run_at
+
+    def flaky_next_run_at(kinds):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise RuntimeError("database is locked")
+        return real_next_run_at(kinds)
+
+    monkeypatch.setattr(queue, "next_run_at", flaky_next_run_at)
+    thread = threading.Thread(target=worker.run_forever)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 10
+        while calls["n"] <= 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert thread.is_alive(), "an idle-query failure killed the worker"
+        job = queue.enqueue("purge", idempotency_key="after-failures")
+        while not ran and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ran == [job.id]
+    finally:
+        worker.stop()
+        thread.join(timeout=10)
+    assert not thread.is_alive()
+
+
+def test_failure_backoff_grows_and_is_capped(queue: JobQueue) -> None:
+    worker = _worker(queue, {})
+    assert [worker.failure_backoff(n) for n in (1, 2, 3, 4, 5, 6, 50)] == [
+        1,
+        2,
+        4,
+        8,
+        16,
+        30,
+        30,
+    ]

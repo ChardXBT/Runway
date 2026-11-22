@@ -60,20 +60,29 @@ class Worker:
             extra={"event_type": "worker_start"},
         )
         try:
+            failures = 0
             while not self.stop_event.is_set():
-                ran = False
                 try:
                     self.produce()
                     ran = self.run_once()
+                    wait = 0.0 if ran else self.idle_seconds()
+                    failures = 0
                 except Exception:  # noqa: BLE001
-                    # A database hiccup (locked, disk) must not kill the loop.
-                    logger.exception("worker iteration failed")
-                if not ran:
-                    self.stop_event.wait(self.idle_seconds())
+                    # A database hiccup (locked, disk) must not kill the worker
+                    # or spin it: every iteration, including the idle-time
+                    # query, is guarded and failures back off up to 30 s.
+                    failures += 1
+                    wait = self.failure_backoff(failures)
+                    logger.exception("worker iteration failed; retrying in %.1f s", wait)
+                if wait > 0:
+                    self.stop_event.wait(wait)
         finally:
             logger.info(
                 "runway worker stop id=%s", self.worker_id, extra={"event_type": "worker_stop"}
             )
+
+    def failure_backoff(self, failures: int) -> float:
+        return float(min(2 ** min(failures - 1, 10), self.max_idle_seconds))
 
     def produce(self) -> None:
         now = self.queue.clock()
