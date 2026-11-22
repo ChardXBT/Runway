@@ -18,8 +18,8 @@ from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
 from runway.config import Settings, get_settings
-from runway.db import initialize_database
 from runway.db.base import Database
+from runway.db.bootstrap import DatabaseNotCurrent, require_database_at_head
 from runway.logging import configure_logging
 from runway.platforms.sync import PlatformSyncScheduler, SyncService
 
@@ -65,6 +65,13 @@ def _lifespan(
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # The API never migrates. A database behind head means `runway db
+        # upgrade` was not run; refusing here makes uvicorn exit non-zero.
+        try:
+            require_database_at_head(settings)
+        except DatabaseNotCurrent as exc:
+            logger.error(str(exc), extra={"event_type": "api_refused"})
+            raise
         logger.info(_startup_summary(settings), extra={"event_type": "api_start"})
         sync_service = SyncService(database, settings)
         try:
@@ -87,10 +94,9 @@ def _lifespan(
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     active_settings = settings or get_settings()
-    database = initialize_database(active_settings)
-    # The migration runner loads alembic.ini, which installs its own root
-    # handler and WARNING level; configure the application's logging last so
-    # the JSON configuration is the one that survives startup.
+    # No migrations and no database connection here: importing the module or
+    # building the app must never alter whatever database .env points at.
+    database = Database(active_settings)
     configure_logging()
 
     application = FastAPI(

@@ -123,6 +123,27 @@ function Assert-PortOwner([string]$Component, [int]$Port) {
     }
 }
 
+function Invoke-DatabaseUpgrade {
+    # The API refuses to serve a database behind the migration head and never
+    # migrates at import, so the launcher upgrades it explicitly first.
+    Save-PreviousLog 'db-upgrade'
+    $log = Join-Path $runtime 'db-upgrade.log'
+    Write-Diagnostic "Upgrading the database using $python."
+    $command = '/d /s /c ""{0}" -m runway.cli.main db upgrade 1>"{1}" 2>&1"' -f $python, $log
+    $upgrade = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
+        -ArgumentList $command -WorkingDirectory $root -WindowStyle Hidden -PassThru
+    $null = $upgrade.Handle # Retain the handle so the exit code stays readable.
+    # A migration is never killed midway; a slow one is reported and left to finish.
+    if (-not $upgrade.WaitForExit(900000)) {
+        throw 'Database upgrade is still running after 15 minutes. Inspect data/runtime/db-upgrade.log; the API was not started.'
+    }
+    $upgrade.WaitForExit()
+    if ($upgrade.ExitCode -ne 0) {
+        throw "Database upgrade failed with code $($upgrade.ExitCode). Inspect data/runtime/db-upgrade.log; the API was not started."
+    }
+    Write-Diagnostic 'Database is at the migration head.'
+}
+
 function Start-Component([string]$Component, [int]$Port) {
     Assert-PortOwner $Component $Port
     if (Test-Ready $Component) {
@@ -144,6 +165,7 @@ function Start-Component([string]$Component, [int]$Port) {
         '"{0}" start "{1}" --hostname 127.0.0.1 --port 3000' -f $next, $webRoot
     }
     $executable = if ($Component -eq 'api') { $python } else { $script:node }
+    if ($Component -eq 'api') { Invoke-DatabaseUpgrade }
     Save-PreviousLog "$Component.stdout"
     Save-PreviousLog "$Component.stderr"
     Write-Diagnostic "Starting $Component using $executable on port $Port."

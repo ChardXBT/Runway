@@ -92,7 +92,9 @@ def test_health_app_is_local_and_publishing_is_disabled(settings: Settings) -> N
     assert payload["publishing_enabled"] is False
 
 
-def test_lineup_mutations_require_literal_confirmation(settings: Settings) -> None:
+def test_lineup_mutations_require_literal_confirmation(
+    settings: Settings, database: Database
+) -> None:
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
         update = client.patch(
             "/api/lineup/1",
@@ -114,6 +116,7 @@ def test_lineup_mutations_require_literal_confirmation(settings: Settings) -> No
 
 def test_passive_connection_and_intelligence_status_are_truthful(
     settings: Settings,
+    database: Database,
 ) -> None:
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
         connection = client.get("/api/publisher/session/status")

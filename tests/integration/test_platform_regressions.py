@@ -13,6 +13,7 @@ from sqlalchemy import delete
 
 from runway.api.app import create_app
 from runway.config import Settings
+from runway.db import initialize_database
 from runway.db.base import Database
 from runway.db.models import AccountMetricDay, ConnectedAccount
 from runway.platforms.capabilities import Platform
@@ -84,6 +85,7 @@ def test_reconnect_after_disconnect_stores_a_usable_token(
         return provider if platform is Platform.youtube else original(self, platform)
 
     monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    initialize_database(settings).engine.dispose()
     app = create_app(settings)
     with TestClient(app, base_url=API) as web:
         _connect_via_oauth(web)
@@ -112,6 +114,7 @@ def test_reconnect_after_disconnect_stores_a_usable_token(
 @pytest.fixture()
 def mock_client(tmp_path: Path):
     settings = Settings(data_dir=tmp_path / "data", platform_provider="mock")
+    initialize_database(settings).engine.dispose()
     app = create_app(settings)
     with TestClient(app, base_url=API) as client:
         yield app, client
