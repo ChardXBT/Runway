@@ -47,12 +47,14 @@ from runway.mediastore.store import (
     UploadPlan,
     UploadProgress,
 )
+from runway.mediastore.validation import Issue, Severity, validate, validate_carousel
 
 __all__ = [
     "ChecksumMismatch",
     "IncompleteUpload",
     "InvalidMediaKey",
     "InvalidUploadRequest",
+    "Issue",
     "LocalDiskStore",
     "MediaKey",
     "MediaKind",
@@ -69,6 +71,7 @@ __all__ = [
     "ProbeTimeout",
     "R2Config",
     "R2Store",
+    "Severity",
     "SizeMismatch",
     "StaleUpload",
     "StorageBackendError",
@@ -83,5 +86,7 @@ __all__ = [
     "parse_ffprobe",
     "parse_media_key",
     "safe_extension",
+    "validate",
+    "validate_carousel",
     "workspace_prefix",
 ]
