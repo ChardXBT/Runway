@@ -125,6 +125,12 @@ def _presented_api_key(request: Request) -> bool:
 
 def resolve_principal(settings: Settings, request: Request) -> Principal:
     if _presented_api_key(request):
+        # ---- API-KEY SEAM (spec 06 section 2) -------------------------------
+        # An `rwy_` bearer is resolved here, before the profile branch, in both
+        # profiles: look the key up in `api_keys` by prefix, compare the hash,
+        # check expiry and revocation, and return Principal(kind="agent", ...).
+        # That is the API-key job's work; until it lands a key is refused and
+        # is never mapped to the local owner or to a session.
         raise Problem(
             401,
             "api_key_unsupported",
@@ -133,14 +139,10 @@ def resolve_principal(settings: Settings, request: Request) -> Principal:
         )
     if settings.profile == "local":
         return local_owner()
-    # Hosted: the identity provider seam is a later job, so nobody is authenticated.
-    raise Problem(
-        401,
-        "authentication_required",
-        "Authentication required",
-        "sign in to use this Runway workspace",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    # Imported here so the local profile never loads the hosted identity stack.
+    from runway.auth.hosted import resolve_hosted_principal
+
+    return resolve_hosted_principal(settings, request)
 
 
 def get_principal(request: Request) -> Principal:

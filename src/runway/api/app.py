@@ -13,15 +13,18 @@ from fastapi.staticfiles import StaticFiles
 from runway import __version__
 from runway.api.catalog_routes import build_catalog_router
 from runway.api.discovery_routes import build_discovery_router
+from runway.api.identity_hook_routes import build_identity_hook_router
 from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
+from runway.api.workspace_routes import build_workspace_router
 from runway.auth.principal import get_principal
 from runway.auth.problems import Problem, problem_handler
 from runway.config import Settings, get_settings
 from runway.db.base import Database
 from runway.db.bootstrap import DatabaseNotCurrent, require_database_at_head
+from runway.hosted.app_setup import configure_hosted, hosted_settings_view
 from runway.logging import configure_logging
 from runway.platforms.sync import PlatformSyncScheduler, SyncService
 
@@ -118,26 +121,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.settings = active_settings
     application.add_exception_handler(Problem, problem_handler)
     application.state.database = database
-    web_origins = loopback_origins(active_settings.web_port)
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=web_origins,
-        allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-        allow_headers=["Content-Type"],
-    )
-    # Added last so it runs first, before CORS handling and every route.
-    application.add_middleware(LocalRequestGuard, allowed_origins=web_origins)
-    application.mount(
-        "/media",
-        StaticFiles(directory=active_settings.resolved_data_dir / "media"),
-        name="media",
-    )
-    application.include_router(build_catalog_router(database, active_settings))
-    application.include_router(build_discovery_router(database, active_settings))
-    application.include_router(build_intelligence_router(database, active_settings))
-    application.include_router(build_proposal_router(database, active_settings))
+    if hosted:
+        # Web-origin CORS and origin guard, rate limits, security headers and
+        # the identity provider (spec 05 sections 2 and 6).
+        configure_hosted(application, active_settings)
+    else:
+        web_origins = loopback_origins(active_settings.web_port)
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=web_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+            allow_headers=["Content-Type"],
+        )
+        # Added last so it runs first, before CORS handling and every route.
+        application.add_middleware(LocalRequestGuard, allowed_origins=web_origins)
+        # Local-only surfaces (spec 01 section 7): media on local disk, capture,
+        # catalogue, discovery, intelligence, the proposal/Lineup flow and the
+        # browser publisher with its connector. Hosted does not mount them (404).
+        application.mount(
+            "/media",
+            StaticFiles(directory=active_settings.resolved_data_dir / "media"),
+            name="media",
+        )
+        application.include_router(build_catalog_router(database, active_settings))
+        application.include_router(build_discovery_router(database, active_settings))
+        application.include_router(build_intelligence_router(database, active_settings))
+        application.include_router(build_proposal_router(database, active_settings))
     application.include_router(build_platform_router(database, active_settings))
+    application.include_router(build_workspace_router(database, active_settings))
+    if hosted and active_settings.identity_provider.strip() == "clerk":
+        application.include_router(build_identity_hook_router(database, active_settings))
 
     @application.get("/health", tags=["system"])
     def health() -> dict[str, object]:
@@ -155,6 +169,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.get("/api/settings", tags=["settings"], dependencies=[Depends(get_principal)])
     def settings_view() -> dict[str, object]:
+        if hosted:
+            # Tenants see product switches, not the operator's paths or accounts.
+            return hosted_settings_view(active_settings)
         return active_settings.public_dict()
 
     return application

@@ -27,6 +27,20 @@ def loopback_origins(port: int) -> list[str]:
     return [f"http://{hostname}:{port}" for hostname in sorted(LOOPBACK_HOSTNAMES)]
 
 
+def cross_site_refusal(headers: Headers, allowed_origins: frozenset[str]) -> str | None:
+    """Why a state-changing browser request must be refused, or None.
+
+    Shared by the local guard and the hosted guard (runway.hosted.middleware).
+    `allowed_origins` must already be case-folded.
+    """
+    origin = headers.get("origin")
+    if origin is not None and origin.casefold() not in allowed_origins:
+        return "Cross-origin request refused."
+    if origin is None and headers.get("sec-fetch-site") in {"cross-site", "same-site"}:
+        return "Cross-site request refused."
+    return None
+
+
 def _hostname(host_header: str) -> str:
     host = host_header.strip().casefold()
     if host.startswith("["):
@@ -48,12 +62,9 @@ class LocalRequestGuard:
             await self._reject(scope, receive, send, 421, "Runway only serves loopback hosts.")
             return
         if scope.get("method", "GET") not in SAFE_METHODS or scope["type"] == "websocket":
-            origin = headers.get("origin")
-            if origin is not None and origin.casefold() not in self.allowed_origins:
-                await self._reject(scope, receive, send, 403, "Cross-origin request refused.")
-                return
-            if origin is None and headers.get("sec-fetch-site") in {"cross-site", "same-site"}:
-                await self._reject(scope, receive, send, 403, "Cross-site request refused.")
+            refusal = cross_site_refusal(headers, self.allowed_origins)
+            if refusal is not None:
+                await self._reject(scope, receive, send, 403, refusal)
                 return
         await self.app(scope, receive, send)
 
