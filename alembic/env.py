@@ -4,6 +4,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
+import runway.db.hosted_models  # noqa: F401
 from alembic import context
 from runway.db import models  # noqa: F401
 from runway.db.base import Base
