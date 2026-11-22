@@ -67,13 +67,24 @@ def pull_command(
     take: bool = typer.Option(
         False, "--take", help="Take a lease whose holder has been silent for over 24 hours."
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Replace a local database that changed after the snapshot (it is backed up first).",
+    ),
     wait_seconds: int = WAIT_OPTION,
 ) -> None:
-    """Take the lease and restore the latest snapshot on this machine."""
-    _run(lambda ctx: operations.pull(ctx, take=take, wait_seconds=wait_seconds))
+    """Verify the latest snapshot, take the lease and restore it on this machine."""
+    _run(lambda ctx: operations.pull(ctx, take=take, force=force, wait_seconds=wait_seconds))
 
 
 @instance_app.command("handover")
 def handover_command(wait_seconds: int = WAIT_OPTION) -> None:
     """Push, then release the lease so another machine can pull."""
     _run(lambda ctx: operations.handover(ctx, wait_seconds=wait_seconds))
+
+
+@instance_app.command("heartbeat")
+def heartbeat_command() -> None:
+    """Renew this machine's lease heartbeat if it is due (Runway also does this hourly)."""
+    _run(operations.heartbeat)

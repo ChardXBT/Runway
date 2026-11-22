@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -74,22 +75,23 @@ def test_load_order_is_environment_then_instance_toml_then_secrets(
         """,
     )
     fake = FakeSops(
-        "RUNWAY_CHANNEL_NAME=From Secrets\n"
-        "RUNWAY_TIMEZONE=Asia/Tokyo\n"
         "RUNWAY_YOUTUBE_CLIENT_ID=client-id-from-secrets\n"
         'RUNWAY_YOUTUBE_CLIENT_SECRET="yt-secret-from-sops"\n'
+        "RUNWAY_INSTAGRAM_APP_ID=ig-app-from-secrets\n"
         f"RUNWAY_TOKEN_KEY={FAKE_KEY}\n"
         "OPENAI_API_KEY=sk-from-secrets\n"
     )
     monkeypatch.setattr(instance_config, "sops_runner", fake)
     monkeypatch.setenv("RUNWAY_INSTANCE_DIR", str(instance_dir))
     monkeypatch.setenv("RUNWAY_TIMEZONE", "UTC")
+    monkeypatch.setenv("RUNWAY_INSTAGRAM_APP_ID", "ig-app-from-env")
 
     settings = Settings(data_dir=tmp_path / "data")
 
     assert settings.resolved_instance_dir == instance_dir.resolve()
-    assert settings.timezone == "UTC"  # process environment wins
-    assert settings.channel_name == "From Toml"  # instance.toml beats secrets
+    assert settings.timezone == "UTC"  # process environment beats instance.toml
+    assert settings.instagram_app_id == "ig-app-from-env"  # and the secrets file
+    assert settings.channel_name == "From Toml"
     assert settings.youtube_client_id == "client-id-from-secrets"
     assert settings.youtube_client_secret == "yt-secret-from-sops"
     assert settings.openai_api_key == "sk-from-secrets"
@@ -167,9 +169,12 @@ def test_missing_sops_names_what_to_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     instance_dir = _instance(tmp_path)
-    empty_path = tmp_path / "empty-path"
-    empty_path.mkdir()
-    monkeypatch.setenv("PATH", str(empty_path))
+    # Only git on PATH (needed to check the instance is not inside a code checkout).
+    git = shutil.which("git")
+    assert git is not None
+    git_dir = Path(git).parent
+    assert not any(git_dir.glob("sops*"))
+    monkeypatch.setenv("PATH", str(git_dir))
 
     with pytest.raises(InstanceConfigError) as caught:
         Settings(instance_dir=instance_dir)
@@ -230,3 +235,167 @@ def test_parse_dotenv_error_never_echoes_the_line() -> None:
     with pytest.raises(InstanceConfigError, match="line 2") as caught:
         parse_dotenv("RUNWAY_A=ok\nnot-a-pair-but-a-secret-value\n")
     assert "secret-value" not in str(caught.value)
+
+
+# --- review fixes -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'machine_id = "machine-a"',
+        'data_dir = "D:/elsewhere"',
+        'codex_cli_path = "C:/evil/codex.exe"',
+        'publisher_chrome_path = "C:/evil/chrome.exe"',
+        'agent_runtime = "openai"',
+        'oauth_redirect_base_url = "https://attacker.example"',
+        'instance_dir = "C:/other"',
+    ],
+)
+def test_instance_toml_refuses_machine_local_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, line: str
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    instance_dir = _instance(tmp_path, toml=line + "\n", secrets=False)
+    with pytest.raises(InstanceConfigError, match="machine-local"):
+        Settings(data_dir=tmp_path / "data", instance_dir=instance_dir)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["publishing_enabled = true", "youtube_automation_authorized = true", "host = '::1'"],
+)
+def test_instance_toml_is_an_allow_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, line: str
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    instance_dir = _instance(tmp_path, toml=line + "\n", secrets=False)
+    with pytest.raises(InstanceConfigError, match="not allowed|machine-local"):
+        Settings(data_dir=tmp_path / "data", instance_dir=instance_dir)
+
+
+def test_instance_toml_accepts_shared_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    instance_dir = _instance(
+        tmp_path,
+        toml="""
+        channel_name = "Shared"
+        timezone = "Europe/Paris"
+        api_port = 8100
+        web_port = 3100
+        platform_provider = "mock"
+        publishing_mode = "assisted"
+        instance_repository = "owner/runway-instance"
+        instance_snapshot_keep = 3
+        """,
+        secrets=False,
+    )
+    settings = Settings(data_dir=tmp_path / "data", instance_dir=instance_dir)
+    assert (settings.channel_name, settings.api_port, settings.instance_snapshot_keep) == (
+        "Shared",
+        8100,
+        3,
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["RUNWAY_MACHINE_ID=machine-a", "RUNWAY_CHANNEL_NAME=Qlob", "RUNWAY_DATA_DIR=D:/x"],
+)
+def test_secrets_file_refuses_anything_but_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, line: str
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(line + "\n"))
+    instance_dir = _instance(tmp_path)
+    with pytest.raises(InstanceConfigError, match="may not come from") as caught:
+        Settings(data_dir=tmp_path / "data", instance_dir=instance_dir)
+    value = line.partition("=")[2]
+    assert value not in str(caught.value)
+
+
+def test_sops_errors_are_scrubbed(tmp_path: Path) -> None:
+    secrets_file = _instance(tmp_path) / "secrets.enc.env"
+    fake = FakeSops(
+        "",
+        returncode=1,
+        stderr="first line\nfailed: token=abc123def456 at https://user:pw@kms.example/x?key=1",
+    )
+    with pytest.raises(InstanceConfigError) as caught:
+        decrypt_dotenv(secrets_file, runner=fake)
+    message = str(caught.value)
+    assert "abc123def456" not in message
+    assert "user:pw" not in message
+    assert "[redacted]" in message and "[url]" in message
+
+
+def test_sops_subprocess_has_a_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd="sops", timeout=float(str(kwargs["timeout"])))
+
+    monkeypatch.setattr(instance_config.shutil, "which", lambda _name: "sops.exe")
+    monkeypatch.setattr(instance_config.subprocess, "run", fake_run)
+    with pytest.raises(InstanceConfigError, match="did not finish"):
+        decrypt_dotenv(_instance(tmp_path) / "secrets.enc.env")
+    assert seen["timeout"] == instance_config.SOPS_TIMEOUT_SECONDS
+    assert seen["shell"] is False
+
+
+def _git(cwd: Path, *args: str) -> None:
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "https://github.com/ChardXBT/Runway.git",
+        "git@github-chard:ChardXBT/Runway.git",
+        "ssh://git@ssh.github.com:443/chardxbt/runway",
+    ],
+)
+def test_instance_dir_inside_any_code_checkout_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote: str
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    other_checkout = tmp_path / "another-runway-clone"
+    other_checkout.mkdir()
+    _git(other_checkout, "init", "--quiet")
+    _git(other_checkout, "remote", "add", "origin", remote)
+    inside = other_checkout / "private" / "runway-instance"
+
+    with pytest.raises(InstanceConfigError, match="checkout of the public code repository"):
+        Settings(data_dir=tmp_path / "data", instance_dir=inside)
+
+
+def test_instance_dir_inside_an_unrelated_repository_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _git(workspace, "init", "--quiet")
+    _git(workspace, "remote", "add", "origin", "https://github.com/owner/notes.git")
+    instance_dir = workspace / "runway-instance"
+
+    settings = Settings(data_dir=tmp_path / "data", instance_dir=instance_dir)
+    assert settings.resolved_instance_dir == instance_dir.resolve()
+
+
+def test_github_remote_parsing_is_strict() -> None:
+    parse = instance_config.parse_github_remote
+    assert parse("https://github.com/owner/runway-instance.git") == "owner/runway-instance"
+    assert parse("git@github.com:owner/runway-instance.git") == "owner/runway-instance"
+    assert parse("ssh://git@github.com/owner/runway-instance") == "owner/runway-instance"
+    for url in (
+        "git@github-chard:owner/runway-instance.git",
+        "ssh://git@ssh.github.com:443/owner/runway-instance.git",
+        "C:/repos/runway-instance",
+        "https://github.com.evil.example/owner/runway-instance.git",
+        "https://gitlab.com/owner/runway-instance.git",
+    ):
+        assert parse(url) is None, url

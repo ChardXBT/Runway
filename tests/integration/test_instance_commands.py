@@ -2,9 +2,10 @@
 
 ``gh`` is never executed: :class:`FakeGitHub` answers every ``gh`` call, keeps
 release assets in a temporary directory and backs each "GitHub" repository
-with a local bare repository. ``git`` is real, but every remote URL is rewritten
-to that local bare repository and ``GIT_ALLOW_PROTOCOL=file`` makes any other
-transport fail, so no test can reach the network.
+with a local bare repository. ``git`` is real, but every
+``https://github.com/<name>.git`` argument is translated to that bare
+repository, a private global git config is used, and ``GIT_ALLOW_PROTOCOL=file``
+makes any other transport fail, so no test can reach the network.
 """
 
 from __future__ import annotations
@@ -14,7 +15,10 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
+import sys
+import tempfile
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -33,6 +37,7 @@ from runway.config import Settings
 from runway.db import Database, initialize_database
 from runway.db.models import ConnectedAccount, MediaAsset
 from runway.operations import instance as ops
+from runway.operations import instance_lease
 from runway.operations.instance import InstanceContext, InstanceError
 from runway.operations.instance_lease import (
     LeaseError,
@@ -46,6 +51,7 @@ from runway.platforms.registry import ProviderRegistry
 from runway.platforms.tokens import TokenStore
 
 PRIVATE_REPO = "owner/runway-instance"
+PUBLIC_REPO = "owner/public-showcase"
 FAKE_CIPHER_PREFIX = "fake-sops-ciphertext:"
 
 
@@ -55,11 +61,22 @@ def _completed(
     return subprocess.CompletedProcess(list(args), code, stdout=stdout, stderr=stderr)
 
 
+def _files_before_options(args: list[str], start: int) -> list[str]:
+    files: list[str] = []
+    for value in args[start:]:
+        if value.startswith("--"):
+            break
+        files.append(value)
+    return files
+
+
 class FakeGitHub:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.repos: dict[str, dict[str, Any]] = {}
         self.calls: list[list[str]] = []
+        self.sops_inputs: list[Path] = []
+        self.reject_pushes = False
         gitconfig = root / "gitconfig"
         gitconfig.write_text("[init]\n\tdefaultBranch = main\n", encoding="utf-8")
         self.git_env = {
@@ -78,16 +95,25 @@ class FakeGitHub:
         bare = self.root / "remotes" / f"{name.replace('/', '__')}.git"
         bare.parent.mkdir(parents=True, exist_ok=True)
         self._real_git(["git", "init", "--quiet", "--bare", "-b", "main", str(bare)])
-        self.repos[name.casefold()] = {
-            "name": name,
-            "visibility": visibility,
-            "bare": bare,
-            "release": None,
-        }
+        self.repos[name.casefold()] = {"name": name, "visibility": visibility, "bare": bare}
         return bare
 
+    def bare(self, name: str) -> Path:
+        return Path(self.repos[name.casefold()]["bare"])
+
+    def release_dir(self, repository: str, tag: str) -> Path:
+        return self.root / "releases" / repository.replace("/", "__") / tag
+
+    def releases(self, repository: str) -> list[str]:
+        base = self.root / "releases" / repository.replace("/", "__")
+        return sorted(path.name for path in base.iterdir()) if base.is_dir() else []
+
     def uploads(self) -> list[list[str]]:
-        return [call for call in self.calls if call[:3] == ["gh", "release", "upload"]]
+        return [
+            call
+            for call in self.calls
+            if call[:3] in (["gh", "release", "upload"], ["gh", "release", "create"])
+        ]
 
     def _real_git(
         self, args: Sequence[str], cwd: Path | None = None
@@ -102,19 +128,31 @@ class FakeGitHub:
             shell=False,
         )
 
+    def _translate(self, value: str) -> str:
+        for repo in self.repos.values():
+            if value.casefold() == f"https://github.com/{repo['name']}.git".casefold():
+                return str(repo["bare"])
+        return value
+
     def __call__(
         self, args: Sequence[str], *, cwd: Path | None = None
     ) -> subprocess.CompletedProcess[str]:
         args = list(args)
         self.calls.append(args)
         if args[0] == "git":
-            return self._real_git(args, cwd)
+            if self.reject_pushes and "push" in args:
+                return _completed(args, 1, stderr="! [rejected] HEAD -> main (fetch first)")
+            return self._real_git([self._translate(arg) for arg in args], cwd)
         if args[0] == "gh":
             return self._gh(args)
         if args[0] == "sops":
+            if "--encrypt" in args:
+                self.sops_inputs.append(Path(args[-1]))
             return fake_sops(args)
         if args[0] == "age-keygen":
             return fake_age_keygen(args)
+        if args[0] == "icacls":
+            return subprocess.run(args, capture_output=True, text=True, check=False)
         raise AssertionError(f"unexpected command {args[0]}")
 
     def _repo(self, name: str) -> dict[str, Any] | None:
@@ -134,30 +172,37 @@ class FakeGitHub:
             repo = self._repo(args[3])
             assert repo is not None
             target = Path(args[4])
-            url = f"https://github.com/{repo['name']}.git"
             result = self._real_git(["git", "clone", "--quiet", str(repo["bare"]), str(target)])
             assert result.returncode == 0, result.stderr
-            for git_args in (
-                ["remote", "set-url", "origin", url],
-                ["config", f"url.{Path(repo['bare']).as_posix()}.insteadOf", url],
-            ):
-                configured = self._real_git(["git", "-C", str(target), *git_args])
-                assert configured.returncode == 0, configured.stderr
+            url = f"https://github.com/{repo['name']}.git"
+            configured = self._real_git(
+                ["git", "-C", str(target), "remote", "set-url", "origin", url]
+            )
+            assert configured.returncode == 0, configured.stderr
             return _completed(args)
         repo = self._repo(_option(args, "--repo"))
         assert repo is not None, args
-        release_dir = self.root / "releases" / repo["name"].replace("/", "__") / args[3]
+        if command == ["release", "list"]:
+            tags = [{"tagName": tag} for tag in self.releases(repo["name"])]
+            return _completed(args, stdout=json.dumps(tags))
+        release_dir = self.release_dir(repo["name"], args[3])
         if command == ["release", "view"]:
             return _completed(args, 0 if release_dir.is_dir() else 1, stdout="{}")
         if command == ["release", "create"]:
+            assert repo["visibility"] == "PRIVATE", "uploaded to a non-private repository"
             release_dir.mkdir(parents=True)
+            for value in _files_before_options(args, 4):
+                shutil.copy2(value, release_dir / Path(value).name)
             return _completed(args)
         if command == ["release", "upload"]:
+            assert repo["visibility"] == "PRIVATE", "uploaded to a non-private repository"
             assert release_dir.is_dir() and "--clobber" in args
-            for value in args[4:]:
-                if value.startswith("--"):
-                    break
+            for value in _files_before_options(args, 4):
                 shutil.copy2(value, release_dir / Path(value).name)
+            return _completed(args)
+        if command == ["release", "delete"]:
+            assert "--yes" in args
+            shutil.rmtree(release_dir)
             return _completed(args)
         if command == ["release", "download"]:
             destination = Path(_option(args, "--dir"))
@@ -174,7 +219,7 @@ def _option(args: list[str], name: str) -> str:
 
 def _gh_api(fake: FakeGitHub, args: list[str]) -> subprocess.CompletedProcess[str]:
     _, owner, name, _, _, tag = args[2].split("/")
-    release_dir = fake.root / "releases" / f"{owner}__{name}" / tag
+    release_dir = fake.release_dir(f"{owner}/{name}", tag)
     assets = [
         {
             "name": path.name,
@@ -268,9 +313,12 @@ def fake_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Fak
     (tmp_path / "github").mkdir()
     fake = FakeGitHub(tmp_path / "github")
     fake.add_repo(PRIVATE_REPO)
-    fake.add_repo("owner/public-showcase", visibility="PUBLIC")
-    # Settings decrypt secrets.enc.env through the same fake sops.
+    fake.add_repo(PUBLIC_REPO, visibility="PUBLIC")
+    # Settings decrypt secrets.enc.env through the same fake sops, and the remote lease
+    # check (which has no InstanceContext) goes through the same fake GitHub.
     monkeypatch.setattr(instance_config, "sops_runner", lambda args: fake_sops(list(args)))
+    monkeypatch.setattr(ops, "default_runner", fake)
+    monkeypatch.setenv("RUNWAY_MACHINE_ID_FILE", str(tmp_path / "profile" / "machine-id"))
     for name in ("RUNWAY_INSTANCE_DIR", "RUNWAY_INSTANCE_REPOSITORY", "RUNWAY_MACHINE_ID"):
         monkeypatch.delenv(name, raising=False)
     yield fake
@@ -342,7 +390,7 @@ def test_init_against_a_public_repository_refuses(
     machine = _machine(tmp_path, "machine-a", fake_github, clock)
 
     with pytest.raises(InstanceError, match="public, not private"):
-        ops.init(machine.context(monkeypatch), "owner/public-showcase")
+        ops.init(machine.context(monkeypatch), PUBLIC_REPO)
 
     assert not machine.instance_dir.exists()
     assert not machine.age_key.exists()
@@ -389,7 +437,7 @@ def test_init_creates_the_layout_and_migrates_the_plain_key_into_encrypted_secre
     legacy = TokenStore(machine.root / "data" / "secrets")
     legacy.store("legacy-ref", TokenSet(access_token="legacy-access"))
     legacy_key = legacy.key_path.read_text().strip()
-    fixture_secret = "GOCSPX-fixture-client-secret-value"
+    fixture_secret = "fixture-client-secret-value-0123"
 
     result = ops.init(
         machine.context(
@@ -545,7 +593,8 @@ def test_pull_refuses_a_snapshot_newer_than_the_code_checkout(
     manifest = json.loads(manifest_path.read_text())
     manifest["alembic_revision"] = "9999_from_the_future"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    for git_args in (["commit", "-q", "-am", "newer snapshot"], ["push", "-q"]):
+    bare = str(fake_github.bare(PRIVATE_REPO))
+    for git_args in (["commit", "-q", "-am", "newer snapshot"], ["push", "-q", bare, "HEAD:main"]):
         result = fake_github._real_git(["git", "-C", str(machine_a.instance_dir), *git_args])
         assert result.returncode == 0, result.stderr
     ops.init(machine_b.context(monkeypatch), PRIVATE_REPO)
@@ -586,9 +635,7 @@ def test_push_waits_for_an_idle_worker_and_gives_up_safely(
     machine = _machine(tmp_path, "machine-a", fake_github, clock)
     ops.init(machine.context(monkeypatch), PRIVATE_REPO)
     _seed_runway(machine.settings())
-    marker = machine.root / "data" / "runtime" / "worker.busy"
-    marker.parent.mkdir(parents=True)
-    marker.write_text("publishing", encoding="utf-8")
+    marker = instance_lease.mark_worker_busy(machine.settings(), "youtube_publish")
 
     sleeps: list[float] = []
 
@@ -604,12 +651,14 @@ def test_push_waits_for_an_idle_worker_and_gives_up_safely(
     assert sleeps == [ops.WORKER_POLL_SECONDS, ops.WORKER_POLL_SECONDS]
 
     uploads_before = len(fake_github.uploads())
-    marker.write_text("publishing", encoding="utf-8")
+    # The legacy single marker file is honoured too.
+    legacy = machine.root / "data" / "runtime" / "worker.busy"
+    legacy.write_text("publishing", encoding="utf-8")
     context = machine.context(monkeypatch)
     context.sleep = lambda seconds: clock.advance(seconds=seconds)
-    with pytest.raises(InstanceError, match="still publishing"):
+    with pytest.raises(InstanceError, match="still running"):
         ops.push(context, wait_seconds=12)
-    with pytest.raises(InstanceError, match="still publishing"):
+    with pytest.raises(InstanceError, match="still running"):
         ops.handover(context, wait_seconds=0)
     assert len(fake_github.uploads()) == uploads_before
     lease = read_lease(machine.instance_dir)
@@ -662,7 +711,7 @@ def test_cli_init_refuses_a_public_repository_without_calling_real_gh(
         lambda settings: InstanceContext(settings=settings, runner=fake_github, now=clock.now),
     )
 
-    result = CliRunner().invoke(app, ["instance", "init", "--repo", "owner/public-showcase"])
+    result = CliRunner().invoke(app, ["instance", "init", "--repo", PUBLIC_REPO])
 
     assert result.exit_code == 1
     assert "Refused" in result.output and "not private" in result.output
@@ -687,3 +736,332 @@ def test_fernet_key_generated_by_init_is_valid(
     key = machine.settings().token_key
     assert key is not None
     Fernet(key.get_secret_value().encode())
+
+
+# --- review fixes -------------------------------------------------------------------------
+
+
+def _git_in(fake: FakeGitHub, directory: Path, *args: str) -> None:
+    result = fake._real_git(["git", "-C", str(directory), *args])
+    assert result.returncode == 0, result.stderr
+
+
+def _remote_head(fake: FakeGitHub, name: str) -> str:
+    result = fake._real_git(["git", "--git-dir", str(fake.bare(name)), "rev-parse", "main"])
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+@pytest.mark.parametrize(
+    ("git_args", "reason"),
+    [
+        # An SSH host alias hides where the data goes.
+        (["remote", "set-url", "origin", "git@github-chard:owner/runway-instance.git"], "origin"),
+        # A port-443 SSH URL and a local path are not recognized destinations either.
+        (
+            [
+                "remote",
+                "set-url",
+                "origin",
+                "ssh://git@ssh.github.com:443/owner/runway-instance.git",
+            ],
+            "origin",
+        ),
+        (["remote", "set-url", "origin", "C:/somewhere/runway-instance"], "origin"),
+        # origin looks right but pushes to the public repository.
+        (["config", "remote.origin.pushurl", f"https://github.com/{PUBLIC_REPO}.git"], "pushes to"),
+        # A rewrite rule sends the private URL to the public repository.
+        (
+            [
+                "config",
+                f"url.https://github.com/{PUBLIC_REPO}.git.insteadOf",
+                f"https://github.com/{PRIVATE_REPO}.git",
+            ],
+            "pushes to|insteadOf",
+        ),
+        (
+            [
+                "config",
+                f"url.https://github.com/{PUBLIC_REPO}.git.pushInsteadOf",
+                f"https://github.com/{PRIVATE_REPO}.git",
+            ],
+            "pushes to|insteadOf",
+        ),
+    ],
+)
+def test_push_refuses_any_destination_other_than_the_verified_repository(
+    tmp_path: Path,
+    fake_github: FakeGitHub,
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    git_args: list[str],
+    reason: str,
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    private_head = _remote_head(fake_github, PRIVATE_REPO)
+    _git_in(fake_github, machine.instance_dir, *git_args)
+
+    with pytest.raises(InstanceError, match=f"refused.*({reason})"):
+        ops.push(machine.context(monkeypatch))
+
+    assert fake_github.uploads() == []
+    assert _remote_head(fake_github, PUBLIC_REPO) == ""  # nothing reached the public repo
+    assert _remote_head(fake_github, PRIVATE_REPO) == private_head
+
+
+def test_every_transfer_names_the_verified_url_and_uses_gh_credentials(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    ops.push(machine.context(monkeypatch))
+
+    transfers = [
+        call for call in fake_github.calls if call[0] == "git" and ({"push", "fetch"} & set(call))
+    ]
+    assert transfers
+    for call in transfers:
+        assert f"https://github.com/{PRIVATE_REPO}.git" in call, call
+        assert "origin" not in call, call
+        assert "credential.helper=!gh auth git-credential" in call, call
+
+
+def test_the_active_machine_renews_its_heartbeat_and_blocks_a_take(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine_a = _machine(tmp_path, "machine-a", fake_github, clock)
+    machine_b = _machine(tmp_path, "machine-b", fake_github, clock)
+    ops.init(machine_a.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine_a.settings())
+    ops.push(machine_a.context(monkeypatch))
+    ops.init(machine_b.context(monkeypatch), PRIVATE_REPO)
+
+    clock.advance(hours=1)
+    assert ops.heartbeat(machine_a.context(monkeypatch))["status"] == "current"
+    for _ in range(5):  # Runway runs on A for 30 hours without a push
+        clock.advance(hours=6)
+        assert ops.heartbeat(machine_a.context(monkeypatch))["status"] == "renewed"
+    remote = json.loads(_remote_file(fake_github, "lease.json"))
+    assert remote["holder"] == "machine-a"
+    assert datetime.fromisoformat(remote["heartbeat_at"]) > clock.now() - timedelta(hours=7)
+
+    # More than 24 hours since A's last push, but the remote heartbeat is fresh.
+    with pytest.raises(LeaseError, match="handover"):
+        ops.pull(machine_b.context(monkeypatch), take=True)
+    assert ops.heartbeat(machine_b.context(monkeypatch))["status"] == "standby"
+
+
+def test_take_is_judged_by_the_remote_lease_not_the_local_copy(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine_a = _machine(tmp_path, "machine-a", fake_github, clock)
+    machine_b = _machine(tmp_path, "machine-b", fake_github, clock)
+    ops.init(machine_a.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine_a.settings())
+    ops.push(machine_a.context(monkeypatch))
+    ops.init(machine_b.context(monkeypatch), PRIVATE_REPO)
+    clock.advance(hours=25)
+    # B's clone is out of date (it still shows A's old heartbeat); A renews remotely.
+    ops.heartbeat(machine_a.context(monkeypatch))
+    old = json.loads((machine_b.instance_dir / "lease.json").read_text())
+    assert datetime.fromisoformat(old["heartbeat_at"]) < clock.now() - timedelta(hours=24)
+
+    with pytest.raises(LeaseError, match="handover"):
+        ops.pull(machine_b.context(monkeypatch), take=True)
+    lease = json.loads(_remote_file(fake_github, "lease.json"))
+    assert lease["holder"] == "machine-a"
+
+
+def test_a_holder_whose_stale_lease_was_taken_drops_to_standby(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine_a = _machine(tmp_path, "machine-a", fake_github, clock)
+    machine_b = _machine(tmp_path, "machine-b", fake_github, clock)
+    ops.init(machine_a.context(monkeypatch), PRIVATE_REPO)
+    token_ref, _token = _seed_runway(machine_a.settings())
+    ops.push(machine_a.context(monkeypatch))
+    ops.init(machine_b.context(monkeypatch), PRIVATE_REPO)
+    clock.advance(hours=25)  # A went silent (offline), B takes over
+    ops.pull(machine_b.context(monkeypatch), take=True)
+
+    # A comes back. Its own clone still says A holds the lease...
+    local = read_lease(machine_a.instance_dir)
+    assert local is not None and local.holder == "machine-a"
+    # ...but its last remote confirmation is old, so it re-reads the remote.
+    aged = datetime.now(UTC) - instance_lease.REMOTE_CHECK_INTERVAL - timedelta(minutes=1)
+    instance_lease.record_remote_check(machine_a.instance_dir, "machine-a", aged)
+    settings_a = machine_a.settings()
+    assert not instance_is_active(settings_a)
+    with pytest.raises(StandbyError, match="private repository says machine-b"):
+        TokenStore.from_settings(settings_a).store(token_ref, TokenSet(access_token="x"))
+
+
+def test_pull_verifies_before_taking_the_lease(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine_a = _machine(tmp_path, "machine-a", fake_github, clock)
+    machine_b = _machine(tmp_path, "machine-b", fake_github, clock)
+    ops.init(machine_a.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine_a.settings())
+    ops.handover(machine_a.context(monkeypatch))
+    ops.init(machine_b.context(monkeypatch), PRIVATE_REPO)
+    manifest = json.loads(_remote_file(fake_github, "manifest.json"))
+    asset = (
+        fake_github.release_dir(PRIVATE_REPO, manifest["release"]["tag"]) / "runway-database.db.gz"
+    )
+    asset.write_bytes(b"corrupted in transit")
+
+    with pytest.raises(InstanceError, match="does not match manifest"):
+        ops.pull(machine_b.context(monkeypatch))
+
+    assert json.loads(_remote_file(fake_github, "lease.json"))["holder"] is None
+    assert not instance_is_active(machine_b.settings())
+    assert not (machine_b.root / "data" / "runway.db").exists()
+
+
+def test_push_arbitrates_through_git_before_uploading(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    before = (machine.instance_dir / "lease.json").read_bytes()
+    fake_github.reject_pushes = True  # another machine pushed first
+
+    with pytest.raises(InstanceError, match="changed while this command ran"):
+        ops.push(machine.context(monkeypatch))
+
+    assert fake_github.uploads() == []
+    assert not (machine.instance_dir / "manifest.json").exists()
+    assert (machine.instance_dir / "lease.json").read_bytes() == before
+    status = fake_github._real_git(
+        ["git", "-C", str(machine.instance_dir), "status", "--porcelain"]
+    )
+    # Only the token store written after init remains, kept on disk and uncommitted.
+    assert status.stdout.strip() == "?? tokens/"
+    assert (machine.instance_dir / "tokens" / "platform-tokens.json").is_file()
+
+
+def test_push_uses_dated_releases_updates_latest_and_keeps_the_newest_n(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    tags = []
+    for _ in range(4):
+        clock.advance(minutes=1)
+        result = ops.push(machine.context(monkeypatch, instance_snapshot_keep=2))
+        tags.append(result["tag"])
+        assert ops._DATED_TAG_PATTERN.fullmatch(result["tag"])
+
+    assert fake_github.releases(PRIVATE_REPO) == sorted([*tags[-2:], "snapshot-latest"])
+    manifest = json.loads(_remote_file(fake_github, "manifest.json"))
+    assert manifest["release"]["tag"] == tags[-1]
+    latest = fake_github.release_dir(PRIVATE_REPO, "snapshot-latest")
+    newest = fake_github.release_dir(PRIVATE_REPO, tags[-1])
+    for name in ops.ASSET_NAMES:
+        assert (latest / name).read_bytes() == (newest / name).read_bytes()
+
+
+def test_pull_by_the_holder_refuses_to_overwrite_newer_local_work(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    ops.push(machine.context(monkeypatch))
+    database = machine.settings().database_path
+    later = datetime.now(UTC).timestamp() + 5
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("CREATE TABLE local_work (id INTEGER PRIMARY KEY)")
+        connection.commit()
+    finally:
+        connection.close()
+    os.utime(database, (later, later))
+    newer = database.read_bytes()
+
+    with pytest.raises(InstanceError, match="--force"):
+        ops.pull(machine.context(monkeypatch))
+    assert database.read_bytes() == newer
+
+    pulled = ops.pull(machine.context(monkeypatch), force=True)
+    backup = Path(pulled["replaced_files_backup"])
+    assert (backup / "runway.db").read_bytes() == newer
+    assert database.read_bytes() != newer
+
+
+def test_secrets_plaintext_never_touches_the_shared_temp_directory(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+
+    [source] = fake_github.sops_inputs
+    assert source.parent.parent == machine.instance_dir / "tmp"
+    # Inside the instance directory, not directly in the shared temp directory.
+    assert source.resolve().parent.parent.parent == machine.instance_dir.resolve()
+    assert source.resolve().parent.parent != Path(tempfile.gettempdir()).resolve()
+    assert not source.exists() and not source.parent.exists()
+    if sys.platform == "win32":
+        [acl] = [call for call in fake_github.calls if call[0] == "icacls"]
+        assert "/inheritance:r" in acl
+    ignored = fake_github._real_git(
+        ["git", "-C", str(machine.instance_dir), "check-ignore", "-q", "tmp/x"]
+    )
+    assert ignored.returncode == 0
+
+
+def test_every_external_command_has_a_timeout_and_no_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.append(kwargs)
+        if args[0].endswith("slow"):
+            raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs["timeout"])
+        return _completed(args)
+
+    monkeypatch.setattr(ops.shutil, "which", lambda name: name)
+    monkeypatch.setattr(ops.subprocess, "run", fake_run)
+    for args in (
+        ["git", "status"],
+        ["git", "-c", "x", "-C", "d", "push", "url", "HEAD:main"],
+        ["gh", "repo", "view", "o/n"],
+        ["gh", "release", "upload", "t", "f"],
+        ["sops", "--encrypt"],
+    ):
+        ops.subprocess_runner(args)
+    assert [call["timeout"] for call in seen] == [
+        ops.COMMAND_TIMEOUT_SECONDS,
+        ops.NETWORK_TIMEOUT_SECONDS,
+        ops.COMMAND_TIMEOUT_SECONDS,
+        ops.TRANSFER_TIMEOUT_SECONDS,
+        instance_config.SOPS_TIMEOUT_SECONDS,
+    ]
+    assert all(call["env"]["GIT_TERMINAL_PROMPT"] == "0" for call in seen)
+    assert all(call["shell"] is False for call in seen)
+    with pytest.raises(InstanceError, match="did not finish"):
+        ops.subprocess_runner(["slow"])
+
+
+def test_the_heartbeat_thread_beats_and_stops(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    clock.advance(hours=6)
+    beater = ops.LeaseHeartbeat(
+        machine.settings(),
+        interval_seconds=3600,
+        context_factory=lambda settings: InstanceContext(
+            settings=settings, runner=fake_github, now=clock.now
+        ),
+    )
+    beater.start()
+    beater.stop()
+    assert beater.last_result is not None and beater.last_result["status"] == "renewed"

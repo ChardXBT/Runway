@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet
 
 from runway.config import Settings
 from runway.db import Database
+from runway.operations import instance_lease
 from runway.operations.instance_lease import (
     Lease,
     LeaseError,
@@ -28,6 +29,33 @@ from runway.platforms.registry import ProviderRegistry
 from runway.platforms.tokens import TokenStore, TokenStoreError
 
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
+
+
+class RemoteLease:
+    """Stands in for the private repository's copy of lease.json."""
+
+    def __init__(self) -> None:
+        self.lease: Lease | None = None
+        self.mirror_local = True
+        self.reads = 0
+        self.error: Exception | None = None
+
+    def __call__(self, settings: Settings) -> Lease | None:
+        self.reads += 1
+        if self.error is not None:
+            raise self.error
+        if self.mirror_local:
+            assert settings.resolved_instance_dir is not None
+            return read_lease(settings.resolved_instance_dir)
+        return self.lease
+
+
+@pytest.fixture(autouse=True)
+def remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RemoteLease:
+    monkeypatch.setenv("RUNWAY_MACHINE_ID_FILE", str(tmp_path / "profile" / "machine-id"))
+    fake = RemoteLease()
+    monkeypatch.setattr(instance_lease, "remote_lease_reader", fake)
+    return fake
 
 
 def _settings(tmp_path: Path, machine: str, *, key: str | None = None) -> Settings:
@@ -187,3 +215,108 @@ def test_worker_busy_marker(tmp_path: Path) -> None:
     marker.parent.mkdir(parents=True)
     marker.write_text("publishing", encoding="utf-8")
     assert worker_is_busy(settings)
+
+
+# --- review fixes -------------------------------------------------------------------------
+
+
+def test_machine_id_defaults_to_an_id_created_once_in_the_user_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RUNWAY_MACHINE_ID", raising=False)
+    settings = Settings(data_dir=tmp_path / "data")
+    first = instance_lease.machine_id(settings)
+    assert first == instance_lease.machine_id(settings)
+    stored = tmp_path / "profile" / "machine-id"
+    assert stored.read_text(encoding="utf-8").strip() == first
+    # Not the host name alone: two machines with the same name get different ids.
+    host = instance_lease.socket.gethostname().casefold()
+    assert first != host
+    monkeypatch.setenv("RUNWAY_MACHINE_ID_FILE", str(tmp_path / "other-profile" / "machine-id"))
+    assert instance_lease.machine_id(settings) != first
+
+    assert instance_lease.machine_id(Settings(machine_id="Explicit-Box")) == "explicit-box"
+
+
+def test_a_holder_whose_lease_was_taken_remotely_drops_to_standby(
+    tmp_path: Path, remote: RemoteLease
+) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    assert settings.resolved_instance_dir is not None
+    instance_dir = settings.resolved_instance_dir
+    write_lease(instance_dir, Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW))
+    remote.mirror_local = False
+    remote.lease = Lease(holder="machine-b", holder_since=NOW, heartbeat_at=NOW)
+
+    assert not instance_is_active(settings)
+    with pytest.raises(StandbyError, match="private repository says machine-b"):
+        ensure_active(settings)
+    assert remote.reads == 1  # the second check used the fresh confirmation
+
+    # Back to machine A remotely, but the confirmation is recent: no re-read yet.
+    remote.lease = Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW)
+    assert not instance_is_active(settings)
+    assert remote.reads == 1
+    # Once the confirmation is older than the interval, the remote is read again.
+    aged = datetime.now(UTC) - instance_lease.REMOTE_CHECK_INTERVAL - timedelta(seconds=1)
+    instance_lease.record_remote_check(instance_dir, "machine-b", aged)
+    assert instance_is_active(settings)
+    assert remote.reads == 2
+
+
+def test_an_unreachable_remote_means_standby(tmp_path: Path, remote: RemoteLease) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    assert settings.resolved_instance_dir is not None
+    write_lease(
+        settings.resolved_instance_dir,
+        Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
+    )
+    remote.error = RuntimeError("could not fetch owner/runway-instance")
+
+    assert not instance_is_active(settings)
+    with pytest.raises(StandbyError, match="could not be confirmed"):
+        ensure_active(settings)
+    # Nothing was recorded, so the next check tries the remote again.
+    remote.error = None
+    assert instance_is_active(settings)
+
+
+def test_worker_busy_markers_mark_and_clear(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "data")
+    assert not worker_is_busy(settings)
+    marker = instance_lease.mark_worker_busy(settings, "youtube_publish")
+    assert worker_is_busy(settings)
+    assert json.loads(marker.read_text(encoding="utf-8"))["job"] == "youtube_publish"
+    instance_lease.clear_worker_busy(marker)
+    assert not worker_is_busy(settings)
+
+    with instance_lease.worker_busy(settings, "comment_reply"):
+        assert worker_is_busy(settings)
+    assert not worker_is_busy(settings)
+    with pytest.raises(RuntimeError), instance_lease.worker_busy(settings, "crash"):
+        raise RuntimeError("job failed")
+    assert not worker_is_busy(settings)
+
+
+def test_unexpired_tokens_for_platform_writes_are_refused_in_standby(tmp_path: Path) -> None:
+    key = Fernet.generate_key().decode("ascii")
+    active = _settings(tmp_path, "machine-a", key=key)
+    standby = _settings(tmp_path, "machine-b", key=key)
+    assert active.resolved_instance_dir is not None
+    write_lease(
+        active.resolved_instance_dir,
+        Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
+    )
+    TokenStore.from_settings(active).store("ref", TokenSet(access_token="long-lived"))
+
+    standby_registry = ProviderRegistry(cast(Database, None), standby)
+    # Reads (sync) still work in standby; writes do not.
+    assert standby_registry.fresh_token(Platform.youtube, "ref").access_token == "long-lived"
+    with pytest.raises(StandbyError):
+        standby_registry.fresh_token(Platform.youtube, "ref", for_write=True)
+    with pytest.raises(StandbyError):
+        standby_registry.ensure_platform_write_allowed()
+
+    active_registry = ProviderRegistry(cast(Database, None), active)
+    token = active_registry.fresh_token(Platform.youtube, "ref", for_write=True)
+    assert token.access_token == "long-lived"

@@ -5,22 +5,31 @@ token store, the lease and a manifest live in a separate **private** repository,
 and database and media snapshots travel as that repository's release assets.
 
 Every external tool (``gh``, ``git``, ``sops``, ``age-keygen``) runs through an
-injectable :class:`CommandRunner` with an argument list and no shell. No secret
-is ever placed on a command line or in an error message.
+injectable :class:`CommandRunner` with an argument list, no shell and a timeout.
+No secret is ever placed on a command line or in an error message.
+
+Git never pushes or fetches by remote name: every transfer names
+``https://github.com/<verified owner/name>.git`` explicitly, after the
+repository was confirmed private with ``gh`` and after checking that neither
+the clone's configured push URLs nor any ``url.*.insteadOf`` rule would send
+the data somewhere else.
 """
 
 from __future__ import annotations
 
+import getpass
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -31,12 +40,17 @@ from cryptography.fernet import Fernet
 
 from runway.config import Settings
 from runway.config.instance import (
+    CODE_REPOSITORY,
     INSTANCE_TOML_NAME,
     SECRETS_FILE_NAME,
     SOPS_INSTALL_HINT,
+    SOPS_TIMEOUT_SECONDS,
     TOKENS_DIR_NAME,
     InstanceConfigError,
+    is_code_repository_remote,
+    parse_github_remote,
     resolve_instance_dir,
+    scrub_tool_output,
 )
 from runway.operations.database_release import (
     DATABASE_ARCHIVE_NAME,
@@ -48,6 +62,7 @@ from runway.operations.database_release import (
     verify_release,
 )
 from runway.operations.instance_lease import (
+    HEARTBEAT_RENEW_AFTER,
     LEASE_FILE_NAME,
     Lease,
     LeaseError,
@@ -56,14 +71,16 @@ from runway.operations.instance_lease import (
     acquire,
     describe_lease,
     ensure_active,
+    ensure_active_or_raise,
     instance_is_active,
     machine_id,
     read_lease,
+    record_remote_check,
     release,
+    worker_busy_markers,
     worker_is_busy,
     write_lease,
 )
-from runway.platforms.base import safe_error_summary
 
 __all__ = [
     "CODE_REPOSITORY",
@@ -72,20 +89,27 @@ __all__ = [
     "InstanceContext",
     "InstanceError",
     "LeaseError",
+    "LeaseHeartbeat",
     "StandbyError",
     "ensure_active",
+    "ensure_active_or_raise",
     "ensure_private_repository",
     "handover",
+    "heartbeat",
     "init",
     "instance_is_active",
     "pull",
     "push",
+    "read_remote_lease",
     "status",
     "subprocess_runner",
 ]
 
-CODE_REPOSITORY = "ChardXBT/Runway"
+logger = logging.getLogger(__name__)
+
 SNAPSHOT_TAG = "snapshot-latest"
+DATED_TAG_PREFIX = "snapshot-"
+_DATED_TAG_PATTERN = re.compile(r"^snapshot-\d{8}-\d{6}$")
 MANIFEST_FILE_NAME = "manifest.json"
 MANIFEST_FORMAT_VERSION = 1
 SOPS_CONFIG_NAME = ".sops.yaml"
@@ -93,6 +117,16 @@ TOKENS_FILE = f"{TOKENS_DIR_NAME}/platform-tokens.json"
 ASSET_NAMES = (DATABASE_ARCHIVE_NAME, MEDIA_ARCHIVE_NAME, MANIFEST_NAME)
 WORKER_POLL_SECONDS = 5.0
 DEFAULT_WORKER_WAIT_SECONDS = 300
+HEARTBEAT_THREAD_INTERVAL_SECONDS = 3600.0
+# A private ref, so concurrent commands never race on FETCH_HEAD.
+REMOTE_REF = "refs/runway/remote"
+INSTANCE_TMP_DIR = "tmp"
+
+COMMAND_TIMEOUT_SECONDS = 120
+NETWORK_TIMEOUT_SECONDS = 600
+TRANSFER_TIMEOUT_SECONDS = 3600
+# Git uses gh for HTTPS credentials; any other configured helper is cleared first.
+GIT_CREDENTIALS = ("-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential")
 
 # The small files committed to the private repository; nothing else is ever added.
 TRACKED_FILES = (
@@ -117,10 +151,6 @@ MIGRATED_SECRET_SETTINGS = (
 )
 
 _REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
-_GITHUB_REMOTE_PATTERN = re.compile(
-    r"github\.com[:/](?P<name>[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+?)(?:\.git)?/?$",
-    re.IGNORECASE,
-)
 _AGE_RECIPIENT_PATTERN = re.compile(r"age1[0-9a-z]{58}")
 _SOPS_AGE_LINE = re.compile(r"^(?P<prefix>\s*age:\s*)(?P<value>\S.*?)\s*$", re.MULTILINE)
 
@@ -137,14 +167,18 @@ _GITIGNORE = """\
 *.db-wal
 *.db-shm
 *.db.gz
+*.sqlite
+*.sqlite3
 *.zip
 *.key
 .env
 .env.*
 browser-profile/
+tmp/
 tokens/token.lock
 tokens/platform-tokens-*.json
 .lease-*.json
+.lease-*.tmp
 """
 # Byte-exact: the Fernet blob and SOPS ciphertext must never be rewritten for line endings.
 _GITATTRIBUTES = "* -text\n"
@@ -154,19 +188,19 @@ _README = """\
 Private state for one Runway installation. Keep this repository **private**.
 The code lives in the public `ChardXBT/Runway` repository; nothing here may be copied there.
 
-- `instance.toml`: non-secret settings (Runway setting names without the `RUNWAY_` prefix).
+- `instance.toml`: shared non-secret settings (Runway setting names without `RUNWAY_`).
 - `secrets.enc.env`: SOPS + age encrypted secrets. Edit with `sops edit secrets.enc.env`.
 - `tokens/platform-tokens.json`: the Fernet-encrypted token store; its key is in the secrets.
-- `lease.json`: the one machine allowed to refresh tokens and publish.
-- `manifest.json`: the last snapshot. The database and media are assets of the
-  `snapshot-latest` release.
+- `lease.json`: the one machine allowed to refresh tokens, publish and run the worker.
+- `manifest.json`: the last snapshot. The database and media are assets of its dated
+  `snapshot-YYYYMMDD-HHMMSS` release, also copied to `snapshot-latest`.
 
 Restore on another machine: clone the code and this repository, install this machine's age
 key, set `RUNWAY_INSTANCE_DIR`, then run `runway instance pull` after the active machine ran
 `runway instance handover`. See `docs/PRIVATE_INSTANCE.md` in the code repository.
 """
 _RELEASE_NOTES = (
-    "Rolling private snapshot of this Runway instance: the database (SQLite online backup, "
+    "Private snapshot of this Runway instance: the database (SQLite online backup, "
     "gzip) and every media file it references. Browser profiles, plain keys and "
     "authentication state are never included."
 )
@@ -190,6 +224,19 @@ class CommandRunner(Protocol):
     ) -> subprocess.CompletedProcess[str]: ...
 
 
+def _timeout_for(args: Sequence[str]) -> int:
+    if args[0] == "sops":
+        return SOPS_TIMEOUT_SECONDS
+    words = set(args[1:6])
+    if args[0] == "gh" and {"release"} <= words and words & {"upload", "download", "create"}:
+        return TRANSFER_TIMEOUT_SECONDS
+    if args[0] == "git" and words & {"push", "fetch", "clone"}:
+        return NETWORK_TIMEOUT_SECONDS
+    if args[0] == "gh" and "clone" in words:
+        return NETWORK_TIMEOUT_SECONDS
+    return COMMAND_TIMEOUT_SECONDS
+
+
 def subprocess_runner(
     args: Sequence[str], *, cwd: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -197,16 +244,32 @@ def subprocess_runner(
     if executable is None:
         hint = _INSTALL_HINTS.get(args[0], "Install it")
         raise InstanceError(f"'{args[0]}' was not found on PATH. {hint}.")
-    return subprocess.run(
-        [executable, *args[1:]],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        shell=False,
-        check=False,
-    )
+    timeout = _timeout_for(args)
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GCM_INTERACTIVE": "never",
+        "GH_PROMPT_DISABLED": "1",
+    }
+    try:
+        return subprocess.run(
+            [executable, *args[1:]],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise InstanceError(f"'{args[0]}' did not finish within {timeout} seconds") from exc
+
+
+# Used where no InstanceContext exists (the remote lease check); tests replace it.
+default_runner: CommandRunner = subprocess_runner
 
 
 def _utcnow() -> datetime:
@@ -240,12 +303,17 @@ class InstanceContext:
     ) -> subprocess.CompletedProcess[str]:
         return self.run(["git", "-C", str(repository_dir), *args], check=check)
 
+    def remote_git(
+        self, repository_dir: Path, *args: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        """A git command that talks to GitHub, authenticated through gh."""
+        return self.run(["git", *GIT_CREDENTIALS, "-C", str(repository_dir), *args], check=check)
+
 
 def _failure(args: Sequence[str], result: subprocess.CompletedProcess[str]) -> str:
-    lines = [line for line in (result.stderr or "").strip().splitlines() if line.strip()]
-    reason = safe_error_summary(RuntimeError(lines[-1])) if lines else "no error output"
-    shown = " ".join(arg for arg in args[:3] if not os.path.isabs(arg))
-    return f"'{shown}' failed (exit {result.returncode}): {reason}"
+    words = [arg for arg in args if not arg.startswith("-") and "=" not in arg]
+    shown = " ".join(word for word in words[:3] if not os.path.isabs(word) and "://" not in word)
+    return f"'{shown}' failed (exit {result.returncode}): {scrub_tool_output(result.stderr or '')}"
 
 
 # --- repositories -----------------------------------------------------------------------
@@ -258,9 +326,8 @@ def validate_repository(name: str) -> str:
     return value
 
 
-def _github_name(remote_url: str) -> str | None:
-    match = _GITHUB_REMOTE_PATTERN.search(remote_url.strip())
-    return match.group("name") if match else None
+def github_url(repository: str) -> str:
+    return f"https://github.com/{repository}.git"
 
 
 def _code_repositories(ctx: InstanceContext) -> set[str]:
@@ -271,7 +338,7 @@ def _code_repositories(ctx: InstanceContext) -> set[str]:
         )
     except InstanceError:
         return blocked
-    name = _github_name(origin.stdout) if origin.returncode == 0 else None
+    name = parse_github_remote(origin.stdout) if origin.returncode == 0 else None
     if name:
         blocked.add(name.casefold())
     return blocked
@@ -300,7 +367,9 @@ def ensure_private_repository(ctx: InstanceContext, repository: str) -> str:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise InstanceError(f"refused: gh returned unreadable repository data for {name}") from exc
-    canonical = str(payload.get("nameWithOwner") or name)
+    canonical = str(payload.get("nameWithOwner") or "")
+    if not _REPOSITORY_PATTERN.fullmatch(canonical):
+        raise InstanceError(f"refused: gh did not report a repository name for {name}")
     if canonical.casefold() in blocked:
         raise InstanceError(f"refused: {canonical} {code_refusal}")
     visibility = str(payload.get("visibility") or "UNKNOWN").upper()
@@ -317,7 +386,45 @@ def ensure_private_repository(ctx: InstanceContext, repository: str) -> str:
 def _origin_repository(ctx: InstanceContext, instance_dir: Path) -> str | None:
     # The raw configured URL, before any url.<base>.insteadOf rewriting.
     result = ctx.git(instance_dir, "config", "--get", "remote.origin.url", check=False)
-    return _github_name(result.stdout) if result.returncode == 0 else None
+    return parse_github_remote(result.stdout) if result.returncode == 0 else None
+
+
+def verify_push_destination(ctx: InstanceContext, instance_dir: Path, repository: str) -> None:
+    """Refuse unless every way git could send this clone's data leads to ``repository``."""
+    expected = repository.casefold()
+    urls = ctx.git(instance_dir, "remote", "get-url", "--push", "--all", "origin", check=False)
+    configured = [line.strip() for line in urls.stdout.splitlines() if line.strip()]
+    if urls.returncode != 0 or not configured:
+        raise InstanceError(f"refused: {instance_dir} has no origin remote for {repository}")
+    for url in configured:
+        name = parse_github_remote(url)
+        if name is None or name.casefold() != expected:
+            target = (
+                "the public code repository"
+                if is_code_repository_remote(url)
+                else (name or "an address that is not a plain github.com repository URL")
+            )
+            raise InstanceError(
+                f"refused: the clone's origin pushes to {target}, not {repository}. "
+                f"Run: git -C {instance_dir} remote set-url origin {github_url(repository)} "
+                "(and remove any remote.origin.pushurl)"
+            )
+    rewrites = ctx.git(
+        instance_dir,
+        "config",
+        "--get-regexp",
+        r"^url\..*\.(insteadof|pushinsteadof)$",
+        check=False,
+    )
+    target_url = github_url(repository).casefold()
+    for line in rewrites.stdout.splitlines():
+        _key, _space, prefix = line.strip().partition(" ")
+        if prefix and target_url.startswith(prefix.strip().casefold()):
+            raise InstanceError(
+                f"refused: a git url.<base>.insteadOf or pushInsteadOf rule rewrites "
+                f"{github_url(repository)} to another address; remove it "
+                "(git config --show-origin --get-regexp '^url\\.')"
+            )
 
 
 def _require_instance_dir(settings: Settings) -> Path:
@@ -331,15 +438,13 @@ def _require_instance_dir(settings: Settings) -> Path:
     return instance_dir
 
 
-def _prepare(ctx: InstanceContext) -> tuple[Path, str]:
-    """The instance clone and its confirmed-private repository, for commands that sync."""
-    instance_dir = _require_instance_dir(ctx.settings)
-    if not (instance_dir / ".git").exists():
-        raise InstanceError(
-            f"{instance_dir} is not a clone of the private instance repository; "
-            "run 'runway instance init --repo <owner/name>' first"
-        )
+def _configured_repository(ctx: InstanceContext, instance_dir: Path) -> str:
+    raw_origin = ctx.git(instance_dir, "config", "--get", "remote.origin.url", check=False)
     origin = _origin_repository(ctx, instance_dir)
+    if raw_origin.returncode == 0 and raw_origin.stdout.strip() and origin is None:
+        raise InstanceError(
+            f"refused: the origin of {instance_dir} is not a plain github.com repository URL"
+        )
     configured = ctx.settings.instance_repository
     if configured and origin and configured.casefold() != origin.casefold():
         raise InstanceError(
@@ -351,19 +456,85 @@ def _prepare(ctx: InstanceContext) -> tuple[Path, str]:
             f"cannot tell which repository {instance_dir} belongs to; "
             "set instance_repository in instance.toml"
         )
-    return instance_dir, ensure_private_repository(ctx, repository)
+    return validate_repository(repository)
+
+
+def _prepare(ctx: InstanceContext) -> tuple[Path, str]:
+    """The instance clone and its confirmed-private repository, for commands that sync."""
+    instance_dir = _require_instance_dir(ctx.settings)
+    if not (instance_dir / ".git").exists():
+        raise InstanceError(
+            f"{instance_dir} is not a clone of the private instance repository; "
+            "run 'runway instance init --repo <owner/name>' first"
+        )
+    repository = ensure_private_repository(ctx, _configured_repository(ctx, instance_dir))
+    verify_push_destination(ctx, instance_dir, repository)
+    return instance_dir, repository
 
 
 # --- git ---------------------------------------------------------------------------------
 
 
-def _git_sync(ctx: InstanceContext, instance_dir: Path) -> None:
-    result = ctx.git(instance_dir, "pull", "--ff-only", "--quiet", check=False)
+def _current_branch(ctx: InstanceContext, instance_dir: Path) -> str:
+    result = ctx.git(instance_dir, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+    branch = result.stdout.strip()
+    if result.returncode != 0 or not branch:
+        raise InstanceError(f"{instance_dir} is not on a branch; check it out with git first")
+    return branch
+
+
+def _has_commits(ctx: InstanceContext, instance_dir: Path) -> bool:
+    return (
+        ctx.git(instance_dir, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode
+        == 0
+    )
+
+
+def _fetch(ctx: InstanceContext, instance_dir: Path, repository: str) -> bool:
+    """Fetch the branch into ``REMOTE_REF``; False when the remote has no such branch yet."""
+    branch = _current_branch(ctx, instance_dir)
+    ctx.git(instance_dir, "update-ref", "-d", REMOTE_REF, check=False)
+    result = ctx.remote_git(
+        instance_dir,
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        github_url(repository),
+        f"+refs/heads/{branch}:{REMOTE_REF}",
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if "couldn't find remote ref" in (result.stderr or "").lower():
+        return False
+    raise InstanceError(f"could not fetch {repository} ({_failure(['git', 'fetch'], result)})")
+
+
+def _git_sync(ctx: InstanceContext, instance_dir: Path, repository: str) -> None:
+    if not _fetch(ctx, instance_dir, repository):
+        if _has_commits(ctx, instance_dir):
+            raise InstanceError(f"{repository} has no branch {_current_branch(ctx, instance_dir)}")
+        return
+    result = ctx.git(instance_dir, "merge", "--ff-only", "--quiet", REMOTE_REF, check=False)
     if result.returncode != 0:
         raise InstanceError(
             "could not fast-forward the instance clone from its remote "
-            f"({_failure(['git', 'pull'], result)}); resolve it with git in {instance_dir}"
+            f"({_failure(['git', 'merge'], result)}); resolve it with git in {instance_dir}"
         )
+
+
+def read_remote_lease(settings: Settings, runner: CommandRunner | None = None) -> Lease | None:
+    """``lease.json`` as it is in the private repository right now."""
+    ctx = InstanceContext(settings=settings, runner=runner or default_runner)
+    instance_dir = _require_instance_dir(settings)
+    repository = _configured_repository(ctx, instance_dir)
+    if not _fetch(ctx, instance_dir, repository):
+        return None
+    exists = ctx.git(instance_dir, "cat-file", "-e", f"{REMOTE_REF}:{LEASE_FILE_NAME}", check=False)
+    if exists.returncode != 0:
+        return None
+    shown = ctx.git(instance_dir, "show", f"{REMOTE_REF}:{LEASE_FILE_NAME}")
+    return Lease.from_text(shown.stdout)
 
 
 def _commit(ctx: InstanceContext, instance_dir: Path, message: str, paths: Sequence[str]) -> bool:
@@ -379,40 +550,100 @@ def _commit(ctx: InstanceContext, instance_dir: Path, message: str, paths: Seque
     return True
 
 
-def _git_push(ctx: InstanceContext, instance_dir: Path) -> None:
-    result = ctx.git(instance_dir, "push", "--quiet", "-u", "origin", "HEAD", check=False)
-    if result.returncode != 0:
-        raise InstanceError(
-            "the private repository changed while this command ran "
-            f"({_failure(['git', 'push'], result)}); run 'runway instance status --refresh'"
-        )
-
-
-def _publish_lease(ctx: InstanceContext, instance_dir: Path, lease: Lease, message: str) -> None:
-    """Write, commit and push the lease; a rejected push undoes the local change.
-
-    A fast-forward-only push is the compare-and-swap: two machines cannot both
-    take the lease from the same starting commit.
-    """
-    existed = (instance_dir / LEASE_FILE_NAME).is_file()
-    previous = (instance_dir / LEASE_FILE_NAME).read_bytes() if existed else None
-    write_lease(instance_dir, lease)
-    if not _commit(ctx, instance_dir, message, [LEASE_FILE_NAME]):
-        return
-    pushed = ctx.git(instance_dir, "push", "--quiet", "-u", "origin", "HEAD", check=False)
-    if pushed.returncode == 0:
-        return
-    ctx.git(instance_dir, "reset", "--quiet", "--soft", "HEAD~1")
-    if previous is None:
-        ctx.git(instance_dir, "rm", "--quiet", "--cached", "--", LEASE_FILE_NAME)
-        (instance_dir / LEASE_FILE_NAME).unlink(missing_ok=True)
-    else:
-        ctx.git(instance_dir, "reset", "--quiet", "HEAD", "--", LEASE_FILE_NAME)
-        (instance_dir / LEASE_FILE_NAME).write_bytes(previous)
-    raise InstanceError(
-        "could not publish the lease: another machine changed the private repository "
-        f"meanwhile ({_failure(['git', 'push'], pushed)}). Run 'runway instance status --refresh'."
+def _push_head(
+    ctx: InstanceContext, instance_dir: Path, repository: str
+) -> subprocess.CompletedProcess[str]:
+    verify_push_destination(ctx, instance_dir, repository)
+    branch = _current_branch(ctx, instance_dir)
+    return ctx.remote_git(
+        instance_dir,
+        "push",
+        "--quiet",
+        "--no-verify",
+        github_url(repository),
+        f"HEAD:refs/heads/{branch}",
+        check=False,
     )
+
+
+def _record_pushed_lease(instance_dir: Path) -> None:
+    try:
+        lease = read_lease(instance_dir)
+    except LeaseError:
+        return
+    record_remote_check(instance_dir, lease.holder if lease else None, datetime.now(UTC))
+
+
+def _commit_and_push(
+    ctx: InstanceContext,
+    instance_dir: Path,
+    repository: str,
+    message: str,
+    paths: Sequence[str],
+) -> bool:
+    """Commit ``paths`` and push; a rejected push restores every path as it was.
+
+    The fast-forward-only push is the compare-and-swap that arbitrates between
+    machines: two machines cannot both build on the same remote commit.
+    """
+    previous = {
+        path: (instance_dir / path).read_bytes() if (instance_dir / path).is_file() else None
+        for path in paths
+    }
+    tracked_before = {
+        path
+        for path in paths
+        if ctx.git(instance_dir, "cat-file", "-e", f"HEAD:{path}", check=False).returncode == 0
+    }
+    if not _commit(ctx, instance_dir, message, paths):
+        return False
+    pushed = _push_head(ctx, instance_dir, repository)
+    if pushed.returncode == 0:
+        _record_pushed_lease(instance_dir)
+        return True
+    if _has_parent(ctx, instance_dir):
+        ctx.git(instance_dir, "reset", "--quiet", "--soft", "HEAD~1")
+    else:
+        ctx.git(instance_dir, "update-ref", "-d", "HEAD")
+    for path, content in previous.items():
+        if path in tracked_before:
+            ctx.git(instance_dir, "reset", "--quiet", "HEAD", "--", path)
+        else:
+            ctx.git(instance_dir, "rm", "--quiet", "--cached", "--ignore-unmatch", "--", path)
+        target = instance_dir / path
+        if content is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(content)
+    raise InstanceError(
+        "the private repository changed while this command ran, or the push was refused "
+        f"({_failure(['git', 'push'], pushed)}). Nothing was uploaded; run "
+        "'runway instance status --refresh' and try again."
+    )
+
+
+def _has_parent(ctx: InstanceContext, instance_dir: Path) -> bool:
+    return (
+        ctx.git(instance_dir, "rev-parse", "--verify", "--quiet", "HEAD~1", check=False).returncode
+        == 0
+    )
+
+
+def _publish_lease(
+    ctx: InstanceContext, instance_dir: Path, repository: str, lease: Lease, message: str
+) -> None:
+    previous = (
+        (instance_dir / LEASE_FILE_NAME).read_bytes()
+        if (instance_dir / LEASE_FILE_NAME).is_file()
+        else None
+    )
+    write_lease(instance_dir, lease)
+    try:
+        _commit_and_push(ctx, instance_dir, repository, message, [LEASE_FILE_NAME])
+    except InstanceError:
+        if previous is not None:
+            (instance_dir / LEASE_FILE_NAME).write_bytes(previous)
+        raise
 
 
 # --- manifest, revisions, worker ----------------------------------------------------------
@@ -483,9 +714,12 @@ def wait_for_idle_worker(ctx: InstanceContext, wait_seconds: float) -> None:
     deadline = ctx.now() + timedelta(seconds=wait_seconds)
     while ctx.worker_busy(ctx.settings):
         if ctx.now() >= deadline:
+            markers = ", ".join(str(path) for path in worker_busy_markers(ctx.settings))
             raise InstanceError(
-                "the worker is still publishing (data/runtime/worker.busy is present); "
-                "try again when the publish has finished"
+                "a publish or other platform write is still running"
+                + (f" ({markers})" if markers else "")
+                + "; try again when it has finished. A marker left by a crashed process can be "
+                "deleted by hand."
             )
         ctx.sleep(WORKER_POLL_SECONDS)
 
@@ -572,38 +806,61 @@ def _add_sops_recipient(path: Path, recipient: str) -> bool:
     return True
 
 
+def _private_directory(ctx: InstanceContext, directory: Path) -> None:
+    """Create ``directory`` readable by the current user only."""
+    directory.mkdir(mode=0o700)
+    if sys.platform == "win32":
+        domain = os.environ.get("USERDOMAIN")
+        user = os.environ.get("USERNAME") or getpass.getuser()
+        principal = f"{domain}\\{user}" if domain else user
+        # Drop inherited entries (Users, Authenticated Users, ...) and grant only this user.
+        ctx.run(["icacls", str(directory), "/inheritance:r", "/grant:r", f"{principal}:(OI)(CI)F"])
+    else:
+        directory.chmod(0o700)
+
+
 def _encrypt_secrets(
-    ctx: InstanceContext, destination: Path, recipients: Sequence[str], values: dict[str, str]
+    ctx: InstanceContext,
+    instance_dir: Path,
+    destination: Path,
+    recipients: Sequence[str],
+    values: dict[str, str],
 ) -> None:
     """Create ``secrets.enc.env`` with SOPS.
 
-    SOPS reads its plaintext from a file, so it exists for the duration of one
-    ``sops`` call inside a private temporary directory, then is deleted.
+    SOPS reads its plaintext from a file. That file lives for one ``sops`` call
+    in the instance's ignored ``tmp`` directory (never the shared temp
+    directory), restricted to the current user, and is deleted in ``finally``.
     """
     plaintext = "".join(f"{key}={value}\n" for key, value in values.items())
-    with tempfile.TemporaryDirectory(prefix="runway-instance-secrets-") as temporary:
-        source = Path(temporary) / "secrets.env"
+    tmp_root = instance_dir / INSTANCE_TMP_DIR
+    tmp_root.mkdir(exist_ok=True)
+    workdir = tmp_root / f"secrets-{os.getpid()}-{os.urandom(4).hex()}"
+    source = workdir / "secrets.env"
+    try:
+        _private_directory(ctx, workdir)
         fd = os.open(source, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(plaintext)
-        try:
-            ctx.run(
-                [
-                    "sops",
-                    "--encrypt",
-                    "--age",
-                    ",".join(recipients),
-                    "--input-type",
-                    "dotenv",
-                    "--output-type",
-                    "dotenv",
-                    "--output",
-                    str(destination),
-                    str(source),
-                ]
-            )
-        finally:
-            source.unlink(missing_ok=True)
+        ctx.run(
+            [
+                "sops",
+                "--encrypt",
+                "--age",
+                ",".join(recipients),
+                "--input-type",
+                "dotenv",
+                "--output-type",
+                "dotenv",
+                "--output",
+                str(destination),
+                str(source),
+            ]
+        )
+    finally:
+        source.unlink(missing_ok=True)
+        if workdir.exists():
+            shutil.rmtree(workdir, ignore_errors=True)
     written = destination.read_bytes() if destination.is_file() else b""
     if not written or any(
         # Only long values: short ones (an app id) can occur in SOPS's plain key names.
@@ -656,8 +913,10 @@ def init(ctx: InstanceContext, repository: str, *, directory: Path | None = None
     origin = _origin_repository(ctx, instance_dir)
     if origin is None or origin.casefold() != repo.casefold():
         raise InstanceError(
-            f"{instance_dir} is a clone of {origin or 'an unknown remote'}, not {repo}"
+            f"{instance_dir} is a clone of {origin or 'an unrecognized remote'}, not {repo}"
         )
+    verify_push_destination(ctx, instance_dir, repo)
+    _git_sync(ctx, instance_dir, repo)
 
     new_instance = (
         not (instance_dir / LEASE_FILE_NAME).exists()
@@ -672,8 +931,10 @@ def init(ctx: InstanceContext, repository: str, *, directory: Path | None = None
     _write_if_missing(instance_dir / ".gitattributes", _GITATTRIBUTES, created, ".gitattributes")
     _write_if_missing(
         instance_dir / INSTANCE_TOML_NAME,
-        "# Non-secret Runway settings for this instance: setting names without RUNWAY_.\n"
+        "# Shared, non-secret Runway settings: setting names without RUNWAY_.\n"
         "# Secrets go in secrets.enc.env (sops edit secrets.enc.env), never here.\n"
+        "# Machine-local settings (machine_id, paths, executables) belong in each\n"
+        "# machine's environment and are refused here.\n"
         f'instance_repository = "{repo}"\n'
         '# channel_name = "Qlob"\n'
         '# timezone = "America/Toronto"\n',
@@ -710,11 +971,11 @@ def init(ctx: InstanceContext, repository: str, *, directory: Path | None = None
             value = getattr(settings, field_name)
             if value:
                 values[env_name] = str(value)
-        _encrypt_secrets(ctx, secrets_file, recipients or [recipient], values)
+        _encrypt_secrets(ctx, instance_dir, secrets_file, recipients or [recipient], values)
         created.append(SECRETS_FILE_NAME)
         if legacy_key is not None:
             next_steps.append(
-                "The token key was moved into secrets.enc.env. Once Runway runs against the "
+                "The token key was copied into secrets.enc.env. Once Runway runs against the "
                 f"instance, delete {settings.resolved_data_dir / 'secrets' / 'token.key'}."
             )
         if len(values) > 1:
@@ -728,9 +989,9 @@ def init(ctx: InstanceContext, repository: str, *, directory: Path | None = None
         write_lease(instance_dir, Lease(holder=ctx.machine, holder_since=now, heartbeat_at=now))
         created.append(LEASE_FILE_NAME)
 
-    committed = _commit(ctx, instance_dir, "Initialize the Runway instance layout", TRACKED_FILES)
-    if committed:
-        _git_push(ctx, instance_dir)
+    committed = _commit_and_push(
+        ctx, instance_dir, repo, "Initialize the Runway instance layout", TRACKED_FILES
+    )
 
     if settings.resolved_instance_dir != instance_dir:
         next_steps.insert(0, f"Set RUNWAY_INSTANCE_DIR={instance_dir} for Runway on this machine.")
@@ -775,7 +1036,8 @@ def status(ctx: InstanceContext, *, refresh: bool = False) -> dict[str, Any]:
         report["state"] = "not initialized; run 'runway instance init --repo <owner/name>'"
         return report
     if refresh:
-        _git_sync(ctx, instance_dir)
+        _instance_dir, repository = _prepare(ctx)
+        _git_sync(ctx, instance_dir, repository)
     lease = read_lease(instance_dir)
     now = ctx.now()
     report["lease"] = {
@@ -785,6 +1047,7 @@ def status(ctx: InstanceContext, *, refresh: bool = False) -> dict[str, Any]:
     }
     report["active"] = instance_is_active(settings)
     report["mode"] = "active" if report["active"] else "standby"
+    report["worker_busy"] = [str(path) for path in worker_busy_markers(settings)]
 
     manifest = read_manifest(instance_dir)
     drift: list[str] = []
@@ -796,6 +1059,7 @@ def status(ctx: InstanceContext, *, refresh: bool = False) -> dict[str, Any]:
         report["last_snapshot"] = {
             "created_at": manifest.get("created_at"),
             "machine": manifest.get("machine"),
+            "tag": manifest.get("release", {}).get("tag"),
             "code_commit": manifest.get("code", {}).get("commit"),
             "alembic_revision": manifest.get("alembic_revision"),
         }
@@ -808,11 +1072,8 @@ def status(ctx: InstanceContext, *, refresh: bool = False) -> dict[str, Any]:
                 f"local database migration {local_revision} differs from the snapshot's "
                 f"{manifest.get('alembic_revision')}"
             )
-        created_at = manifest.get("created_at")
-        if settings.database_path.is_file() and isinstance(created_at, str):
-            modified = datetime.fromtimestamp(settings.database_path.stat().st_mtime, UTC)
-            if modified > datetime.fromisoformat(created_at):
-                drift.append("the local database changed after the snapshot")
+        if _local_database_is_newer(settings, manifest):
+            drift.append("the local database changed after the snapshot")
         revision = manifest.get("alembic_revision")
         if isinstance(revision, str) and revision not in checkout_revisions(settings):
             warnings.append("the snapshot is newer than this code checkout; update the code")
@@ -832,7 +1093,60 @@ def status(ctx: InstanceContext, *, refresh: bool = False) -> dict[str, Any]:
     return report
 
 
-def _upload_snapshot(ctx: InstanceContext, repository: str, workdir: Path) -> dict[str, Any]:
+def _local_database_is_newer(settings: Settings, manifest: dict[str, Any]) -> bool:
+    database = settings.database_path
+    created_at = manifest.get("created_at")
+    if not database.is_file() or not isinstance(created_at, str):
+        return False
+    modified = datetime.fromtimestamp(database.stat().st_mtime, UTC)
+    if modified <= datetime.fromisoformat(created_at):
+        return False
+    return sha256_file(database) != str(manifest.get("database", {}).get("sha256"))
+
+
+def _verify_release_assets(
+    ctx: InstanceContext, repository: str, tag: str, assets: dict[str, Any]
+) -> None:
+    release_info = ctx.run(["gh", "api", f"repos/{repository}/releases/tags/{tag}"])
+    try:
+        uploaded = {
+            str(asset["name"]): asset for asset in json.loads(release_info.stdout).get("assets", [])
+        }
+    except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
+        raise InstanceError("gh returned unreadable release data") from exc
+    for name, entry in assets.items():
+        asset = uploaded.get(name)
+        if entry is None or asset is None or int(asset.get("size", -1)) != entry["bytes"]:
+            raise InstanceError(
+                f"uploaded snapshot asset {name} ({tag}) is missing or has the wrong size"
+            )
+        digest = asset.get("digest")
+        if digest and digest != f"sha256:{entry['sha256']}":
+            raise InstanceError(f"uploaded snapshot asset {name} ({tag}) has the wrong digest")
+
+
+def _upload_snapshot(
+    ctx: InstanceContext, repository: str, tag: str, workdir: Path, assets: dict[str, Any]
+) -> None:
+    """Upload to the immutable dated release, then refresh ``snapshot-latest``."""
+    files = [str(workdir / name) for name in ASSET_NAMES]
+    ctx.run(
+        [
+            "gh",
+            "release",
+            "create",
+            tag,
+            *files,
+            "--repo",
+            repository,
+            "--title",
+            f"Runway instance {tag}",
+            "--notes",
+            _RELEASE_NOTES,
+            "--prerelease",
+        ]
+    )
+    _verify_release_assets(ctx, repository, tag, assets)
     exists = ctx.run(
         ["gh", "release", "view", SNAPSHOT_TAG, "--repo", repository, "--json", "tagName"],
         check=False,
@@ -847,52 +1161,53 @@ def _upload_snapshot(ctx: InstanceContext, repository: str, workdir: Path) -> di
                 "--repo",
                 repository,
                 "--title",
-                "Runway instance snapshot",
+                "Runway instance snapshot (latest)",
                 "--notes",
                 _RELEASE_NOTES,
                 "--prerelease",
             ]
         )
-    files = [workdir / name for name in ASSET_NAMES]
-    ctx.run(
-        [
-            "gh",
-            "release",
-            "upload",
-            SNAPSHOT_TAG,
-            *(str(path) for path in files),
-            "--clobber",
-            "--repo",
-            repository,
-        ]
+    ctx.run(["gh", "release", "upload", SNAPSHOT_TAG, *files, "--clobber", "--repo", repository])
+    _verify_release_assets(ctx, repository, SNAPSHOT_TAG, assets)
+
+
+def _prune_snapshots(ctx: InstanceContext, repository: str, keep: int, current: str) -> list[str]:
+    listed = ctx.run(
+        ["gh", "release", "list", "--repo", repository, "--limit", "1000", "--json", "tagName"],
+        check=False,
     )
-    assets = {path.name: _file_entry(path) for path in files}
-    release_info = ctx.run(["gh", "api", f"repos/{repository}/releases/tags/{SNAPSHOT_TAG}"])
+    if listed.returncode != 0:
+        logger.warning(
+            "could not list snapshot releases to prune: %s", scrub_tool_output(listed.stderr)
+        )
+        return []
     try:
-        uploaded = {
-            str(asset["name"]): asset for asset in json.loads(release_info.stdout).get("assets", [])
-        }
-    except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
-        raise InstanceError("gh returned unreadable release data") from exc
-    for name, entry in assets.items():
-        asset = uploaded.get(name)
-        if entry is None or asset is None or int(asset.get("size", -1)) != entry["bytes"]:
-            raise InstanceError(f"uploaded snapshot asset {name} is missing or has the wrong size")
-        digest = asset.get("digest")
-        if digest and digest != f"sha256:{entry['sha256']}":
-            raise InstanceError(f"uploaded snapshot asset {name} has the wrong digest")
-    return assets
+        tags = [str(entry["tagName"]) for entry in json.loads(listed.stdout)]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return []
+    dated = sorted((tag for tag in tags if _DATED_TAG_PATTERN.fullmatch(tag)), reverse=True)
+    deleted: list[str] = []
+    for tag in dated[keep:]:
+        if tag == current:
+            continue
+        result = ctx.run(
+            ["gh", "release", "delete", tag, "--repo", repository, "--yes", "--cleanup-tag"],
+            check=False,
+        )
+        if result.returncode == 0:
+            deleted.append(tag)
+    return deleted
 
 
 def push(
     ctx: InstanceContext, *, wait_seconds: float = DEFAULT_WORKER_WAIT_SECONDS
 ) -> dict[str, Any]:
-    """Snapshot the database and media, upload them, and commit the small files."""
+    """Snapshot the database and media, arbitrate through git, then upload."""
     settings = ctx.settings
     instance_dir, repository = _prepare(ctx)
-    _git_sync(ctx, instance_dir)
+    _git_sync(ctx, instance_dir, repository)
     me = ctx.machine
-    lease = read_lease(instance_dir)
+    lease = read_lease(instance_dir)  # the remote copy: the clone was just fast-forwarded
     if lease is None or lease.holder != me:
         raise LeaseError(
             f"only the machine holding the lease may push ({describe_lease(lease)}). "
@@ -903,6 +1218,8 @@ def push(
     if not database.is_file():
         raise InstanceError(f"there is no database at {database} to snapshot")
     commit, branch = _code_revision(ctx)
+    now = ctx.now()
+    tag = f"{DATED_TAG_PREFIX}{now.astimezone(UTC).strftime('%Y%m%d-%H%M%S')}"
     with tempfile.TemporaryDirectory(prefix="runway-instance-push-") as temporary:
         workdir = Path(temporary)
         snapshot = create_release(
@@ -912,42 +1229,63 @@ def push(
             commit_sha=commit,
             branch=branch,
         )
-        assets = _upload_snapshot(ctx, repository, workdir)
-    now = ctx.now()
-    manifest: dict[str, Any] = {
-        "format_version": MANIFEST_FORMAT_VERSION,
-        "created_at": now.isoformat(),
-        "machine": me,
-        "repository": repository,
-        "code": {"repository": CODE_REPOSITORY, "commit": snapshot["commit_sha"], "branch": branch},
-        "alembic_revision": snapshot["migration"],
-        "database": {
-            "bytes": snapshot["database_bytes"],
-            "sha256": snapshot["database_sha256"],
-            "table_count": snapshot["table_count"],
-        },
-        "media": {
-            "entry_count": snapshot["database_media"]["entry_count"],
-            "content_bytes": snapshot["database_media"]["content_bytes"],
-        },
-        "release": {"tag": SNAPSHOT_TAG, "assets": assets},
-        "files": {
-            name: entry
-            for name in (TOKENS_FILE, SECRETS_FILE_NAME, INSTANCE_TOML_NAME)
-            if (entry := _file_entry(instance_dir / name)) is not None
-        },
-    }
-    _write_json(instance_dir / MANIFEST_FILE_NAME, manifest)
-    write_lease(instance_dir, acquire(lease, me, now, take_stale=False))
-    _commit(ctx, instance_dir, f"Snapshot from {me}", TRACKED_FILES)
-    _git_push(ctx, instance_dir)
+        assets = {name: _file_entry(workdir / name) for name in ASSET_NAMES}
+        manifest: dict[str, Any] = {
+            "format_version": MANIFEST_FORMAT_VERSION,
+            "created_at": now.isoformat(),
+            "machine": me,
+            "repository": repository,
+            "code": {
+                "repository": CODE_REPOSITORY,
+                "commit": snapshot["commit_sha"],
+                "branch": branch,
+            },
+            "alembic_revision": snapshot["migration"],
+            "database": {
+                "bytes": snapshot["database_bytes"],
+                "sha256": snapshot["database_sha256"],
+                "table_count": snapshot["table_count"],
+            },
+            "media": {
+                "entry_count": snapshot["database_media"]["entry_count"],
+                "content_bytes": snapshot["database_media"]["content_bytes"],
+            },
+            "release": {"tag": tag, "latest_tag": SNAPSHOT_TAG, "assets": assets},
+            "files": {
+                name: entry
+                for name in (TOKENS_FILE, SECRETS_FILE_NAME, INSTANCE_TOML_NAME)
+                if (entry := _file_entry(instance_dir / name)) is not None
+            },
+        }
+        originals = {
+            name: (instance_dir / name).read_bytes() if (instance_dir / name).is_file() else None
+            for name in (MANIFEST_FILE_NAME, LEASE_FILE_NAME)
+        }
+        _write_json(instance_dir / MANIFEST_FILE_NAME, manifest)
+        write_lease(instance_dir, acquire(lease, me, now, take_stale=False))
+        try:
+            # Arbitrate first: only after the fast-forward push wins is anything uploaded.
+            _commit_and_push(
+                ctx, instance_dir, repository, f"Snapshot {tag} from {me}", TRACKED_FILES
+            )
+        except InstanceError:
+            for name, content in originals.items():
+                if content is None:
+                    (instance_dir / name).unlink(missing_ok=True)
+                else:
+                    (instance_dir / name).write_bytes(content)
+            raise
+        _upload_snapshot(ctx, repository, tag, workdir, assets)
+    pruned = _prune_snapshots(ctx, repository, settings.instance_snapshot_keep, tag)
     return {
         "status": "pushed",
         "repository": repository,
         "machine": me,
+        "tag": tag,
         "alembic_revision": manifest["alembic_revision"],
         "code_commit": manifest["code"]["commit"],
         "assets": {name: entry["bytes"] for name, entry in assets.items() if entry},
+        "pruned": pruned,
     }
 
 
@@ -956,21 +1294,96 @@ def handover(
 ) -> dict[str, Any]:
     """Push, then release the lease so another machine can pull."""
     result = push(ctx, wait_seconds=wait_seconds)
-    instance_dir = _require_instance_dir(ctx.settings)
+    instance_dir, repository = _prepare(ctx)
     released = release(read_lease(instance_dir), ctx.machine, ctx.now())
-    _publish_lease(ctx, instance_dir, released, f"Hand over the lease from {ctx.machine}")
+    _publish_lease(
+        ctx, instance_dir, repository, released, f"Hand over the lease from {ctx.machine}"
+    )
     return {**result, "status": "handed over", "mode": "standby"}
+
+
+def heartbeat(
+    ctx: InstanceContext, *, renew_after: timedelta = HEARTBEAT_RENEW_AFTER
+) -> dict[str, Any]:
+    """Renew this machine's lease heartbeat in the private repository when it is due."""
+    instance_dir, repository = _prepare(ctx)
+    _git_sync(ctx, instance_dir, repository)
+    me = ctx.machine
+    lease = read_lease(instance_dir)
+    record_remote_check(instance_dir, lease.holder if lease else None, datetime.now(UTC))
+    if lease is None or lease.holder != me:
+        return {"status": "standby", "lease": describe_lease(lease)}
+    now = ctx.now()
+    if lease.heartbeat_at is not None and now - lease.heartbeat_at < renew_after:
+        return {"status": "current", "lease": describe_lease(lease)}
+    renewed = replace(lease, heartbeat_at=now)
+    _publish_lease(ctx, instance_dir, repository, renewed, f"Heartbeat from {me}")
+    return {"status": "renewed", "lease": describe_lease(renewed)}
+
+
+class LeaseHeartbeat:
+    """Background renewal of the lease heartbeat while Runway runs (spec 07 §4)."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        interval_seconds: float = HEARTBEAT_THREAD_INTERVAL_SECONDS,
+        context_factory: Callable[[Settings], InstanceContext] | None = None,
+    ) -> None:
+        self.settings = settings
+        self.interval_seconds = interval_seconds
+        # default_runner is looked up at each beat, so tests can replace it in one place.
+        self._context_factory = context_factory or (
+            lambda value: InstanceContext(settings=value, runner=default_runner)
+        )
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.last_result: dict[str, Any] | None = None
+
+    def beat(self) -> None:
+        try:
+            self.last_result = heartbeat(self._context_factory(self.settings))
+        except (
+            InstanceError,
+            InstanceConfigError,
+            LeaseError,
+            DatabaseReleaseError,
+            OSError,
+        ) as exc:
+            self.last_result = {"status": "failed"}
+            logger.warning("instance lease heartbeat failed: %s", scrub_tool_output(str(exc)))
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self.beat()
+            self._stop.wait(self.interval_seconds)
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._run, name="runway-lease-heartbeat", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
 
 
 def _download_snapshot(
     ctx: InstanceContext, repository: str, manifest: dict[str, Any], destination: Path
 ) -> None:
+    release_info = manifest.get("release", {})
+    tag = str(release_info.get("tag") or SNAPSHOT_TAG)
     ctx.run(
         [
             "gh",
             "release",
             "download",
-            SNAPSHOT_TAG,
+            tag,
             "--repo",
             repository,
             *(part for name in ASSET_NAMES for part in ("--pattern", name)),
@@ -979,12 +1392,12 @@ def _download_snapshot(
             "--clobber",
         ]
     )
-    expected = manifest.get("release", {}).get("assets", {})
+    expected = release_info.get("assets", {})
     for name in ASSET_NAMES:
         if _file_entry(destination / name) != expected.get(name):
             raise InstanceError(
-                f"downloaded snapshot asset {name} does not match manifest.json; "
-                "the release and the instance repository are out of step"
+                f"downloaded snapshot asset {name} ({tag}) does not match manifest.json; "
+                "the release is incomplete or out of step. Ask the active machine to push again."
             )
 
 
@@ -1025,23 +1438,32 @@ def pull(
     ctx: InstanceContext,
     *,
     take: bool = False,
+    force: bool = False,
     wait_seconds: float = DEFAULT_WORKER_WAIT_SECONDS,
 ) -> dict[str, Any]:
-    """Take the lease and restore the latest snapshot into this machine's data directory."""
+    """Download and verify the latest snapshot, take the lease, then install it."""
     settings = ctx.settings
     instance_dir, repository = _prepare(ctx)
-    _git_sync(ctx, instance_dir)
+    _git_sync(ctx, instance_dir, repository)
     me = ctx.machine
     now = ctx.now()
-    lease = read_lease(instance_dir)
-    new_lease = acquire(lease, me, now, take_stale=take)
+    # After the fast-forward the clone's lease.json is the remote copy, so a --take
+    # is judged by the remote heartbeat, not by whatever this clone last saw.
+    remote_lease = read_lease(instance_dir)
+    new_lease = acquire(remote_lease, me, now, take_stale=take)
     manifest = read_manifest(instance_dir)
     if manifest is None:
         raise InstanceError("no snapshot has been pushed yet; run 'runway instance push' first")
     revision = manifest.get("alembic_revision")
     ensure_snapshot_revision_supported(settings, revision if isinstance(revision, str) else None)
+    already_holder = remote_lease is not None and remote_lease.holder == me
+    if already_holder and not force and _local_database_is_newer(settings, manifest):
+        raise InstanceError(
+            "the local database changed after the latest snapshot, so restoring it would lose "
+            "work. Run 'runway instance push' to keep it, or 'runway instance pull --force' to "
+            "replace it (the local database is backed up under data/backups first)."
+        )
     wait_for_idle_worker(ctx, wait_seconds)
-    _publish_lease(ctx, instance_dir, new_lease, f"Take the lease on {me}")
 
     warnings: list[str] = []
     if _file_entry(instance_dir / TOKENS_FILE) != manifest.get("files", {}).get(TOKENS_FILE):
@@ -1062,12 +1484,15 @@ def pull(
         )
         if verified["migration"] != revision:
             raise InstanceError("the snapshot's database revision does not match manifest.json")
+        # Only a verified snapshot is worth the lease; the push arbitrates between machines.
+        _publish_lease(ctx, instance_dir, repository, new_lease, f"Take the lease on {me}")
         backup = _install_restored(data_dir, Path(staging), now.strftime("%Y%m%dT%H%M%SZ"))
     return {
         "status": "pulled",
         "repository": repository,
         "machine": me,
         "mode": "active",
+        "tag": manifest.get("release", {}).get("tag"),
         "alembic_revision": revision,
         "snapshot_created_at": manifest.get("created_at"),
         "snapshot_machine": manifest.get("machine"),
