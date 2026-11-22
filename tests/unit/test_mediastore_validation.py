@@ -111,8 +111,12 @@ VIDEO_ROWS: list[tuple[str, PostType, dict[str, Any], str | None]] = [
     ("duration", "tiktok_video", {"duration_ms": 600_001}, "duration_too_long"),
     ("duration", "instagram_reel", {"duration_ms": None}, "probe_incomplete"),
     # Container
-    ("container", "youtube_video", {"container": "matroska"}, None),
-    ("container", "youtube_video", {"container": "avi", "moov_at_front": None}, None),
+    # YouTube now has an explicit list (MP4, MOV, WebM) instead of "any video".
+    ("container", "youtube_video", {"container": "mov"}, None),
+    ("container", "youtube_video", {"container": "webm", "moov_at_front": None}, None),
+    ("container", "youtube_video", {"container": "matroska"}, "container_not_supported"),
+    ("container", "youtube_short", {"container": "avi"}, "container_not_supported"),
+    ("container", "youtube_video", {"container": "hls"}, "container_not_supported"),
     ("container", "instagram_reel", {"container": "mov"}, None),
     (
         "container",
@@ -147,6 +151,9 @@ VIDEO_ROWS: list[tuple[str, PostType, dict[str, Any], str | None]] = [
         "edit_list_present",
     ),
     ("edit list", "tiktok_video", {"has_edit_list": True}, None),
+    # An MP4 whose layout walk stopped early: unknown is a warning, never a silent pass.
+    ("edit list", "instagram_reel", {"has_edit_list": None}, "probe_incomplete"),
+    ("edit list", "tiktok_video", {"has_edit_list": None}, None),
     # Video codec
     ("video codec", "youtube_video", {"video_codec": "av1"}, None),
     ("video codec", "instagram_reel", {"video_codec": "hevc"}, None),

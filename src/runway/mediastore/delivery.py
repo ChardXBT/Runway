@@ -154,9 +154,12 @@ def plan_tiktok_chunks(
 ) -> TikTokChunkPlan:
     """Plan a ``FILE_UPLOAD`` under the Content Posting API rules (limits ``TIKTOK_CHUNKS``).
 
-    - A file smaller than the minimum chunk, or than ``chunk_size``, is one chunk of its size.
-    - Otherwise ``total_chunk_count = floor(video_size / chunk_size)`` and the remainder is
-      folded into the last chunk, which may therefore be up to twice ``chunk_size``.
+    - A file no larger than ``chunk_size`` (so any file under 5 MB) is one chunk of its own
+      size, unless it is above the 64 MB single-chunk limit.
+    - Otherwise ``total_chunk_count = floor(video_size / chunk_size)``, every chunk but the
+      last is ``chunk_size`` and the remainder is folded into the last chunk (at most 128 MB).
+    - A file that would be a single chunk above 64 MB is split instead: ``chunk_size``
+      becomes ``video_size // 2``, giving two chunks of at most 64 MB each.
     """
     rules = TIKTOK_CHUNKS
     if video_size <= 0:
@@ -167,9 +170,12 @@ def plan_tiktok_chunks(
         raise ValueError(
             f"chunk_size must be between {rules.min_chunk_bytes} and {rules.max_chunk_bytes}"
         )
-    if video_size <= chunk_size:
-        whole = ByteRange(0, video_size - 1, video_size)
-        return TikTokChunkPlan(video_size, video_size, 1, (whole,))
+    if video_size // chunk_size <= 1:
+        if video_size <= rules.max_single_chunk_bytes:
+            whole = ByteRange(0, video_size - 1, video_size)
+            return TikTokChunkPlan(video_size, video_size, 1, (whole,))
+        # Between 64 MB and 2 x chunk_size: two chunks of half the file each.
+        chunk_size = video_size // 2
 
     count = video_size // chunk_size
     if count > rules.max_chunk_count:
@@ -181,6 +187,8 @@ def plan_tiktok_chunks(
         for index in range(count - 1)
     ]
     chunks.append(ByteRange((count - 1) * chunk_size, video_size - 1, video_size))
+    if any(chunk.length > rules.max_chunk_bytes for chunk in chunks[:-1]):
+        raise ValueError("a chunk other than the last would exceed TikTok's chunk limit")
     if chunks[-1].length > rules.max_final_chunk_bytes:
         raise ValueError("the final chunk would exceed TikTok's limit")
     return TikTokChunkPlan(video_size, chunk_size, count, tuple(chunks))

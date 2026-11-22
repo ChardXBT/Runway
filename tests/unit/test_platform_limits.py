@@ -109,3 +109,20 @@ def test_youtube_default_chunk_is_a_multiple_of_256_kib() -> None:
     rules = limits.YOUTUBE_UPLOAD
     assert rules.default_chunk_bytes == 8 * limits.MiB
     assert rules.default_chunk_bytes % rules.chunk_multiple_bytes == 0
+
+
+def test_every_video_post_type_lists_its_containers() -> None:
+    # The probe's demuxer whitelist is derived from these lists, so none may be "any".
+    for post_type, rules in limits.VIDEO_LIMITS.items():
+        assert rules.containers, post_type
+    assert limits.YOUTUBE_VIDEO.containers == {"mp4", "mov", "webm"}
+    assert limits.YOUTUBE_SHORT.containers == limits.YOUTUBE_VIDEO.containers
+
+
+def test_edit_list_rule_and_tiktok_split_rule_are_recorded_with_sources() -> None:
+    rule = limits.INSTAGRAM_EDIT_LIST_RULE
+    assert "at least one entry" in rule.rule
+    assert "instagram.md" in rule.source and rule.label == "decision"
+    chunks = limits.TIKTOK_CHUNKS
+    assert chunks.max_single_chunk_bytes == chunks.max_chunk_bytes == 64 * limits.MB
+    assert "recheck-20261122.md" in chunks.source

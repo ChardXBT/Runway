@@ -44,6 +44,8 @@ MiB = 1024 * KiB
 GiB = 1024 * MiB
 
 RESEARCH_READ_ON = date(2026, 11, 14)
+# Second research pass (research/recheck-20261122.md, on branch expansion/build).
+RECHECK_READ_ON = date(2026, 11, 22)
 SPEC_READ_ON = date(2026, 11, 22)
 
 _YOUTUBE = "docs/expansion/research/youtube.md"
@@ -52,6 +54,7 @@ _TIKTOK = "docs/expansion/research/tiktok.md"
 _HOSTING = "docs/expansion/research/hosting-and-sync.md"
 _SPEC_02 = "docs/expansion/specs/02-media-pipeline.md"
 _SPEC_08 = "docs/expansion/specs/08-platform-adapters.md"
+_RECHECK = "docs/expansion/research/recheck-20261122.md"
 
 
 @dataclass(frozen=True)
@@ -164,6 +167,8 @@ class YouTubeUploadRules:
 class TikTokChunkRules:
     min_chunk_bytes: int
     max_chunk_bytes: int
+    # Largest file sent as a single chunk; larger files are split.
+    max_single_chunk_bytes: int
     max_final_chunk_bytes: int
     max_chunk_count: int
     default_chunk_bytes: int
@@ -211,6 +216,17 @@ class ObjectStoreRules:
 
 
 @dataclass(frozen=True)
+class DetectionRule:
+    """How Runway turns a platform rule into a check on the file, when the platform is vague."""
+
+    name: str
+    rule: str
+    source: str
+    read_on: date
+    label: FactLabel = "decision"
+
+
+@dataclass(frozen=True)
 class ValidationHeuristics:
     """Runway's tolerance when comparing an aspect ratio with a recommended one."""
 
@@ -221,6 +237,7 @@ class ValidationHeuristics:
 
 
 _INSTAGRAM_VIDEO_CODECS = frozenset({"h264", "hevc"})
+YOUTUBE_CONTAINERS = frozenset({"mp4", "mov", "webm"})
 
 YOUTUBE_VIDEO = VideoLimits(
     post_type="youtube_video",
@@ -228,7 +245,9 @@ YOUTUBE_VIDEO = VideoLimits(
     max_size_bytes=256 * GB,
     min_duration_ms=None,
     max_duration_ms=None,  # Channel-dependent: spec 02 §5 says do not block.
-    containers=None,
+    # Spec 02 §5 says "any video/*"; Runway narrows it to containers YouTube lists as
+    # supported and that the probe reads with a whitelisted demuxer (probe.ALLOWED_DEMUXERS).
+    containers=YOUTUBE_CONTAINERS,
     require_moov_at_front=False,
     forbid_edit_lists=False,
     video_codecs=None,
@@ -244,7 +263,11 @@ YOUTUBE_VIDEO = VideoLimits(
     max_aspect=None,
     recommended_aspect=None,
     max_bitrate_bps=None,
-    source=f"{_YOUTUBE} §3; https://developers.google.com/youtube/v3/docs/videos/insert",
+    source=(
+        f"{_YOUTUBE} §3; https://developers.google.com/youtube/v3/docs/videos/insert; "
+        "containers: [Unverified] YouTube Help 'Supported YouTube file formats' (MOV, MP4, "
+        "WebM among others), working knowledge not re-read, narrowed by Runway"
+    ),
     read_on=RESEARCH_READ_ON,
 )
 
@@ -254,7 +277,7 @@ YOUTUBE_SHORT = VideoLimits(
     max_size_bytes=YOUTUBE_VIDEO.max_size_bytes,
     min_duration_ms=None,
     max_duration_ms=None,  # The Shorts length is a warning; see YOUTUBE_SHORTS_HEURISTIC.
-    containers=None,
+    containers=YOUTUBE_CONTAINERS,
     require_moov_at_front=False,
     forbid_edit_lists=False,
     video_codecs=None,
@@ -270,7 +293,7 @@ YOUTUBE_SHORT = VideoLimits(
     max_aspect=None,
     recommended_aspect=None,
     max_bitrate_bps=None,
-    source=f"{_YOUTUBE} §3; {_SPEC_08} §2",
+    source=f"{_YOUTUBE} §3; {_SPEC_08} §2; containers as for YOUTUBE_VIDEO",
     read_on=RESEARCH_READ_ON,
 )
 
@@ -466,6 +489,19 @@ POST_TYPE_PLATFORM: Mapping[PostType, Platform] = MappingProxyType(
     }
 )
 
+INSTAGRAM_EDIT_LIST_RULE = DetectionRule(
+    name="instagram.no_edit_lists",
+    rule=(
+        "Any elst box with at least one entry, in any track, counts as an edit list. ffmpeg's "
+        "default MP4 output has one (a start shift); the fix is a re-mux with -use_editlist 0."
+    ),
+    source=(
+        f"{_INSTAGRAM} §4 ('moov atom at front, no edit lists'). No source was found that "
+        "exempts single-entry start-shift edit lists, so none is exempted."
+    ),
+    read_on=SPEC_READ_ON,
+)
+
 VALIDATION_HEURISTICS = ValidationHeuristics(
     aspect_tolerance=0.01,  # Relative: 1080x1916 still counts as 9:16.
     source=f"Runway choice for the 'warn outside 9:16' rows of {_SPEC_02} §5",
@@ -548,22 +584,26 @@ YOUTUBE_UPLOAD = YouTubeUploadRules(
     read_on=RESEARCH_READ_ON,
 )
 
-# TikTok's page says "5 MB to 64 MB, final chunk up to 128 MB" and its examples use decimal
-# sizes (chunk_size 10000000). The bounds below hold under both the decimal and the binary
-# reading: the minimum is 5 MiB (the larger reading) and the maximums are decimal (the smaller
-# reading). Files smaller than the minimum chunk go in one request.
+# TikTok's media transfer guide (re-read 2026-11-22, research/recheck-20261122.md §3): each
+# chunk 5-64 MB except the last, which may be up to 128 MB; total_chunk_count =
+# floor(video_size / chunk_size); files under 5 MB go whole. Its examples use decimal sizes
+# (chunk_size 10000000). The bounds below hold under both the decimal and the binary reading:
+# the minimum is 5 MiB (the larger reading) and the maximums are decimal (the smaller one).
+# Runway's safer reading for a one-request upload: the single chunk is also the first chunk,
+# so it must respect max_chunk_bytes; a file above 64 MB is always split into 2+ chunks.
 TIKTOK_CHUNKS = TikTokChunkRules(
     min_chunk_bytes=5 * MiB,
     max_chunk_bytes=64 * MB,
+    max_single_chunk_bytes=64 * MB,
     max_final_chunk_bytes=128 * MB,
     max_chunk_count=1_000,
     default_chunk_bytes=10 * MB,  # Spec 02 §6 and spec 08 §4.
     upload_url_ttl=timedelta(hours=1),
     source=(
-        f"{_TIKTOK} §4 and §5; "
+        f"{_TIKTOK} §4 and §5; {_RECHECK} §3; "
         "https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide"
     ),
-    read_on=RESEARCH_READ_ON,
+    read_on=RECHECK_READ_ON,
 )
 
 INSTAGRAM_POLLING = InstagramContainerPolling(

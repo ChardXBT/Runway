@@ -168,3 +168,35 @@ def test_instagram_poll_schedule() -> None:
     assert instagram_poll_schedule(180) == (60, 120, 180)
     with pytest.raises(ValueError):
         instagram_poll_schedule(0)
+
+
+# Review fixes ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("size", "chunk", "expected"),
+    [
+        # (video_size, chunk_size, expected chunk lengths)
+        (5 * MB, 10 * MB, [5 * MB]),
+        (64 * MB, 64 * MB, [64 * MB]),  # Exactly 64 MB still fits one request.
+        (64 * MB + 1, 64 * MB, [32 * MB, 32 * MB + 1]),
+        (100 * MB, 64 * MB, [50 * MB, 50 * MB]),  # Was one 100 MB chunk before the fix.
+        (128 * MB - 1, 64 * MB, [64 * MB - 1, 64 * MB]),
+        (128 * MB, 64 * MB, [64 * MB, 64 * MB]),
+        (128 * MB + 1, 64 * MB, [64 * MB, 64 * MB + 1]),
+        (79 * MB, 40 * MB, [39_500_000, 39_500_000]),
+        (19 * MB, 10 * MB, [19 * MB]),
+        (65 * MB, 10 * MB, [10 * MB] * 5 + [15 * MB]),
+    ],
+)
+def test_tiktok_no_non_final_chunk_exceeds_64_mb_and_large_files_are_split(
+    size: int, chunk: int, expected: list[int]
+) -> None:
+    plan = plan_tiktok_chunks(size, chunk)
+    assert [c.length for c in plan.chunks] == expected
+    assert plan.total_chunk_count == len(expected) == size // plan.chunk_size
+    assert all(c.length <= 64 * MB for c in plan.chunks[:-1])
+    assert plan.chunks[-1].length <= 128 * MB
+    if size > 64 * MB:
+        assert plan.total_chunk_count >= 2
+    assert plan.chunks[0].first == 0 and plan.chunks[-1].last == size - 1

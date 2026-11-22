@@ -218,11 +218,14 @@ def _validate_video(out: _Collector, probe: ProbeResult, limits: VideoLimits) ->
                 "front. Re-save the file with faststart; this does not re-encode it.",
                 FASTSTART_FIX,
             )
-    if container_ok and limits.forbid_edit_lists and probe.has_edit_list:
+    if container_ok and limits.forbid_edit_lists and probe.has_edit_list is None:
+        out.unknown("MP4 layout (edit lists)")
+    elif container_ok and limits.forbid_edit_lists and probe.has_edit_list:
         out.error(
             "edit_list_present",
-            f"The file has an edit list that trims or re-times a track; {out.label} do not "
-            "accept edit lists. Re-save the file without one; this does not re-encode it.",
+            f"The file has an edit list (an elst box, which most encoders write to shift a "
+            f"track's start); {out.label} do not accept edit lists. Re-save the file without "
+            "one; this does not re-encode it.",
             EDIT_LIST_FIX,
         )
 
