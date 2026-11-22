@@ -40,3 +40,7 @@ A_Runway_Task.xml
 platform-tokens.json
 secrets.enc.*
 lease.json
+*.db.gz
+*.sqlite
+*.sqlite3
+runway-operational-media.zip
