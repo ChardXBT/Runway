@@ -81,9 +81,9 @@ def _resolve_member(
             if attempt:
                 raise
             continue
-        assert refused is not None
-        raise Problem(403, refused.code, "No access to this workspace", refused.detail)
-    raise AssertionError("unreachable")  # pragma: no cover
+        if refused is not None:
+            raise Problem(403, refused.code, "No access to this workspace", refused.detail)
+    raise RuntimeError("membership resolution did not finish")  # pragma: no cover
 
 
 def resolve_hosted_principal(settings: Settings, request: Request) -> Principal:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -62,20 +63,25 @@ def test_a_valid_token_verifies_and_returns_its_claims() -> None:
 
 
 @pytest.mark.parametrize(
-    ("claims", "code"),
+    ("make_claims", "code"),
     [
-        (session_claims("user_1", lifetime=-30), "token_expired"),
-        (session_claims("user_1", issuer="https://evil.example"), "invalid_token"),
-        (session_claims("user_1", azp="https://evil.example"), "invalid_token"),
-        (session_claims("user_1", nbf=int(time.time()) + 600), "invalid_token"),
-        (session_claims("user_1", iat=int(time.time()) + 600), "invalid_token"),
-        (session_claims("user_1", sub=""), "invalid_token"),
-        ({k: v for k, v in session_claims("user_1").items() if k != "exp"}, "invalid_token"),
+        # Factories, so the claims are minted when the test runs, not when it is
+        # collected (a collected 60 s token can expire before a late test runs).
+        (lambda: session_claims("user_1", lifetime=-30), "token_expired"),
+        (lambda: session_claims("user_1", issuer="https://evil.example"), "invalid_token"),
+        (lambda: session_claims("user_1", azp="https://evil.example"), "invalid_token"),
+        (lambda: session_claims("user_1", nbf=int(time.time()) + 600), "invalid_token"),
+        (lambda: session_claims("user_1", iat=int(time.time()) + 600), "invalid_token"),
+        (lambda: session_claims("user_1", sub=""), "invalid_token"),
+        (
+            lambda: {k: v for k, v in session_claims("user_1").items() if k != "exp"},
+            "invalid_token",
+        ),
     ],
 )
-def test_bad_claims_are_rejected(claims: dict[str, object], code: str) -> None:
+def test_bad_claims_are_rejected(make_claims: Callable[[], dict[str, object]], code: str) -> None:
     with pytest.raises(IdentityRejected) as raised:
-        verify_rs256(mint(rsa_key(), claims), _keys(), RULES)
+        verify_rs256(mint(rsa_key(), make_claims()), _keys(), RULES)
     assert raised.value.code == code
 
 

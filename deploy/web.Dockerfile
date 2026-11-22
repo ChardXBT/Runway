@@ -9,7 +9,8 @@ COPY apps/web ./
 # Public by design: the browser needs the API's address. Never pass a secret here.
 ARG NEXT_PUBLIC_RUNWAY_API_URL=http://127.0.0.1:8000
 ENV NEXT_PUBLIC_RUNWAY_API_URL=${NEXT_PUBLIC_RUNWAY_API_URL}
-RUN npm run build && npm prune --omit=dev
+# Dev dependencies stay: `next start` may still compile next.config.ts at boot.
+RUN npm run build
 
 FROM node:24-slim
 ENV NODE_ENV=production \
