@@ -76,14 +76,23 @@ class ProviderRegistry:
     def set_provider(self, platform: Platform, provider: PlatformProvider) -> None:
         self._providers[platform] = provider
 
-    def fresh_token(self, platform: Platform, token_ref: str) -> TokenSet:
+    def ensure_platform_write_allowed(self) -> None:
+        """Raise StandbyError when this machine does not hold the private instance lease."""
+        self.token_store.ensure_writable()
+
+    def fresh_token(
+        self, platform: Platform, token_ref: str, *, for_write: bool = False
+    ) -> TokenSet:
         """Load an account token, refreshing and re-storing it when it is near expiry.
 
         Raises AuthorizationExpired only when the account must be re-authorized
         (no stored token, a revoked grant). Transient refresh failures (timeouts,
         5xx, rate limits) propagate as their own ProviderError so callers do not
-        mistake a network blip for a revoked account.
+        mistake a network blip for a revoked account. ``for_write`` tokens are
+        refused on a standby machine even when they need no refresh.
         """
+        if for_write:
+            self.ensure_platform_write_allowed()
         token = self.token_store.load(token_ref)
         if token is None:
             raise AuthorizationExpired("account token is missing", status=401)

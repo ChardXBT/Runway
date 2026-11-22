@@ -6,8 +6,9 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from runway import __version__
@@ -21,6 +22,7 @@ from runway.config import Settings, get_settings
 from runway.db import initialize_database
 from runway.db.base import Database
 from runway.logging import configure_logging
+from runway.operations.instance_lease import StandbyError
 from runway.platforms.sync import PlatformSyncScheduler, SyncService
 
 logger = logging.getLogger(__name__)
@@ -75,9 +77,18 @@ def _lifespan(
         if settings.platform_sync_interval_minutes > 0:
             scheduler = PlatformSyncScheduler(sync_service, settings.platform_sync_interval_minutes)
             scheduler.start()
+        lease_heartbeat = None
+        if settings.instance_dir is not None:
+            # Private instance only: keep this machine's lease heartbeat fresh while it runs.
+            from runway.operations.instance import LeaseHeartbeat
+
+            lease_heartbeat = LeaseHeartbeat(settings)
+            lease_heartbeat.start()
         try:
             yield
         finally:
+            if lease_heartbeat is not None:
+                lease_heartbeat.stop()
             if scheduler is not None:
                 scheduler.stop()
             logger.info("runway api stop", extra={"event_type": "api_stop"})
@@ -104,6 +115,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.state.settings = active_settings
     application.state.database = database
+
+    @application.exception_handler(StandbyError)
+    async def standby_error(_request: Request, exc: StandbyError) -> JSONResponse:
+        # A platform write or token use reached on a machine without the instance lease.
+        return JSONResponse(status_code=409, content={"detail": exc.detail})
+
     web_origins = loopback_origins(active_settings.web_port)
     application.add_middleware(
         CORSMiddleware,

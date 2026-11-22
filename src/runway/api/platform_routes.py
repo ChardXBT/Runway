@@ -859,6 +859,8 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except InboxReplyForbidden as exc:
             raise HTTPException(status_code=403, detail=exc.detail) from exc
+        except StandbyError as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
         except ProviderError as exc:
             raise HTTPException(status_code=502, detail=exc.detail) from exc
 

@@ -42,6 +42,7 @@ from runway.domain.state_machine import (
     require_transition,
     transition_attempt,
 )
+from runway.operations.instance_lease import ensure_active_or_raise
 from runway.publishing.base import (
     AssistedPost,
     AssistedPreparation,
@@ -1428,6 +1429,7 @@ class YouTubeBrowserPublisher:
         confirmation_phrase: str,
     ) -> PublishResult:
         self._require_enabled()
+        ensure_active_or_raise(self.settings)
         if not self._confirm_lock.acquire(blocking=False):
             raise ValueError("another YouTube scheduling confirmation is already running")
         try:
@@ -1700,6 +1702,7 @@ class YouTubeBrowserPublisher:
     async def process_queued_attempt(self, attempt_id: int) -> PublishResult:
         """Schedule one explicitly queued Lineup item; callers serialize the queue."""
         self._require_enabled()
+        ensure_active_or_raise(self.settings)
         await asyncio.to_thread(self._confirm_lock.acquire)
         try:
             with self.database.session() as session:
