@@ -28,7 +28,7 @@ def build_worker(settings: Settings, database: Database) -> Worker:
     sync_service = SyncService(database, settings)
     handlers: dict[str, Handler] = {
         SYNC_ACCOUNT_JOB: partial(run_sync_account_job, sync_service),
-        PURGE_JOB: partial(run_purge_job, database),
+        PURGE_JOB: partial(run_purge_job, database, settings),
     }
     producers: list[JobProducer] = [RetentionPurgeScheduler(queue)]
     if settings.platform_sync_interval_minutes > 0:

@@ -426,7 +426,7 @@ def test_hourly_purge_removes_only_expired_keys_and_events(
     assert job is not None
     assert queue.claim("w1", {PURGE_JOB}) is None  # one job per hour slot
 
-    run_purge_job(database, job)
+    run_purge_job(database, database.settings, job)
 
     with database.session() as session:
         assert list(session.scalars(select(EventRecord.id))) == [fresh_event]
@@ -511,3 +511,96 @@ def test_failure_backoff_grows_and_is_capped(queue: JobQueue) -> None:
         30,
         30,
     ]
+
+
+# ------------------------------------------------------- review fixes (item 9)
+
+
+def test_purge_removes_old_finished_jobs_but_keeps_publishing_history_longer(
+    queue: JobQueue, database: Database, settings: Settings
+) -> None:
+    from sqlalchemy import update
+
+    from runway.db.models import utcnow
+    from runway.jobs.retention import purge_finished_jobs
+
+    now = utcnow()
+    ages = {
+        ("sync_account", "completed", 15): "removed",
+        ("sync_account", "failed", 15): "removed",
+        ("sync_account", "completed", 13): "kept",
+        ("sync_account", "pending", 40): "kept",  # unfinished work is never purged
+        ("send", "completed", 30): "kept",
+        ("reconcile", "failed", 30): "kept",
+        ("send", "completed", 91): "removed",
+        ("send", "reconciling", 200): "kept",
+    }
+    ids: dict[tuple[str, str, int], int] = {}
+    for kind, state, days in ages:
+        job = queue.enqueue(kind, idempotency_key=f"{kind}:{state}:{days}")
+        ids[(kind, state, days)] = job.id
+        with database.session() as session:
+            session.execute(
+                update(PublishJob)
+                .where(PublishJob.id == job.id)
+                .values(state=state, updated_at=now - timedelta(days=days))
+            )
+
+    with database.session() as session:
+        assert purge_finished_jobs(session, now=now) == 3
+
+    with database.session() as session:
+        remaining = set(session.scalars(select(PublishJob.id)))
+    for key, expected in ages.items():
+        assert (ids[key] in remaining) is (expected == "kept"), key
+
+
+def test_purge_removes_only_unreferenced_unheld_lock_files(
+    database: Database, settings: Settings
+) -> None:
+    from runway.db.models import ConnectedAccount
+    from runway.jobs.retention import run_purge_job
+    from runway.locks import exclusive_file_lock
+    from runway.platforms.sync import sync_lock_path
+    from runway.platforms.tokens import TokenStore
+
+    with database.session() as session:
+        account = ConnectedAccount(
+            platform="youtube",
+            external_account_id="UC-live",
+            status="connected",
+            granted_scopes_json="[]",
+            token_ref="liveref",
+        )
+        session.add(account)
+        session.flush()
+        live_id = account.id
+    refresh_dir = TokenStore(settings.resolved_data_dir / "secrets").refresh_lock_dir
+    refresh_dir.mkdir(parents=True)
+    for name in ("liveref", "goneref", "heldref"):
+        (refresh_dir / f"{name}.lock").write_bytes(b"\0")
+    sync_dir = sync_lock_path(settings, live_id).parent
+    sync_dir.mkdir(parents=True)
+    sync_lock_path(settings, live_id).write_bytes(b"\0")
+    sync_lock_path(settings, 9999).write_bytes(b"\0")
+
+    job = Job.of(
+        PublishJob(
+            id=1,
+            kind="purge",
+            workspace_id=1,
+            target_id=None,
+            state="running",
+            attempts=1,
+            max_attempts=1,
+            run_at=START,
+            idempotency_key="purge:test",
+            payload_json="{}",
+            last_error=None,
+        )
+    )
+    with exclusive_file_lock(refresh_dir / "heldref.lock", timeout=0):
+        run_purge_job(database, settings, job)
+
+    assert sorted(path.stem for path in refresh_dir.glob("*.lock")) == ["heldref", "liveref"]
+    assert [path.stem for path in sync_dir.glob("*.lock")] == [f"account-{live_id}"]
