@@ -26,6 +26,7 @@ from runway.mediastore.keys import (
     workspace_prefix,
 )
 from runway.mediastore.local import LocalDiskStore
+from runway.mediastore.r2 import R2Config, R2Store
 from runway.mediastore.store import (
     MediaStore,
     PartReceipt,
@@ -48,6 +49,8 @@ __all__ = [
     "ObjectExists",
     "ObjectNotFound",
     "PartReceipt",
+    "R2Config",
+    "R2Store",
     "SizeMismatch",
     "StaleUpload",
     "StorageBackendError",
