@@ -186,8 +186,11 @@ Back up the database with SQLite's online backup API (see
 powershell -ExecutionPolicy Bypass -File scripts\sync_private_database_release.ps1 -TargetSha <full-commit-sha>
 ```
 
-This command refuses to run before the commit exists on `origin/main` or if the GitHub repository
-is not private. It creates an online SQLite backup plus every media file referenced by the
+The release goes to `-Repository <owner/name>` when given, otherwise to the private instance
+repository named by `RUNWAY_INSTANCE_REPOSITORY` (`instance_repository` in the instance's
+`instance.toml`; see [`PRIVATE_INSTANCE.md`](PRIVATE_INSTANCE.md)), otherwise to the code
+repository. This command refuses to run before the commit exists on `origin/main` or if the
+target GitHub repository is not private. It creates an online SQLite backup plus every media file referenced by the
 database, validates all hashes and table counts, uploads the assets, downloads them again, and
 performs a complete restoration verification. Browser profiles and Google authentication are
 never included.
