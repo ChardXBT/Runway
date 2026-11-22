@@ -9,6 +9,10 @@ class InvalidMediaKey(MediaStoreError, ValueError):
     """The key is malformed or would escape the store's root."""
 
 
+class WorkspaceMismatch(InvalidMediaKey):
+    """The key is well formed but lies under another workspace's prefix."""
+
+
 class InvalidUploadRequest(MediaStoreError, ValueError):
     """The size, content type, part number or part length is not acceptable."""
 

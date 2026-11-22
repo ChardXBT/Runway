@@ -5,6 +5,11 @@ through the API process. Each part URL signs ``content-length``, which binds the
 part's planned length; ``complete_upload`` also re-reads the part list from R2 and checks
 every size before assembling the object, and checks the object's length afterwards.
 
+R2 cannot check the declared SHA-256 at completion (part ETags are R2's MD5s), so
+:meth:`R2Store.copy_to_path` streams the object to the probe job's server-named file and
+verifies the size and SHA-256 on the way; a mismatch rejects the asset. Every object method
+takes ``workspace_id`` and refuses keys outside ``w/{workspace_id}/``.
+
 Requests use path-style URLs (``https://<account>.r2.cloudflarestorage.com/<bucket>/<key>``),
 region ``auto`` and service ``s3``.
 """
@@ -14,9 +19,11 @@ from __future__ import annotations
 import io
 import re
 import xml.etree.ElementTree as ElementTree
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import BinaryIO
 from xml.sax.saxutils import escape
 
@@ -32,7 +39,7 @@ from runway.mediastore.errors import (
     UnsupportedOperation,
     UploadNotFound,
 )
-from runway.mediastore.keys import parse_media_key
+from runway.mediastore.keys import check_workspace, parse_media_key
 from runway.mediastore.sigv4 import (
     SigV4Credentials,
     presign_url,
@@ -48,6 +55,8 @@ from runway.mediastore.store import (
     UploadPlan,
     UploadProgress,
     check_upload_request,
+    normalize_content_type,
+    write_verified,
 )
 from runway.platforms.base import safe_error_summary
 from runway.platforms.limits import R2_STORAGE, MiB
@@ -121,8 +130,10 @@ class R2Store:
 
     # Uploads ---------------------------------------------------------------------------
 
-    def begin_upload(self, key: str, size: int, content_type: str, *, sha256: str) -> UploadPlan:
-        content_type, digest = check_upload_request(key, size, content_type, sha256)
+    def begin_upload(
+        self, key: str, size: int, content_type: str, *, sha256: str, workspace_id: str | int
+    ) -> UploadPlan:
+        content_type, digest = check_upload_request(key, size, content_type, sha256, workspace_id)
         if self._max_object_bytes is not None and size > self._max_object_bytes:
             raise InvalidUploadRequest(
                 f"size {size} exceeds this store's limit of {self._max_object_bytes} bytes"
@@ -219,14 +230,20 @@ class R2Store:
             f"<ETag>&quot;{escape(by_number[number].etag)}&quot;</ETag></Part>"
             for number in plan.part_numbers()
         )
-        response = self._send(
-            "POST",
-            self._object_url(plan.key, [("uploadId", plan.upload_id)]),
-            operation="complete multipart upload",
-            headers={"content-type": "application/xml"},
-            body=f"<CompleteMultipartUpload>{body}</CompleteMultipartUpload>".encode(),
-            not_found=UploadNotFound,
-        )
+        try:
+            response = self._send(
+                "POST",
+                self._object_url(plan.key, [("uploadId", plan.upload_id)]),
+                operation="complete multipart upload",
+                headers={"content-type": "application/xml"},
+                body=f"<CompleteMultipartUpload>{body}</CompleteMultipartUpload>".encode(),
+                not_found=UploadNotFound,
+            )
+        except UploadNotFound:
+            # A parallel completion finished between our ListParts and this request.
+            if self._object_size(plan.key) == plan.size:
+                return
+            raise
         # S3 can report a failed completion with status 200 and an <Error> body.
         root = _parse_xml(response)
         if _local_name(root.tag) == "Error":
@@ -237,7 +254,7 @@ class R2Store:
             )
         actual = self._object_size(plan.key)
         if actual != plan.size:
-            self.delete(plan.key)
+            self._delete(plan.key)
             raise SizeMismatch(f"object holds {actual} bytes; expected {plan.size}")
 
     def abort_upload(self, plan: UploadPlan) -> None:
@@ -260,7 +277,8 @@ class R2Store:
 
     # Objects ---------------------------------------------------------------------------
 
-    def open(self, key: str) -> BinaryIO:
+    def open(self, key: str, *, workspace_id: str | int) -> BinaryIO:
+        check_workspace(key, workspace_id)
         response = self._send(
             "HEAD", self._object_url(key), operation="head object", not_found=ObjectNotFound
         )
@@ -269,14 +287,55 @@ class R2Store:
         raw = _RangedObjectReader(self, key, size, etag)
         return io.BufferedReader(raw, buffer_size=_READ_BUFFER_BYTES)
 
-    def object_size(self, key: str) -> int | None:
+    def object_size(self, key: str, *, workspace_id: str | int) -> int | None:
+        check_workspace(key, workspace_id)
         return self._object_size(key)
 
-    def signed_get_url(self, key: str, ttl_seconds: int) -> str | None:
+    def copy_to_path(
+        self, key: str, destination: Path, *, workspace_id: str | int, sha256: str, size: int
+    ) -> Path:
+        """Download the object to ``destination``, verifying size and SHA-256 as it streams.
+
+        This is where an R2 upload's declared hash is checked (spec 02 §4 step 3): part
+        ETags are MD5s chosen by R2, so ``complete_upload`` cannot check it. On
+        ``ChecksumMismatch`` or ``SizeMismatch`` no file is left; the caller should reject the
+        asset and delete the object.
+        """
+        check_workspace(key, workspace_id)
+        with self._stream(
+            "GET", self._object_url(key), operation="get object", not_found=ObjectNotFound
+        ) as response:
+            return write_verified(
+                response.iter_bytes(_READ_BUFFER_BYTES), destination, sha256=sha256, size=size
+            )
+
+    def signed_get_url(self, key: str, ttl_seconds: int, *, workspace_id: str | int) -> str | None:
+        """Plain presigned GET, for a platform to fetch (the Instagram container URL)."""
+        check_workspace(key, workspace_id)
+        return self._presign_get(key, ttl_seconds, [])
+
+    def signed_preview_url(
+        self, key: str, ttl_seconds: int, *, workspace_id: str | int, content_type: str
+    ) -> str | None:
+        """Presigned GET for previews: the probed type and ``attachment`` are forced."""
+        check_workspace(key, workspace_id)
+        overrides = [
+            ("response-content-disposition", "attachment"),
+            ("response-content-type", normalize_content_type(content_type)),
+        ]
+        return self._presign_get(key, ttl_seconds, overrides)
+
+    def delete(self, key: str, *, workspace_id: str | int) -> None:
+        check_workspace(key, workspace_id)
+        self._delete(key)
+
+    # Internals ---------------------------------------------------------------------------
+
+    def _presign_get(self, key: str, ttl_seconds: int, query: list[tuple[str, str]]) -> str:
         self._check_ttl(ttl_seconds)
         return presign_url(
             "GET",
-            self._object_url(key),
+            self._object_url(key, query),
             credentials=self._config.credentials,
             region=self._config.region,
             service=_SERVICE,
@@ -284,15 +343,13 @@ class R2Store:
             expires_seconds=ttl_seconds,
         )
 
-    def delete(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         self._send(
             "DELETE",
             self._object_url(key),
             operation="delete object",
             expected=(200, 204, 404),
         )
-
-    # Internals ---------------------------------------------------------------------------
 
     def _part_size_for(self, size: int) -> int:
         needed = -(-size // R2_STORAGE.max_parts)
@@ -334,7 +391,44 @@ class R2Store:
         expected: tuple[int, ...] = (200,),
         not_found: type[Exception] | None = None,
     ) -> httpx.Response:
-        signed = sign_headers(
+        signed = self._sign(method, url, headers, body)
+        try:
+            response = self._client.request(method, url, headers=signed, content=body or None)
+        except httpx.HTTPError as exc:
+            raise StorageBackendError(
+                f"R2 {operation} failed: {safe_error_summary(exc)}", retryable=True
+            ) from exc
+        self._check_status(response, operation, expected, not_found)
+        return response
+
+    @contextmanager
+    def _stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        operation: str,
+        headers: Mapping[str, str] | None = None,
+        expected: tuple[int, ...] = (200,),
+        not_found: type[Exception] | None = None,
+    ) -> Iterator[httpx.Response]:
+        """Like ``_send`` but the body is not read; leaving the block closes the response."""
+        signed = self._sign(method, url, headers, b"")
+        try:
+            with self._client.stream(method, url, headers=signed) as response:
+                if response.status_code not in expected:
+                    response.read()  # Error bodies are small XML documents.
+                self._check_status(response, operation, expected, not_found)
+                yield response
+        except httpx.HTTPError as exc:
+            raise StorageBackendError(
+                f"R2 {operation} failed: {safe_error_summary(exc)}", retryable=True
+            ) from exc
+
+    def _sign(
+        self, method: str, url: str, headers: Mapping[str, str] | None, body: bytes
+    ) -> dict[str, str]:
+        return sign_headers(
             method,
             url,
             headers or {},
@@ -344,14 +438,16 @@ class R2Store:
             service=_SERVICE,
             now=self._clock(),
         )
-        try:
-            response = self._client.request(method, url, headers=signed, content=body or None)
-        except httpx.HTTPError as exc:
-            raise StorageBackendError(
-                f"R2 {operation} failed: {safe_error_summary(exc)}", retryable=True
-            ) from exc
+
+    @staticmethod
+    def _check_status(
+        response: httpx.Response,
+        operation: str,
+        expected: tuple[int, ...],
+        not_found: type[Exception] | None,
+    ) -> None:
         if response.status_code in expected:
-            return response
+            return
         if response.status_code == 404 and not_found is not None:
             raise not_found(f"R2 {operation}: not found")
         code = _error_code(response)
@@ -373,21 +469,27 @@ class R2Store:
         headers = {"range": f"bytes={first}-{last}"}
         if etag:
             headers["if-match"] = etag
-        response = self._send(
+        wanted = last - first + 1
+        with self._stream(
             "GET",
             self._object_url(key),
             operation="get object range",
             headers=headers,
             expected=(200, 206),
             not_found=ObjectNotFound,
-        )
-        data = response.content
-        if response.status_code == 200:
-            # The server ignored the range and sent the whole object.
-            data = data[first : last + 1]
-        if len(data) != last - first + 1:
+        ) as response:
+            if response.status_code == 200 and first > 0:
+                # The server ignored Range and is sending the whole object; skipping to
+                # ``first`` could mean downloading gigabytes, so refuse instead.
+                raise StorageBackendError("R2 ignored the Range header of a ranged read")
+            data = bytearray()
+            for block in response.iter_bytes():
+                data += block[: wanted - len(data)]
+                if len(data) >= wanted:
+                    break
+        if len(data) != wanted:
             raise StorageBackendError("R2 returned a short range read", retryable=True)
-        return data
+        return bytes(data)
 
     def _list_parts(self, plan: UploadPlan) -> list[PartReceipt]:
         parts: list[PartReceipt] = []
