@@ -4,9 +4,11 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +23,66 @@ class TokenStoreError(Exception):
     pass
 
 
+class TokenRefreshBusy(TokenStoreError):
+    """Another thread or process held the account's refresh lock for too long."""
+
+
+_TOKEN_REF_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+# Longer than one provider round trip (20 s client timeout) plus the store write.
+REFRESH_LOCK_TIMEOUT_SECONDS = 90.0
+_LOCK_POLL_SECONDS = 0.05
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path, *, timeout: float | None) -> Iterator[None]:
+    """Hold an exclusive OS lock on ``path`` across threads and processes.
+
+    Each call opens its own handle, so two threads of one process exclude each
+    other as well (Windows byte-range locks and POSIX ``flock`` are per open
+    file). ``timeout=None`` waits forever.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = None if timeout is None else time.monotonic() + timeout
+    with path.open("a+b") as handle:
+        if sys.platform == "win32":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            while True:
+                handle.seek(0)
+                try:
+                    # LK_NBLCK fails at once; LK_LOCK would give up after ~10 s.
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise TokenRefreshBusy(f"timed out waiting for {path.name}") from None
+                    time.sleep(_LOCK_POLL_SECONDS)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise TokenRefreshBusy(f"timed out waiting for {path.name}") from None
+                    time.sleep(_LOCK_POLL_SECONDS)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 class TokenStore:
     """Fernet-encrypted token persistence under ``data/secrets/``.
 
@@ -33,6 +95,7 @@ class TokenStore:
         self.key_path = secrets_dir / "token.key"
         self.store_path = secrets_dir / "platform-tokens.json"
         self.lock_path = secrets_dir / "token.lock"
+        self.refresh_lock_dir = secrets_dir / "refresh-locks"
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -43,30 +106,23 @@ class TokenStore:
         silently overwrite each other's token updates. A sidecar
         ``token.lock`` file is held exclusively for the whole sequence.
         """
-        self.secrets_dir.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a+b") as handle:
-            if sys.platform == "win32":
-                import msvcrt
+        with _exclusive_file_lock(self.lock_path, timeout=None):
+            yield
 
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
-                    handle.write(b"\0")
-                    handle.flush()
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-                try:
-                    yield
-                finally:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
+    @contextmanager
+    def refresh_lock(
+        self, token_ref: str, *, timeout: float = REFRESH_LOCK_TIMEOUT_SECONDS
+    ) -> Iterator[None]:
+        """Serialize refreshing one account's token across threads and processes.
 
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        Held for the whole refresh: re-read, call the token endpoint, store the
+        new token set. Providers that rotate refresh tokens (TikTok) invalidate
+        the old one on use, so a second concurrent refresh would lose the grant.
+        """
+        if not _TOKEN_REF_PATTERN.match(token_ref):
+            raise TokenStoreError("token reference is not a safe lock name")
+        with _exclusive_file_lock(self.refresh_lock_dir / f"{token_ref}.lock", timeout=timeout):
+            yield
 
     def _load_key(self) -> bytes:
         if self.key_path.is_file():

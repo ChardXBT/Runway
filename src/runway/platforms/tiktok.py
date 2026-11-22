@@ -115,7 +115,14 @@ class TikTokProvider(PlatformProvider):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         data = self._json_or_raise(response)
-        return self._token_from_response(data)
+        refreshed = self._token_from_response(data)
+        # TikTok rotates the refresh token on every refresh and sends the new
+        # one with its own refresh_expires_in. Fields a response omits keep the
+        # values an earlier response gave; nothing falls back to a constant.
+        if refreshed.refresh_token is None:
+            refreshed.refresh_token = token.refresh_token
+        refreshed.extra = {**token.extra, **refreshed.extra}
+        return refreshed
 
     def revoke(self, token: TokenSet) -> bool:
         response = provider_request(
@@ -179,6 +186,21 @@ class TikTokProvider(PlatformProvider):
         if not isinstance(data, dict):
             data = {}
         error = data.get("error")
+        if isinstance(error, str) and error and error != "ok":
+            # The OAuth token endpoint reports errors as a top-level string
+            # (RFC 6749 style), unlike the data API's error object.
+            description = data.get("error_description")
+            message = description if isinstance(description, str) and description else error
+            log_id = data.get("log_id")
+            if log_id:
+                message = f"{message} (log_id {log_id})"
+            if error == "invalid_grant" or response.status_code == 401:
+                raise AuthorizationExpired(message, status=response.status_code)
+            raise ProviderError(
+                message,
+                retryable=response.status_code >= 500 or response.status_code == 429,
+                status=response.status_code,
+            )
         if isinstance(error, dict) and error:
             code = str(error.get("code") or "")
             message = str(error.get("message") or "TikTok API error")

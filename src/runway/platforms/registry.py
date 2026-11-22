@@ -9,7 +9,7 @@ from sqlalchemy import select
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
-from runway.platforms.base import AuthorizationExpired, PlatformProvider, TokenSet
+from runway.platforms.base import AuthorizationExpired, PlatformProvider, ProviderError, TokenSet
 from runway.platforms.capabilities import (
     DEFAULT_PLATFORM_SCOPES,
     Platform,
@@ -17,7 +17,7 @@ from runway.platforms.capabilities import (
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.mock import MockPlatformProvider, mock_token
 from runway.platforms.tiktok import TikTokProvider
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import TokenRefreshBusy, TokenStore
 from runway.platforms.youtube import YouTubeProvider
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,17 @@ def token_refresh_window(platform: Platform) -> timedelta:
     if platform is Platform.instagram:
         return INSTAGRAM_TOKEN_REFRESH_WINDOW
     return TOKEN_REFRESH_WINDOW
+
+
+def _needs_refresh(platform: Platform, token: TokenSet) -> bool:
+    # expires_at comes from the provider's own expires_in; a token without one
+    # (mock, or a provider that omitted it) is used until the platform says 401.
+    if token.expires_at is None:
+        return False
+    expires_at = token.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at - datetime.now(UTC) <= token_refresh_window(platform)
 
 
 class UnknownPlatformError(ValueError):
@@ -87,16 +98,28 @@ class ProviderRegistry:
         token = self.token_store.load(token_ref)
         if token is None:
             raise AuthorizationExpired("account token is missing", status=401)
-        if token.expires_at is None:
+        if not _needs_refresh(platform, token):
             return token
-        expires_at = token.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)
-        if expires_at - datetime.now(UTC) > token_refresh_window(platform):
-            return token
-        refreshed = self.provider(platform).refresh(token)
-        self.token_store.store(token_ref, refreshed)
-        return refreshed
+        try:
+            with self.token_store.refresh_lock(token_ref):
+                # Re-read under the lock: another thread or process may have
+                # refreshed (and, on TikTok, rotated the refresh token) while
+                # this one waited. Refreshing again would spend a dead token.
+                token = self.token_store.load(token_ref)
+                if token is None:
+                    raise AuthorizationExpired("account token is missing", status=401)
+                if not _needs_refresh(platform, token):
+                    return token
+                refreshed = self.provider(platform).refresh(token)
+                # Stored before the lock is released, so the next waiter
+                # re-reads the new token set instead of refreshing again.
+                self.token_store.store(token_ref, refreshed)
+                return refreshed
+        except TokenRefreshBusy as exc:
+            raise ProviderError(
+                "another process is still refreshing this account's token",
+                retryable=True,
+            ) from exc
 
     def platforms(self) -> list[Platform]:
         return list(Platform)
