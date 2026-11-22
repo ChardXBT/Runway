@@ -43,6 +43,8 @@ from runway.mediastore.keys import (
 )
 from runway.mediastore.local import LocalDiskStore
 from runway.mediastore.probe import (
+    ALLOWED_DEMUXERS,
+    PROBE_INPUT_SUFFIX,
     MediaKind,
     MediaProber,
     MediaToolMissing,
@@ -50,8 +52,11 @@ from runway.mediastore.probe import (
     ProbeError,
     ProbeResult,
     ProbeTimeout,
+    content_type_for,
     default_poster_time_ms,
+    new_probe_input,
     parse_ffprobe,
+    safe_tool_message,
 )
 from runway.mediastore.r2 import R2Config, R2Store
 from runway.mediastore.store import (
@@ -66,6 +71,7 @@ from runway.mediastore.store import (
 from runway.mediastore.validation import Issue, Severity, validate, validate_carousel
 
 __all__ = [
+    "ALLOWED_DEMUXERS",
     "ByteRange",
     "ChecksumMismatch",
     "Chunk",
@@ -84,6 +90,7 @@ __all__ = [
     "MediaTools",
     "ObjectExists",
     "ObjectNotFound",
+    "PROBE_INPUT_SUFFIX",
     "PartReceipt",
     "ProbeError",
     "ProbeResult",
@@ -103,16 +110,19 @@ __all__ = [
     "UploadProgress",
     "WorkspaceMismatch",
     "check_workspace",
+    "content_type_for",
     "default_poster_time_ms",
     "instagram_poll_schedule",
     "iter_tiktok_chunks",
     "iter_youtube_chunks",
     "key_extension",
     "make_media_key",
+    "new_probe_input",
     "parse_ffprobe",
     "parse_media_key",
     "plan_tiktok_chunks",
     "read_range",
+    "safe_tool_message",
     "validate",
     "validate_carousel",
     "workspace_prefix",

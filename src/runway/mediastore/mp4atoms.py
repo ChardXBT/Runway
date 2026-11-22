@@ -3,7 +3,12 @@
 ffprobe does not report where the ``moov`` box sits or whether tracks carry edit lists, and
 Instagram rejects files with ``moov`` after ``mdat`` or with edit lists. This reader walks box
 headers only (8 or 16 bytes each), seeking past box bodies, and visits at most
-``MAX_BOXES`` boxes, so a hostile file cannot make it read much or loop.
+``MAX_BOXES`` boxes per walk, so a hostile file cannot make it read much or loop. When a walk
+stops early (budget spent or a malformed box), an answer it could not reach is ``None``
+(unknown), never ``False``.
+
+Edit lists follow ``runway.platforms.limits.INSTAGRAM_EDIT_LIST_RULE``: any ``elst`` box with
+at least one entry counts.
 """
 
 from __future__ import annotations
@@ -18,8 +23,6 @@ MAX_BOXES = 20_000
 _HEADER = struct.Struct(">I4s")
 _LARGE_SIZE = struct.Struct(">Q")
 _FULL_BOX_COUNT = struct.Struct(">BxxxI")
-_ELST_ENTRY_V0 = struct.Struct(">IihH")
-_ELST_ENTRY_V1 = struct.Struct(">QqhH")
 # Box types an MP4 or QuickTime file can start with.
 _FIRST_BOX_TYPES = frozenset({"ftyp", "moov", "mdat", "wide", "free", "skip", "pnot"})
 
@@ -44,20 +47,26 @@ class Box:
 class Mp4Layout:
     top_level: tuple[str, ...]
     major_brand: str | None
-    # None when the file has no moov or no mdat at the top level.
+    # None when moov or mdat was not found at the top level (absent or not reached).
     moov_at_front: bool | None
-    # True when a track has an edit list that cuts, pauses or re-times it (see
-    # _edit_list_changes_timeline). None when the file has no moov box.
+    # True when any track has an elst box with entries. None when there is no moov box or the
+    # walk inside moov stopped before it finished.
     has_edit_list: bool | None
 
 
-class _Budget:
-    def __init__(self, limit: int) -> None:
+class _Walk:
+    """Box budget for one walk, and whether the walk stopped before the end."""
+
+    def __init__(self, limit: int = MAX_BOXES) -> None:
         self.remaining = limit
+        self.incomplete = False
 
     def spend(self) -> bool:
+        if self.remaining <= 0:
+            self.incomplete = True
+            return False
         self.remaining -= 1
-        return self.remaining >= 0
+        return True
 
 
 def _box_type(raw: bytes) -> str | None:
@@ -66,27 +75,24 @@ def _box_type(raw: bytes) -> str | None:
     return raw.decode("ascii")
 
 
-def _iter_boxes(stream: BinaryIO, start: int, end: int, budget: _Budget) -> Iterator[Box]:
+def _iter_boxes(stream: BinaryIO, start: int, end: int, walk: _Walk) -> Iterator[Box]:
     position = start
-    while position + _HEADER.size <= end and budget.spend():
+    while position + _HEADER.size <= end:
+        if not walk.spend():
+            return
         stream.seek(position)
         header = stream.read(_HEADER.size)
-        if len(header) < _HEADER.size:
-            return
-        size, raw_type = _HEADER.unpack(header)
-        box_type = _box_type(raw_type)
-        if box_type is None:
-            return
+        size, raw_type = _HEADER.unpack(header) if len(header) == _HEADER.size else (0, b"")
+        box_type = _box_type(raw_type) if raw_type else None
         header_size = _HEADER.size
-        if size == 1:
+        if box_type is not None and size == 1:
             large = stream.read(_LARGE_SIZE.size)
-            if len(large) < _LARGE_SIZE.size:
-                return
-            (size,) = _LARGE_SIZE.unpack(large)
+            size = _LARGE_SIZE.unpack(large)[0] if len(large) == _LARGE_SIZE.size else 0
             header_size += _LARGE_SIZE.size
-        elif size == 0:
+        elif box_type is not None and size == 0:
             size = end - position
-        if size < header_size or position + size > end:
+        if box_type is None or size < header_size or position + size > end:
+            walk.incomplete = True
             return
         yield Box(box_type, position, size, header_size)
         position += size
@@ -106,46 +112,37 @@ def _major_brand(stream: BinaryIO, box: Box) -> str | None:
     return _box_type(stream.read(4))
 
 
-def _edit_list_changes_timeline(stream: BinaryIO, elst: Box) -> bool:
-    """True when the edit list cuts, pauses or re-times the track.
-
-    A single full-rate entry only shifts the track start. ffmpeg and phone cameras write one
-    on nearly every file, so it is not counted.
-    """
+def _elst_has_entries(stream: BinaryIO, elst: Box) -> bool | None:
     if elst.size < elst.header_size + _FULL_BOX_COUNT.size:
-        return False
+        return None
     stream.seek(elst.body_offset)
-    version, entry_count = _FULL_BOX_COUNT.unpack(stream.read(_FULL_BOX_COUNT.size))
-    if entry_count == 0:
-        return False
-    if entry_count > 1:
-        return True
-    entry = _ELST_ENTRY_V1 if version == 1 else _ELST_ENTRY_V0
-    raw = stream.read(entry.size)
-    if len(raw) < entry.size:
-        return True
-    _, media_time, rate_integer, rate_fraction = entry.unpack(raw)
-    return bool(media_time == -1 or rate_integer != 1 or rate_fraction != 0)
+    _, entry_count = _FULL_BOX_COUNT.unpack(stream.read(_FULL_BOX_COUNT.size))
+    return bool(entry_count > 0)
 
 
-def _has_edit_list(stream: BinaryIO, moov: Box, budget: _Budget) -> bool:
-    for trak in _iter_boxes(stream, moov.body_offset, moov.end, budget):
+def _has_edit_list(stream: BinaryIO, moov: Box) -> bool | None:
+    walk = _Walk()
+    unknown = False
+    for trak in _iter_boxes(stream, moov.body_offset, moov.end, walk):
         if trak.type != "trak":
             continue
-        for edts in _iter_boxes(stream, trak.body_offset, trak.end, budget):
+        for edts in _iter_boxes(stream, trak.body_offset, trak.end, walk):
             if edts.type != "edts":
                 continue
-            for elst in _iter_boxes(stream, edts.body_offset, edts.end, budget):
-                if elst.type == "elst" and _edit_list_changes_timeline(stream, elst):
+            for elst in _iter_boxes(stream, edts.body_offset, edts.end, walk):
+                if elst.type != "elst":
+                    continue
+                found = _elst_has_entries(stream, elst)
+                if found:
                     return True
-    return False
+                unknown = unknown or found is None
+    return None if walk.incomplete or unknown else False
 
 
 def read_layout(stream: BinaryIO) -> Mp4Layout | None:
     """Return the layout, or ``None`` when the stream does not start like an MP4/MOV file."""
-    budget = _Budget(MAX_BOXES)
     size = _stream_size(stream)
-    boxes = list(_iter_boxes(stream, 0, size, budget))
+    boxes = list(_iter_boxes(stream, 0, size, _Walk()))
     if not boxes:
         return None
     types = tuple(box.type for box in boxes)
@@ -160,7 +157,7 @@ def read_layout(stream: BinaryIO) -> Mp4Layout | None:
         top_level=types,
         major_brand=_major_brand(stream, ftyp) if ftyp else None,
         moov_at_front=moov_at_front,
-        has_edit_list=None if moov is None else _has_edit_list(stream, moov, budget),
+        has_edit_list=None if moov is None else _has_edit_list(stream, moov),
     )
 
 

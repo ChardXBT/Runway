@@ -11,6 +11,8 @@ from typing import Any
 import pytest
 
 from runway.mediastore import (
+    ALLOWED_DEMUXERS,
+    PROBE_INPUT_SUFFIX,
     MediaProber,
     MediaToolMissing,
     MediaTools,
@@ -18,7 +20,9 @@ from runway.mediastore import (
     ProbeResult,
     ProbeTimeout,
     default_poster_time_ms,
+    new_probe_input,
     parse_ffprobe,
+    safe_tool_message,
 )
 from runway.mediastore import probe as probe_module
 from runway.mediastore.mp4atoms import MAX_BOXES, Mp4Layout, read_layout
@@ -184,19 +188,51 @@ def test_large_and_open_ended_box_sizes() -> None:
     [
         ([], False),
         ([_elst([])], False),
-        ([_elst([IDENTITY])], False),
-        ([_elst([(1000, 1024, 1, 0)])], False),
-        ([_elst([IDENTITY], version=1)], False),
-        ([_elst([IDENTITY]), _elst([(500, -1, 1, 0), IDENTITY])], True),
-        ([_elst([(500, -1, 1, 0)])], True),
+        # Any elst entry counts, including ffmpeg's usual single start shift
+        # (limits.INSTAGRAM_EDIT_LIST_RULE).
+        ([_elst([IDENTITY])], True),
+        ([_elst([(1000, 1024, 1, 0)])], True),
+        ([_elst([IDENTITY], version=1)], True),
+        ([_elst([]), _elst([(500, -1, 1, 0), IDENTITY])], True),
         ([_elst([IDENTITY, IDENTITY])], True),
-        ([_elst([(1000, 0, 2, 0)])], True),
-        ([_elst([(1000, 0, 1, 0x8000)], version=1)], True),
     ],
 )
-def test_edit_lists_that_change_the_timeline(elsts: list[bytes], expected: bool) -> None:
+def test_any_edit_list_entry_counts(elsts: list[bytes], expected: bool) -> None:
     layout = _layout(FTYP + _moov(*elsts) + _box("mdat"))
     assert layout is not None and layout.has_edit_list is expected
+
+
+def test_exhausted_top_level_budget_still_reads_the_moov() -> None:
+    # Before the fix the 20,000 free boxes spent the shared budget and the moov walk
+    # reported "no edit list" (False) for a file that has one.
+    data = FTYP + _moov(_elst([(500, -1, 1, 0), IDENTITY])) + _box("mdat") + _box("free") * 20_000
+    layout = _layout(data)
+    assert layout is not None
+    assert layout.moov_at_front is True
+    assert layout.has_edit_list is True
+
+
+def test_exhausted_budget_inside_moov_is_unknown_not_false() -> None:
+    padding = _box("free") * (MAX_BOXES + 10)
+    trak = _box("trak", _box("edts", _elst([IDENTITY])))
+    data = FTYP + _box("moov", padding + trak) + _box("mdat")
+    layout = _layout(data)
+    assert layout is not None and layout.moov_at_front is True
+    assert layout.has_edit_list is None
+
+
+def test_moov_beyond_an_exhausted_top_level_walk_is_unknown() -> None:
+    data = FTYP + _box("free") * (MAX_BOXES + 10) + _box("mdat") + _moov(_elst([IDENTITY]))
+    layout = _layout(data)
+    assert layout is not None
+    assert layout.moov_at_front is None and layout.has_edit_list is None
+
+
+def test_malformed_box_inside_moov_is_unknown() -> None:
+    broken_trak = struct.pack(">I4s", 9_999, b"trak") + b"\0" * 8
+    data = FTYP + _box("moov", broken_trak) + _box("mdat")
+    layout = _layout(data)
+    assert layout is not None and layout.has_edit_list is None
 
 
 @pytest.mark.parametrize(
@@ -230,25 +266,55 @@ def test_box_count_is_bounded() -> None:
 # Running ffprobe ---------------------------------------------------------------------------
 
 
-def test_missing_binary_gives_a_clear_error(tmp_path: Path) -> None:
-    media = tmp_path / "clip.mp4"
-    media.write_bytes(b"x")
-    prober = MediaProber(MediaTools(ffprobe="runway-no-such-ffprobe", ffmpeg="runway-no-ffmpeg"))
-    with pytest.raises(MediaToolMissing, match="ffprobe binary 'runway-no-such-ffprobe'"):
+def _input(tmp_path: Path, content: bytes = b"x") -> Path:
+    media = new_probe_input(tmp_path)
+    media.write_bytes(content)
+    return media
+
+
+def test_allowed_demuxers_are_exactly_what_validation_accepts() -> None:
+    assert set(ALLOWED_DEMUXERS) == {
+        "mov",
+        "mp4",
+        "m4a",
+        "3gp",
+        "3g2",
+        "mj2",
+        "matroska",
+        "webm",
+        "jpeg_pipe",
+    }
+    # Demuxers that open further files by name must never be allowed.
+    assert not {"hls", "concat", "dash", "image2", "tee", "mpd"} & set(ALLOWED_DEMUXERS)
+
+
+def test_missing_binary_gives_a_clear_error_without_paths(tmp_path: Path) -> None:
+    media = _input(tmp_path)
+    configured = str(tmp_path / "tools" / "runway-no-such-ffprobe.exe")
+    prober = MediaProber(MediaTools(ffprobe=configured, ffmpeg="runway-no-ffmpeg"))
+    with pytest.raises(MediaToolMissing) as raised:
         prober.probe(media)
+    assert "'runway-no-such-ffprobe.exe'" in str(raised.value)
+    assert str(tmp_path) not in str(raised.value)
     with pytest.raises(MediaToolMissing, match="Install FFmpeg"):
         prober.extract_poster(media, tmp_path / "poster.jpg")
 
 
-def test_only_server_paths_are_accepted(tmp_path: Path) -> None:
+def test_only_server_named_inputs_are_accepted(tmp_path: Path) -> None:
     prober = MediaProber()
     with pytest.raises(TypeError):
         prober.probe("http://example.com/x.mp4")  # type: ignore[arg-type]
+    for client_named in ("clip.mp4", "list.m3u8", "x.ffconcat", "noext"):
+        path = tmp_path / client_named
+        path.write_bytes(b"x")
+        with pytest.raises(ProbeError, match="server-named"):
+            prober.probe(path)
+        with pytest.raises(ProbeError, match="server-named"):
+            prober.extract_poster(path, tmp_path / "poster.jpg")
     with pytest.raises(ProbeError, match="does not exist"):
-        prober.probe(tmp_path / "missing.mp4")
-    (tmp_path / "a.mp4").write_bytes(b"x")
+        prober.probe(tmp_path / f"missing{PROBE_INPUT_SUFFIX}")
     with pytest.raises(ProbeError, match=".jpg"):
-        prober.extract_poster(tmp_path / "a.mp4", tmp_path / "poster.png")
+        prober.extract_poster(_input(tmp_path), tmp_path / "poster.png")
 
 
 def _fake_tools() -> MediaTools:
@@ -256,31 +322,42 @@ def _fake_tools() -> MediaTools:
     return MediaTools(ffprobe=sys.executable, ffmpeg=sys.executable, timeout_seconds=7)
 
 
-def test_probe_arguments_are_locked_down(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    media = tmp_path / "-i http x.mp4"
-    media.write_bytes(b"not really a video")
-    seen: dict[str, Any] = {}
+def test_probe_and_poster_arguments_are_locked_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = _input(tmp_path, b"not really a video")
+    calls: list[tuple[list[str], dict[str, Any]]] = []
 
     def fake_run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        seen["arguments"] = arguments
-        seen.update(kwargs)
-        stdout = (FIXTURES / "h264_aac_vertical_mp4.json").read_bytes()
-        return subprocess.CompletedProcess(arguments, 0, stdout, b"")
+        calls.append((arguments, kwargs))
+        if "-print_format" in arguments:
+            stdout = (FIXTURES / "h264_aac_vertical_mp4.json").read_bytes()
+            return subprocess.CompletedProcess(arguments, 0, stdout, b"")
+        Path(arguments[-1].removeprefix("file:")).write_bytes(b"jpeg")
+        return subprocess.CompletedProcess(arguments, 0, b"", b"")
 
     monkeypatch.setattr(probe_module.subprocess, "run", fake_run)
-    result = MediaProber(_fake_tools()).probe(media)
-    arguments = seen["arguments"]
-    assert arguments[arguments.index("-protocol_whitelist") + 1] == "file"
-    assert arguments[-1] == f"file:{media.resolve()}"
-    assert seen["timeout"] == 7 and seen["stdin"] == subprocess.DEVNULL
-    assert "shell" not in seen
+    prober = MediaProber(_fake_tools())
+    result = prober.probe(media)
+    prober.extract_poster(media, tmp_path / "poster.jpg")
+    for arguments, kwargs in calls:
+        assert arguments[arguments.index("-protocol_whitelist") + 1] == "file"
+        assert arguments[arguments.index("-format_whitelist") + 1] == ",".join(ALLOWED_DEMUXERS)
+        assert f"file:{media.resolve()}" in arguments
+        input_at = arguments.index(f"file:{media.resolve()}")
+        assert arguments.index("-format_whitelist") < input_at
+        assert kwargs["timeout"] == 7 and kwargs["stdin"] == subprocess.DEVNULL
+        assert "shell" not in kwargs
+    poster_arguments = calls[1][0]
+    assert poster_arguments[poster_arguments.index("-update") + 1] == "1"
     # The file is not really an MP4, so the layout is unknown, and the size is the real one.
     assert result.moov_at_front is None and result.size_bytes == media.stat().st_size
 
 
-def test_probe_timeout_and_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    media = tmp_path / "clip.mp4"
-    media.write_bytes(b"x")
+def test_probe_timeout_and_failure_messages_carry_no_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = _input(tmp_path)
 
     def slow(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
@@ -289,14 +366,24 @@ def test_probe_timeout_and_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     with pytest.raises(ProbeTimeout, match="7 seconds"):
         MediaProber(_fake_tools()).probe(media)
 
+    stderr = (
+        f"[hls @ 0000019df7b35a40] Format not on whitelist 'mov,mp4'\n"
+        f"file:{media.resolve()}: Invalid data found when processing input\n"
+    ).encode()
+
     def failing(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.CompletedProcess(
-            arguments, 1, b"", b"C:\\path\\clip.mp4: Invalid data found when processing input"
-        )
+        return subprocess.CompletedProcess(arguments, 1, b"", stderr)
 
     monkeypatch.setattr(probe_module.subprocess, "run", failing)
-    with pytest.raises(ProbeError, match="Invalid data"):
+    with pytest.raises(ProbeError) as raised:
         MediaProber(_fake_tools()).probe(media)
+    message = str(raised.value)
+    assert "Invalid data found when processing input" in message
+    assert str(tmp_path) not in message and "C:\\" not in message and "file:" not in message
+    with pytest.raises(ProbeError) as raised:
+        MediaProber(_fake_tools()).extract_poster(media, tmp_path / "out" / "poster.jpg")
+    assert str(tmp_path) not in str(raised.value)
+    assert not (tmp_path / "out" / "poster.jpg").exists()
 
     def not_json(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         return subprocess.CompletedProcess(arguments, 0, b"[1, 2]", b"")
@@ -304,3 +391,21 @@ def test_probe_timeout_and_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(probe_module.subprocess, "run", not_json)
     with pytest.raises(ProbeError, match="JSON object"):
         MediaProber(_fake_tools()).probe(media)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "file:C:\\Users\\someone\\data\\media\\w\\1\\a\\x.input: Invalid argument",
+        "Error opening input file file:C:\\data\\x y.input.",
+        "/srv/runway/data/media/.scratch/abc.input: Operation not permitted",
+        "\\\\server\\share\\x.input: No such file",
+        "[concat @ 000001e8c5a65a00] Unsafe file name 'C:/Users/ericy/victim.mp4'",
+    ],
+)
+def test_safe_tool_message_removes_paths(line: str) -> None:
+    message = safe_tool_message(f"noise\n{line}\n")
+    assert "<file>" in message or "Unsafe" in message
+    for fragment in ("C:\\", "C:/", "/srv/", "\\\\server", "Users", "ericy"):
+        assert fragment not in message
+    assert " @ " not in message

@@ -2,16 +2,25 @@
 
 Security rules this module enforces:
 
-- the input is a :class:`pathlib.Path` to a regular file the server wrote; it is passed as
+- the input is a :class:`pathlib.Path` to a regular file the server wrote, named by the
+  server with the fixed suffix :data:`PROBE_INPUT_SUFFIX` (see :func:`new_probe_input`), so
+  no client-chosen extension can steer ffmpeg's format detection. It is passed as
   ``file:<absolute path>``, so it can never be read as an option or a network URL;
+- ``-format_whitelist`` (:data:`ALLOWED_DEMUXERS`) limits the demuxers to the containers some
+  post type accepts. Playlist and list demuxers (``hls``, ``concat``, ``dash``, ``image2``
+  sequences) open further files, and ``-protocol_whitelist file`` alone does not stop them
+  from opening another workspace's file by path;
 - ``-protocol_whitelist file`` stops the demuxers from opening anything but local files;
 - every run has a timeout and no shell;
-- the media kind comes from the probe, never from the filename or the client's content type.
+- the media kind comes from the probe, never from the filename or the client's content type;
+- error messages never contain server paths.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import secrets
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -21,6 +30,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from runway.mediastore.mp4atoms import Mp4Layout, read_layout_from_path
+from runway.platforms.limits import IMAGE_LIMITS, VIDEO_LIMITS
 
 MediaKind = Literal["video", "image", "audio", "unknown"]
 
@@ -56,6 +66,36 @@ _IMAGE_CODEC_CONTAINERS = {
     "jpegxl": "jpegxl",
 }
 _ISO_FORMATS = frozenset({"mov", "mp4", "m4a", "3gp", "3g2", "mj2"})
+
+# The ffmpeg demuxer that reads each container name Runway's limits can accept.
+_DEMUXERS_BY_CONTAINER: Mapping[str, tuple[str, ...]] = {
+    "mp4": tuple(sorted(_ISO_FORMATS)),
+    "mov": tuple(sorted(_ISO_FORMATS)),
+    "webm": ("matroska", "webm"),
+    "matroska": ("matroska", "webm"),
+    "jpeg": ("jpeg_pipe",),
+    "png": ("png_pipe",),
+    "webp": ("webp_pipe",),
+}
+
+
+def _accepted_containers() -> frozenset[str]:
+    names: set[str] = set()
+    for video in VIDEO_LIMITS.values():
+        if video.containers is None:
+            raise RuntimeError(f"{video.post_type} must list its accepted containers")
+        names |= video.containers
+    for image in IMAGE_LIMITS.values():
+        names |= image.formats
+    return frozenset(names)
+
+
+# Exactly the demuxers for containers some post type accepts; nothing that opens other files.
+ALLOWED_DEMUXERS: tuple[str, ...] = tuple(
+    sorted({name for c in _accepted_containers() for name in _DEMUXERS_BY_CONTAINER[c]})
+)
+PROBE_INPUT_SUFFIX = ".input"
+_ACCEPTED_LABEL = "MP4, MOV, WebM or JPEG"
 _WEBM_VIDEO_CODECS = frozenset({"vp8", "vp9", "av1"})
 _WEBM_AUDIO_CODECS = frozenset({"opus", "vorbis"})
 
@@ -120,11 +160,22 @@ class MediaTools:
     timeout_seconds: float = DEFAULT_PROBE_TIMEOUT_SECONDS
 
 
+def new_probe_input(directory: Path) -> Path:
+    """A fresh server-chosen path for probe input: ``{directory}/{random}.input``.
+
+    Fill it with ``MediaStore.copy_to_path`` (which also verifies the bytes), probe it, then
+    delete it.
+    """
+    return directory / f"{secrets.token_hex(16)}{PROBE_INPUT_SUFFIX}"
+
+
 def _resolve_binary(name_or_path: str, purpose: str) -> str:
     resolved = shutil.which(name_or_path)
     if resolved is None:
+        # Name the binary, not the configured directory.
+        shown = Path(name_or_path).name
         raise MediaToolMissing(
-            f"{purpose} binary '{name_or_path}' was not found. Install FFmpeg "
+            f"{purpose} binary '{shown}' was not found. Install FFmpeg "
             "(https://ffmpeg.org/download.html) or configure the path to the binary."
         )
     return resolved
@@ -133,10 +184,32 @@ def _resolve_binary(name_or_path: str, purpose: str) -> str:
 def _checked_input(path: Path) -> Path:
     if not isinstance(path, Path):
         raise TypeError("media path must be a pathlib.Path the server generated")
+    if path.suffix != PROBE_INPUT_SUFFIX:
+        raise ProbeError(
+            f"probe input must be a server-named {PROBE_INPUT_SUFFIX} file (new_probe_input)"
+        )
     resolved = path.resolve()
     if not resolved.is_file():
         raise ProbeError("media file does not exist")
     return resolved
+
+
+# Windows (C:\..., \\server\...) and POSIX absolute paths, with an optional file: prefix.
+_PATH_RE = re.compile(r"(?:file:)?(?:[A-Za-z]:[\\/]|\\\\|/)[^\s'\"]*")
+_ADDRESS_RE = re.compile(r"\s@\s0x?[0-9A-Fa-f]+")
+
+
+def safe_tool_message(text: str, paths: Sequence[Path] = ()) -> str:
+    """The last line of a tool's stderr with every path replaced by a placeholder."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    message = lines[-1]
+    for path in paths:
+        for form in (f"file:{path}", str(path), path.as_posix()):
+            message = message.replace(form, "<file>")
+    message = _PATH_RE.sub("<file>", message)
+    return _ADDRESS_RE.sub("", message)[:300]
 
 
 def _run(arguments: Sequence[str], timeout: float, tool: str) -> subprocess.CompletedProcess[bytes]:
@@ -154,10 +227,9 @@ def _run(arguments: Sequence[str], timeout: float, tool: str) -> subprocess.Comp
         raise MediaToolMissing(f"{tool} could not be started: {exc.strerror or exc}") from exc
 
 
-def _stderr_line(result: subprocess.CompletedProcess[bytes]) -> str:
-    text = result.stderr.decode("utf-8", errors="replace").strip()
-    # The last line names the problem; earlier lines can echo the path.
-    return text.splitlines()[-1][:300] if text else f"exit code {result.returncode}"
+def _stderr_line(result: subprocess.CompletedProcess[bytes], paths: Sequence[Path]) -> str:
+    text = result.stderr.decode("utf-8", errors="replace")
+    return safe_tool_message(text, paths) or f"exit code {result.returncode}"
 
 
 class MediaProber:
@@ -175,6 +247,8 @@ class MediaProber:
                 "error",
                 "-protocol_whitelist",
                 "file",
+                "-format_whitelist",
+                ",".join(ALLOWED_DEMUXERS),
                 "-print_format",
                 "json",
                 "-show_format",
@@ -185,7 +259,10 @@ class MediaProber:
             "ffprobe",
         )
         if result.returncode != 0:
-            raise ProbeError(f"ffprobe could not read the file: {_stderr_line(result)}")
+            raise ProbeError(
+                f"ffprobe could not read the file as {_ACCEPTED_LABEL}: "
+                f"{_stderr_line(result, [source, path])}"
+            )
         try:
             payload = json.loads(result.stdout.decode("utf-8", errors="replace"))
         except json.JSONDecodeError as exc:
@@ -225,6 +302,8 @@ class MediaProber:
                 "error",
                 "-protocol_whitelist",
                 "file",
+                "-format_whitelist",
+                ",".join(ALLOWED_DEMUXERS),
                 *seek,
                 "-i",
                 f"file:{source_path}",
@@ -236,6 +315,9 @@ class MediaProber:
                 "3",
                 "-f",
                 "image2",
+                # One image, never a %d sequence pattern.
+                "-update",
+                "1",
                 "-y",
                 f"file:{target}",
             ],
@@ -243,8 +325,28 @@ class MediaProber:
             "ffmpeg",
         )
         if result.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
-            raise ProbeError(f"ffmpeg could not extract a poster frame: {_stderr_line(result)}")
+            target.unlink(missing_ok=True)
+            raise ProbeError(
+                "ffmpeg could not extract a poster frame: "
+                f"{_stderr_line(result, [source_path, source, target, destination])}"
+            )
         return target
+
+
+_CONTENT_TYPES = {
+    ("video", "mp4"): "video/mp4",
+    ("video", "mov"): "video/quicktime",
+    ("video", "webm"): "video/webm",
+    ("video", "matroska"): "video/x-matroska",
+    ("image", "jpeg"): "image/jpeg",
+    ("image", "png"): "image/png",
+    ("image", "webp"): "image/webp",
+}
+
+
+def content_type_for(probe: ProbeResult) -> str | None:
+    """The MIME type of the probed container, for preview URLs; ``None`` when unknown."""
+    return _CONTENT_TYPES.get((probe.kind, probe.container or ""))
 
 
 def default_poster_time_ms(probe: ProbeResult) -> int:
