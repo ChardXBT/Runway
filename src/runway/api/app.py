@@ -8,6 +8,8 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from runway import __version__
@@ -89,6 +91,23 @@ def _lifespan(
     return lifespan
 
 
+def _add_documentation_routes(application: FastAPI) -> None:
+    """The OpenAPI document and its viewers, behind the principal like every route."""
+    principal = [Depends(get_principal)]
+
+    @application.get("/openapi.json", include_in_schema=False, dependencies=principal)
+    def openapi_document() -> JSONResponse:
+        return JSONResponse(application.openapi())
+
+    @application.get("/docs", include_in_schema=False, dependencies=principal)
+    def swagger_ui() -> HTMLResponse:
+        return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{application.title} docs")
+
+    @application.get("/redoc", include_in_schema=False, dependencies=principal)
+    def redoc() -> HTMLResponse:
+        return get_redoc_html(openapi_url="/openapi.json", title=f"{application.title} docs")
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     active_settings = settings or get_settings()
     # No migrations and no database connection here: importing the module or
@@ -105,10 +124,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             f"for the configured {active_settings.channel_name} channel"
         ),
         lifespan=_lifespan(database, active_settings),
-        # The generated docs carry no principal; hosted mode does not serve them.
-        docs_url=None if hosted else "/docs",
-        redoc_url=None if hosted else "/redoc",
-        openapi_url=None if hosted else "/openapi.json",
+        # FastAPI's built-in docs routes cannot take dependencies; they are
+        # re-added below behind get_principal (local only).
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
     application.state.settings = active_settings
     application.add_exception_handler(Problem, problem_handler)
@@ -147,6 +167,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "scheduling_horizon_days": None,
             "platform_provider": active_settings.platform_provider,
         }
+
+    if not hosted:
+        _add_documentation_routes(application)
 
     @application.get("/api/settings", tags=["settings"], dependencies=[Depends(get_principal)])
     def settings_view() -> dict[str, object]:

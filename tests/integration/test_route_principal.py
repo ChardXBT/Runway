@@ -21,8 +21,6 @@ from runway.config import Settings
 # explicitly; anything else without the dependency fails this test.
 EXEMPT_HEALTH_ROUTES = frozenset({"/health"})
 EXEMPT_STATIC_MOUNTS = frozenset({"/media"})
-# FastAPI's generated documentation (local profile only; hosted disables it).
-EXEMPT_FRAMEWORK_DOCS = frozenset({"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"})
 
 
 def _calls(dependant: Dependant) -> Iterator[Callable[..., Any]]:
@@ -47,8 +45,7 @@ def _unguarded_routes(application: FastAPI) -> list[str]:
             if route.path not in EXEMPT_STATIC_MOUNTS:
                 missing.append(f"mount {route.path}")
         elif isinstance(route, Route):
-            if route.path not in EXEMPT_FRAMEWORK_DOCS:
-                missing.append(f"route {route.path}")
+            missing.append(f"route {route.path}")
         else:
             missing.append(f"unrecognized route {route!r}")
     return missing
@@ -68,6 +65,18 @@ def test_every_api_route_requires_a_principal(local_app: FastAPI) -> None:
     # Guard against a vacuous pass if routers stop being included.
     assert len(api_routes) > 90
     assert _unguarded_routes(local_app) == []
+    # The generated docs are ordinary guarded routes too.
+    paths = {context.path for context in api_routes}
+    assert {"/openapi.json", "/docs", "/redoc"} <= paths
+
+
+def test_local_docs_still_answer_without_a_login(local_app: FastAPI) -> None:
+    client = TestClient(local_app, base_url="http://127.0.0.1:8000")
+    document = client.get("/openapi.json")
+    assert document.status_code == 200
+    assert "/api/platforms" in document.json()["paths"]
+    assert client.get("/docs").status_code == 200
+    assert client.get("/redoc").status_code == 200
 
 
 def test_the_walk_detects_a_route_without_the_dependency(local_app: FastAPI) -> None:
