@@ -158,3 +158,49 @@ def test_schema_comparison_identifies_changed_column_attributes(
     changed = proposal_differences["changed_columns"]
     assert isinstance(changed, list)
     assert changed[0]["expected"]["name"] == "status"
+
+
+WORKSPACE_SCOPED_TABLES = (
+    "channels",
+    "connected_accounts",
+    "oauth_states",
+    "content_groups",
+    "platform_content",
+    "content_metric_snapshots",
+    "account_metric_snapshots",
+    "account_metric_days",
+    "comment_records",
+    "reply_drafts",
+    "platform_actions",
+    "sync_runs",
+    "sync_cursors",
+    "content_drafts",
+    "draft_targets",
+    "publish_jobs",
+)
+
+
+def test_committed_contract_gives_every_platform_table_a_workspace() -> None:
+    snapshot_path = Settings().project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
+    snapshot: object = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert isinstance(snapshot, dict)
+    tables = snapshot["contract"]["tables"]
+    assert {"workspaces", "users", "workspace_members", "api_keys", "audit_log"} <= set(tables)
+    for table in WORKSPACE_SCOPED_TABLES:
+        column = next(c for c in tables[table]["columns"] if c["name"] == "workspace_id")
+        assert column["nullable"] is False, table
+        assert column["default"] == "1", table
+        assert {
+            "columns": ["workspace_id"],
+            "referred_table": "workspaces",
+            "referred_columns": ["id"],
+            "ondelete": None,
+        } in tables[table]["foreign_keys"], table
+    unique = {
+        row["name"]: row["columns"] for row in tables["connected_accounts"]["unique_constraints"]
+    }
+    assert unique["uq_connected_account_external"] == [
+        "workspace_id",
+        "platform",
+        "external_account_id",
+    ]

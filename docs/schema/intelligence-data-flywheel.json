@@ -53,6 +53,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "FLOAT"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -65,6 +72,16 @@
               "id"
             ],
             "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -73,6 +90,13 @@
               "account_id"
             ],
             "name": "ix_account_metric_days_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_account_metric_days_workspace_id",
             "unique": false
           }
         ],
@@ -152,6 +176,13 @@
             "nullable": true,
             "primary_key": 0,
             "type": "INTEGER"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -164,6 +195,16 @@
               "id"
             ],
             "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -172,6 +213,13 @@
               "account_id"
             ],
             "name": "ix_account_metric_snapshots_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_account_metric_snapshots_workspace_id",
             "unique": false
           }
         ],
@@ -845,6 +893,123 @@
           }
         ]
       },
+      "api_keys": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "expires_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "key_hash",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
+          },
+          {
+            "default": null,
+            "name": "last_used_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "name",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "prefix",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "revoked_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "scopes_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_api_keys_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "key_hash"
+            ],
+            "name": "uq_api_key_hash"
+          },
+          {
+            "columns": [
+              "prefix"
+            ],
+            "name": "uq_api_key_prefix"
+          }
+        ]
+      },
       "audit_events": {
         "check_constraints": [],
         "columns": [
@@ -929,6 +1094,98 @@
               "id"
             ],
             "name": "ix_audit_events_type_created",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
+      "audit_log": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "action",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "actor_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "actor_kind",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "detail_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "target_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "target_type",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id",
+              "created_at",
+              "id"
+            ],
+            "name": "ix_audit_log_workspace_created",
             "unique": false
           }
         ],
@@ -3672,6 +3929,13 @@
             "type": "DATETIME"
           },
           {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
             "default": null,
             "name": "youtube_channel_id",
             "nullable": true,
@@ -3679,8 +3943,27 @@
             "type": "VARCHAR(200)"
           }
         ],
-        "foreign_keys": [],
-        "indexes": [],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_channels_workspace_id",
+            "unique": false
+          }
+        ],
         "unique_constraints": [
           {
             "columns": [
@@ -3839,6 +4122,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "TEXT"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -3861,6 +4151,16 @@
               "id"
             ],
             "referred_table": "platform_content"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -3912,6 +4212,13 @@
               "status"
             ],
             "name": "ix_comment_records_status",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_comment_records_workspace_id",
             "unique": false
           }
         ],
@@ -4250,9 +4557,27 @@
             "nullable": false,
             "primary_key": 0,
             "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
-        "foreign_keys": [],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
         "indexes": [
           {
             "columns": [
@@ -4267,6 +4592,13 @@
             ],
             "name": "ix_connected_accounts_status",
             "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_connected_accounts_workspace_id",
+            "unique": false
           }
         ],
         "unique_constraints": [
@@ -4278,6 +4610,7 @@
           },
           {
             "columns": [
+              "workspace_id",
               "platform",
               "external_account_id"
             ],
@@ -4357,9 +4690,27 @@
             "nullable": false,
             "primary_key": 0,
             "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
-        "foreign_keys": [],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
         "indexes": [
           {
             "columns": [
@@ -4373,6 +4724,13 @@
               "status"
             ],
             "name": "ix_content_drafts_status",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_content_drafts_workspace_id",
             "unique": false
           }
         ],
@@ -4408,10 +4766,36 @@
             "nullable": false,
             "primary_key": 0,
             "type": "VARCHAR(300)"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
-        "foreign_keys": [],
-        "indexes": [],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_content_groups_workspace_id",
+            "unique": false
+          }
+        ],
         "unique_constraints": []
       },
       "content_metric_snapshots": {
@@ -4444,6 +4828,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "TEXT"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -4456,6 +4847,16 @@
               "id"
             ],
             "referred_table": "platform_content"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -4472,6 +4873,13 @@
               "content_id"
             ],
             "name": "ix_content_metric_snapshots_content_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_content_metric_snapshots_workspace_id",
             "unique": false
           }
         ],
@@ -4556,6 +4964,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "VARCHAR(30)"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -4588,6 +5003,16 @@
               "id"
             ],
             "referred_table": "platform_content"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -4603,6 +5028,13 @@
               "draft_id"
             ],
             "name": "ix_draft_targets_draft_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_draft_targets_workspace_id",
             "unique": false
           }
         ],
@@ -6901,10 +7333,36 @@
             "nullable": false,
             "primary_key": 0,
             "type": "VARCHAR(128)"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
-        "foreign_keys": [],
-        "indexes": [],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_oauth_states_workspace_id",
+            "unique": false
+          }
+        ],
         "unique_constraints": [
           {
             "columns": [
@@ -7472,6 +7930,13 @@
             "nullable": true,
             "primary_key": 0,
             "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -7484,6 +7949,16 @@
               "id"
             ],
             "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -7506,6 +7981,13 @@
               "state"
             ],
             "name": "ix_platform_actions_state",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_platform_actions_workspace_id",
             "unique": false
           }
         ],
@@ -7667,6 +8149,13 @@
             "nullable": true,
             "primary_key": 0,
             "type": "INTEGER"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -7689,6 +8178,16 @@
               "id"
             ],
             "referred_table": "content_groups"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -7754,6 +8253,13 @@
               "view_count"
             ],
             "name": "ix_platform_content_view_count",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_platform_content_workspace_id",
             "unique": false
           }
         ],
@@ -9400,6 +9906,170 @@
           }
         ]
       },
+      "publish_jobs": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": "0",
+            "name": "attempts",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "idempotency_key",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          },
+          {
+            "default": null,
+            "name": "kind",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "locked_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "locked_until",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "3",
+            "name": "max_attempts",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": "'{}'",
+            "name": "payload_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "run_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "state",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "target_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "target_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "draft_targets"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "state",
+              "run_at"
+            ],
+            "name": "ix_publish_jobs_state_run_at",
+            "unique": false
+          },
+          {
+            "columns": [
+              "target_id"
+            ],
+            "name": "ix_publish_jobs_target_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_publish_jobs_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "idempotency_key"
+            ],
+            "name": "uq_publish_job_idempotency"
+          }
+        ]
+      },
       "raw_post_records": {
         "check_constraints": [],
         "columns": [
@@ -9528,6 +10198,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -9540,9 +10217,27 @@
               "id"
             ],
             "referred_table": "comment_records"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
-        "indexes": [],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_reply_drafts_workspace_id",
+            "unique": false
+          }
+        ],
         "unique_constraints": [
           {
             "columns": [
@@ -11046,6 +11741,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -11058,6 +11760,16 @@
               "id"
             ],
             "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -11066,6 +11778,13 @@
               "account_id"
             ],
             "name": "ix_sync_cursors_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_sync_cursors_workspace_id",
             "unique": false
           }
         ],
@@ -11151,6 +11870,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "VARCHAR(20)"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
           }
         ],
         "foreign_keys": [
@@ -11163,6 +11889,16 @@
               "id"
             ],
             "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
           }
         ],
         "indexes": [
@@ -11179,14 +11915,208 @@
             ],
             "name": "ix_sync_runs_status",
             "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_sync_runs_workspace_id",
+            "unique": false
           }
         ],
         "unique_constraints": []
+      },
+      "users": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "display_name",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "email",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(320)"
+          },
+          {
+            "default": null,
+            "name": "external_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [],
+        "unique_constraints": [
+          {
+            "columns": [
+              "external_id"
+            ],
+            "name": "uq_user_external_id"
+          }
+        ]
+      },
+      "workspace_members": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "role",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "user_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "user_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "users"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "user_id"
+            ],
+            "name": "ix_workspace_members_user_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "workspace_id",
+              "user_id"
+            ],
+            "name": "uq_workspace_member"
+          }
+        ]
+      },
+      "workspaces": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "deleted_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "name",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "profile_note",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "slug",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [],
+        "unique_constraints": [
+          {
+            "columns": [
+              "slug"
+            ],
+            "name": "uq_workspace_slug"
+          }
+        ]
       }
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be",
-  "migration": "0012_creator_platforms",
-  "table_count": 66
+  "fingerprint": "58dcc07a53db54486d94c53bd7c07eb419916ee7f0dfa7d60e2129bde6cd2e07",
+  "migration": "0015_publish_jobs",
+  "table_count": 72
 }

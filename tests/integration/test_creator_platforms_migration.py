@@ -76,7 +76,7 @@ def test_0012_upgrade_and_downgrade_preserve_existing_rows(tmp_path: Path) -> No
     _seed_0011_rows(engine)
     engine.dispose()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0012_creator_platforms")
     engine = create_engine(settings.database_url)
     upgraded = inspect(engine)
     assert set(upgraded.get_table_names()) >= NEW_TABLES
