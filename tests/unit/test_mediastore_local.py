@@ -199,6 +199,18 @@ def test_parts_in_any_order_complete_into_the_key_path(tmp_path: Path) -> None:
         handle.seek(PART + 5)
         assert handle.read(10) == data[PART + 5 : PART + 15]
     assert store.signed_get_url(key, 7200) is None
+    assert store.path_for(key) == final.resolve()
+
+
+def test_path_for_requires_a_completed_object(tmp_path: Path) -> None:
+    data = _payload(10)
+    key, digest = _key(data)
+    store = _store(tmp_path / "media")
+    store.begin_upload(key, 10, "video/mp4", sha256=digest)
+    with pytest.raises(ObjectNotFound):
+        store.path_for(key)
+    with pytest.raises(InvalidMediaKey):
+        store.path_for("w/../../x.mp4")
 
 
 def test_upload_resumes_after_restart_without_resending_parts(tmp_path: Path) -> None:

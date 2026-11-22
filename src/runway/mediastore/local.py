@@ -225,6 +225,13 @@ class LocalDiskStore:
         self._object_path(key)
         return None
 
+    def path_for(self, key: str) -> Path:
+        """Filesystem path of a completed object, for ffprobe. Validated like every key."""
+        path = self._object_path(key)
+        if not path.is_file():
+            raise ObjectNotFound("no object at this key")
+        return path
+
     def delete(self, key: str) -> None:
         path = self._object_path(key)
         path.unlink(missing_ok=True)
