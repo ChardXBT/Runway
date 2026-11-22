@@ -4,7 +4,9 @@ import json
 import logging
 import threading
 from collections.abc import Callable
+from contextlib import AbstractContextManager, ExitStack
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -27,6 +29,7 @@ from runway.domain.enums import CommentStatus
 from runway.domain.state_machine import COMMENT_STATUS_MACHINE, TARGET_DELIVERED_STATES
 from runway.jobs.queue import Job, JobQueue
 from runway.jobs.worker import PermanentJobError
+from runway.locks import LockTimeout, exclusive_file_lock
 from runway.platforms.base import (
     AuthorizationExpired,
     CapabilityUnsupported,
@@ -48,6 +51,10 @@ logger = logging.getLogger(__name__)
 
 STALE_RUN_AGE = timedelta(minutes=30)
 COMMENT_PAGE_LIMIT = 5
+
+
+def sync_lock_path(settings: Settings, account_id: int) -> Path:
+    return settings.resolved_data_dir / "runtime" / "sync-locks" / f"account-{account_id}.lock"
 
 
 class SyncRunInProgress(Exception):
@@ -85,8 +92,30 @@ class SyncService:
                 self._locks[account_id] = lock
             return lock
 
+    def _account_file_lock(self, account_id: int) -> AbstractContextManager[None]:
+        """The cross-process lock held for the whole sync of one account.
+
+        The API (manual sync) and the worker (scheduled sync) are separate
+        processes, so a threading lock alone cannot keep them apart. This is
+        the same OS file lock as token refresh, on a separate file so the
+        refresh inside a sync does not wait on its own sync.
+        """
+        return exclusive_file_lock(sync_lock_path(self.settings, account_id), timeout=0)
+
+    def _sync_held_elsewhere(self, account_id: int) -> bool:
+        try:
+            with self._account_file_lock(account_id):
+                return False
+        except LockTimeout:
+            return True
+
     def mark_stale_runs_failed(self) -> int:
-        """Fail runs left in `running` state for longer than STALE_RUN_AGE."""
+        """Fail runs left in `running` state for longer than STALE_RUN_AGE.
+
+        A run whose account lock is still held belongs to a live sync in
+        another process (for example a long backfill in the worker) and is
+        left alone.
+        """
         cutoff = datetime.now(UTC) - STALE_RUN_AGE
         marked = 0
         with self.database.session() as session:
@@ -95,7 +124,7 @@ class SyncService:
                 started = run.started_at
                 if started.tzinfo is None:
                     started = started.replace(tzinfo=UTC)
-                if started < cutoff:
+                if started < cutoff and not self._sync_held_elsewhere(run.account_id):
                     run.status = "failed"
                     run.completed_at = utcnow()
                     run.error_summary = "interrupted"
@@ -121,11 +150,20 @@ class SyncService:
 
     # -------------------------------------------------------------------- run
 
-    def _begin_run(self, account_id: int, trigger: str) -> tuple[threading.Lock, int]:
+    def _begin_run(self, account_id: int, trigger: str) -> tuple[ExitStack, int]:
+        """Take both account locks and record the run; the caller closes the stack."""
+        hold = ExitStack()
         lock = self._account_lock(account_id)
         if not lock.acquire(blocking=False):
             raise SyncRunInProgress(f"account {account_id} already has a sync in progress")
+        hold.callback(lock.release)
         try:
+            try:
+                hold.enter_context(self._account_file_lock(account_id))
+            except LockTimeout:
+                raise SyncRunInProgress(
+                    f"account {account_id} is being synced by another Runway process"
+                ) from None
             if self._has_recent_running_run(account_id):
                 raise SyncRunInProgress(f"account {account_id} already has a running sync")
             with self.database.session() as session:
@@ -141,21 +179,19 @@ class SyncService:
                 run = SyncRun(account_id=account_id, trigger=trigger, status="running")
                 session.add(run)
                 session.flush()
-                return lock, run.id
+                return hold, run.id
         except BaseException:
-            lock.release()
+            hold.close()
             raise
 
     def run(self, account_id: int, trigger: str = "manual") -> SyncRun:
-        lock, run_id = self._begin_run(account_id, trigger)
-        try:
+        hold, run_id = self._begin_run(account_id, trigger)
+        with hold:
             self._execute(run_id, account_id)
-        finally:
-            lock.release()
         return self.get_run(run_id)
 
     def start_background(self, account_id: int, trigger: str = "manual") -> SyncRun:
-        lock, run_id = self._begin_run(account_id, trigger)
+        hold, run_id = self._begin_run(account_id, trigger)
 
         def worker() -> None:
             try:
@@ -163,7 +199,7 @@ class SyncService:
             except Exception:  # noqa: BLE001
                 logger.exception("background sync failed for account %s", account_id)
             finally:
-                lock.release()
+                hold.close()
 
         try:
             threading.Thread(
@@ -174,7 +210,7 @@ class SyncService:
         except Exception:
             # The worker never started, so nothing else will release the lock
             # or finish the run; unwind both before surfacing the failure.
-            lock.release()
+            hold.close()
             try:
                 self._finish_run(
                     run_id,
