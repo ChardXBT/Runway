@@ -5049,6 +5049,90 @@
           }
         ]
       },
+      "events": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "payload_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "subject_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "subject_type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "created_at"
+            ],
+            "name": "ix_events_created_at",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id",
+              "id"
+            ],
+            "name": "ix_events_workspace_id_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
       "feedback_signals": {
         "check_constraints": [],
         "columns": [
@@ -5639,6 +5723,98 @@
           }
         ],
         "unique_constraints": []
+      },
+      "idempotency_keys": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "key",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "principal_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "request_hash",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(64)"
+          },
+          {
+            "default": null,
+            "name": "response_body",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "response_status",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "created_at"
+            ],
+            "name": "ix_idempotency_keys_created_at",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "workspace_id",
+              "principal_id",
+              "key"
+            ],
+            "name": "uq_idempotency_key"
+          }
+        ]
       },
       "image_generation_runs": {
         "check_constraints": [],
@@ -12116,7 +12292,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "58dcc07a53db54486d94c53bd7c07eb419916ee7f0dfa7d60e2129bde6cd2e07",
-  "migration": "0015_publish_jobs",
-  "table_count": 72
+  "fingerprint": "bf37abbdd41fde72921966781e6c5b07fb0591e97a5c50dcdac48920b62b54e3",
+  "migration": "0016_shared_contracts",
+  "table_count": 74
 }

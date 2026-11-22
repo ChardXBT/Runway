@@ -23,7 +23,7 @@ from runway.db.schema_contract import schema_snapshot
 
 # Fingerprint of docs/schema/intelligence-data-flywheel.json at 0012_creator_platforms.
 SCHEMA_0012_FINGERPRINT = "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be"
-HEAD = "0015_publish_jobs"
+HEAD = "0016_shared_contracts"
 SCOPED_TABLES = (
     "channels",
     "connected_accounts",
@@ -41,7 +41,16 @@ SCOPED_TABLES = (
     "content_drafts",
     "draft_targets",
 )
-NEW_TABLES = {"workspaces", "users", "workspace_members", "api_keys", "audit_log", "publish_jobs"}
+NEW_TABLES = {
+    "workspaces",
+    "users",
+    "workspace_members",
+    "api_keys",
+    "audit_log",
+    "publish_jobs",
+    "idempotency_keys",
+    "events",
+}
 NOW = "2026-11-01 10:00:00.000000"
 
 FIXTURE_ROWS = [
@@ -167,6 +176,7 @@ def test_upgrade_from_0012_with_rows_keeps_every_row_and_backfills_workspace_1(
     assert {table: after[table] for table in before} == before
     assert after["workspaces"] == 1
     assert after["publish_jobs"] == 0
+    assert after["events"] == after["idempotency_keys"] == 0
     engine = _engine(at_0012)
     with engine.connect() as connection:
         workspace = connection.execute(text("SELECT id, slug, name FROM workspaces")).one()
@@ -217,9 +227,14 @@ def test_downgrade_after_upgrade_keeps_rows_and_restores_0012(at_0012: Settings)
 def test_each_revision_downgrades_one_step_at_a_time(at_0012: Settings) -> None:
     before = _row_counts(at_0012)
     config = _config(at_0012)
-    for revision in ("0013_workspaces", "0014_workspace_columns", HEAD):
+    for revision in ("0013_workspaces", "0014_workspace_columns", "0015_publish_jobs", HEAD):
         command.upgrade(config, revision)
-    for revision in ("0014_workspace_columns", "0013_workspaces", "0012_creator_platforms"):
+    for revision in (
+        "0015_publish_jobs",
+        "0014_workspace_columns",
+        "0013_workspaces",
+        "0012_creator_platforms",
+    ):
         command.downgrade(config, revision)
         counts = _row_counts(at_0012)
         assert {table: counts[table] for table in before} == before, revision
@@ -265,3 +280,43 @@ def test_fresh_database_upgrades_and_downgrades_cleanly(tmp_path: Path) -> None:
     # The model-built schema (0001 create_all) and the migrated one are identical.
     assert rebuilt["fingerprint"] == fresh["fingerprint"]
     assert _row_counts(settings)["workspaces"] == 1
+
+
+def _events_ddl(settings: Settings) -> str:
+    with sqlite3.connect(settings.database_path) as connection:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'"
+        ).fetchone()
+    connection.close()
+    return str(row[0]) if row else ""
+
+
+def test_0016_adds_and_removes_only_the_shared_contract_tables(at_0012: Settings) -> None:
+    config = _config(at_0012)
+    command.upgrade(config, "0015_publish_jobs")
+    before = _row_counts(at_0012)
+    snapshot_0015 = _snapshot(at_0012)
+
+    command.upgrade(config, "0016_shared_contracts")
+    after = _row_counts(at_0012)
+    assert {table: after[table] for table in before} == before
+    assert after["events"] == after["idempotency_keys"] == 0
+    # Event ids never repeat (Last-Event-ID resume depends on it).
+    assert "AUTOINCREMENT" in _events_ddl(at_0012).upper()
+    inspector = inspect(_engine(at_0012))
+    unique = {
+        row["name"]: row["column_names"]
+        for row in inspector.get_unique_constraints("idempotency_keys")
+    }
+    assert unique["uq_idempotency_key"] == ["workspace_id", "principal_id", "key"]
+
+    command.downgrade(config, "0015_publish_jobs")
+    assert _row_counts(at_0012) == before
+    assert _snapshot(at_0012)["fingerprint"] == snapshot_0015["fingerprint"]
+
+
+def test_a_fresh_database_also_gets_autoincrement_event_ids(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "fresh-events")
+    settings.ensure_directories()
+    command.upgrade(_config(settings), "head")
+    assert "AUTOINCREMENT" in _events_ddl(settings).upper()

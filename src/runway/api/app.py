@@ -19,8 +19,9 @@ from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
+from runway.api.v1.errors import install_problem_handlers
+from runway.api.v1.events_routes import build_events_router
 from runway.auth.principal import get_principal
-from runway.auth.problems import Problem, problem_handler
 from runway.config import Settings, get_settings
 from runway.db.base import Database
 from runway.db.bootstrap import DatabaseNotCurrent, require_database_at_head
@@ -131,7 +132,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=None,
     )
     application.state.settings = active_settings
-    application.add_exception_handler(Problem, problem_handler)
+    install_problem_handlers(application)
     application.state.database = database
     web_origins = loopback_origins(active_settings.web_port)
     application.add_middleware(
@@ -153,6 +154,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(build_intelligence_router(database, active_settings))
     application.include_router(build_proposal_router(database, active_settings))
     application.include_router(build_platform_router(database, active_settings))
+    # Versioned surface (spec 06): every router comes from build_v1_router.
+    application.include_router(build_events_router(database))
 
     @application.get("/health", tags=["system"])
     def health() -> dict[str, object]:

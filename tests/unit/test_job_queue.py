@@ -24,6 +24,7 @@ from runway.jobs.queue import (
     claim_statement,
     retry_delay,
 )
+from runway.jobs.retention import PURGE_JOB, RetentionPurgeScheduler
 from runway.jobs.runtime import build_worker
 from runway.jobs.worker import PermanentJobError, Worker
 from runway.platforms.registry import ProviderRegistry
@@ -380,5 +381,52 @@ def test_the_worker_runs_scheduled_sync_with_the_existing_sync_code(tmp_path, cl
 
 def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database: Database) -> None:
     worker = build_worker(settings, database)
-    assert worker.producers == []
-    assert set(worker.handlers) == {SYNC_ACCOUNT_JOB}
+    assert [type(producer) for producer in worker.producers] == [RetentionPurgeScheduler]
+    assert set(worker.handlers) == {SYNC_ACCOUNT_JOB, PURGE_JOB}
+
+
+def test_hourly_purge_removes_only_expired_keys_and_events(
+    queue: JobQueue, database: Database, clock: Clock
+) -> None:
+    from sqlalchemy import update
+
+    from runway.db.models import EventRecord, IdempotencyKey, utcnow
+    from runway.events.log import record_event
+    from runway.events.types import SYNC_FINISHED
+    from runway.jobs.retention import run_purge_job
+
+    now = utcnow()
+    with database.session() as session:
+        old_event = record_event(session, 1, SYNC_FINISHED, "account", 1).id
+        fresh_event = record_event(session, 1, SYNC_FINISHED, "account", 2).id
+        session.execute(
+            update(EventRecord)
+            .where(EventRecord.id == old_event)
+            .values(created_at=now - timedelta(days=8))
+        )
+        for key, age in (("old", timedelta(hours=25)), ("fresh", timedelta(hours=1))):
+            session.add(
+                IdempotencyKey(
+                    workspace_id=1,
+                    principal_id="user:local-owner",
+                    key=key,
+                    request_hash="0" * 64,
+                    response_status=200,
+                    response_body="{}",
+                    created_at=now - age,
+                )
+            )
+
+    scheduler = RetentionPurgeScheduler(queue)
+    scheduler.produce(clock.now)
+    scheduler.produce(clock.now + timedelta(minutes=30))
+    assert scheduler.next_due(clock.now) == START + timedelta(hours=1)
+    job = queue.claim("w1", {PURGE_JOB})
+    assert job is not None
+    assert queue.claim("w1", {PURGE_JOB}) is None  # one job per hour slot
+
+    run_purge_job(database, job)
+
+    with database.session() as session:
+        assert list(session.scalars(select(EventRecord.id))) == [fresh_event]
+        assert list(session.scalars(select(IdempotencyKey.key))) == ["fresh"]

@@ -8,6 +8,7 @@ from pathlib import Path
 from runway.config import Settings
 from runway.db.base import Database
 from runway.jobs.queue import JobQueue
+from runway.jobs.retention import PURGE_JOB, RetentionPurgeScheduler, run_purge_job
 from runway.jobs.worker import Handler, JobProducer, Worker
 from runway.platforms.sync import (
     SYNC_ACCOUNT_JOB,
@@ -27,8 +28,9 @@ def build_worker(settings: Settings, database: Database) -> Worker:
     sync_service = SyncService(database, settings)
     handlers: dict[str, Handler] = {
         SYNC_ACCOUNT_JOB: partial(run_sync_account_job, sync_service),
+        PURGE_JOB: partial(run_purge_job, database),
     }
-    producers: list[JobProducer] = []
+    producers: list[JobProducer] = [RetentionPurgeScheduler(queue)]
     if settings.platform_sync_interval_minutes > 0:
         producers.append(
             PlatformSyncScheduler(database, queue, settings.platform_sync_interval_minutes)

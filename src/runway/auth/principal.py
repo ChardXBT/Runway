@@ -11,7 +11,7 @@ from typing import Literal
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
-from runway.auth.problems import Problem
+from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
 
 PrincipalKind = Literal["user", "agent", "system"]
@@ -109,12 +109,7 @@ def require(principal: Principal, scope: str) -> None:
     if scope not in ALL_SCOPES:
         raise ValueError(f"unknown scope {scope!r}")
     if scope not in principal.scopes:
-        raise Problem(
-            403,
-            "scope_missing",
-            "Scope missing",
-            f"this action needs the {scope} scope",
-        )
+        raise Problem.of(ProblemCode.SCOPE_MISSING, f"this action needs the {scope} scope")
 
 
 def _presented_api_key(request: Request) -> bool:
@@ -125,19 +120,15 @@ def _presented_api_key(request: Request) -> bool:
 
 def resolve_principal(settings: Settings, request: Request) -> Principal:
     if _presented_api_key(request):
-        raise Problem(
-            401,
-            "api_key_unsupported",
-            "API keys are not available yet",
+        raise Problem.of(
+            ProblemCode.API_KEY_UNSUPPORTED,
             "this Runway version cannot verify API keys; send the request without one",
         )
     if settings.profile == "local":
         return local_owner()
     # Hosted: the identity provider seam is a later job, so nobody is authenticated.
-    raise Problem(
-        401,
-        "authentication_required",
-        "Authentication required",
+    raise Problem.of(
+        ProblemCode.AUTHENTICATION_REQUIRED,
         "sign in to use this Runway workspace",
         headers={"WWW-Authenticate": "Bearer"},
     )

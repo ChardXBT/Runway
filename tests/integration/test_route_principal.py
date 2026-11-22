@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from starlette.routing import Mount, Route
 
 from runway.api.app import create_app
+from runway.api.v1.router import V1Route
 from runway.auth.principal import get_principal
 from runway.config import Settings
 
@@ -68,6 +69,10 @@ def test_every_api_route_requires_a_principal(local_app: FastAPI) -> None:
     # The generated docs are ordinary guarded routes too.
     paths = {context.path for context in api_routes}
     assert {"/openapi.json", "/docs", "/redoc"} <= paths
+    # Every /api/v1 route comes from build_v1_router.
+    v1_routes = [context for context in api_routes if (context.path or "").startswith("/api/v1")]
+    assert "/api/v1/events/stream" in {context.path for context in v1_routes}
+    assert all(isinstance(context.original_route, V1Route) for context in v1_routes)
 
 
 def test_local_docs_still_answer_without_a_login(local_app: FastAPI) -> None:

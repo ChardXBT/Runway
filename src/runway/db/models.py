@@ -1847,3 +1847,57 @@ class PublishJob(Base, TimestampMixin):
     last_error: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(String(300))
     payload_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+
+
+# -----------------------------------------------------------------------------
+# Shared v1 contracts (migration 0016)
+
+
+class IdempotencyKey(Base):
+    """A remembered v1 mutation (spec 06 section 5); kept 24 hours.
+
+    `response_status` is null while the first request is still running, so a
+    concurrent retry with the same key is refused instead of run twice.
+    """
+
+    __tablename__ = "idempotency_keys"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "principal_id", "key", name="uq_idempotency_key"),
+        Index("ix_idempotency_keys_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_idempotency_keys_workspace")
+    )
+    principal_id: Mapped[str] = mapped_column(String(200))
+    key: Mapped[str] = mapped_column(String(200))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    response_body: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EventRecord(Base):
+    """One change Runway learned about, for the browser stream and agents (spec 04 section 4).
+
+    AUTOINCREMENT keeps ids strictly increasing even after old rows are purged,
+    so a `Last-Event-ID` can never point at a newer, different event.
+    """
+
+    __tablename__ = "events"
+    __table_args__ = (
+        Index("ix_events_workspace_id_id", "workspace_id", "id"),
+        Index("ix_events_created_at", "created_at"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_events_workspace")
+    )
+    type: Mapped[str] = mapped_column(String(80))
+    subject_type: Mapped[str] = mapped_column(String(80))
+    subject_id: Mapped[str | None] = mapped_column(String(200))
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
