@@ -16,7 +16,7 @@ from pathlib import Path
 
 import typer
 from PIL import Image, ImageDraw
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 
 from runway.analysis.runtime import AgentRuntimeError, CodexAgentRuntime
@@ -28,6 +28,7 @@ from runway.cli.db_commands import db_app
 from runway.cli.worker_commands import worker_command
 from runway.config import get_settings
 from runway.db import initialize_database
+from runway.db.bootstrap import read_only_sqlite_engine
 from runway.discovery.service import DiscoveryService
 from runway.evaluation.checksums import canonical_text_sha256
 from runway.evaluation.datasets import DatasetRepository
@@ -165,10 +166,7 @@ def _read_only_schema_engine(database_path: Path) -> Engine:
     path = database_path.resolve()
     if not path.is_file():
         raise typer.BadParameter(f"database does not exist: {path}")
-    return create_engine(
-        f"sqlite+pysqlite:///file:{path.as_posix()}?mode=ro&uri=true",
-        future=True,
-    )
+    return read_only_sqlite_engine(path)
 
 
 @database_app.command("schema-status")

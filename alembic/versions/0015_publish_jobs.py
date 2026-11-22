@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0015_publish_jobs"
 down_revision = "0014_workspace_columns"
@@ -16,13 +16,46 @@ branch_labels = None
 depends_on = None
 
 
-def _table_names() -> set[str]:
+def _table_names() -> set[str] | None:
+    """Existing tables, or None when generating SQL offline (nothing can be read)."""
+    if context.is_offline_mode():
+        return None
     return set(sa.inspect(op.get_bind()).get_table_names())
 
 
+def _missing(table: str, existing: set[str] | None) -> bool:
+    return existing is None or table not in existing
+
+
+def _ensure_indexes(
+    table: str, existing: set[str] | None, indexes: tuple[tuple[str, list[str]], ...]
+) -> None:
+    # Checked one by one, so a table created by an earlier partial run still
+    # gets every index.
+    present: set[str] = set()
+    if existing is not None and table in existing:
+        present = {str(index["name"]) for index in sa.inspect(op.get_bind()).get_indexes(table)}
+    for name, columns in indexes:
+        if name not in present:
+            op.create_index(name, table, columns)
+
+
 def upgrade() -> None:
-    if "publish_jobs" in _table_names():
-        return
+    existing = _table_names()
+    if _missing("publish_jobs", existing):
+        _create_publish_jobs()
+    _ensure_indexes(
+        "publish_jobs",
+        existing,
+        (
+            ("ix_publish_jobs_state_run_at", ["state", "run_at"]),
+            ("ix_publish_jobs_workspace_id", ["workspace_id"]),
+            ("ix_publish_jobs_target_id", ["target_id"]),
+        ),
+    )
+
+
+def _create_publish_jobs() -> None:
     op.create_table(
         "publish_jobs",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -48,11 +81,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("idempotency_key", name="uq_publish_job_idempotency"),
     )
-    op.create_index("ix_publish_jobs_state_run_at", "publish_jobs", ["state", "run_at"])
-    op.create_index("ix_publish_jobs_workspace_id", "publish_jobs", ["workspace_id"])
-    op.create_index("ix_publish_jobs_target_id", "publish_jobs", ["target_id"])
 
 
 def downgrade() -> None:
-    if "publish_jobs" in _table_names():
+    if not _missing("publish_jobs", _table_names()):
         op.drop_table("publish_jobs")

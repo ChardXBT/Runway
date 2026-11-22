@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, select
+from sqlalchemy import Engine, create_engine, select
 
 from alembic import command
 from runway.config import Settings
@@ -45,6 +47,30 @@ def alembic_config(settings: Settings) -> Config:
     return config
 
 
+def read_only_sqlite_engine(path: Path) -> Engine:
+    """A read-only engine that never creates or alters the file.
+
+    `Path.as_uri()` percent-encodes `#`, `?` and `%`, and the URI goes straight
+    to sqlite3, so SQLAlchemy's URL parser never sees the path; a data
+    directory such as `C:/Run#way` would otherwise be cut at the `#` and read
+    as "not migrated".
+    """
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+
+    def connect() -> sqlite3.Connection:
+        return sqlite3.connect(uri, uri=True, check_same_thread=False)
+
+    return create_engine("sqlite+pysqlite://", creator=connect, future=True)
+
+
+def migration_head(settings: Settings) -> str:
+    """The newest revision this checkout's migrations define."""
+    head = ScriptDirectory.from_config(alembic_config(settings)).get_current_head()
+    if head is None:
+        raise RuntimeError("the migration script directory has no head revision")
+    return head
+
+
 def run_migrations(settings: Settings) -> None:
     command.upgrade(alembic_config(settings), "head")
 
@@ -58,10 +84,7 @@ def migration_status(settings: Settings) -> MigrationStatus:
     current: str | None = None
     path = settings.database_path
     if path.is_file():
-        engine = create_engine(
-            f"sqlite+pysqlite:///file:{path.resolve().as_posix()}?mode=ro&uri=true",
-            future=True,
-        )
+        engine = read_only_sqlite_engine(path)
         try:
             with engine.connect() as connection:
                 current = MigrationContext.configure(connection).get_current_revision()

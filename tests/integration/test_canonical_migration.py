@@ -9,6 +9,7 @@ from alembic import command
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db import initialize_database
+from runway.db.bootstrap import migration_head
 
 
 def _alembic_config(settings: Settings) -> Config:
@@ -86,8 +87,7 @@ def test_existing_schema_upgrade_and_rollback_preserve_catalogue(
     assert "caption_slate_id" in {column["name"] for column in upgraded.get_columns("proposals")}
     with upgraded_engine.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM posts")).scalar_one() == post_count
-        assert (
-            connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == "0016_shared_contracts"
-        )
+        assert connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == migration_head(settings)
     upgraded_engine.dispose()

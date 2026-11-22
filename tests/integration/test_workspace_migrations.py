@@ -8,22 +8,25 @@ new columns. The downgraded schema must equal the committed 0012 contract.
 
 from __future__ import annotations
 
+import io
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 from runway.config import Settings
-from runway.db.bootstrap import alembic_config
-from runway.db.schema_contract import schema_snapshot
+from runway.db.bootstrap import alembic_config, migration_head
+from runway.db.schema_contract import load_schema_snapshot, schema_snapshot
 
 # Fingerprint of docs/schema/intelligence-data-flywheel.json at 0012_creator_platforms.
 SCHEMA_0012_FINGERPRINT = "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be"
-HEAD = "0016_shared_contracts"
+HEAD = migration_head(Settings())
 SCOPED_TABLES = (
     "channels",
     "connected_accounts",
@@ -320,3 +323,187 @@ def test_a_fresh_database_also_gets_autoincrement_event_ids(tmp_path: Path) -> N
     settings.ensure_directories()
     command.upgrade(_config(settings), "head")
     assert "AUTOINCREMENT" in _events_ddl(settings).upper()
+
+
+# ------------------------------------------------------------- crash safety
+
+
+class InjectedCrash(RuntimeError):
+    pass
+
+
+@contextmanager
+def _crash_on(statement_prefix: str) -> Iterator[list[str]]:
+    """Fail the first SQL statement starting with `statement_prefix`, in any engine."""
+    seen: list[str] = []
+
+    def hook(_conn, _cursor, statement, *_args) -> None:  # type: ignore[no-untyped-def]
+        if statement.lstrip().upper().startswith(statement_prefix.upper()) and not seen:
+            seen.append(statement)
+            raise InjectedCrash(f"simulated crash at: {statement_prefix}")
+
+    event.listen(Engine, "before_cursor_execute", hook)
+    try:
+        yield seen
+    finally:
+        event.remove(Engine, "before_cursor_execute", hook)
+
+
+def _tables(settings: Settings) -> set[str]:
+    engine = _engine(settings)
+    try:
+        return set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def _version(settings: Settings) -> str | None:
+    engine = _engine(settings)
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(text("SELECT version_num FROM alembic_version")).first()
+        return None if row is None else str(row[0])
+    finally:
+        engine.dispose()
+
+
+def _committed_head_fingerprint() -> str:
+    snapshot = load_schema_snapshot(
+        Settings().project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
+    )
+    return str(snapshot["fingerprint"])
+
+
+def test_a_crash_mid_0014_rolls_the_revision_back_and_a_rerun_succeeds(
+    at_0012: Settings,
+) -> None:
+    before = _row_counts(at_0012)
+    config = _config(at_0012)
+
+    # Fails after channels and connected_accounts were already rebuilt.
+    with (
+        _crash_on("CREATE TABLE _alembic_tmp_platform_content") as hit,
+        pytest.raises(InjectedCrash),
+    ):
+        command.upgrade(config, "head")
+    assert hit, "the crash point was never reached"
+
+    # 0013 committed on its own; every statement of 0014 was rolled back.
+    assert _version(at_0012) == "0013_workspaces"
+    assert not {name for name in _tables(at_0012) if name.startswith("_alembic_tmp_")}
+    engine = _engine(at_0012)
+    for table in ("channels", "connected_accounts", "platform_content"):
+        assert "workspace_id" not in {c["name"] for c in inspect(engine).get_columns(table)}
+    engine.dispose()
+    counts = _row_counts(at_0012)
+    assert {table: counts[table] for table in before} == before
+
+    command.upgrade(config, "head")
+
+    assert _version(at_0012) == HEAD
+    after = _row_counts(at_0012)
+    assert {table: after[table] for table in before} == before
+    assert _snapshot(at_0012)["fingerprint"] == _committed_head_fingerprint()
+    assert _foreign_key_violations(at_0012) == []
+
+
+def test_a_crash_mid_0013_leaves_no_partial_tables_and_a_rerun_succeeds(
+    at_0012: Settings,
+) -> None:
+    before = _row_counts(at_0012)
+    config = _config(at_0012)
+
+    with _crash_on("CREATE TABLE api_keys") as hit, pytest.raises(InjectedCrash):
+        command.upgrade(config, "head")
+    assert hit
+
+    assert _version(at_0012) == "0012_creator_platforms"
+    assert {"workspaces", "users", "workspace_members"}.isdisjoint(_tables(at_0012))
+
+    command.upgrade(config, "head")
+
+    assert _version(at_0012) == HEAD
+    after = _row_counts(at_0012)
+    assert {table: after[table] for table in before} == before
+    assert after["workspaces"] == 1
+    assert _snapshot(at_0012)["fingerprint"] == _committed_head_fingerprint()
+
+
+def test_a_leftover_batch_table_from_an_old_crash_is_cleared(at_0012: Settings) -> None:
+    """The state a pre-fix, non-transactional crash left on disk: 0013 plus a temp table."""
+    before = _row_counts(at_0012)
+    config = _config(at_0012)
+    command.upgrade(config, "0013_workspaces")
+    engine = _engine(at_0012)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE _alembic_tmp_channels (id INTEGER PRIMARY KEY)"))
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    assert "_alembic_tmp_channels" not in _tables(at_0012)
+    after = _row_counts(at_0012)
+    assert {table: after[table] for table in before} == before
+    assert _snapshot(at_0012)["fingerprint"] == _committed_head_fingerprint()
+
+
+def test_0013_completes_a_partial_run_that_created_only_workspaces(at_0012: Settings) -> None:
+    config = _config(at_0012)
+    command.upgrade(config, "0013_workspaces")
+    engine = _engine(at_0012)
+    with engine.begin() as connection:
+        # What a pre-fix crash right after CREATE TABLE workspaces looked like.
+        for table in ("audit_log", "api_keys", "workspace_members", "users"):
+            connection.execute(text(f"DROP TABLE {table}"))
+        connection.execute(
+            text("UPDATE alembic_version SET version_num = '0012_creator_platforms'")
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    assert {"users", "workspace_members", "api_keys", "audit_log"} <= _tables(at_0012)
+    assert _row_counts(at_0012)["workspaces"] == 1
+    assert _snapshot(at_0012)["fingerprint"] == _committed_head_fingerprint()
+
+
+# --------------------------------------------------------------- Postgres SQL
+
+
+def _offline_postgres_sql(tmp_path: Path, revisions: str) -> str:
+    settings = Settings(data_dir=tmp_path / "pg")
+    config = _config(settings)
+    config.set_main_option("sqlalchemy.url", "postgresql://runway@localhost/runway")
+    buffer = io.StringIO()
+    config.output_buffer = buffer
+    start = revisions.partition(":")[0]
+    if start == HEAD:
+        command.downgrade(config, revisions, sql=True)
+    else:
+        command.upgrade(config, revisions, sql=True)
+    return buffer.getvalue()
+
+
+def test_postgres_upgrade_alters_in_place_and_advances_the_workspace_sequence(
+    tmp_path: Path,
+) -> None:
+    sql = _offline_postgres_sql(tmp_path, f"0012_creator_platforms:{HEAD}")
+
+    # recreate="auto": plain ALTERs, never copy/drop/rename of referenced tables.
+    assert "_alembic_tmp" not in sql
+    assert "DROP TABLE channels" not in sql
+    assert "ALTER TABLE channels ADD COLUMN workspace_id INTEGER DEFAULT 1 NOT NULL" in sql
+    assert "ALTER TABLE connected_accounts DROP CONSTRAINT uq_connected_account_external" in sql
+    assert "SELECT setval(pg_get_serial_sequence('workspaces', 'id')" in sql
+    for table in ("users", "workspace_members", "api_keys", "audit_log", "publish_jobs"):
+        assert f"CREATE TABLE {table} (" in sql
+    assert "CREATE TABLE idempotency_keys (" in sql and "CREATE TABLE events (" in sql
+    # Every revision is its own transaction.
+    assert sql.count("BEGIN;") == sql.count("COMMIT;") >= 4
+
+
+def test_postgres_downgrade_alters_in_place(tmp_path: Path) -> None:
+    sql = _offline_postgres_sql(tmp_path, f"{HEAD}:0012_creator_platforms")
+    assert "_alembic_tmp" not in sql
+    assert "ALTER TABLE channels DROP COLUMN workspace_id" in sql
+    assert "DROP TABLE workspaces" in sql

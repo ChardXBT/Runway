@@ -2,11 +2,16 @@
 
 Revision ID: 0013_workspaces
 Revises: 0012_creator_platforms
+
+Crash safety: env.py runs every revision in one transaction (SQLite DDL
+included), and each table and index here is checked individually, so a
+database left half-way by an earlier, non-transactional run still upgrades.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
@@ -37,20 +42,20 @@ def _slug(name: str) -> str:
     return slug[:80] or "workspace-1"
 
 
-def _table_names() -> set[str]:
+def _table_names() -> set[str] | None:
+    """Existing tables, or None when generating SQL offline (nothing can be read)."""
+    if context.is_offline_mode():
+        return None
     return set(sa.inspect(op.get_bind()).get_table_names())
 
 
-def upgrade() -> None:
-    # 0001 builds a fresh database from the current models, so these tables
-    # may already exist; only the missing ones are created (as 0004-0012 do).
-    existing = _table_names()
-    if "workspaces" not in existing:
-        _create_workspace_tables()
-    _ensure_workspace_one()
+def _index_names(table: str) -> set[str]:
+    if context.is_offline_mode():
+        return set()
+    return {str(index["name"]) for index in sa.inspect(op.get_bind()).get_indexes(table)}
 
 
-def _create_workspace_tables() -> None:
+def _create_workspaces() -> None:
     op.create_table(
         "workspaces",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -62,6 +67,9 @@ def _create_workspace_tables() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("slug", name="uq_workspace_slug"),
     )
+
+
+def _create_users() -> None:
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -72,6 +80,9 @@ def _create_workspace_tables() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("external_id", name="uq_user_external_id"),
     )
+
+
+def _create_workspace_members() -> None:
     op.create_table(
         "workspace_members",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -86,7 +97,9 @@ def _create_workspace_tables() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),
     )
-    op.create_index("ix_workspace_members_user_id", "workspace_members", ["user_id"])
+
+
+def _create_api_keys() -> None:
     op.create_table(
         "api_keys",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -105,7 +118,9 @@ def _create_workspace_tables() -> None:
         sa.UniqueConstraint("prefix", name="uq_api_key_prefix"),
         sa.UniqueConstraint("key_hash", name="uq_api_key_hash"),
     )
-    op.create_index("ix_api_keys_workspace_id", "api_keys", ["workspace_id"])
+
+
+def _create_audit_log() -> None:
     op.create_table(
         "audit_log",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -120,15 +135,45 @@ def _create_workspace_tables() -> None:
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_audit_log_workspace"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_audit_log_workspace_created", "audit_log", ["workspace_id", "created_at", "id"]
-    )
+
+
+# Parents first. Each entry: table, creator, indexes (name, columns).
+_TABLES: tuple[tuple[str, Callable[[], None], tuple[tuple[str, list[str]], ...]], ...] = (
+    ("workspaces", _create_workspaces, ()),
+    ("users", _create_users, ()),
+    (
+        "workspace_members",
+        _create_workspace_members,
+        (("ix_workspace_members_user_id", ["user_id"]),),
+    ),
+    ("api_keys", _create_api_keys, (("ix_api_keys_workspace_id", ["workspace_id"]),)),
+    (
+        "audit_log",
+        _create_audit_log,
+        (("ix_audit_log_workspace_created", ["workspace_id", "created_at", "id"]),),
+    ),
+)
+
+
+def upgrade() -> None:
+    # 0001 builds a fresh database from the current models, so some or all of
+    # these may exist already; create exactly what is missing.
+    existing = _table_names()
+    for table, create, indexes in _TABLES:
+        if existing is None or table not in existing:
+            create()
+        present = _index_names(table) if existing is not None and table in existing else set()
+        for index_name, columns in indexes:
+            if index_name not in present:
+                op.create_index(index_name, table, columns)
+    _ensure_workspace_one()
 
 
 def _ensure_workspace_one() -> None:
-    bind = op.get_bind()
-    if bind.execute(sa.text("SELECT 1 FROM workspaces WHERE id = 1")).first() is not None:
-        return
+    if not context.is_offline_mode():
+        found = op.get_bind().execute(sa.text("SELECT 1 FROM workspaces WHERE id = 1")).first()
+        if found is not None:
+            return
     name = _channel_name()
     workspaces = sa.table(
         "workspaces",
@@ -150,10 +195,17 @@ def _ensure_workspace_one() -> None:
             }
         ],
     )
+    if op.get_context().dialect.name == "postgresql":
+        # An explicit id does not advance the serial sequence; without this the
+        # next workspace insert would collide with id 1.
+        op.execute(
+            "SELECT setval(pg_get_serial_sequence('workspaces', 'id'), "
+            "(SELECT MAX(id) FROM workspaces))"
+        )
 
 
 def downgrade() -> None:
     existing = _table_names()
-    for table_name in reversed(NEW_TABLES):
-        if table_name in existing:
-            op.drop_table(table_name)
+    for table in reversed(NEW_TABLES):
+        if existing is None or table in existing:
+            op.drop_table(table)

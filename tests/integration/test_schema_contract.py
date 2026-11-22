@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 
 from alembic import command
 from runway.config import Settings
+from runway.db.bootstrap import migration_head
 from runway.db.schema_contract import (
     compare_schema_snapshots,
     schema_fingerprint,
@@ -210,7 +211,7 @@ def test_committed_contract_has_the_shared_v1_tables() -> None:
     snapshot_path = Settings().project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
     snapshot: object = json.loads(snapshot_path.read_text(encoding="utf-8"))
     assert isinstance(snapshot, dict)
-    assert snapshot["migration"] == "0016_shared_contracts"
+    assert snapshot["migration"] == migration_head(Settings())
     tables = snapshot["contract"]["tables"]
     assert {column["name"] for column in tables["events"]["columns"]} == {
         "id",

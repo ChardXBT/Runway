@@ -5,6 +5,7 @@ from runway.api.app import create_app
 from runway.audit.service import AuditService
 from runway.config import Settings
 from runway.db import Database
+from runway.db.bootstrap import migration_head
 from runway.db.models import AuditEvent, PairwisePreference
 from runway.db.repositories import get_channel
 
@@ -64,7 +65,7 @@ def test_migrations_seed_channel_and_enable_wal(database: Database) -> None:
     assert channel_count == 1
     assert journal_mode.lower() == "wal"
     assert foreign_keys == 1
-    assert migration == "0016_shared_contracts"
+    assert migration == migration_head(database.settings)
     assert feedback_table == 1
     assert publisher_table == 1
     assert schedule_slot == 1
