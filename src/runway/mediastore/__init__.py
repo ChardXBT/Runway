@@ -5,6 +5,19 @@ touches the database or defines routes; the API and worker wire these pieces to
 ``media_assets_v2`` and ``media_uploads``.
 """
 
+from runway.mediastore.delivery import (
+    ByteRange,
+    Chunk,
+    TikTokChunkPlan,
+    instagram_poll_schedule,
+    iter_tiktok_chunks,
+    iter_youtube_chunks,
+    plan_tiktok_chunks,
+    read_range,
+    youtube_chunk_ranges,
+    youtube_resume_offset,
+    youtube_status_query_headers,
+)
 from runway.mediastore.errors import (
     ChecksumMismatch,
     IncompleteUpload,
@@ -50,7 +63,9 @@ from runway.mediastore.store import (
 from runway.mediastore.validation import Issue, Severity, validate, validate_carousel
 
 __all__ = [
+    "ByteRange",
     "ChecksumMismatch",
+    "Chunk",
     "IncompleteUpload",
     "InvalidMediaKey",
     "InvalidUploadRequest",
@@ -76,17 +91,26 @@ __all__ = [
     "StaleUpload",
     "StorageBackendError",
     "StoreKind",
+    "TikTokChunkPlan",
     "UnsupportedOperation",
     "UploadMode",
     "UploadNotFound",
     "UploadPlan",
     "UploadProgress",
     "default_poster_time_ms",
+    "instagram_poll_schedule",
+    "iter_tiktok_chunks",
+    "iter_youtube_chunks",
     "make_media_key",
     "parse_ffprobe",
     "parse_media_key",
+    "plan_tiktok_chunks",
+    "read_range",
     "safe_extension",
     "validate",
     "validate_carousel",
     "workspace_prefix",
+    "youtube_chunk_ranges",
+    "youtube_resume_offset",
+    "youtube_status_query_headers",
 ]
