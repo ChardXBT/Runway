@@ -6,11 +6,12 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from runway.auth.principal import get_principal
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -279,7 +280,7 @@ def _enrich_token(
 
 
 def build_platform_router(database: Database, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["platforms"])
+    router = APIRouter(prefix="/api", tags=["platforms"], dependencies=[Depends(get_principal)])
     registry = ProviderRegistry(database, settings)
     oauth_states = OAuthStateService(database)
     sync_service = SyncService(database, settings, registry)

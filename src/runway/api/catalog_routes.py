@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from runway.auth.principal import get_principal
 from runway.capture.schemas import BrowserDomSnapshot
 from runway.capture.service import CaptureService
 from runway.catalog.service import CatalogService
@@ -32,7 +33,7 @@ class BrowserCheckpointRequest(BaseModel):
 
 
 def build_catalog_router(database: Database, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["catalogue"])
+    router = APIRouter(prefix="/api", tags=["catalogue"], dependencies=[Depends(get_principal)])
     capture = CaptureService(database, settings)
     catalog = CatalogService(database, settings)
 

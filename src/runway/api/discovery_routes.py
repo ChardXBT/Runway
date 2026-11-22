@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from runway.auth.principal import get_principal
 from runway.captions.service import CaptionService
 from runway.config import Settings
 from runway.db.base import Database
@@ -24,7 +25,7 @@ class CandidateRejectRequest(BaseModel):
 
 
 def build_discovery_router(database: Database, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["discovery"])
+    router = APIRouter(prefix="/api", tags=["discovery"], dependencies=[Depends(get_principal)])
 
     @router.post("/search-runs")
     def create_search(payload: SearchRunRequest) -> dict[str, object]:

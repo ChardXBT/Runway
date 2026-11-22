@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -17,6 +17,8 @@ from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
+from runway.auth.principal import get_principal
+from runway.auth.problems import Problem, problem_handler
 from runway.config import Settings, get_settings
 from runway.db.base import Database
 from runway.db.bootstrap import DatabaseNotCurrent, require_database_at_head
@@ -98,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # building the app must never alter whatever database .env points at.
     database = Database(active_settings)
     configure_logging()
+    hosted = active_settings.profile == "hosted"
 
     application = FastAPI(
         title="Runway API",
@@ -107,8 +110,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             f"for the configured {active_settings.channel_name} channel"
         ),
         lifespan=_lifespan(database, active_settings),
+        # The generated docs carry no principal; hosted mode does not serve them.
+        docs_url=None if hosted else "/docs",
+        redoc_url=None if hosted else "/redoc",
+        openapi_url=None if hosted else "/openapi.json",
     )
     application.state.settings = active_settings
+    application.add_exception_handler(Problem, problem_handler)
     application.state.database = database
     web_origins = loopback_origins(active_settings.web_port)
     application.add_middleware(
@@ -145,7 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "platform_provider": active_settings.platform_provider,
         }
 
-    @application.get("/api/settings", tags=["settings"])
+    @application.get("/api/settings", tags=["settings"], dependencies=[Depends(get_principal)])
     def settings_view() -> dict[str, object]:
         return active_settings.public_dict()
 

@@ -263,6 +263,7 @@ async def test_editorial_accept_stays_local_and_never_creates_publisher_work(
     monkeypatch.setattr(YouTubeBrowserPublisher, "validate_session", forbidden)
 
     application = FastAPI()
+    application.state.settings = settings
     application.include_router(build_proposal_router(database, settings))
     detail = ProposalService(database, settings).detail(proposal_id)
     with TestClient(application, base_url="http://127.0.0.1:8000") as client:
@@ -967,6 +968,7 @@ def test_explicit_empty_lineup_selection_is_never_expanded_to_all_posts(
     settings: Settings,
 ) -> None:
     application = FastAPI()
+    application.state.settings = settings
     application.include_router(build_proposal_router(database, settings))
 
     with TestClient(application, base_url="http://127.0.0.1:8000") as client:
@@ -986,6 +988,7 @@ async def test_waiting_lineup_post_cannot_bypass_batch_confirmation_through_retr
 ) -> None:
     proposal_id = await _scheduled_proposal(database, settings)
     application = FastAPI()
+    application.state.settings = settings
     application.include_router(build_proposal_router(database, settings))
 
     with TestClient(application, base_url="http://127.0.0.1:8000") as client:

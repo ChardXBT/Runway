@@ -7,6 +7,8 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
 
 class Settings(BaseSettings):
     """Typed Runway settings; secret values are never returned by the API."""
@@ -18,6 +20,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # `local` (default): one owner on loopback, no login. `hosted`: many
+    # workspaces behind an identity provider (spec 01 section 2).
+    profile: Literal["local", "hosted"] = "local"
+    # Name of the configured identity provider; empty until one is set up.
+    # Hosted mode refuses to start without it.
+    identity_provider: str = ""
     product_name: str = "Runway"
     connector_account_email: str = "tryrunwaytoday@gmail.com"
     channel_name: str = "Qlob"
@@ -98,13 +106,6 @@ class Settings(BaseSettings):
     platform_sync_comment_content_limit: int = Field(default=10, ge=0, le=100)
     platform_sync_analytics_days: int = Field(default=90, ge=7, le=365)
 
-    @field_validator("host")
-    @classmethod
-    def loopback_only(cls, value: str) -> str:
-        if value not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError("Runway may only bind to a loopback host")
-        return value
-
     @field_validator(
         "codex_cli_path",
         "publisher_chrome_path",
@@ -145,6 +146,27 @@ class Settings(BaseSettings):
         if hour not in range(24) or minute not in range(60):
             raise ValueError("default_post_time must be a valid local time")
         return f"{hour:02d}:{minute:02d}"
+
+    @model_validator(mode="after")
+    def profile_requirements(self) -> Settings:
+        """Fail fast on combinations a profile cannot run safely (spec 01 section 2)."""
+        if self.profile == "local":
+            if self.host not in LOOPBACK_HOSTS:
+                raise ValueError("Runway may only bind to a loopback host")
+            return self
+        problems: list[str] = []
+        if self.database_url.startswith("sqlite"):
+            problems.append("a Postgres database (SQLite is local-only)")
+        if not self.identity_provider.strip():
+            problems.append("a configured identity provider (RUNWAY_IDENTITY_PROVIDER)")
+        if self.publishing_mode == "authorized_browser":
+            problems.append(
+                "RUNWAY_PUBLISHING_MODE other than authorized_browser "
+                "(the browser publisher is local-only)"
+            )
+        if problems:
+            raise ValueError("RUNWAY_PROFILE=hosted requires " + "; ".join(problems))
+        return self
 
     @model_validator(mode="after")
     def authorized_browser_requires_both_interlocks(self) -> Settings:
@@ -255,6 +277,7 @@ class Settings(BaseSettings):
 
     def public_dict(self) -> dict[str, object]:
         return {
+            "profile": self.profile,
             "product_name": self.product_name,
             "connector_account_email": self.connector_account_email,
             "channel_name": self.channel_name,
