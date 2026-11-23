@@ -4,8 +4,15 @@ Other code calls these functions; it never reads `workspace_limits` itself.
 
 * `quotas_for(session, settings, workspace_id)` -> `WorkspaceQuotas`
 * `enforce_quota(quotas, "connected_accounts", used=n)` raises 403 `quota_exceeded`
-* `publishing_allowed(session, settings, workspace_id)` -> bool, checked by the
-  worker before every send; `publishing_gate(...)` also says why not.
+* `require_send_allowed(session, settings, workspace_id, posts_sent_today=...)`
+  is THE check before every platform-mutating send (an inbox reply, a browser
+  publisher submission, an engine target): it raises `PublishingPaused` (409)
+  for the global pause or the workspace kill switch, and 403 `quota_exceeded`
+  when `posts_sent_today` is given and the posts-per-day quota is used up.
+* `require_connected_account_slot(session, settings, workspace_id)` before an
+  account is connected (403 `quota_exceeded`).
+* `publishing_allowed(...)` / `publishing_gate(...)` answer the kill-switch
+  question without raising (status views, the CLI).
 
 In `local` every quota is unlimited (invariant 17); the kill switches apply in
 both profiles because they can only stop publishing.
@@ -17,11 +24,13 @@ import logging
 from dataclasses import dataclass, fields, replace
 from typing import Literal
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from runway.auth.problems import Problem
 from runway.config import Settings
 from runway.db.hosted_models import WorkspaceLimits
+from runway.db.models import ConnectedAccount
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +162,80 @@ def publishing_gate(session: Session, settings: Settings, workspace_id: int) -> 
 
 
 def publishing_allowed(session: Session, settings: Settings, workspace_id: int) -> bool:
-    """The worker's check before every send: global pause and the workspace kill switch."""
+    """Global pause and the workspace kill switch, as a bool (see `require_send_allowed`)."""
     return publishing_gate(session, settings, workspace_id).allowed
+
+
+class PublishingPaused(Problem):
+    """A send was refused by the global pause or the workspace kill switch.
+
+    Raised before anything reaches the platform, so the action may be retried
+    once the operator lifts the switch.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(409, "publishing_paused", "Publishing is paused", reason)
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return self.reason
+
+
+def require_send_allowed(
+    session: Session,
+    settings: Settings,
+    workspace_id: int,
+    *,
+    posts_sent_today: int | None = None,
+) -> None:
+    """The one check every platform-mutating send makes first, in both profiles.
+
+    Raises `PublishingPaused` when publishing is paused globally
+    (`RUNWAY_PUBLISHING_PAUSED`) or for this workspace (`runway hosted
+    pause-publishing`). When the caller publishes posts it passes
+    `posts_sent_today` (targets of this workspace already sent since 00:00 UTC)
+    and a send past the posts-per-day quota raises 403 `quota_exceeded`.
+    Replies and other non-post actions pass None. In `local` every quota is
+    unlimited, so only the kill switches can refuse.
+    """
+    gate = publishing_gate(session, settings, workspace_id)
+    if not gate.allowed:
+        logger.warning(
+            "send refused: %s",
+            gate.reason,
+            extra={"event_type": "publishing_paused_refusal", "workspace_id": workspace_id},
+        )
+        raise PublishingPaused(gate.reason or "publishing is paused")
+    if posts_sent_today is not None:
+        quotas = quotas_for(session, settings, workspace_id)
+        enforce_quota(quotas, "posts_per_day", used=posts_sent_today, workspace_id=workspace_id)
+
+
+def connected_account_count(session: Session, workspace_id: int) -> int:
+    """Accounts that hold a connection slot (everything not disconnected).
+
+    `connected_accounts` has no workspace column on this branch yet, so every
+    account counts against the workspace: an over-count, which can only refuse.
+    The tenancy work adds `ConnectedAccount.workspace_id == workspace_id` here.
+    """
+    del workspace_id
+    count = session.scalar(
+        select(func.count(ConnectedAccount.id)).where(ConnectedAccount.status != "disconnected")
+    )
+    return int(count or 0)
+
+
+def require_connected_account_slot(session: Session, settings: Settings, workspace_id: int) -> None:
+    """Refuse to connect one more account past the workspace's quota (403)."""
+    quotas = quotas_for(session, settings, workspace_id)
+    if quotas.connected_accounts is None:
+        return
+    enforce_quota(
+        quotas,
+        "connected_accounts",
+        used=connected_account_count(session, workspace_id),
+        workspace_id=workspace_id,
+    )
 
 
 def set_publishing_disabled(

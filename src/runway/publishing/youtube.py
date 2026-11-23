@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from runway.auth.principal import LOCAL_WORKSPACE_ID
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -42,6 +43,7 @@ from runway.domain.state_machine import (
     require_transition,
     transition_attempt,
 )
+from runway.hosted.quotas import require_send_allowed
 from runway.publishing.base import (
     AssistedPost,
     AssistedPreparation,
@@ -1431,6 +1433,9 @@ class YouTubeBrowserPublisher:
         if not self._confirm_lock.acquire(blocking=False):
             raise ValueError("another YouTube scheduling confirmation is already running")
         try:
+            # Kill switches before the one-time confirmation is consumed, so a
+            # refused send can be confirmed again once publishing resumes.
+            self._require_send_allowed()
             post = self._consume_confirmation(
                 attempt_id,
                 confirmation_token=confirmation_token,
@@ -1710,6 +1715,9 @@ class YouTubeBrowserPublisher:
                     raise StalePublishAttempt(
                         f"publish attempt {attempt_id} was superseded before submission"
                     )
+            # A paused send leaves the attempt queued; the queue pauses with
+            # the reason and a human resumes it after the switch is lifted.
+            self._require_send_allowed()
             try:
                 session_status = await self._validated_adapter_session(source="queue_preflight")
             except Exception as exc:
@@ -2694,6 +2702,11 @@ class YouTubeBrowserPublisher:
             attempt.proposal_id,
             details,
         )
+
+    def _require_send_allowed(self) -> None:
+        """Global pause and workspace kill switch (the browser publisher is local-only)."""
+        with self.database.session() as session:
+            require_send_allowed(session, self.settings, LOCAL_WORKSPACE_ID)
 
     def _require_enabled(self) -> None:
         if not self.settings.authorized_browser_ready:

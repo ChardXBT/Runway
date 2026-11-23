@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     quota_connected_accounts: int = Field(default=3, ge=0)
     quota_posts_per_day: int = Field(default=10, ge=0)
     quota_api_requests_per_minute: int = Field(default=120, ge=1)
-    # Operator switch read by the worker before every send, in both profiles.
+    # Operator switch checked before every platform-mutating send, in both
+    # profiles (runway.hosted.quotas.require_send_allowed).
     publishing_paused: bool = False
     product_name: str = "Runway"
     connector_account_email: str = "tryrunwaytoday@gmail.com"

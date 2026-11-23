@@ -28,6 +28,8 @@ Still required before a hosted deployment can start (other work packages):
 | Database token store, `RUNWAY_TOKEN_KEYS` | hosted tokens must not live in a file | spec 05 section 3 |
 | Clerk in the web app (sign-in pages, organization switcher, forwarding the session token) | the API accepts Clerk tokens; the web app does not obtain them yet | web work package |
 | API keys (`rwy_` bearers) | refused with `api_key_unsupported` until built | spec 06 |
+| Workspace scoping and scope checks on the platform routes (accounts, connect/disconnect, content, inbox, drafts, overview, analytics) | their queries read and write the global tables with no `workspace_id` filter and call no `require()`, so one workspace's member could read or disconnect another's accounts. Hosted therefore does **not mount** that router (404) | workspace tenancy (wave 4, spec 01 sections 4-5): add `workspace_id` filters and `require(ACCOUNTS_MANAGE / INBOX_REPLY / POSTS_WRITE ...)`, then mount it in hosted |
+| `enforce_quota` call sites for storage (media upload) and posts per day (the publishing engine) | the quotas exist; connected accounts is enforced on connect, posts per day needs the engine's daily count, storage needs the upload path | media pipeline (spec 02) and publishing engine (spec 03) |
 
 ## 2. The pieces
 
@@ -41,10 +43,15 @@ Still required before a hosted deployment can start (other work packages):
 | `.github/workflows/ci.yml`, job `container-image` | Builds both images on every push, checks the user is not root, `ffprobe` and the CLI run, and the compose file parses. Pushes nothing. |
 | `runway serve` | In hosted it binds `RUNWAY_HOST` (the image sets `0.0.0.0`) and trusts `X-Forwarded-*` only from `RUNWAY_FORWARDED_ALLOW_IPS`. In local it still refuses anything but loopback. |
 
-Request path in the API (hosted): security headers, per-IP rate limit, origin
-guard, CORS, then `get_principal`: verify the Clerk session, mirror the user,
-resolve the workspace and the Runway role, per-account and per-workspace rate
-limits. Routes call `require(principal, scope)`.
+Request path in the API (hosted): security headers, per-IP rate limit (requests
+without a credential; see section 4), origin guard, CORS, then `get_principal`:
+verify the Clerk session, per-user rate limit, mirror the user, resolve the
+workspace and the Runway role, per-workspace rate limit. Routes call
+`require(principal, scope)`.
+
+Routes served in hosted today: `/health`, `/api/settings` (product switches only),
+`/api/v1/workspace*` (always filtered by `principal.workspace_id`) and the signed
+webhook `/hooks/identity/clerk`. Everything else is 404 until it is workspace-scoped.
 
 ## 3. What the owner must sign up for and approve
 
@@ -132,7 +139,7 @@ The reverse proxy terminates TLS for the web and API origins and forwards to
 
 | Task | How |
 | --- | --- |
-| Pause all publishing | set `RUNWAY_PUBLISHING_PAUSED=true` and restart `worker` (the worker calls `publishing_allowed` before every send) |
+| Pause all publishing | set `RUNWAY_PUBLISHING_PAUSED=true` and restart `api` and `worker`. Every platform-mutating send calls `runway.hosted.quotas.require_send_allowed` first (inbox replies, the browser publisher, and the publishing engine once it lands) and is refused with `409 publishing_paused`; nothing is recorded as sent |
 | Stop one workspace from publishing | `runway hosted pause-publishing <workspace id> --reason "..."`; undo with `resume-publishing` |
 | Raise or lower a workspace's quotas | `runway hosted quota <id> --posts-per-day 25` (`--clear` restores the defaults) |
 | See a workspace's limits | `runway hosted status <id>` |
@@ -140,7 +147,8 @@ The reverse proxy terminates TLS for the web and API origins and forwards to
 
 Hosted serves 404 for the local-only surfaces: capture, catalogue, discovery,
 intelligence, the proposal and Lineup flow, the browser publisher and its
-connector, `/media` and the generated API docs. `/api/settings` shows tenants
+connector, `/media` and the generated API docs; and, until they are scoped to a
+workspace, the platform routes (accounts, content, inbox, drafts, overview). `/api/settings` shows tenants
 product switches only.
 
 ## 7. Backups

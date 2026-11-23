@@ -7,6 +7,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
+from runway.auth.principal import LOCAL_WORKSPACE_ID
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -19,6 +20,7 @@ from runway.db.models import (
 )
 from runway.domain.enums import CommentStatus, PlatformActionState
 from runway.domain.state_machine import COMMENT_STATUS_MACHINE, PLATFORM_ACTION_MACHINE
+from runway.hosted.quotas import require_send_allowed
 from runway.platforms.base import (
     AuthorizationExpired,
     ProviderError,
@@ -277,7 +279,9 @@ class InboxService:
                 session.delete(draft)
             return {"comment_id": comment_id, "text": None}
 
-    def reply(self, comment_id: int, text: str) -> dict[str, object]:
+    def reply(
+        self, comment_id: int, text: str, *, workspace_id: int = LOCAL_WORKSPACE_ID
+    ) -> dict[str, object]:
         if self.registry is None:
             raise InboxReplyForbidden("reply service is unavailable")
         registry = self.registry
@@ -302,6 +306,8 @@ class InboxService:
             )
             if not capability["ready"]:
                 raise InboxReplyForbidden(str(capability["detail"]))
+            # The kill switches: nothing is recorded or sent while paused.
+            require_send_allowed(session, self.settings, workspace_id)
             action = PlatformAction(
                 account_id=account.id,
                 action_type="comment_reply",
