@@ -767,6 +767,11 @@ def _remote_head(fake: FakeGitHub, name: str) -> str:
             "origin",
         ),
         (["remote", "set-url", "origin", "C:/somewhere/runway-instance"], "origin"),
+        # origin looks right but its push URL is an SSH host alias nobody can verify.
+        (
+            ["config", "remote.origin.pushurl", "git@github-chard:owner/runway-instance.git"],
+            "pushes to",
+        ),
         # origin looks right but pushes to the public repository.
         (["config", "remote.origin.pushurl", f"https://github.com/{PUBLIC_REPO}.git"], "pushes to"),
         # A rewrite rule sends the private URL to the public repository.
@@ -807,6 +812,70 @@ def test_push_refuses_any_destination_other_than_the_verified_repository(
 
     assert fake_github.uploads() == []
     assert _remote_head(fake_github, PUBLIC_REPO) == ""  # nothing reached the public repo
+    assert _remote_head(fake_github, PRIVATE_REPO) == private_head
+
+
+def test_push_refuses_when_any_of_several_push_urls_is_elsewhere(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    private_head = _remote_head(fake_github, PRIVATE_REPO)
+    # The first push URL is the private repository; a second one (git pushes to every
+    # pushurl) points at the public repository.
+    private_url = f"https://github.com/{PRIVATE_REPO}.git"
+    _git_in(
+        fake_github, machine.instance_dir, "config", "--add", "remote.origin.pushurl", private_url
+    )
+    public_url = f"https://github.com/{PUBLIC_REPO}.git"
+    _git_in(
+        fake_github, machine.instance_dir, "config", "--add", "remote.origin.pushurl", public_url
+    )
+
+    with pytest.raises(InstanceError, match=f"refused.*pushes to {PUBLIC_REPO}"):
+        ops.push(machine.context(monkeypatch))
+
+    assert fake_github.uploads() == []
+    assert _remote_head(fake_github, PUBLIC_REPO) == ""
+    assert _remote_head(fake_github, PRIVATE_REPO) == private_head
+
+
+@pytest.mark.parametrize("rule", ["insteadOf", "pushInsteadOf"])
+def test_push_refuses_a_rewrite_of_the_verified_url_even_when_origin_differs(
+    tmp_path: Path,
+    fake_github: FakeGitHub,
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    rule: str,
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    private_head = _remote_head(fake_github, PRIVATE_REPO)
+    # origin uses the SSH form, so its own (unrewritten) URL looks right; the push names
+    # the HTTPS URL, which the rule would silently send to the public repository.
+    _git_in(
+        fake_github,
+        machine.instance_dir,
+        "remote",
+        "set-url",
+        "origin",
+        f"git@github.com:{PRIVATE_REPO}.git",
+    )
+    _git_in(
+        fake_github,
+        machine.instance_dir,
+        "config",
+        f"url.https://github.com/{PUBLIC_REPO}.git.{rule}",
+        f"https://github.com/{PRIVATE_REPO}.git",
+    )
+
+    with pytest.raises(InstanceError, match="refused.*insteadOf"):
+        ops.push(machine.context(monkeypatch))
+
+    assert fake_github.uploads() == []
+    assert _remote_head(fake_github, PUBLIC_REPO) == ""
     assert _remote_head(fake_github, PRIVATE_REPO) == private_head
 
 
@@ -1019,6 +1088,8 @@ def test_every_external_command_has_a_timeout_and_no_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: list[dict[str, Any]] = []
+    # The parent shell may already set it; the runner must set it on its own.
+    monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
 
     def fake_run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         seen.append(kwargs)
