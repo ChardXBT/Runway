@@ -7,6 +7,9 @@ it starts in about a third of the time of the full CLI).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 
 import typer
 from alembic.script import ScriptDirectory
@@ -16,7 +19,7 @@ from runway.config import Settings, get_settings
 from runway.db.backup import AUTOMATIC_BACKUPS_KEPT, backup_database, prune_automatic_backups
 from runway.db.bootstrap import alembic_config, initialize_database, migration_status
 from runway.locks import LockTimeout, exclusive_file_lock
-from runway.operations.runtime_files import worker_lock_path
+from runway.operations.runtime_files import runtime_directory, worker_lock_path
 
 db_app = typer.Typer(help="Migrate and inspect the configured database.")
 
@@ -36,6 +39,11 @@ def db_upgrade(
 ) -> None:
     """Upgrade the configured database to the newest migration and seed defaults."""
     settings = get_settings()
+    with _only_migration(settings):
+        _upgrade(settings, backup)
+
+
+def _upgrade(settings: Settings, backup: bool) -> None:
     before = migration_status(settings)
     if not before.up_to_date:
         # Rebuilding tables under a running worker (older code that accepted
@@ -74,6 +82,26 @@ def db_current() -> None:
 
 
 EXIT_WORKER_RUNNING = 3
+EXIT_MIGRATION_RUNNING = 4
+
+
+def migration_lock_path(settings: Settings) -> Path:
+    return runtime_directory(settings) / "db-migrate.lock"
+
+
+@contextmanager
+def _only_migration(settings: Settings) -> Iterator[None]:
+    """One `runway db upgrade/downgrade` at a time per data directory.
+
+    The launcher stops waiting for a slow migration but leaves it running; the
+    next launcher run must not start a second one beside it.
+    """
+    try:
+        with exclusive_file_lock(migration_lock_path(settings), timeout=0):
+            yield
+    except LockTimeout:
+        typer.echo("another `runway db` migration is running; wait for it to finish", err=True)
+        raise typer.Exit(code=EXIT_MIGRATION_RUNNING) from None
 
 
 def _refuse_while_the_worker_runs(settings: Settings, action: str) -> None:
@@ -122,10 +150,11 @@ def db_downgrade(
             err=True,
         )
         raise typer.Exit(code=2)
-    _refuse_while_the_worker_runs(settings, "downgrading")
-    backup_path = backup_database(settings, f"before-downgrade-to-{revision}")
-    command.downgrade(config, revision)
-    after = migration_status(settings)
+    with _only_migration(settings):
+        _refuse_while_the_worker_runs(settings, "downgrading")
+        backup_path = backup_database(settings, f"before-downgrade-to-{revision}")
+        command.downgrade(config, revision)
+        after = migration_status(settings)
     typer.echo(
         json.dumps(
             {

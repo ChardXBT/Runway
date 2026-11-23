@@ -188,3 +188,18 @@ def test_checkout_revision_is_this_repositorys_commit() -> None:
         check=False,
     ).stdout.strip()
     assert checkout_revision() == (expected or "unknown")
+
+
+def test_a_second_migration_refuses_while_one_is_running(migrated: Settings) -> None:
+    # A migration the launcher gave up waiting for keeps running; the next
+    # launcher run must not start a second one beside it.
+    runner = CliRunner()
+    command.downgrade(alembic_config(migrated), OLDEST)
+    with exclusive_file_lock(db_commands.migration_lock_path(migrated), timeout=0):
+        upgrade = runner.invoke(cli_app, ["db", "upgrade"])
+        downgrade = runner.invoke(cli_app, ["db", "downgrade", OLDEST])
+    assert upgrade.exit_code == db_commands.EXIT_MIGRATION_RUNNING
+    assert downgrade.exit_code == db_commands.EXIT_MIGRATION_RUNNING
+    assert "another `runway db` migration is running" in upgrade.output
+    assert _version(migrated) == OLDEST
+    assert runner.invoke(cli_app, ["db", "upgrade"]).exit_code == 0
