@@ -20,6 +20,8 @@ from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
 from runway.api.v1.errors import install_problem_handlers
 from runway.api.v1.events_routes import build_events_router
+from runway.api.v1.media_routes import build_media_router
+from runway.api.v1.posts_routes import build_cross_post_router, build_posts_router
 from runway.api.workspace_routes import build_workspace_router
 from runway.auth.principal import get_principal
 from runway.config import Settings, get_settings
@@ -133,7 +135,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_origins=web_origins,
             allow_credentials=False,
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-            allow_headers=["Content-Type"],
+            # v1 clients send If-Match and Idempotency-Key and read ETag (spec 06 section 6).
+            allow_headers=["Content-Type", "If-Match", "Idempotency-Key", "Last-Event-ID"],
+            expose_headers=["ETag", "Idempotent-Replayed"],
         )
         # Added last so it runs first, before CORS handling and every route.
         application.add_middleware(LocalRequestGuard, allowed_origins=web_origins)
@@ -155,6 +159,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Hosted serves none of it (404) until the workspace-tenancy work
         # scopes every query by principal.workspace_id and calls require().
         application.include_router(build_platform_router(database, active_settings))
+        # Spec 03 section 8. Nothing here publishes: a release only queues a job
+        # for the separate `runway worker` process. Local only until the tenancy
+        # work proves workspace isolation on Postgres for these routes too.
+        from runway.posts.bridge import ProposalBridge
+        from runway.posts.runtime import build_media_service, build_post_service
+
+        post_service = build_post_service(active_settings, database)
+        media_service = build_media_service(
+            active_settings,
+            database,
+            registry=post_service.registry,
+            stores=post_service.media_stores,
+        )
+        application.state.post_service = post_service
+        application.state.media_service = media_service
+        application.include_router(build_posts_router(post_service))
+        application.include_router(build_media_router(media_service))
+        application.include_router(
+            build_cross_post_router(ProposalBridge(post_service, media_service))
+        )
     application.include_router(build_workspace_router(database, active_settings))
     # Versioned surface (spec 06): every router comes from build_v1_router.
     application.include_router(build_events_router(database))

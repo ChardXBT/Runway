@@ -49,6 +49,7 @@ def test_every_shared_code_has_its_status() -> None:
         "not_found": 404,
         "idempotency_conflict": 409,
         "rate_limited": 429,
+        "invalid_state": 409,
         "authentication_required": 401,
         "api_key_unsupported": 401,
     }

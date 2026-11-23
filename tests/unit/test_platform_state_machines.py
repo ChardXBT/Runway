@@ -75,14 +75,20 @@ def test_stored_vocabularies_are_unchanged() -> None:
     }
 
 
-def test_target_machine_allows_only_todays_manual_path() -> None:
+def test_target_machine_keeps_the_manual_path_and_guards_the_engine_states() -> None:
     assert TARGET_STATE_MACHINE.allowed("pending", "published")
     with pytest.raises(InvalidStateTransition):
         TARGET_STATE_MACHINE.require("published", "pending")
-    # Engine states are declared but cannot be entered until the publishing job adds edges.
-    for state in TargetState:
-        if state not in {TargetState.DRAFT, TargetState.PUBLISHED}:
-            assert not TARGET_STATE_MACHINE.allowed(TargetState.DRAFT, state)
+    # From an unsent draft only validation, manual publishing or cancelling.
+    reachable = {
+        state for state in TargetState if TARGET_STATE_MACHINE.allowed(TargetState.DRAFT, state)
+    }
+    assert reachable == {
+        TargetState.DRAFT,
+        TargetState.READY,
+        TargetState.PUBLISHED,
+        TargetState.CANCELLED,
+    }
     with pytest.raises(UnknownState):
         TARGET_STATE_MACHINE.parse("sent")
 

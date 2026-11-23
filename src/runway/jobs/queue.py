@@ -35,6 +35,13 @@ logger = logging.getLogger(__name__)
 SEND = "send"
 RECONCILE = "reconcile"
 
+# A send job is never retried by the queue (the engine re-releases instead), so
+# it is enqueued with a single attempt. The reconcile job an expired send
+# leaves behind only reads, so it gets the read-job retry budget. Kept equal to
+# runway.posts.jobs.READ_JOB_MAX_ATTEMPTS without importing runway.posts here;
+# tests/unit/test_job_queue.py pins the two together.
+RECONCILE_MAX_ATTEMPTS = 3
+
 DEFAULT_LEASE_SECONDS = 300
 # Retry delays after the 1st, 2nd, 3rd... failed attempt; the last one repeats.
 RETRY_BACKOFF_SECONDS: tuple[int, ...] = (60, 300, 1200)
@@ -149,7 +156,7 @@ def hand_expired_send_to_reconcile(session: Session, job: PublishJob, now: datet
                 run_at=now,
                 state=JOB_STATE_MACHINE.start(JobState.PENDING),
                 attempts=0,
-                max_attempts=job.max_attempts,
+                max_attempts=RECONCILE_MAX_ATTEMPTS,
                 idempotency_key=key,
                 payload_json=json.dumps({"send_job_id": job.id}),
             )
@@ -345,6 +352,21 @@ class JobQueue:
                 row.run_at = self.clock() + retry_delay(row.attempts)
                 return JOB_STATE_MACHINE.apply(row, JobState.PENDING)
             return JOB_STATE_MACHINE.apply(row, JobState.FAILED)
+
+    def defer(self, job_id: int, worker_id: str, run_at: datetime, *, reason: str) -> None:
+        """Put a running job back to `run_at` without counting the attempt.
+
+        For a handler that decided "not yet" before doing any work (publishing
+        paused, an Instagram container made ahead of `planned_at`).
+        """
+        with self._exclusive() as session:
+            row = self._leased(session, job_id, worker_id)
+            JOB_STATE_MACHINE.apply(row, JobState.PENDING)
+            row.attempts = max(row.attempts - 1, 0)
+            row.run_at = run_at
+            row.locked_by = None
+            row.locked_until = None
+            row.last_error = reason[:_ERROR_LIMIT]
 
     # ---------------------------------------------------------------- reading
 
