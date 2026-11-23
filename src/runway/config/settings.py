@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     clerk_authorized_parties: str = ""
     clerk_audience: str = ""
     # Svix signing secret(s) of the Clerk webhook endpoint (`whsec_...`); several
-    # may be given, space- or comma-separated, while one is being rotated.
+    # may be given, space- or comma-separated, while one is being rotated. The
+    # hosted API refuses to start without one; migrations and the worker need none.
     clerk_webhook_secret: SecretStr | None = None
     identity_token_leeway_seconds: int = Field(default=5, ge=0, le=60)
     # Runway role for a member who joins an existing workspace. The first member
@@ -218,8 +219,16 @@ class Settings(BaseSettings):
             problems.append("an https Clerk issuer (RUNWAY_CLERK_ISSUER)")
         if self.clerk_jwks_url.strip() and not _is_https_url(self.clerk_jwks_url):
             problems.append("an https Clerk JWKS URL (RUNWAY_CLERK_JWKS_URL)")
-        if not self.clerk_webhook_secrets:
-            problems.append("a Clerk webhook signing secret (RUNWAY_CLERK_WEBHOOK_SECRET)")
+        # The secret itself is required by the API only (create_app refuses to
+        # start without it), so migrations and the worker run without it. A
+        # value that is given must decode wherever it is given.
+        secrets = self.clerk_webhook_secrets
+        if secrets and not all(_is_svix_secret(secret) for secret in secrets):
+            # Refused at startup, not at the first delivery: an undecodable
+            # secret would answer every webhook with 401 and Clerk would retry.
+            problems.append(
+                "Clerk webhook secrets of the form whsec_<base64> (RUNWAY_CLERK_WEBHOOK_SECRET)"
+            )
         return problems
 
     def _web_origin_problems(self) -> list[str]:
@@ -321,10 +330,19 @@ class Settings(BaseSettings):
         return list(dict.fromkeys(origin.rstrip("/").casefold() for origin in configured))
 
     @property
+    def clerk_issuer_normalized(self) -> str:
+        """The issuer compared with the token's `iss` claim.
+
+        Clerk's `iss` has no trailing slash; one pasted into the setting would
+        otherwise refuse every token, so it is removed (as for the JWKS URL).
+        """
+        return self.clerk_issuer.strip().rstrip("/")
+
+    @property
     def clerk_jwks_endpoint(self) -> str:
         if self.clerk_jwks_url.strip():
             return self.clerk_jwks_url.strip()
-        return self.clerk_issuer.strip().rstrip("/") + "/.well-known/jwks.json"
+        return self.clerk_issuer_normalized + "/.well-known/jwks.json"
 
     @property
     def clerk_authorized_party_list(self) -> list[str]:
@@ -436,6 +454,17 @@ class Settings(BaseSettings):
 
 def _csv(value: str) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _is_svix_secret(secret: str) -> bool:
+    # Imported here: runway.identity imports runway.config at module level.
+    from runway.identity.svix import decode_secret
+
+    try:
+        decode_secret(secret)
+    except ValueError:
+        return False
+    return True
 
 
 def _is_https_url(value: str) -> bool:

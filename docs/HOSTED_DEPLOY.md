@@ -35,16 +35,16 @@ Still required before a hosted deployment can start (other work packages):
 
 | Piece | What it is |
 | --- | --- |
-| `Dockerfile` | `python:3.13-slim`, `ffmpeg` installed, runs as the non-root user `runway` (uid 10001). Installs `requirements.lock` exactly, then Runway itself. Entry point `runway`; commands `serve` (default), `worker`, `db upgrade`, `hosted ...`. No secret is baked in. |
-| `deploy/web.Dockerfile` | The Next.js web app. `NEXT_PUBLIC_RUNWAY_API_URL` is a build argument (public by design). Telemetry disabled. |
-| `deploy/compose.hosted.yml` | One machine: `postgres`, `migrate` (release step), `api`, `worker`, `web`. Every secret is an environment placeholder; compose refuses to start when a required one is missing. Postgres has no published port; `api` and `web` publish on loopback only, for the reverse proxy. |
+| `Dockerfile` | `python:3.13-slim` pinned by digest, `ffmpeg` installed, runs as the non-root user `runway` (uid 10001). Installs `requirements-runtime.lock` (runtime packages only, the same versions as `requirements.lock`, every file hash-checked with `--require-hashes`), then Runway itself. The health check probes `RUNWAY_API_PORT`. Entry point `runway`; commands `serve` (default), `worker`, `db upgrade`, `hosted ...`. No secret is baked in. |
+| `deploy/web.Dockerfile` | The Next.js web app (`node:24-slim` pinned by digest). `NEXT_PUBLIC_RUNWAY_API_URL` is a build argument (public by design). Telemetry disabled. |
+| `deploy/compose.hosted.yml` | One machine: `postgres`, `migrate` (release step), `api`, `worker`, `web`. Every secret is an environment placeholder; compose refuses to start when a required one is missing. Each service gets only its own secrets: `api` the Clerk webhook secret and the app-role password, `worker` the token keys, platform app credentials and the app-role password, `migrate` only the owner-role password. Postgres has no published port; `api` and `web` publish on loopback only, for the reverse proxy. |
 | `deploy/postgres/init-roles.sh` | Runs once on a new Postgres volume. Creates the **owner** role (owns the schema; migrations and restores connect as it) and the **app** role (API and worker; row access only, `NOBYPASSRLS`, cannot alter the schema). |
 | `deploy/backup.sh`, `deploy/restore.sh` | Daily `pg_dump` to object storage through rclone or the AWS CLI, 14 days kept; restore into an empty database only. |
 | `.github/workflows/ci.yml`, job `container-image` | Builds both images on every push, checks the user is not root, `ffprobe` and the CLI run, and the compose file parses. Pushes nothing. |
 | `runway serve` | In hosted it binds `RUNWAY_HOST` (the image sets `0.0.0.0`) and trusts `X-Forwarded-*` only from `RUNWAY_FORWARDED_ALLOW_IPS`. In local it still refuses anything but loopback. |
 
-Request path in the API (hosted): security headers, per-IP rate limit (requests
-without a credential; see section 4), origin guard, CORS, then `get_principal`:
+Request path in the API (hosted): security headers, per-address rate limit (requests
+without a session, and every webhook delivery; see section 4), origin guard, CORS, then `get_principal`:
 verify the Clerk session, per-user rate limit, mirror the user, resolve the
 workspace and the Runway role, per-workspace rate limit. Routes call
 `require(principal, scope)`.
@@ -107,9 +107,11 @@ build; check them against Clerk's current session-token reference during setup.
 ## 4. Configuration
 
 Required in hosted (startup refuses without them):
-`RUNWAY_IDENTITY_PROVIDER=clerk`, `RUNWAY_CLERK_ISSUER` (https),
-`RUNWAY_CLERK_WEBHOOK_SECRET`, `RUNWAY_WEB_ORIGINS` (https origins; plain http only
-for a loopback rehearsal), and a Postgres database.
+`RUNWAY_IDENTITY_PROVIDER=clerk`, `RUNWAY_CLERK_ISSUER` (https; a trailing slash is
+ignored), `RUNWAY_WEB_ORIGINS` (https origins; plain http only for a loopback
+rehearsal), and a Postgres database. The API also requires
+`RUNWAY_CLERK_WEBHOOK_SECRET`; every value in it must be `whsec_<base64>` (checked at
+startup, in every process that is given it). Migrations and the worker do not need it.
 
 Limits and switches (defaults in brackets): `RUNWAY_RATE_LIMIT_IP_PER_MINUTE` [300],
 `RUNWAY_RATE_LIMIT_PRINCIPAL_PER_MINUTE` [120], `RUNWAY_QUOTA_STORAGE_BYTES` [1 GiB],
@@ -117,6 +119,33 @@ Limits and switches (defaults in brackets): `RUNWAY_RATE_LIMIT_IP_PER_MINUTE` [3
 `RUNWAY_QUOTA_API_REQUESTS_PER_MINUTE` [120], `RUNWAY_PUBLISHING_PAUSED` [false].
 The rate limiter is in-process: with more than one API process, each keeps its own
 buckets until a shared store implements `RateLimiter`.
+
+How requests are keyed:
+
+- A request with a valid session is limited per user (`RATE_LIMIT_PRINCIPAL_PER_MINUTE`)
+  and per workspace (the workspace's API quota). It never spends the address bucket,
+  so users behind one address (an office NAT, or a server-side hop from the web app)
+  do not throttle each other.
+- A request with no session, or whose token fails verification, spends the bucket of
+  its client address (`RATE_LIMIT_IP_PER_MINUTE`). IPv6 addresses are folded to their
+  /64, the block one subscriber usually holds.
+- The signed webhook `/hooks/identity/clerk` resolves no principal, so it always spends
+  the address bucket, whatever `Authorization` or cookie header it carries.
+- The client address is the one uvicorn derives from `X-Forwarded-For`, trusted only
+  from `RUNWAY_FORWARDED_ALLOW_IPS`. In the compose file that is the network gateway
+  `172.30.0.1`, through which the host's reverse proxy reaches the api container; the
+  web, worker and postgres containers are not trusted, so they cannot spoof a client
+  address. If the proxy runs in a container instead (for example `cloudflared`), give
+  it a fixed address on that network and trust that address only. Check once after
+  deploying that the API's access log shows real client addresses, not `172.30.0.1`.
+- The web -> API hop: the web app calls the API from the browser
+  (`NEXT_PUBLIC_RUNWAY_API_URL`, through the reverse proxy, which appends the real
+  address), so no request reaches the API from the web container today. When the web
+  app gains server-side calls (spec 05 section 1) they carry the user's session and
+  are keyed per user. A server-side call without a session would share the web
+  container's address bucket; such a call must forward the browser's address in
+  `X-Forwarded-For` and the web container's fixed address must then be added to
+  `RUNWAY_FORWARDED_ALLOW_IPS`.
 
 Secrets live in the host's secret store or an untracked env file passed with
 `--env-file`. Never in the image, the repository or a CI log.
@@ -151,7 +180,36 @@ connector, `/media` and the generated API docs; and, until they are scoped to a
 workspace, the platform routes (accounts, content, inbox, drafts, overview). `/api/settings` shows tenants
 product switches only.
 
-## 7. Backups
+## 7. For the engine integration
+
+The publishing engine (spec 03) must call exactly one function before every
+platform-mutating send (publishing a post target, a reply, a comment, a delete):
+
+```python
+from runway.hosted.quotas import require_send_allowed, PublishingPaused
+
+require_send_allowed(session, settings, workspace_id, posts_sent_today=sent_today)
+```
+
+- Call it inside the same database session as the send's bookkeeping, after the
+  target is claimed and **before** the platform call or any "sent" row is written.
+- `workspace_id` is the target's workspace (`runway.auth.principal.LOCAL_WORKSPACE_ID` in local).
+- `posts_sent_today`: for a post, the number of this workspace's targets already sent
+  since 00:00 UTC, so the posts-per-day quota is applied; pass `None` for replies and
+  other non-post actions.
+- It raises `PublishingPaused` (a `Problem`, 409 `publishing_paused`) when
+  `RUNWAY_PUBLISHING_PAUSED` is set or the operator ran `runway hosted pause-publishing`
+  for the workspace, and `Problem` 403 `quota_exceeded` past the daily quota. Both are
+  raised before anything leaves Runway: the engine leaves the target unsent and
+  retryable (not failed), and does not retry it until the switch is lifted.
+- In `local` every quota is unlimited, so only the two kill switches can refuse.
+
+Today it is called by `InboxService.reply` (`runway/platforms/inbox.py`) and both
+browser-publisher submission paths (`runway/publishing/youtube.py`,
+`_require_send_allowed`). Tests: `tests/integration/test_hosted_limits.py`
+(`test_require_send_allowed_applies_the_switches_and_the_posts_per_day_quota`).
+
+## 8. Backups
 
 `deploy/backup.sh` once a day (cron or a systemd timer), connected as the owner role:
 
@@ -171,6 +229,9 @@ object storage is re-uploadable and is not backed up.
 1. Create a **fresh** Postgres (a new compose project or a scratch server) and run
    `deploy/postgres/init-roles.sh` against it, so the owner and app roles exist.
 2. As the owner role: `RUNWAY_RESTORE_CONFIRM=<db name> deploy/restore.sh latest`.
+   `latest` only considers dumps of `RUNWAY_RESTORE_SOURCE_DB` (default: the target
+   `PGDATABASE`), so a bucket shared by staging and production cannot return the other
+   database's dump; set it to `runway` when rehearsing into a scratch database.
    It refuses a database that already has tables, verifies the checksum, restores in
    one transaction and prints the migration revision.
 3. `runway db current` against it reports `up_to_date: true` for the image you deploy.

@@ -156,6 +156,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.include_router(build_platform_router(database, active_settings))
     application.include_router(build_workspace_router(database, active_settings))
     if hosted and active_settings.identity_provider.strip() == "clerk":
+        if not active_settings.clerk_webhook_secrets:
+            # The API receives the membership webhooks; without the secret it
+            # could verify none. Migrations and the worker do not need it.
+            raise ValueError(
+                "RUNWAY_PROFILE=hosted requires a Clerk webhook signing secret "
+                "(RUNWAY_CLERK_WEBHOOK_SECRET) for the API"
+            )
         application.include_router(build_identity_hook_router(database, active_settings))
 
     @application.get("/health", tags=["system"])

@@ -22,7 +22,7 @@ from identity_support import (
     session_claims,
     svix_headers,
 )
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from starlette.datastructures import Headers
 from starlette.requests import Request
 
@@ -317,7 +317,9 @@ def test_hosted_clerk_settings_are_validated(tmp_path: Path) -> None:
         Settings(data_dir=tmp_path / "data", profile="hosted", identity_provider="clerk")
     message = str(raised.value)
     assert "RUNWAY_CLERK_ISSUER" in message
-    assert "RUNWAY_CLERK_WEBHOOK_SECRET" in message
+    # Required by the API only (see the create_app test), so `runway db
+    # upgrade` and the worker start without the webhook secret.
+    assert "RUNWAY_CLERK_WEBHOOK_SECRET" not in message
     assert "RUNWAY_WEB_ORIGINS" in message
     with pytest.raises(ValidationError, match="one of clerk"):
         Settings(data_dir=tmp_path / "data", profile="hosted", identity_provider="okta")
@@ -342,6 +344,40 @@ def test_hosted_clerk_settings_are_validated(tmp_path: Path) -> None:
     assert str(raised.value).count("requires") == 1
     assert "SQLite is local-only" in str(raised.value)
     assert "CLERK" not in str(raised.value) and "WEB_ORIGINS" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "secret",
+    ["whsec_placeholder", "whsec_", "whsec_not base64!", f"{WEBHOOK_SECRET} whsec_placeholder"],
+)
+def test_an_undecodable_webhook_secret_is_refused_at_startup(tmp_path: Path, secret: str) -> None:
+    # Accepting it would answer every Clerk delivery with 401 at run time.
+    with pytest.raises(ValidationError, match="whsec_<base64>"):
+        Settings(
+            data_dir=tmp_path / "data",
+            profile="hosted",
+            identity_provider="clerk",
+            clerk_issuer=ISSUER,
+            clerk_webhook_secret=secret,
+            web_origins=WEB_ORIGIN,
+        )
+
+
+def test_the_hosted_api_refuses_to_start_without_a_webhook_secret(tmp_path: Path) -> None:
+    from runway.api.app import create_app
+
+    hosted = Settings(
+        data_dir=tmp_path / "data", clerk_issuer=ISSUER, web_origins=WEB_ORIGIN
+    ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    with pytest.raises(ValueError, match="RUNWAY_CLERK_WEBHOOK_SECRET"):
+        create_app(hosted)
+    create_app(hosted.model_copy(update={"clerk_webhook_secret": SecretStr(WEBHOOK_SECRET)}))
+
+
+def test_the_configured_issuer_is_compared_without_a_trailing_slash(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", clerk_issuer=f" {ISSUER}/ ")
+    assert settings.clerk_issuer_normalized == ISSUER
+    assert settings.clerk_jwks_endpoint == f"{ISSUER}/.well-known/jwks.json"
 
 
 def test_local_profile_ignores_hosted_settings_and_derives_defaults(tmp_path: Path) -> None:

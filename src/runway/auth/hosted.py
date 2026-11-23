@@ -1,8 +1,9 @@
 """Hosted-profile principal resolution (spec 01 section 3, spec 05 section 2).
 
-verify the session with the identity provider -> mirror the user and find
-the workspace of the active organization -> take the Runway role from
-`workspace_members` -> apply the per-principal and per-workspace rate limits.
+verify the session with the identity provider (a refused token is charged to
+the client address's rate-limit bucket) -> the per-user rate limit -> mirror
+the user and find the workspace of the active organization -> take the Runway
+role from `workspace_members` -> the per-workspace rate limit.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from runway.auth.problems import Problem
 from runway.config import Settings
 from runway.db.base import Database
 from runway.hosted.quotas import quotas_for
-from runway.hosted.ratelimit import RateLimit, RateLimiter, enforce
+from runway.hosted.ratelimit import RateLimit, RateLimiter, client_key, enforce
 from runway.identity.base import (
     ExternalIdentity,
     IdentityProvider,
@@ -93,7 +94,32 @@ def resolve_hosted_principal(settings: Settings, request: Request) -> Principal:
     if provider is None or database is None:
         # No identity provider configured: nobody can be authenticated.
         raise unauthenticated()
-    identity = verify_identity(provider, request)
+    limiter: RateLimiter | None = getattr(state, "rate_limiter", None)
+    try:
+        identity = verify_identity(provider, request)
+    except Problem as refused:
+        presented = refused.status_code == 401 and refused.code != "authentication_required"
+        if limiter is not None and presented:
+            # A presented token failed: spend the client address's bucket, so
+            # forged or expired tokens are throttled like anonymous calls. (A
+            # request with no credential already paid in ClientRateLimit.)
+            address = request.client.host if request.client else None
+            enforce(
+                limiter,
+                client_key(address),
+                RateLimit(settings.rate_limit_ip_per_minute),
+                "too many requests from this address; slow down",
+            )
+        raise
+    if limiter is not None:
+        # Keyed by the verified user, never by address: many users may share
+        # one address (the web server, a NAT), and one user may move between them.
+        enforce(
+            limiter,
+            f"user:{provider.name}:{identity.user_id}",
+            RateLimit(settings.rate_limit_principal_per_minute),
+            "too many requests from this account; slow down",
+        )
     mirror = IdentityMirror(provider.name, default_role=settings.hosted_default_member_role)
     member, workspace_rpm = _resolve_member(database, mirror, settings, identity)
     principal = Principal(
@@ -104,19 +130,11 @@ def resolve_hosted_principal(settings: Settings, request: Request) -> Principal:
         scopes=scopes_for_role(member.role),
         display=member.display,
     )
-    limiter: RateLimiter | None = getattr(state, "rate_limiter", None)
-    if limiter is not None:
+    if limiter is not None and workspace_rpm is not None:
         enforce(
             limiter,
-            f"principal:{principal.kind}:{principal.id}",
-            RateLimit(settings.rate_limit_principal_per_minute),
-            "too many requests from this account; slow down",
+            f"workspace:{principal.workspace_id}",
+            RateLimit(workspace_rpm),
+            "this workspace has reached its API requests per minute",
         )
-        if workspace_rpm is not None:
-            enforce(
-                limiter,
-                f"workspace:{principal.workspace_id}",
-                RateLimit(workspace_rpm),
-                "this workspace has reached its API requests per minute",
-            )
     return principal

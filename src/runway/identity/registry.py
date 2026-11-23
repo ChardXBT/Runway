@@ -16,7 +16,7 @@ ProviderFactory = Callable[[Settings, JwksFetcher], IdentityProvider]
 
 def _clerk(settings: Settings, fetcher: JwksFetcher) -> IdentityProvider:
     config = ClerkConfig(
-        issuer=settings.clerk_issuer.strip(),
+        issuer=settings.clerk_issuer_normalized,
         jwks_url=settings.clerk_jwks_endpoint,
         authorized_parties=normalized_origins(settings.clerk_authorized_party_list),
         audience=settings.clerk_audience.strip() or None,

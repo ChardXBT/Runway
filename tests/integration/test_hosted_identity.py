@@ -289,6 +289,116 @@ def test_the_last_owner_cannot_be_demoted(hosted: Hosted) -> None:
     assert demote.json()["role"] == "editor"
 
 
+def test_a_removed_member_cannot_reclaim_an_open_workspace_as_owner(hosted: Hosted) -> None:
+    # The organization is first seen through a non-admin membership, so its
+    # first-owner claim is still open when that member is removed.
+    hosted.hook(membership_event("created", "org_b", "user_b"), "msg_b1")
+    member = hosted.auth("user_b", "org_b", role="member")
+    assert hosted.client.get("/api/v1/workspace", headers=member).json()["your_role"] == "viewer"
+    hosted.hook(membership_event("deleted", "org_b", "user_b"), "msg_b2")
+
+    # A still-valid token claiming admin must not bring the removed user back as owner.
+    for role in ("admin", "member"):
+        response = hosted.client.get(
+            "/api/v1/workspace", headers=hosted.auth("user_b", "org_b", role=role)
+        )
+        _problem(response, 403, "membership_unknown")
+    assert hosted.count(WorkspaceMember) == 0
+    # A real admin who was never removed can still take the open claim.
+    admin = hosted.client.get("/api/v1/workspace", headers=hosted.auth("user_z", "org_b"))
+    assert admin.json()["your_role"] == "owner"
+
+
+def test_the_first_owner_claim_closes_once_the_workspace_has_an_owner(hosted: Hosted) -> None:
+    hosted.hook(membership_event("created", "org_c", "user_c"), "msg_c1")
+    with hosted.database.session() as session:
+        member = session.scalar(select(WorkspaceMember))
+        assert member is not None
+        member.role = "owner"  # an owner exists while the claim was never taken
+    response = hosted.client.get("/api/v1/workspace", headers=hosted.auth("user_y", "org_c"))
+    _problem(response, 403, "membership_unknown")
+    with hosted.database.session() as session:
+        link = session.scalar(
+            select(WorkspaceIdentityLink).where(WorkspaceIdentityLink.external_org_id == "org_c")
+        )
+        assert link is not None and link.claimed_at is not None
+    # Removing that owner does not reopen the claim.
+    hosted.hook(membership_event("deleted", "org_c", "user_c"), "msg_c2")
+    response = hosted.client.get("/api/v1/workspace", headers=hosted.auth("user_y", "org_c"))
+    _problem(response, 403, "membership_unknown")
+
+
+def test_owner_demotion_locks_the_workspace_row_first(hosted: Hosted) -> None:
+    # Two owners demoting each other at once under Postgres READ COMMITTED must
+    # not leave the workspace without an owner: the demotion takes a row lock
+    # (SELECT ... FOR UPDATE) on the workspace before counting owners.
+    from sqlalchemy import event
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.orm import ORMExecuteState
+    from sqlalchemy.orm import Session as OrmSession
+
+    owner = hosted.auth("user_a", "org_a")
+    hosted.client.get("/api/v1/workspace", headers=owner)
+    hosted.hook(membership_event("created", "org_a", "user_e"), "msg_e")
+    other_id = hosted.user_id("user_e")
+    hosted.client.patch(
+        f"/api/v1/workspace/members/{other_id}", json={"role": "owner"}, headers=owner
+    )
+
+    statements: list[str] = []
+
+    def record(state: ORMExecuteState) -> None:
+        statements.append(str(state.statement.compile(dialect=postgresql.dialect())))
+
+    event.listen(OrmSession, "do_orm_execute", record)
+    try:
+        demote = hosted.client.patch(
+            f"/api/v1/workspace/members/{other_id}", json={"role": "editor"}, headers=owner
+        )
+    finally:
+        event.remove(OrmSession, "do_orm_execute", record)
+    assert demote.status_code == 200, demote.text
+    locks = [
+        i for i, sql in enumerate(statements) if "FROM workspaces" in sql and "FOR UPDATE" in sql
+    ]
+    counts = [i for i, sql in enumerate(statements) if "count(workspace_members.id)" in sql]
+    assert locks and counts and locks[0] < counts[0], statements
+
+
+def test_oversized_user_email_and_name_are_cut_to_the_column_sizes(hosted: Hosted) -> None:
+    long_name = "N" * 300
+    long_email = "e" * 400 + "@example.test"
+    response = hosted.client.get(
+        "/api/v1/workspace",
+        headers=hosted.auth("user_a", "org_a", email=long_email, name=long_name),
+    )
+    assert response.status_code == 200, response.text
+    hosted.hook(
+        {
+            "type": "user.updated",
+            "data": {
+                "id": "user_a",
+                "primary_email_address_id": "idn_1",
+                "email_addresses": [{"id": "idn_1", "email_address": long_email + "x"}],
+                "first_name": long_name,
+                "last_name": long_name,
+            },
+        },
+        "msg_long",
+    )
+    with hosted.database.session() as session:
+        user = session.scalar(select(User).where(User.external_id == "user_a"))
+        assert user is not None
+        assert user.email is not None and len(user.email) == 320
+        assert user.display_name is not None and len(user.display_name) == 200
+
+
+def test_an_issuer_with_a_trailing_slash_still_accepts_tokens(tmp_path: Path) -> None:
+    with hosted_app(tmp_path, clerk_issuer=ISSUER + "/") as running:
+        response = running.client.get("/api/v1/workspace", headers=running.auth("user_a", "org_a"))
+        assert response.status_code == 200, response.text
+
+
 # ------------------------------------------------------------------ webhooks
 
 
@@ -425,6 +535,77 @@ def test_rate_limits_return_429_problem_json(tmp_path: Path) -> None:
         running.app.state.rate_limiter._buckets.clear()
         assert running.client.get("/api/v1/workspace", headers=headers).status_code == 200
         _problem(running.client.get("/api/v1/workspace", headers=headers), 429, "rate_limited")
+
+
+class _ClientAddress:
+    """Present every request as coming from `address` (the hop uvicorn sees)."""
+
+    def __init__(self, app: Any, address: str) -> None:
+        self.app = app
+        self.address = address
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] in {"http", "websocket"}:
+            scope["client"] = (self.address, 1234)
+        await self.app(scope, receive, send)
+
+
+def test_signed_in_users_behind_one_address_do_not_share_a_bucket(tmp_path: Path) -> None:
+    # Every TestClient request comes from one address, like users behind the
+    # web server or one NAT. Each signed-in user has their own budget.
+    with hosted_app(tmp_path, rate_limit_ip_per_minute=2) as running:
+        for user, org in (("user_a", "org_a"), ("user_c", "org_c"), ("user_d", "org_d")):
+            headers = running.auth(user, org)
+            for _ in range(4):
+                response = running.client.get("/api/v1/workspace", headers=headers)
+                assert response.status_code == 200, (user, response.text)
+
+
+def test_forged_tokens_spend_the_address_bucket(tmp_path: Path) -> None:
+    with hosted_app(tmp_path, rate_limit_ip_per_minute=2) as running:
+        forged = {"Authorization": "Bearer " + mint(rsa_key("attacker"), session_claims("x"))}
+        for _ in range(2):
+            _problem(running.client.get("/api/v1/workspace", headers=forged), 401, "invalid_token")
+        _problem(running.client.get("/api/v1/workspace", headers=forged), 429, "rate_limited")
+        _problem(running.client.get("/api/v1/workspace"), 429, "rate_limited")
+        # A valid session from the same address is limited per user, not refused.
+        valid = running.auth("user_a", "org_a")
+        assert running.client.get("/api/v1/workspace", headers=valid).status_code == 200
+
+
+def test_a_bearer_header_does_not_skip_the_address_bucket_on_the_webhook(tmp_path: Path) -> None:
+    # The webhook resolves no principal, so a session header there would never
+    # be charged per user: it must stay on the address bucket.
+    with hosted_app(tmp_path, rate_limit_ip_per_minute=2) as running:
+        junk = {"Authorization": "Bearer not-a-session", "svix-id": "msg_x"}
+        statuses = [
+            running.client.post(HOOK, content=b"{}", headers=junk).status_code for _ in range(3)
+        ]
+        assert statuses[:2] == [401, 401]
+        _problem(running.client.post(HOOK, content=b"{}", headers=junk), 429, "rate_limited")
+
+
+def test_ipv6_clients_are_limited_per_64_behind_the_trusted_proxy(tmp_path: Path) -> None:
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    with hosted_app(tmp_path, rate_limit_ip_per_minute=3) as running:
+        # As `runway serve` runs it: X-Forwarded-For trusted only from the proxy.
+        proxied = ProxyHeadersMiddleware(running.app, trusted_hosts="172.30.0.1")
+        client = TestClient(_ClientAddress(proxied, "172.30.0.1"), base_url=running.client.base_url)
+        statuses = [
+            client.get(
+                "/api/v1/workspace", headers={"X-Forwarded-For": f"2001:db8::{i}"}
+            ).status_code
+            for i in range(1, 7)
+        ]
+        assert statuses == [401, 401, 401, 429, 429, 429]
+        other = client.get("/api/v1/workspace", headers={"X-Forwarded-For": "2001:db8:0:1::1"})
+        assert other.status_code == 401
+        # A spoofed leftmost entry does not buy a new bucket.
+        spoofed = client.get(
+            "/api/v1/workspace", headers={"X-Forwarded-For": "10.9.9.9, 2001:db8::99"}
+        )
+        assert spoofed.status_code == 429
 
 
 def test_hosted_hides_the_local_only_routes(hosted: Hosted) -> None:

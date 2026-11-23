@@ -87,6 +87,17 @@ def change_member_role(
         raise Problem(
             404, "member_not_found", "Member not found", "no such member in this workspace"
         )
+    if member.role == "owner" and role != "owner":
+        # Serialize owner demotions per workspace: without the row lock, two
+        # owners demoting each other under READ COMMITTED would both count two
+        # owners and leave none. The lock is held until the request's
+        # transaction ends, and the member and the count are read after it, so
+        # a demotion committed meanwhile is seen. (SQLite ignores FOR UPDATE
+        # and serializes writers itself.)
+        session.execute(
+            select(Workspace.id).where(Workspace.id == principal.workspace_id).with_for_update()
+        )
+        session.refresh(member)
     previous = member.role
     if previous == "owner" and role != "owner":
         owners = session.scalar(

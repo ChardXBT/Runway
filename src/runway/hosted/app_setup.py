@@ -1,9 +1,11 @@
 """Middleware and state the hosted profile adds to the API (spec 05 sections 2 and 6).
 
 Starlette runs the middleware added last first, so a request passes:
-security headers -> per-IP rate limit -> origin guard -> CORS -> routes, and
-`get_principal` then verifies the session and applies the per-principal and
-per-workspace limits.
+security headers -> per-address rate limit (requests without a session, and
+every request to the signed webhook) -> origin guard -> CORS -> routes, and
+`get_principal` then verifies the session and applies the per-user and
+per-workspace limits (a token that fails verification spends the address
+bucket there).
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from runway.api.identity_hook_routes import CLERK_HOOK_PATH
 from runway.config import Settings
 from runway.hosted.middleware import ClientRateLimit, HostedRequestGuard, SecurityHeaders
 from runway.hosted.ratelimit import InProcessTokenBucket, RateLimit
@@ -51,7 +54,10 @@ def configure_hosted(application: FastAPI, settings: Settings) -> None:
     )
     application.add_middleware(HostedRequestGuard, allowed_origins=origins)
     application.add_middleware(
-        ClientRateLimit, limiter=limiter, limit=RateLimit(settings.rate_limit_ip_per_minute)
+        ClientRateLimit,
+        limiter=limiter,
+        limit=RateLimit(settings.rate_limit_ip_per_minute),
+        address_only_paths=(CLERK_HOOK_PATH,),
     )
     application.add_middleware(SecurityHeaders)
 

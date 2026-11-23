@@ -3,8 +3,11 @@
 * `HostedRequestGuard`: the local guard's cross-site check, against the
   configured web origins instead of loopback; and a state-changing request
   authenticated by the session cookie must carry a matching `Origin`.
-* `ClientRateLimit`: per-client-IP token bucket, before authentication, so
-  failed sign-ins and forged tokens are throttled too.
+* `ClientRateLimit`: per-client-address token bucket for requests that carry
+  no session credential. A request with a session token is limited per user
+  after verification instead, and a token that fails verification is charged
+  to the same address bucket (`runway.auth.hosted`), so forged tokens are
+  throttled too.
 * `SecurityHeaders`: HSTS, no-sniff, frame denial and no-store on every
   response.
 
@@ -22,8 +25,9 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from runway.api.security import SAFE_METHODS, cross_site_refusal
+from runway.auth.principal import API_KEY_PREFIX
 from runway.auth.problems import PROBLEM_MEDIA_TYPE, Problem
-from runway.hosted.ratelimit import RateLimit, RateLimiter, rate_limited
+from runway.hosted.ratelimit import RateLimit, RateLimiter, client_key, rate_limited
 from runway.identity.base import presented_credential
 
 SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
@@ -90,24 +94,41 @@ class ClientRateLimit:
         limiter: RateLimiter,
         limit: RateLimit,
         exempt_paths: Iterable[str] = ("/health",),
+        address_only_paths: Iterable[str] = (),
     ) -> None:
         self.app = app
         self.limiter = limiter
         self.limit = limit
         self.exempt_paths = frozenset(exempt_paths)
+        # Routes that resolve no principal (the signed webhook): a session
+        # header there would never be charged per user, so it is ignored.
+        self.address_only_paths = frozenset(address_only_paths)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("path") in self.exempt_paths:
             await self.app(scope, receive, send)
             return
+        if scope.get("path") not in self.address_only_paths and _carries_session(
+            Headers(scope=scope)
+        ):
+            # Limited per user once verified; a failed verification is charged
+            # to this address by resolve_hosted_principal.
+            await self.app(scope, receive, send)
+            return
         client = scope.get("client")
-        address = client[0] if client else "unknown"
-        decision = self.limiter.consume(f"ip:{address}", self.limit)
+        decision = self.limiter.consume(client_key(client[0] if client else None), self.limit)
         if not decision.allowed:
             problem = rate_limited(decision, "too many requests from this address; slow down")
             await send_problem(scope, receive, send, problem)
             return
         await self.app(scope, receive, send)
+
+
+def _carries_session(headers: Headers) -> bool:
+    presented = presented_credential(headers)
+    # An `rwy_` agent key is not a session; until keys are verified it is
+    # refused without crypto, so it stays on the address bucket.
+    return presented is not None and not presented[1].startswith(API_KEY_PREFIX)
 
 
 class SecurityHeaders:

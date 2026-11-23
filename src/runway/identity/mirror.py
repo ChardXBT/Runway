@@ -9,8 +9,11 @@ to. The rules:
   the workspace is created the first time the organization is seen.
 * The first member of a new organization's workspace becomes its `owner`,
   provided the provider reports them as an organization admin (Clerk's creator
-  of an organization is its admin). The claim is taken once, atomically.
-  Every later member joins with the configured default role.
+  of an organization is its admin). The claim is taken once, atomically, and
+  is closed for good as soon as the workspace has any owner. A user whose
+  membership in the workspace was ever revoked can never take it, so a removed
+  member holding a still-valid admin token cannot come back as owner. Every
+  later member joins with the configured default role.
 * Membership rows are created only by that first-owner claim or by the
   provider's membership webhooks. A signed-in user without a row gets 403.
 * Removing a membership, a user or an organization revokes membership rows.
@@ -51,6 +54,11 @@ logger = logging.getLogger(__name__)
 
 ROLES: frozenset[str] = frozenset(get_args(Role))
 PROVIDER_ADMIN_ROLE = "admin"
+# Column sizes of users.email and users.display_name: a longer value would
+# raise DataError on Postgres and turn a sign-in or webhook into a 500.
+EMAIL_MAX = 320
+DISPLAY_NAME_MAX = 200
+MEMBER_REVOKED = "identity.member_revoked"
 
 Outcome = str  # "applied" | "duplicate" | "stale" | "ignored"
 
@@ -120,7 +128,9 @@ class IdentityMirror:
         workspace = self._active_workspace(session, link)
         member = self._member(session, workspace.id, user.id)
         if member is None:
-            if identity.organization_role == PROVIDER_ADMIN_ROLE and self._claim(session, link):
+            if identity.organization_role == PROVIDER_ADMIN_ROLE and self._claim(
+                session, link, user.id
+            ):
                 member = self._add_member(session, workspace.id, user, "owner", via="sign-in")
             else:
                 raise MembershipRefused(
@@ -222,7 +232,7 @@ class IdentityMirror:
             # Runway's role is the system of record; a provider role change is ignored.
             return "applied"
         role: Role = self.default_role
-        if event.provider_role == PROVIDER_ADMIN_ROLE and self._claim(session, link):
+        if event.provider_role == PROVIDER_ADMIN_ROLE and self._claim(session, link, user.id):
             role = "owner"
         self._add_member(session, link.workspace_id, user, role, via="webhook")
         return "applied"
@@ -262,6 +272,8 @@ class IdentityMirror:
     def _user(
         self, session: Session, external_id: str, email: str | None, display_name: str | None
     ) -> User:
+        email = email[:EMAIL_MAX] if email else email
+        display_name = display_name[:DISPLAY_NAME_MAX] if display_name else display_name
         user = session.scalar(select(User).where(User.external_id == external_id))
         if user is None:
             user = User(
@@ -332,9 +344,16 @@ class IdentityMirror:
             counter += 1
         return candidate
 
-    def _claim(self, session: Session, link: WorkspaceIdentityLink) -> bool:
+    def _claim(self, session: Session, link: WorkspaceIdentityLink, user_id: int) -> bool:
         """Take the one-time first-owner claim; True only for the caller that took it."""
         now = self.clock()
+        if link.claimed_at is None and self._has_owner(session, link.workspace_id):
+            # An owner exists (for example promoted by an owner while the claim
+            # was open): close the claim so nobody else can take it later.
+            self._close_claim(session, link, now)
+            return False
+        if self._was_revoked(session, link.workspace_id, user_id):
+            return False
         result = cast(
             CursorResult[object],
             session.execute(
@@ -350,6 +369,34 @@ class IdentityMirror:
         claimed = result.rowcount == 1
         session.refresh(link)
         return claimed
+
+    @staticmethod
+    def _close_claim(session: Session, link: WorkspaceIdentityLink, now: datetime) -> None:
+        session.execute(
+            update(WorkspaceIdentityLink)
+            .where(
+                WorkspaceIdentityLink.id == link.id,
+                WorkspaceIdentityLink.claimed_at.is_(None),
+            )
+            .values(claimed_at=now, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        session.refresh(link)
+
+    @staticmethod
+    def _was_revoked(session: Session, workspace_id: int, user_id: int) -> bool:
+        """A revocation is a tombstone: the audit log keeps it for good."""
+        return (
+            session.scalar(
+                select(AuditLogEntry.id).where(
+                    AuditLogEntry.workspace_id == workspace_id,
+                    AuditLogEntry.action == MEMBER_REVOKED,
+                    AuditLogEntry.target_type == "user",
+                    AuditLogEntry.target_id == str(user_id),
+                )
+            )
+            is not None
+        )
 
     @staticmethod
     def _member(session: Session, workspace_id: int, user_id: int) -> WorkspaceMember | None:
@@ -385,7 +432,7 @@ class IdentityMirror:
                 workspace_id,
                 extra={"event_type": "identity_last_owner_removed", "workspace_id": workspace_id},
             )
-        self._audit(session, workspace_id, "identity.member_revoked", user_id, detail)
+        self._audit(session, workspace_id, MEMBER_REVOKED, user_id, detail)
 
     @staticmethod
     def _has_owner(session: Session, workspace_id: int) -> bool:

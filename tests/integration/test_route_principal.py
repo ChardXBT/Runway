@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
+from identity_support import WEBHOOK_SECRET
 from starlette.routing import Mount, Route
 
 from runway.api.app import create_app
@@ -105,8 +106,44 @@ def test_hosted_clerk_app_exempts_only_its_signed_webhook(tmp_path: Path) -> Non
         data_dir=tmp_path / "data",
         clerk_issuer="https://clerk.runway.test",
         web_origins="https://app.runway.test",
+        clerk_webhook_secret=WEBHOOK_SECRET,
     ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
     application = create_app(hosted)
     paths = {context.path for context in iter_route_contexts(application.routes)}
     assert paths >= EXEMPT_SIGNATURE_ROUTES
     assert _unguarded_routes(application) == []
+
+
+# Every route the hosted API serves, and why each is safe there. Adding a
+# router to hosted must add it here, with its tenancy argument.
+HOSTED_ROUTES = {
+    # Liveness probe: product name, version and switches; no tenant data.
+    ("GET", "/health"),
+    # Product switches only (hosted_settings_view), behind get_principal.
+    ("GET", "/api/settings"),
+    # Workspace router: every query is filtered by principal.workspace_id and
+    # role changes require workspace:admin.
+    ("GET", "/api/v1/workspace"),
+    ("GET", "/api/v1/workspace/members"),
+    ("PATCH", "/api/v1/workspace/members/{user_id}"),
+    # Clerk webhook: authenticated by the Svix signature, not by a principal.
+    ("POST", "/hooks/identity/clerk"),
+}
+
+
+def test_hosted_serves_exactly_the_listed_routes(tmp_path: Path) -> None:
+    hosted = Settings(
+        data_dir=tmp_path / "data",
+        clerk_issuer="https://clerk.runway.test",
+        web_origins="https://app.runway.test",
+        clerk_webhook_secret=WEBHOOK_SECRET,
+    ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    application = create_app(hosted)
+    served = {
+        (method, context.path)
+        for context in iter_route_contexts(application.routes)
+        for method in (context.methods or set())
+        if method != "HEAD"
+    }
+    assert served == HOSTED_ROUTES
+    assert not [route for route in application.routes if isinstance(route, Mount)]

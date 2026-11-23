@@ -4,7 +4,7 @@ import pytest
 
 from runway.auth.problems import Problem
 from runway.hosted.quotas import UNLIMITED, WorkspaceQuotas, enforce_quota
-from runway.hosted.ratelimit import InProcessTokenBucket, RateLimit, enforce
+from runway.hosted.ratelimit import InProcessTokenBucket, RateLimit, client_key, enforce
 
 
 def test_token_bucket_allows_a_burst_then_refills_over_time() -> None:
@@ -54,3 +54,19 @@ def test_enforce_quota() -> None:
     with pytest.raises(Problem):
         enforce_quota(quotas, "storage_bytes", used=90, adding=11)
     enforce_quota(UNLIMITED, "storage_bytes", used=10**15)
+
+
+@pytest.mark.parametrize(
+    ("address", "key"),
+    [
+        ("203.0.113.9", "ip:203.0.113.9"),
+        ("2001:db8::1", "ip:2001:db8::/64"),
+        ("2001:db8:0:0:ffff:ffff:ffff:ffff", "ip:2001:db8::/64"),
+        ("2001:db8:0:1::1", "ip:2001:db8:0:1::/64"),
+        ("::ffff:198.51.100.7", "ip:198.51.100.7"),
+        ("testclient", "ip:testclient"),
+        (None, "ip:unknown"),
+    ],
+)
+def test_client_key_folds_ipv6_to_its_64(address: str | None, key: str) -> None:
+    assert client_key(address) == key

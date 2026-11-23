@@ -3,10 +3,17 @@
 `RateLimiter` is the seam: the in-process token bucket below serves one API
 process; a shared store (Redis, Postgres) can implement the same protocol
 when the API runs as more than one process.
+
+Keys: a signed-in request is limited per user (`user:<provider>:<id>`) and per
+workspace; only requests without a valid session spend the per-address bucket
+(`ip:<address>`), so users behind one proxy hop or one NAT do not share a
+budget. `client_key` folds an IPv6 address to its /64, the block one
+subscriber usually holds, so one client cannot mint fresh buckets.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import threading
 import time
@@ -74,6 +81,25 @@ class InProcessTokenBucket:
         self._buckets[key] = (tokens, now)
         while len(self._buckets) > self._max_keys:
             self._buckets.popitem(last=False)
+
+
+IPV6_CLIENT_PREFIX = 64
+
+
+def client_key(address: str | None) -> str:
+    """The per-address bucket key: IPv4 as is, IPv6 folded to its /64."""
+    if not address:
+        return "ip:unknown"
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return f"ip:{address}"
+    if isinstance(parsed, ipaddress.IPv6Address):
+        if parsed.ipv4_mapped is not None:
+            return f"ip:{parsed.ipv4_mapped}"
+        network = ipaddress.IPv6Network((parsed, IPV6_CLIENT_PREFIX), strict=False)
+        return f"ip:{network}"
+    return f"ip:{parsed}"
 
 
 def rate_limited(decision: RateDecision, detail: str) -> Problem:
