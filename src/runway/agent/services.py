@@ -139,9 +139,7 @@ class PostService(Protocol):
         """Must include `platform`, `state` and `payload_hash`."""
         ...
 
-    def request_release(
-        self, principal: Principal, post_id: int, target_id: int
-    ) -> JSONObject: ...
+    def request_release(self, principal: Principal, post_id: int, target_id: int) -> JSONObject: ...
 
     def release_target(
         self, principal: Principal, post_id: int, target_id: int, payload_hash: str

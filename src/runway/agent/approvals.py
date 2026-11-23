@@ -81,7 +81,7 @@ def guarded_awaiting_release(
         target_columns = _columns(connection, "draft_targets")
         post_columns = _columns(connection, "content_drafts")
         if not (
-            REQUIRED_TARGET_COLUMNS <= target_columns and REQUIRED_POST_COLUMNS <= post_columns
+            target_columns >= REQUIRED_TARGET_COLUMNS and post_columns >= REQUIRED_POST_COLUMNS
         ):
             return ApprovalPage(items=[], next_cursor=None)
         target_names = sorted(

@@ -71,9 +71,7 @@ def upgrade() -> None:
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("key_id", "platform", name="uq_api_key_release_grant"),
         )
-        op.create_index(
-            "ix_api_key_release_grants_key_id", "api_key_release_grants", ["key_id"]
-        )
+        op.create_index("ix_api_key_release_grants_key_id", "api_key_release_grants", ["key_id"])
         op.create_index(
             "ix_api_key_release_grants_workspace_id", "api_key_release_grants", ["workspace_id"]
         )
@@ -103,9 +101,7 @@ def upgrade() -> None:
             ),
             sa.PrimaryKeyConstraint("id"),
         )
-        op.create_index(
-            "ix_webhook_endpoints_workspace_id", "webhook_endpoints", ["workspace_id"]
-        )
+        op.create_index("ix_webhook_endpoints_workspace_id", "webhook_endpoints", ["workspace_id"])
     if "webhook_deliveries" not in existing:
         op.create_table(
             "webhook_deliveries",
@@ -135,9 +131,7 @@ def upgrade() -> None:
             "webhook_deliveries",
             ["state", "next_attempt_at"],
         )
-        op.create_index(
-            "ix_webhook_deliveries_endpoint_id", "webhook_deliveries", ["endpoint_id"]
-        )
+        op.create_index("ix_webhook_deliveries_endpoint_id", "webhook_deliveries", ["endpoint_id"])
         op.create_index(
             "ix_webhook_deliveries_workspace_id", "webhook_deliveries", ["workspace_id"]
         )

@@ -88,6 +88,6 @@ def test_existing_schema_upgrade_and_rollback_preserve_catalogue(
         assert connection.execute(text("SELECT count(*) FROM posts")).scalar_one() == post_count
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == "0016_shared_contracts"
+            == "0019_agent_interface"
         )
     upgraded_engine.dispose()

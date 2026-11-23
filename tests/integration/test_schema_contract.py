@@ -210,7 +210,7 @@ def test_committed_contract_has_the_shared_v1_tables() -> None:
     snapshot_path = Settings().project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
     snapshot: object = json.loads(snapshot_path.read_text(encoding="utf-8"))
     assert isinstance(snapshot, dict)
-    assert snapshot["migration"] == "0016_shared_contracts"
+    assert snapshot["migration"] == "0019_agent_interface"
     tables = snapshot["contract"]["tables"]
     assert {column["name"] for column in tables["events"]["columns"]} == {
         "id",

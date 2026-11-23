@@ -79,9 +79,7 @@ def policy_view(session: Session, workspace_id: int) -> PolicyView:
     return PolicyView(_as_policy(row.agent_release), row.updated_by, row.updated_at)
 
 
-def set_agent_release_policy(
-    session: Session, actor: Principal, value: AgentRelease
-) -> PolicyView:
+def set_agent_release_policy(session: Session, actor: Principal, value: AgentRelease) -> PolicyView:
     """Change the workspace policy. Turning it to `never` disables every grant at once."""
     if value not in AGENT_RELEASE_VALUES:
         raise Problem.of(ProblemCode.VALIDATION_FAILED, "agent_release must be never or per_key")
@@ -202,6 +200,9 @@ def authorize_release(
         )
     if platform is None:
         return
+    if not principal.id.isdigit():
+        # An agent that is not an API key (keyless local MCP) holds no grants.
+        raise Problem.of(ProblemCode.SCOPE_MISSING, "only an API key can hold a release grant")
     key_id = int(principal.id)
     grant = session.scalar(
         select(ApiKeyReleaseGrant).where(

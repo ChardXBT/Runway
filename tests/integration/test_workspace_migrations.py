@@ -23,7 +23,7 @@ from runway.db.schema_contract import schema_snapshot
 
 # Fingerprint of docs/schema/intelligence-data-flywheel.json at 0012_creator_platforms.
 SCHEMA_0012_FINGERPRINT = "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be"
-HEAD = "0016_shared_contracts"
+HEAD = "0019_agent_interface"
 SCOPED_TABLES = (
     "channels",
     "connected_accounts",
@@ -50,7 +50,17 @@ NEW_TABLES = {
     "publish_jobs",
     "idempotency_keys",
     "events",
+    "workspace_policies",
+    "api_key_release_grants",
+    "webhook_endpoints",
+    "webhook_deliveries",
 }
+AGENT_TABLES = (
+    "workspace_policies",
+    "api_key_release_grants",
+    "webhook_endpoints",
+    "webhook_deliveries",
+)
 NOW = "2026-11-01 10:00:00.000000"
 
 FIXTURE_ROWS = [
@@ -227,9 +237,16 @@ def test_downgrade_after_upgrade_keeps_rows_and_restores_0012(at_0012: Settings)
 def test_each_revision_downgrades_one_step_at_a_time(at_0012: Settings) -> None:
     before = _row_counts(at_0012)
     config = _config(at_0012)
-    for revision in ("0013_workspaces", "0014_workspace_columns", "0015_publish_jobs", HEAD):
+    for revision in (
+        "0013_workspaces",
+        "0014_workspace_columns",
+        "0015_publish_jobs",
+        "0016_shared_contracts",
+        HEAD,
+    ):
         command.upgrade(config, revision)
     for revision in (
+        "0016_shared_contracts",
         "0015_publish_jobs",
         "0014_workspace_columns",
         "0013_workspaces",
@@ -320,3 +337,26 @@ def test_a_fresh_database_also_gets_autoincrement_event_ids(tmp_path: Path) -> N
     settings.ensure_directories()
     command.upgrade(_config(settings), "head")
     assert "AUTOINCREMENT" in _events_ddl(settings).upper()
+
+
+def test_0019_adds_and_removes_only_the_agent_interface_tables(at_0012: Settings) -> None:
+    config = _config(at_0012)
+    command.upgrade(config, "0016_shared_contracts")
+    before = _row_counts(at_0012)
+    snapshot_0016 = _snapshot(at_0012)
+    assert set(AGENT_TABLES).isdisjoint(inspect(_engine(at_0012)).get_table_names())
+
+    command.upgrade(config, "0019_agent_interface")
+    after = _row_counts(at_0012)
+    assert {table: after[table] for table in before} == before
+    assert all(after[table] == 0 for table in AGENT_TABLES)
+    inspector = inspect(_engine(at_0012))
+    unique = {
+        row["name"]: row["column_names"]
+        for row in inspector.get_unique_constraints("webhook_deliveries")
+    }
+    assert unique["uq_webhook_delivery_event"] == ["endpoint_id", "event_id"]
+
+    command.downgrade(config, "0016_shared_contracts")
+    assert _row_counts(at_0012) == before
+    assert _snapshot(at_0012)["fingerprint"] == snapshot_0016["fingerprint"]

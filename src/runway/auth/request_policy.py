@@ -123,8 +123,10 @@ def _database(request: Request) -> Database | None:
 
 
 def _is_local_owner_trust(settings: Settings, principal: Principal) -> bool:
-    return settings.profile == "local" and principal.kind == "user" and (
-        principal.id == LOCAL_OWNER_ID
+    return (
+        settings.profile == "local"
+        and principal.kind == "user"
+        and (principal.id == LOCAL_OWNER_ID)
     )
 
 
@@ -164,13 +166,13 @@ def enforce_request_policy(settings: Settings, request: Request, principal: Prin
     method = request.method.upper()
     template = route_template(request)
     path = request.url.path
-    if principal.kind == "agent" and not is_v1_path(path):
-        if not (method in {"GET", "HEAD"} and template in KEY_READABLE_LEGACY_ROUTES):
-            raise Problem.of(
-                ProblemCode.SCOPE_MISSING,
-                "API keys work on /api/v1 and the MCP server only; unversioned routes "
-                "check no scopes, so they refuse keys",
-            )
+    key_readable = method in {"GET", "HEAD"} and template in KEY_READABLE_LEGACY_ROUTES
+    if principal.kind == "agent" and not is_v1_path(path) and not key_readable:
+        raise Problem.of(
+            ProblemCode.SCOPE_MISSING,
+            "API keys work on /api/v1 and the MCP server only; unversioned routes "
+            "check no scopes, so they refuse keys",
+        )
     if (
         settings.local_require_key_for_writes
         and method in MUTATING_METHODS
