@@ -11,13 +11,13 @@ import os
 import signal
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from types import FrameType
 
 import typer
 from sqlalchemy.exc import OperationalError
 
-from runway.config import get_settings
+from runway.config import Settings, get_settings
 from runway.db.base import Database
 from runway.db.bootstrap import DatabaseNotCurrent, require_database_at_head
 from runway.jobs.runtime import build_worker
@@ -95,36 +95,44 @@ def worker_command(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=EXIT_NOT_MIGRATED) from exc
     database = Database(settings)
-    pid_path = worker_pid_path(settings)
     try:
-        with exclusive_file_lock(worker_lock_path(settings), timeout=0):
-            # Written only while holding the lock, so it always names the live
-            # worker; operators and the launcher stop the worker through it.
-            write_pid_file(
-                pid_path,
-                {
-                    "pid": os.getpid(),
-                    "revision": checkout_revision(),
-                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                },
-            )
+        with ExitStack() as held:
             try:
-                worker = build_worker(settings, database)
-                sweep_stale_runs(SyncService(database, settings))
-                with _stop_on_signals(worker.stop):
-                    if once:
-                        worker.produce()
-                        while not worker.stop_event.is_set() and worker.run_once():
-                            pass
-                    else:
-                        worker.run_forever()
-            finally:
-                remove_pid_file(pid_path, os.getpid())
-    except LockTimeout as exc:
-        typer.echo("another runway worker is already running for this data directory", err=True)
-        raise typer.Exit(code=EXIT_ALREADY_RUNNING) from exc
+                held.enter_context(exclusive_file_lock(worker_lock_path(settings), timeout=0))
+            except LockTimeout as exc:
+                typer.echo(
+                    "another runway worker is already running for this data directory", err=True
+                )
+                raise typer.Exit(code=EXIT_ALREADY_RUNNING) from exc
+            _run_holding_the_lock(settings, database, once=once)
     finally:
         database.engine.dispose()
+
+
+def _run_holding_the_lock(settings: Settings, database: Database, *, once: bool) -> None:
+    # Written only while holding the lock, so it always names the live worker;
+    # the launcher and operators find (and stop) the worker through it.
+    pid_path = worker_pid_path(settings)
+    write_pid_file(
+        pid_path,
+        {
+            "pid": os.getpid(),
+            "revision": checkout_revision(),
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    )
+    try:
+        worker = build_worker(settings, database)
+        sweep_stale_runs(SyncService(database, settings))
+        with _stop_on_signals(worker.stop):
+            if once:
+                worker.produce()
+                while not worker.stop_event.is_set() and worker.run_once():
+                    pass
+            else:
+                worker.run_forever()
+    finally:
+        remove_pid_file(pid_path, os.getpid())
 
 
 if __name__ == "__main__":

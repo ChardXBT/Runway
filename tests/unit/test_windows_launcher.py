@@ -289,7 +289,7 @@ Set-Content -LiteralPath $python -Value "@echo off`r`necho %*> `"%~dp0args.txt`"
 $env:FAKE_EXIT = '0'
 Invoke-DatabaseUpgrade
 $recorded = (Get-Content -LiteralPath (Join-Path $Root 'args.txt')).Trim()
-Assert ($recorded -eq '-m runway.cli.main db upgrade') "upgrade arguments: $recorded"
+Assert ($recorded -eq '-m runway.cli.db_commands upgrade') "upgrade arguments: $recorded"
 Assert ((Get-Content (Join-Path $runtime 'db-upgrade.log')) -contains 'alembic output') 'upgrade output must be logged'
 $env:FAKE_EXIT = '3'
 $failed = $false
@@ -339,13 +339,13 @@ def _launcher_function(name: str) -> str:
 def test_launcher_upgrades_before_starting_the_api() -> None:
     start_component = _launcher_function("Start-Component")
     upgrade = start_component.index("if ($Component -eq 'api') { Invoke-DatabaseUpgrade }")
-    assert upgrade < start_component.index("Start-Process")
+    assert upgrade < start_component.index("Start-HiddenCommand")
     # The API itself never migrates; uvicorn serves the app module unchanged.
     assert "-m uvicorn runway.api.app:app --host 127.0.0.1 --port 8000" in start_component
 
 
 WORKER_SCRIPT = r"""
-param([string]$Launcher, [string]$Root)
+param([string]$Launcher, [string]$Root, [string]$Interpreter)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($Launcher, [ref]$null, [ref]$null)
@@ -356,63 +356,80 @@ function Assert($Value, $Label) { if (-not $Value) { throw $Label } }
 $root = $Root
 $runtime = Join-Path $Root 'runtime'
 $null = New-Item -ItemType Directory -Force -Path $runtime
+$lockPath = Join-Path $runtime 'worker.lock'
+$pidPath = Join-Path $runtime 'worker.pid'
 $started = @()
 function Write-Diagnostic([string]$Message) { $script:diagnostics += ,$Message }
 $diagnostics = @()
 
-# Ownership: the same venv rules as the API, for the worker module.
+# Ownership by command line is for the API only; the worker is found by its lock.
 $python = 'C:\repo with spaces\.venv\Scripts\python.exe'
 $worker = [pscustomobject]@{ Name='python.exe'; ProcessId=7; CommandLine='"' + $python + '" -m runway.cli.main worker' }
-Assert (Test-Owned $worker 'worker') 'venv worker must be owned'
 Assert (-not (Test-Owned $worker 'api')) 'a worker is not the API'
-$api = [pscustomobject]@{ Name='python.exe'; CommandLine='"' + $python + '" -m uvicorn runway.api.app:app' }
-Assert (-not (Test-Owned $api 'worker')) 'the API is not a worker'
-$base = [pscustomobject]@{ Name='python.exe'; ParentProcessId=42; CommandLine='"C:\Python312\python.exe" -m runway.cli.main worker' }
-$parentProcess = [pscustomobject]@{ CommandLine='"' + $python + '" -m runway.cli.main worker' }
-function Get-ParentProcess { return $script:parentProcess }
-Assert (Test-Owned $base 'worker') 'base interpreter started by our redirector must be owned'
-$parentProcess = [pscustomobject]@{ CommandLine='"C:\other\.venv\Scripts\python.exe" -m runway.cli.main worker' }
-Assert (-not (Test-Owned $base 'worker')) 'another checkout''s worker must not be owned'
+Assert (-not (Test-Owned $worker 'worker')) 'workers are not recognised by command line'
 
-# An owned worker is already running: nothing new is started.
-function Get-CimInstance { return $script:worker }
-Start-Worker
-Assert ($started.Count -eq 0) 'a running worker must not be started twice'
-Assert ($diagnostics[-1] -like 'worker already running (PID 7).') "diagnostic: $($diagnostics[-1])"
+# A worker holds worker.lock through runway.locks, whatever its command line
+# (here a bare python -c, like runway.exe worker would be).
+Assert (-not (Test-WorkerLockHeld $lockPath)) 'no lock file means no worker'
+$ready = Join-Path $Root 'holder.ready'
+$holderCode = "import sys,time,pathlib; from runway.locks import exclusive_file_lock; cm=exclusive_file_lock(pathlib.Path(sys.argv[1]), timeout=0); cm.__enter__(); pathlib.Path(sys.argv[2]).write_text('x'); time.sleep(60)"
+$holder = Start-Process -FilePath $Interpreter -ArgumentList @('-c', ('"{0}"' -f $holderCode), ('"{0}"' -f $lockPath), ('"{0}"' -f $ready)) -WindowStyle Hidden -PassThru
+try {
+    $deadline = (Get-Date).AddSeconds(60)
+    while (-not (Test-Path -LiteralPath $ready) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    Assert (Test-Path -LiteralPath $ready) 'lock holder did not start'
+    Set-Content -LiteralPath $pidPath -Value ('{"pid": ' + $holder.Id + ', "revision": "abc", "started_at": "now"}')
+    Assert (Test-WorkerLockHeld $lockPath) 'a held worker.lock is a running worker'
+    function Start-HiddenCommand { throw 'a running worker must not be started twice' }
+    Start-Worker $lockPath $pidPath
+    Assert ($started.Count -eq 0) 'a running worker must not be started twice'
+    Assert ($diagnostics[-1] -eq "worker already running (PID $($holder.Id)).") "diagnostic: $($diagnostics[-1])"
+} finally {
+    Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+    $holder.WaitForExit(10000) | Out-Null
+}
+# The OS dropped the lock with the process; the leftover file is not a worker.
+Assert (Test-Path -LiteralPath $lockPath) 'lock file stays behind'
+Assert (-not (Test-WorkerLockHeld $lockPath)) 'a released lock is not a running worker'
 
-# A failed process query must stop the launch rather than start a second worker.
-function Get-CimInstance { throw 'WMI unavailable' }
-$failed = $false
-try { Start-Worker } catch { $failed = $_.Exception.Message.Contains('WMI unavailable') }
-Assert $failed 'a failed worker query must not look like no worker'
-
-# No worker yet: start one with the venv python, logging to worker.log.
-function Get-CimInstance { return @() }
+# Re-load the real process runner, then start a fake worker with the venv python.
+$ast.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Start-HiddenCommand'
+}, $false) | ForEach-Object { Invoke-Expression $_.Extent.Text }
 $python = Join-Path $Root 'fake python.cmd'
 Set-Content -LiteralPath $python -Value "@echo off`r`necho %*> `"%~dp0worker-args.txt`"`r`necho worker log line`r`nif `"%FAKE_EXIT%`"==`"`" (ping -n 30 127.0.0.1 >nul) else (exit /b %FAKE_EXIT%)" -Encoding ASCII
 $env:FAKE_EXIT = ''
-Start-Worker
-Assert ($started.Count -eq 1) 'the started worker must be tracked for rollback'
+Start-Worker $lockPath $pidPath 1
+Assert ($started.Count -eq 1) 'the started worker must be tracked'
 $recorded = (Get-Content -LiteralPath (Join-Path $Root 'worker-args.txt')).Trim()
-Assert ($recorded -eq '-m runway.cli.main worker') "worker arguments: $recorded"
+Assert ($recorded -eq '-m runway.cli.worker_commands') "worker arguments: $recorded"
 Assert ((Get-Content (Join-Path $runtime 'worker.log')) -contains 'worker log line') 'worker output must go to worker.log'
 Stop-StartedChild $started[0]
-Assert $started[0].HasExited 'rollback must stop the worker'
+Assert $started[0].HasExited 'the started worker can be stopped'
 
-# A worker that exits during the grace period fails the launch.
+# A worker that exits during the grace period is an error for Start-Worker ...
 $started = @()
 $env:FAKE_EXIT = '3'
 $failed = $false
-try { Start-Worker } catch {
+try { Start-Worker $lockPath $pidPath 5 } catch {
     $failed = $_.Exception.Message.Contains('code 3') -and $_.Exception.Message.Contains('worker.log')
 }
-Assert $failed 'a worker that exits at startup must fail the launch'
+Assert $failed 'a worker that exits at startup is reported'
+
+# ... but never fails the launch: it is logged and the API is left up.
+$diagnostics = @()
+Start-WorkerBesideApi $lockPath $pidPath
+Assert ($diagnostics[-1] -like 'worker did not start: worker exited with code 3*The API stays up*') "diagnostic: $($diagnostics[-1])"
+# Nor does a failed lock check.
+function Test-WorkerLockHeld { throw 'lock check failed' }
+Start-WorkerBesideApi $lockPath $pidPath
+Assert ($diagnostics[-1] -like 'worker did not start: lock check failed*') "diagnostic: $($diagnostics[-1])"
 Write-Output 'worker launcher contracts passed'
 """
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows launcher contract")
-def test_launcher_starts_one_worker_and_rolls_it_back(tmp_path: Path) -> None:
+def test_launcher_starts_one_worker_and_never_fails_the_launch_for_it(tmp_path: Path) -> None:
     launcher = Path(__file__).resolve().parents[2] / "run-runway.ps1"
     script = tmp_path / "worker.ps1"
     script.write_text(WORKER_SCRIPT, encoding="utf-8")
@@ -431,10 +448,12 @@ def test_launcher_starts_one_worker_and_rolls_it_back(tmp_path: Path) -> None:
             str(launcher),
             "-Root",
             str(root),
+            "-Interpreter",
+            sys.executable,
         ],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=180,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "worker launcher contracts passed" in result.stdout
@@ -444,7 +463,9 @@ def test_launcher_starts_the_worker_with_the_api() -> None:
     text = (Path(__file__).resolve().parents[2] / "run-runway.ps1").read_text(encoding="utf-8")
     main = text[text.rindex("try {") :]
     api = main.index("Start-Component 'api' 8000")
-    worker = main.index("Start-Worker")
+    worker = main.index("Start-WorkerBesideApi")
     assert api < worker < main.index("Start-Component 'web' 3000")
+    # A worker failure is logged inside Start-WorkerBesideApi, never thrown.
+    assert "Start-Worker " not in main
     # Health checks are unchanged: only the API and web components are probed.
     assert "Test-Ready 'worker'" not in text

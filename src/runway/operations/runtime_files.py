@@ -31,11 +31,17 @@ def write_pid_file(path: Path, record: dict[str, Any]) -> None:
     os.replace(partial, path)
 
 
-def remove_pid_file(path: Path, pid: int) -> None:
-    """Remove `path` only if it still names `pid` (a newer worker may own it)."""
+def read_pid_file(path: Path) -> dict[str, Any] | None:
+    """The record at `path`, or None when it is missing or unreadable."""
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return
-    if isinstance(record, dict) and record.get("pid") == pid:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def remove_pid_file(path: Path, pid: int) -> None:
+    """Remove `path` only if it still names `pid` (a newer worker may own it)."""
+    record = read_pid_file(path)
+    if record is not None and record.get("pid") == pid:
         path.unlink(missing_ok=True)

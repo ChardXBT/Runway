@@ -87,8 +87,8 @@ function Get-ParentProcess($Process) {
 
 function Test-Owned($Process, [string]$Component) {
     if (-not $Process -or -not $Process.CommandLine) { return $false }
-    if ($Component -eq 'api' -or $Component -eq 'worker') {
-        $module = if ($Component -eq 'api') { 'runway.api.app:app' } else { 'runway.cli.main worker' }
+    if ($Component -eq 'api') {
+        $module = 'runway.api.app:app'
         if (-not (Test-Contains $Process.CommandLine $module)) { return $false }
         if (Test-Contains $Process.CommandLine $python) { return $true }
         # The venv python.exe is a redirector. On python.org installs it starts the
@@ -124,16 +124,28 @@ function Assert-PortOwner([string]$Component, [int]$Port) {
     }
 }
 
+function Start-HiddenCommand([string]$Command) {
+    # Every child goes through cmd.exe, which writes its logs. Start-Process
+    # -Redirect* would create the child with handle inheritance on, handing it
+    # this launcher's stdout/stderr and any handle a concurrent caller leaked in;
+    # a caller capturing launcher output then blocked until Runway stopped.
+    # Without -Redirect* Start-Process uses ShellExecute, which inherits nothing.
+    # Each child gets its own hidden console, so it can be asked to stop with
+    # Ctrl+C later.
+    $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
+        -ArgumentList $Command -WorkingDirectory $root -WindowStyle Hidden -PassThru
+    $null = $child.Handle # Retain the handle so rapid exits still have an exit code.
+    return $child
+}
+
 function Invoke-DatabaseUpgrade {
     # The API refuses to serve a database behind the migration head and never
     # migrates at import, so the launcher upgrades it explicitly first.
     Save-PreviousLog 'db-upgrade'
     $log = Join-Path $runtime 'db-upgrade.log'
     Write-Diagnostic "Upgrading the database using $python."
-    $command = '/d /s /c ""{0}" -m runway.cli.main db upgrade 1>"{1}" 2>&1"' -f $python, $log
-    $upgrade = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
-        -ArgumentList $command -WorkingDirectory $root -WindowStyle Hidden -PassThru
-    $null = $upgrade.Handle # Retain the handle so the exit code stays readable.
+    $command = '/d /s /c ""{0}" -m runway.cli.db_commands upgrade 1>"{1}" 2>&1"' -f $python, $log
+    $upgrade = Start-HiddenCommand $command
     # A migration is never killed midway; a slow one is reported and left to finish.
     if (-not $upgrade.WaitForExit(900000)) {
         throw 'Database upgrade is still running after 15 minutes. Inspect data/runtime/db-upgrade.log; the API was not started.'
@@ -145,31 +157,50 @@ function Invoke-DatabaseUpgrade {
     Write-Diagnostic 'Database is at the migration head.'
 }
 
-function Get-OwnedWorker {
-    # A failed process query must not look like "no worker", or a second one starts.
-    return @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction Stop |
-        Where-Object { Test-Owned $_ 'worker' })
+function Test-WorkerLockHeld([string]$LockPath) {
+    # `runway worker` holds a byte-range lock on worker.lock for its whole life
+    # and the OS drops it when the process exits, so a held lock is a live
+    # worker however it was started (venv python, runway.exe, by hand). A failed
+    # check throws: it must never look like "no worker", or a second one starts.
+    if (-not (Test-Path -LiteralPath $LockPath -PathType Leaf)) { return $false }
+    $stream = [System.IO.File]::Open($LockPath, 'Open', 'ReadWrite', 'ReadWrite')
+    try {
+        try { $stream.Lock(0, 1) } catch [System.IO.IOException] { return $true }
+        $stream.Unlock(0, 1)
+        return $false
+    } finally {
+        $stream.Dispose()
+    }
 }
 
-function Start-Worker {
+function Get-WorkerRecord([string]$PidPath) {
+    # data/runtime/worker.pid: {"pid", "revision", "started_at"}, written by the
+    # worker while it holds the lock and removed when it exits.
+    try {
+        $record = Get-Content -LiteralPath $PidPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($record -and $record.PSObject.Properties['pid']) { return $record }
+    } catch { }
+    return $null
+}
+
+function Start-Worker([string]$LockPath, [string]$PidPath, [double]$GraceSeconds = 5) {
     # The worker runs scheduled platform sync and queued jobs. It has no port or
     # health endpoint, and it refuses to run twice for one data directory.
-    $running = @(Get-OwnedWorker)
-    if ($running.Count -gt 0) {
-        Write-Diagnostic "worker already running (PID $($running[0].ProcessId))."
+    if (Test-WorkerLockHeld $LockPath) {
+        $record = Get-WorkerRecord $PidPath
+        $id = if ($record) { $record.pid } else { 'unknown' }
+        Write-Diagnostic "worker already running (PID $id)."
         return
     }
     Save-PreviousLog 'worker'
     $log = Join-Path $runtime 'worker.log'
     Write-Diagnostic "Starting worker using $python."
-    $command = '/d /s /c ""{0}" -m runway.cli.main worker 1>"{1}" 2>&1"' -f $python, $log
-    $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
-        -ArgumentList $command -WorkingDirectory $root -WindowStyle Hidden -PassThru
-    $null = $child.Handle # Retain the handle so rapid exits still have an exit code.
+    $command = '/d /s /c ""{0}" -m runway.cli.worker_commands 1>"{1}" 2>&1"' -f $python, $log
+    $child = Start-HiddenCommand $command
     $script:started += $child
     # A worker that is still running after the grace period passed its startup
     # checks (database at head, single-instance lock).
-    $deadline = (Get-Date).AddSeconds(5)
+    $deadline = (Get-Date).AddSeconds($GraceSeconds)
     while ((Get-Date) -lt $deadline) {
         $child.Refresh()
         if ($child.HasExited) {
@@ -179,6 +210,17 @@ function Start-Worker {
         Start-Sleep -Milliseconds 250
     }
     Write-Diagnostic "worker running (PID $($child.Id))."
+}
+
+function Start-WorkerBesideApi([string]$LockPath, [string]$PidPath) {
+    # The API and web are what the Supervisor health-checks. A worker that
+    # cannot start is logged and left for the next launcher run to retry; it
+    # never fails the launch or stops a healthy API.
+    try {
+        Start-Worker $LockPath $PidPath
+    } catch {
+        Write-Diagnostic "worker did not start: $($_.Exception.Message) The API stays up; the next launcher run retries the worker."
+    }
 }
 
 function Start-Component([string]$Component, [int]$Port) {
@@ -206,16 +248,9 @@ function Start-Component([string]$Component, [int]$Port) {
     Save-PreviousLog "$Component.stdout"
     Save-PreviousLog "$Component.stderr"
     Write-Diagnostic "Starting $Component using $executable on port $Port."
-    # Start-Process -Redirect* would create the server with handle inheritance on,
-    # handing it this launcher's stdout/stderr and any handle a concurrent caller
-    # leaked in. A caller capturing launcher output then blocked until Runway
-    # stopped. Without -Redirect* Start-Process uses ShellExecute, which inherits
-    # nothing; cmd.exe writes the component logs instead.
     $command = '/d /s /c ""{0}" {1} 1>"{2}" 2>"{3}""' -f $executable, $arguments,
         (Join-Path $runtime "$Component.stdout.log"), (Join-Path $runtime "$Component.stderr.log")
-    $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
-        -ArgumentList $command -WorkingDirectory $root -WindowStyle Hidden -PassThru
-    $null = $child.Handle # Retain the handle so rapid exits still have an exit code.
+    $child = Start-HiddenCommand $command
     $script:started += $child
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
@@ -270,7 +305,7 @@ try {
     if (-not $ApiOnly) { Assert-PortOwner 'web' 3000 }
     if (-not $WebOnly) {
         Start-Component 'api' 8000
-        Start-Worker
+        Start-WorkerBesideApi (Join-Path $runtime 'worker.lock') (Join-Path $runtime 'worker.pid')
     }
     if (-not $ApiOnly) { Start-Component 'web' 3000 }
     if ((-not $WebOnly -and -not (Test-Ready 'api')) -or
