@@ -113,8 +113,24 @@ _GITHUB_REMOTE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SCRUB_URL = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://\S+")
+# NAME=value / NAME: value where the name holds a credential word, so
+# RUNWAY_TOKEN_KEY=... and YOUTUBE_CLIENT_SECRET=... are redacted too.
 _SCRUB_CREDENTIAL = re.compile(
-    r"(?i)\b(token|secret|password|key|authorization|data key|value)(\s*[=:]\s*)\S+"
+    r"(?i)([a-z0-9_-]*(?:token|secret|password|key|authorization|credential|value)"
+    r"[a-z0-9_-]*)(\s*[=:]\s*)\S+"
+)
+# Token shapes sops, gh or git may echo without a name in front of them.
+_SCRUB_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9_])(?:"
+    r"ya29\.[0-9A-Za-z_-]{6,}"
+    r"|GOCSPX-[0-9A-Za-z_-]{6,}"
+    r"|1//[0-9A-Za-z_-]{6,}"
+    r"|rft\.[0-9A-Za-z!*._-]{6,}"
+    r"|act\.[0-9A-Za-z!*._-]{6,}"
+    r"|IG(?:AA|QV)[0-9A-Za-z_-]{6,}"
+    r"|gh[pousr]_[0-9A-Za-z]{6,}"
+    r"|AGE-SECRET-KEY-[0-9A-Z]{10,}"
+    r")"
 )
 
 SopsRunner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
@@ -130,6 +146,7 @@ def scrub_tool_output(text: str, limit: int = 300) -> str:
     if not lines:
         return "no error output"
     line = _SCRUB_URL.sub("[url]", lines[-1])
+    line = _SCRUB_TOKEN.sub("[redacted]", line)
     line = _SCRUB_CREDENTIAL.sub(r"\1\2[redacted]", line)
     return line[:limit]
 
@@ -232,9 +249,25 @@ def _git_probe(git: str, args: Sequence[str]) -> subprocess.CompletedProcess[str
         raise InstanceConfigError("git did not answer while checking RUNWAY_INSTANCE_DIR") from exc
 
 
+def _checkout_has_code_remote(git: str, toplevel: str) -> bool:
+    remotes = _git_probe(
+        git, ["-C", toplevel, "config", "--get-regexp", r"^remote\..*\.(url|pushurl)$"]
+    )
+    for line in remotes.stdout.splitlines():
+        _key, _space, url = line.partition(" ")
+        if is_code_repository_remote(url):
+            return True
+    return False
+
+
 @lru_cache(maxsize=64)
 def _enclosing_code_checkout(directory: str) -> str | None:
-    """The top of a git working tree of the public code repository containing ``directory``."""
+    """The top of a git working tree of the public code repository containing ``directory``.
+
+    Every enclosing repository is checked, not only the innermost one: a private
+    clone nested inside another code checkout, or a submodule of one, is refused
+    all the same.
+    """
     probe = Path(directory)
     while not probe.exists() and probe.parent != probe:
         probe = probe.parent
@@ -244,22 +277,37 @@ def _enclosing_code_checkout(directory: str) -> str | None:
             "RUNWAY_INSTANCE_DIR needs git to confirm the instance is not inside a checkout "
             "of the public code repository. Install Git (winget install --id Git.Git)."
         )
-    top = _git_probe(git, ["-C", str(probe), "rev-parse", "--show-toplevel"])
-    if top.returncode != 0:
-        if "not a git repository" in (top.stderr or "").lower():
+    seen: set[str] = set()
+    cursor = probe
+    for _ in range(16):  # a bounded walk: no filesystem nests repositories that deep
+        top = _git_probe(git, ["-C", str(cursor), "rev-parse", "--show-toplevel"])
+        if top.returncode != 0:
+            if "not a git repository" in (top.stderr or "").lower():
+                return None
+            raise InstanceConfigError(
+                f"cannot tell whether {directory} is inside a git checkout: "
+                f"{scrub_tool_output(top.stderr or '')}"
+            )
+        toplevel = os.path.normpath(top.stdout.strip())
+        if toplevel in seen:
             return None
-        raise InstanceConfigError(
-            f"cannot tell whether {directory} is inside a git checkout: "
-            f"{scrub_tool_output(top.stderr or '')}"
-        )
-    toplevel = top.stdout.strip()
-    remotes = _git_probe(
-        git, ["-C", toplevel, "config", "--get-regexp", r"^remote\..*\.(url|pushurl)$"]
-    )
-    for line in remotes.stdout.splitlines():
-        _key, _space, url = line.partition(" ")
-        if is_code_repository_remote(url):
+        seen.add(toplevel)
+        if _checkout_has_code_remote(git, toplevel):
             return toplevel
+        # A submodule also reports the superproject's working tree; every other
+        # nested repository is found by probing the toplevel's parent.
+        super_tree = _git_probe(
+            git, ["-C", toplevel, "rev-parse", "--show-superproject-working-tree"]
+        )
+        super_path = super_tree.stdout.strip() if super_tree.returncode == 0 else ""
+        if super_path:
+            cursor = Path(super_path)
+            if not cursor.is_absolute():
+                cursor = (Path(toplevel) / cursor).resolve()
+        elif Path(toplevel).parent != Path(toplevel):
+            cursor = Path(toplevel).parent
+        else:
+            return None
     return None
 
 

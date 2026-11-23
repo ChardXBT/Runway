@@ -403,3 +403,102 @@ def test_github_remote_parsing_is_strict() -> None:
 
 def test_instance_snapshot_keep_defaults_to_five(tmp_path: Path) -> None:
     assert Settings(data_dir=tmp_path / "data").instance_snapshot_keep == 5
+
+
+# --- p6 review fixes ----------------------------------------------------------
+
+FAKE_FERNET = "q3mW7xK2p" + "L9vB4nR8tY1uE6iO0aS5dF2gH7jK3lZ9xC="
+FAKE_YT_SECRET = "yT3sCr" + "8xK2mQ9pL4nB"
+FAKE_API_VALUE = "k3y9xK2m" + "Q7pA4sD8fG"
+
+
+@pytest.mark.parametrize(
+    ("line", "secret"),
+    [
+        (f"could not decrypt: RUNWAY_TOKEN_KEY={FAKE_FERNET}", FAKE_FERNET),
+        ("bad dotenv line YOUTUBE_CLIENT_SECRET=" + FAKE_YT_SECRET, FAKE_YT_SECRET),
+        ("setting MY_API_KEY: " + FAKE_API_VALUE, FAKE_API_VALUE),
+        ("error: search_api_key=" + FAKE_API_VALUE, FAKE_API_VALUE),
+    ],
+)
+def test_scrub_redacts_named_secret_values(line: str, secret: str) -> None:
+    scrubbed = instance_config.scrub_tool_output(line)
+    assert "[redacted]" in scrubbed
+    assert secret not in scrubbed
+
+
+@pytest.mark.parametrize(
+    ("line", "secret"),
+    [
+        ("error: " + "ya29" + "." + "a0AfB" + "x" * 25, "a0AfB" + "x" * 25),
+        ("invalid dotenv input line: " + "GOCSPX" + "-" + "Ab3dEf6h" + "j" * 20, None),
+        ("refresh " + "1" + "//" + "0gAbCd" + "f" * 30, None),
+        ("token " + "rft" + "." + "AbCd" + "e" * 25, None),
+        ("token " + "act" + "." + "XyZ" + "a" * 25, None),
+        ("token " + "IGAA" + "AbCdEf" + "g" * 25, None),
+        ("(gh" + "p_" + "0aB" * 13 + ")", "0aB" * 13),
+        ("key: " + "AGE-SECRET-KEY-" + "1" + "QZ" * 29, None),
+    ],
+)
+def test_scrub_redacts_bare_token_shapes(line: str, secret: str | None) -> None:
+    scrubbed = instance_config.scrub_tool_output(line)
+    assert "[redacted]" in scrubbed
+    if secret is not None:
+        assert secret not in scrubbed
+
+
+def test_scrub_leaves_ordinary_errors_alone() -> None:
+    line = "fatal: not a git repository (or any of the parent directories)"
+    assert instance_config.scrub_tool_output(line) == line
+
+
+def _repo(path: Path, remote: str | None = None) -> Path:
+    path.mkdir(parents=True)
+    _git(path, "init", "--quiet")
+    if remote is not None:
+        _git(path, "remote", "add", "origin", remote)
+    return path
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "git@github.com:chardxbt/runway.git",
+        "https://github.com/ChardXBT/Runway",
+        "ssh://git@github.com/CHARDXBT/RUNWAY.GIT",
+        "https://github.com/chardxbt/runway.git/",
+    ],
+)
+def test_instance_repo_nested_inside_a_code_checkout_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote: str
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    outer = _repo(tmp_path / "code-checkout", remote)
+    inner = _repo(outer / "runway-instance")  # the instance is its own clone
+
+    with pytest.raises(InstanceConfigError, match="checkout of the public code repository"):
+        Settings(data_dir=tmp_path / "data", instance_dir=inner)
+
+
+def test_a_subdirectory_of_the_nested_repo_is_also_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    outer = _repo(tmp_path / "code", "git@github.com:ChardXBT/Runway.git")
+    inner = _repo(outer / "instance-clone")
+    deeper = inner / "data" / "store"
+    deeper.mkdir(parents=True)
+
+    with pytest.raises(InstanceConfigError, match="checkout of the public code repository"):
+        Settings(data_dir=tmp_path / "data", instance_dir=deeper)
+
+
+def test_nested_repo_with_an_unrelated_remote_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    outer = _repo(tmp_path / "workspace", "https://github.com/owner/notes.git")
+    inner = _repo(outer / "runway-instance")
+
+    settings = Settings(data_dir=tmp_path / "data", instance_dir=inner)
+    assert settings.resolved_instance_dir == inner.resolve()
