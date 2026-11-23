@@ -26,6 +26,7 @@ from runway.db.bootstrap import DatabaseNotCurrent, migration_head, require_data
 from runway.logging import configure_logging
 from runway.operations.revision import checkout_revision
 from runway.platforms.sync import SyncService
+from runway.realtime.hooks_routes import build_hooks_router
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(build_intelligence_router(database, active_settings))
     application.include_router(build_proposal_router(database, active_settings))
     application.include_router(build_platform_router(database, active_settings))
+    # Signature-authenticated platform webhooks (spec 04 section 2): the one
+    # deliberate no-principal route family besides health/static.
+    application.include_router(build_hooks_router(database, active_settings))
     # Versioned surface (spec 06): every router comes from build_v1_router.
     application.include_router(build_events_router(database))
 

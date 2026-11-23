@@ -22,6 +22,14 @@ from runway.config import Settings
 # explicitly; anything else without the dependency fails this test.
 EXEMPT_HEALTH_ROUTES = frozenset({"/health"})
 EXEMPT_STATIC_MOUNTS = frozenset({"/media"})
+# Authenticated by platform signatures; no session, no workspace (spec 04 section 2).
+EXEMPT_SIGNED_WEBHOOKS = frozenset(
+    {
+        "/hooks/youtube/websub/{subscription_id}",
+        "/hooks/instagram",
+        "/hooks/tiktok",
+    }
+)
 
 
 def _calls(dependant: Dependant) -> Iterator[Callable[..., Any]]:
@@ -38,7 +46,7 @@ def _unguarded_routes(application: FastAPI) -> list[str]:
     for context in iter_route_contexts(application.routes):
         route = context.original_route
         if isinstance(route, APIRoute):
-            if context.path in EXEMPT_HEALTH_ROUTES:
+            if context.path in EXEMPT_HEALTH_ROUTES or context.path in EXEMPT_SIGNED_WEBHOOKS:
                 continue
             if get_principal not in set(_calls(context.dependant)):
                 missing.append(f"{sorted(context.methods or [])} {context.path}")

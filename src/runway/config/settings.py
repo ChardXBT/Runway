@@ -98,8 +98,13 @@ class Settings(BaseSettings):
     youtube_engage_scopes: bool = False
     instagram_app_id: str | None = None
     instagram_app_secret: str | None = None
+    # Secret like instagram_app_secret: Meta's webhook handshake token. Never
+    # logged or returned by the API.
+    instagram_webhook_verify_token: str | None = None
     tiktok_client_key: str | None = None
     tiktok_client_secret: str | None = None
+    # Per-(provider, source) sliding-window cap on webhook POSTs.
+    webhook_rate_limit_per_minute: int = Field(default=120, ge=1)
     inbox_replies_enabled: bool = False
     platform_sync_interval_minutes: int = Field(default=0, ge=0, le=1440)
     platform_sync_max_content_items: int = Field(default=200, ge=10, le=2000)
@@ -126,6 +131,7 @@ class Settings(BaseSettings):
         "youtube_client_secret",
         "instagram_app_id",
         "instagram_app_secret",
+        "instagram_webhook_verify_token",
         "tiktok_client_key",
         "tiktok_client_secret",
         mode="before",
