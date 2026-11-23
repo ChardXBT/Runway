@@ -1,10 +1,12 @@
 """The post and media service seam the MCP tools and the approval queue call.
 
-The publishing engine (posts, targets, media) is built on another branch. The
-agent layer is written against these Protocols; the engine's real functions
-are connected through one call, `register_agent_services`, after both
-branches merge. Until then the defaults answer 409 `capability_not_ready`,
-and the approval queue falls back to a guarded read of `draft_targets`.
+The agent layer is written against these Protocols. By default
+`build_agent_services` returns the real publishing engine through the adapter
+in `runway.agent.engine`; `register_agent_services` swaps in another
+implementation (tests use a fake). `UnconnectedPostService` and
+`UnconnectedMediaService` answer 409 `capability_not_ready` for a build that
+registers them on purpose; with them the approval queue falls back to a
+guarded read of `draft_targets`.
 
 Contract for an implementation:
 
@@ -87,6 +89,8 @@ class ApprovalItem(BaseModel):
     title: str
     planned_at: datetime | None = None
     payload_hash: str | None = None
+    # The exact payload a release approves (what the person reviews).
+    payload: dict[str, Any] | None = None
     version: int | None = None
     source: str | None = None
     created_by: str | None = None
@@ -146,7 +150,7 @@ class PostService(Protocol):
     ) -> JSONObject: ...
 
     def reject_target(self, principal: Principal, target_id: int, reason: str) -> None:
-        """Return an agent's target to `draft` after a person rejected it."""
+        """Take an agent's target out of the queue after a person rejected it."""
         ...
 
     def list_awaiting_release(
@@ -224,7 +228,7 @@ class UnconnectedPostService:
         raise engine_not_connected()
 
     def reject_target(self, principal: Principal, target_id: int, reason: str) -> None:
-        # Nothing to move back before the engine exists; the event is still written.
+        # Nothing to move without an engine; the event is still written.
         return None
 
     def list_awaiting_release(
@@ -245,8 +249,8 @@ class UnconnectedMediaService:
 class AgentServices:
     posts: PostService
     media: MediaService
-    # False while the defaults above are in place: the approval queue then
-    # reads draft_targets directly (see runway.agent.approvals).
+    # False for the unconnected stand-ins: the approval queue then reads
+    # draft_targets directly (see runway.agent.approvals).
     connected: bool = False
 
 
@@ -255,16 +259,20 @@ _factory: AgentServicesFactory | None = None
 
 
 def register_agent_services(factory: AgentServicesFactory | None) -> None:
-    """Connect the publishing engine: one call, made where the app and MCP server start.
+    """Replace the services the MCP tools and the approval queue call (tests use fakes).
 
     `factory(database, settings)` returns `AgentServices(posts=..., media=...,
-    connected=True)`. Passing None restores the unconnected defaults.
+    connected=True)`. Passing None restores the default: the real publishing
+    engine (`runway.agent.engine.engine_agent_services`).
     """
     global _factory
     _factory = factory
 
 
 def build_agent_services(database: Database, settings: Settings) -> AgentServices:
+    """The registered factory's services, else the real publishing engine's."""
     if _factory is not None:
         return _factory(database, settings)
-    return AgentServices(posts=UnconnectedPostService(), media=UnconnectedMediaService())
+    from runway.agent.engine import engine_agent_services
+
+    return engine_agent_services(database, settings)

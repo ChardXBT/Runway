@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 from mcp.shared.exceptions import MCPError
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from runway.agent.services import (
     AgentServices,
@@ -39,7 +39,13 @@ from runway.auth.problems import Problem, ProblemCode
 from runway.auth.release_policy import ReleaseGrantInput, set_agent_release_policy
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import AuditLogEntry, CommentRecord, ConnectedAccount, PlatformContent
+from runway.db.models import (
+    AuditLogEntry,
+    CommentRecord,
+    ConnectedAccount,
+    ContentDraft,
+    PlatformContent,
+)
 from runway.events.log import record_event
 from runway.events.types import TARGET_AWAITING_RELEASE
 from runway.mcp.server import INSTRUCTIONS, PrincipalSource, ToolRunner, build_mcp_server
@@ -480,6 +486,81 @@ async def test_an_agent_creates_a_post_that_awaits_approval_and_cannot_release_i
     with database.session() as session:
         actions = [row.action for row in session.scalars(select(AuditLogEntry)).all()]
     assert "mcp:create_post" in actions and "mcp:request_release" in actions
+
+
+async def test_end_to_end_with_the_real_engine_the_key_proposes_and_only_the_owner_releases(
+    database: Database, settings: Settings, seed: Seed
+) -> None:
+    """No fake: MCP tools call the publishing engine registered by default."""
+    register_agent_services(None)
+    secret = _key(database, settings)
+    server = build_mcp_server(_runner(database, settings, secret))
+    async with Client(server, mode="2026-07-28") as client:
+        created = _data(
+            await client.call_tool(
+                "create_post",
+                {
+                    "title": "Community update",
+                    "body": "We launched",
+                    "targets": [{"account_id": seed.youtube, "post_type": "youtube_post"}],
+                    "idempotency_key": "e2e-create-1",
+                },
+            )
+        )
+        post_id = created["id"]
+        target = created["targets"][0]
+        target_id = target["id"]
+        assert created["source"] == "agent" and created["ai_generated"] is True
+        assert target["state"] == "ready"
+        scheduled = _data(
+            await client.call_tool(
+                "schedule_target",
+                {"post_id": post_id, "target_id": target_id, "version": target["version"]},
+            )
+        )
+        assert scheduled["releasable"] is True and scheduled["awaiting_release"] is True
+        asked = _data(
+            await client.call_tool("request_release", {"post_id": post_id, "target_id": target_id})
+        )
+        assert asked["released"] is False and asked["awaiting_release"] is True
+        status = _data(
+            await client.call_tool(
+                "get_target_status", {"post_id": post_id, "target_id": target_id}
+            )
+        )
+        assert status["state"] == "ready" and status["release"]["state"] == "none"
+        payload_hash = status["payload_hash"]
+        # Replaying the create returns the first post; nothing new is created.
+        replay = _data(
+            await client.call_tool(
+                "create_post",
+                {
+                    "title": "Community update",
+                    "body": "We launched",
+                    "targets": [{"account_id": seed.youtube, "post_type": "youtube_post"}],
+                    "idempotency_key": "e2e-create-1",
+                },
+            )
+        )
+        assert replay["id"] == post_id and replay["idempotent_replayed"] is True
+        assert "release_target" not in {tool.name for tool in (await client.list_tools()).tools}
+    with database.session() as session:
+        assert session.scalar(select(func.count()).select_from(ContentDraft)) == 1
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as http:
+        queue = http.get("/api/v1/approvals").json()
+        assert [item["target_id"] for item in queue["items"]] == [target_id]
+        assert queue["items"][0]["payload_hash"] == payload_hash
+        release_url = f"/api/v1/posts/{post_id}/targets/{target_id}/release"
+        body = {"payload_hash": payload_hash, "confirmed": True}
+        refused = http.post(release_url, json=body, headers={"Authorization": f"Bearer {secret}"})
+        assert refused.status_code == 403
+        assert refused.json()["code"] == "scope_missing"
+        released = http.post(release_url, json=body)
+        assert released.status_code == 200, released.text
+        assert released.json()["targets"][0]["state"] == "queued"
+        assert released.json()["targets"][0]["release"]["released_by"].startswith("user:")
+        assert http.get("/api/v1/approvals").json()["items"] == []
 
 
 async def test_release_target_appears_only_for_a_granted_key_and_never_releases_tiktok(
