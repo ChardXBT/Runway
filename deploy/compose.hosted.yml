@@ -15,6 +15,9 @@
 
 name: runway-hosted
 
+# Least privilege: the shared block below carries configuration only. Each
+# service adds just the secrets it uses: the API the Clerk webhook secret, the
+# worker the token keys and platform app credentials, migrate neither.
 x-runway-env: &runway-env
   RUNWAY_PROFILE: hosted
   RUNWAY_HOST: 0.0.0.0
@@ -25,12 +28,19 @@ x-runway-env: &runway-env
   RUNWAY_IDENTITY_PROVIDER: clerk
   RUNWAY_CLERK_ISSUER: ${RUNWAY_CLERK_ISSUER:?Clerk Frontend API URL, https://...}
   RUNWAY_CLERK_JWKS_URL: ${RUNWAY_CLERK_JWKS_URL:-}
-  RUNWAY_CLERK_WEBHOOK_SECRET: ${RUNWAY_CLERK_WEBHOOK_SECRET:?whsec_ secret of the Clerk webhook endpoint}
   RUNWAY_WEB_ORIGINS: ${RUNWAY_WEB_ORIGINS:?https origin of the web app}
   RUNWAY_WEB_BASE_URL: ${RUNWAY_WEB_BASE_URL:-}
   RUNWAY_OAUTH_REDIRECT_BASE_URL: ${RUNWAY_OAUTH_REDIRECT_BASE_URL:?https origin of the API}
-  # Only the proxy on this machine may set X-Forwarded-For.
-  RUNWAY_FORWARDED_ALLOW_IPS: ${RUNWAY_FORWARDED_ALLOW_IPS:-172.16.0.0/12}
+  # Only the host's reverse proxy may set X-Forwarded-For. It reaches the api
+  # container through the network gateway below; the web, worker and postgres
+  # containers are on the same network but are NOT trusted.
+  RUNWAY_FORWARDED_ALLOW_IPS: ${RUNWAY_FORWARDED_ALLOW_IPS:-172.30.0.1}
+
+# The worker refreshes platform tokens and publishes, so it alone decrypts
+# tokens and holds the platform app secrets. When the platform routes are
+# served in hosted (OAuth connect runs in the API), the api service gains the
+# client credentials and the token keys needed to store a new connection.
+x-platform-secrets: &platform-secrets
   # Read once the database token store lands (spec 05 section 3): "v2:<key>,v1:<key>".
   RUNWAY_TOKEN_KEYS: ${RUNWAY_TOKEN_KEYS:-}
   RUNWAY_YOUTUBE_CLIENT_ID: ${RUNWAY_YOUTUBE_CLIENT_ID:-}
@@ -42,7 +52,8 @@ x-runway-env: &runway-env
 
 services:
   postgres:
-    image: postgres:17
+    # Pinned by digest (postgres:17, read 2026-11-23).
+    image: postgres:17@sha256:223efeb196329b55b3b9a13db144956411dbc18e727e59f681c3e0aede6475cf
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${RUNWAY_DB_NAME:-runway}
@@ -86,6 +97,8 @@ services:
     restart: unless-stopped
     environment:
       <<: *runway-env
+      # Only the API receives Clerk webhooks.
+      RUNWAY_CLERK_WEBHOOK_SECRET: ${RUNWAY_CLERK_WEBHOOK_SECRET:?whsec_ secret of the Clerk webhook endpoint}
       # The app role: no ownership, no BYPASSRLS, so row-level security holds.
       RUNWAY_DATABASE_URL: postgresql+psycopg://${RUNWAY_DB_APP:-runway_app}:${RUNWAY_DB_APP_PASSWORD:?application role password}@postgres:5432/${RUNWAY_DB_NAME:-runway}
     volumes:
@@ -101,7 +114,7 @@ services:
     command: ["worker"]
     restart: unless-stopped
     environment:
-      <<: *runway-env
+      <<: [*runway-env, *platform-secrets]
       RUNWAY_DATABASE_URL: postgresql+psycopg://${RUNWAY_DB_APP:-runway_app}:${RUNWAY_DB_APP_PASSWORD:?application role password}@postgres:5432/${RUNWAY_DB_NAME:-runway}
     volumes:
       - runway-data:/data
@@ -127,6 +140,15 @@ services:
       - "127.0.0.1:${RUNWAY_WEB_HOST_PORT:-3100}:3000"
     depends_on:
       - api
+
+networks:
+  default:
+    ipam:
+      config:
+        # A fixed range so RUNWAY_FORWARDED_ALLOW_IPS can name the gateway
+        # alone. Change both together if the range is taken on the host.
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
 
 volumes:
   postgres-data:

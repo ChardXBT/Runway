@@ -6,7 +6,10 @@
 #
 # Built in CI on every push and never pushed anywhere from there. Secrets come
 # from the host's secret store at run time; none are baked into the image.
-FROM python:3.13-slim
+#
+# Pinned by digest (python:3.13-slim, read 2026-11-23); bump the tag and the
+# digest together.
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -27,9 +30,11 @@ RUN groupadd --system --gid 10001 runway \
 
 WORKDIR /app
 
-# The exact locked environment first, so source edits do not reinstall it.
-COPY requirements.lock ./
-RUN python -m pip install --requirement requirements.lock
+# The exact locked runtime environment first, so source edits do not reinstall
+# it. Runtime packages only (no pytest, mypy or pip-audit), every downloaded
+# file checked against its recorded hash.
+COPY requirements-runtime.lock ./
+RUN python -m pip install --require-hashes --requirement requirements-runtime.lock
 
 # Editable install, as in CI: Settings.project_root resolves alembic.ini and
 # the migration scripts from the source tree.
@@ -44,8 +49,9 @@ USER runway
 VOLUME ["/data"]
 EXPOSE 8000
 
+# Probes the port the API was started on (RUNWAY_API_PORT), not a fixed 8000.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('RUNWAY_API_PORT', '8000'), timeout=4)"]
 
 ENTRYPOINT ["runway"]
 CMD ["serve"]

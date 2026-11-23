@@ -10,6 +10,8 @@
 # privileges apply. The target must be a fresh database: this script refuses
 # one that already has tables, so it cannot overwrite production by accident.
 # Set RUNWAY_RESTORE_CONFIRM to the target database name to proceed.
+# `latest` picks the newest dump of RUNWAY_RESTORE_SOURCE_DB (default: the
+# target's PGDATABASE); set it when rehearsing into a database with another name.
 set -euo pipefail
 
 : "${PGDATABASE:?set PGDATABASE (and PGHOST, PGUSER, PGPASSWORD or ~/.pgpass)}"
@@ -42,8 +44,15 @@ fetch() {
 }
 
 if [[ "$wanted" == "latest" ]]; then
-    wanted="$(list | grep -E '^runway-.+-[0-9]{8}T[0-9]{6}Z\.dump$' | sort | tail -n 1 || true)"
-    [[ -n "$wanted" ]] || { echo "no backups found at $remote" >&2; exit 1; }
+    # Only dumps of the named source database (default: the target's name), so a
+    # remote shared by staging and production cannot hand back the other's dump.
+    source_db="${RUNWAY_RESTORE_SOURCE_DB:-$PGDATABASE}"
+    [[ "$source_db" =~ ^[A-Za-z0-9_-]+$ ]] || {
+        echo "RUNWAY_RESTORE_SOURCE_DB must be a plain database name: $source_db" >&2
+        exit 2
+    }
+    wanted="$(list | grep -E "^runway-${source_db}-[0-9]{8}T[0-9]{6}Z\.dump\$" | sort | tail -n 1 || true)"
+    [[ -n "$wanted" ]] || { echo "no backups of $source_db found at $remote" >&2; exit 1; }
 fi
 [[ "$wanted" =~ ^[A-Za-z0-9._-]+\.dump$ ]] || { echo "not a backup file name: $wanted" >&2; exit 2; }
 
