@@ -12,7 +12,7 @@ import typer
 from alembic.script import ScriptDirectory
 
 from alembic import command
-from runway.config import get_settings
+from runway.config import Settings, get_settings
 from runway.db.backup import AUTOMATIC_BACKUPS_KEPT, backup_database, prune_automatic_backups
 from runway.db.bootstrap import alembic_config, initialize_database, migration_status
 from runway.locks import LockTimeout, exclusive_file_lock
@@ -37,6 +37,10 @@ def db_upgrade(
     """Upgrade the configured database to the newest migration and seed defaults."""
     settings = get_settings()
     before = migration_status(settings)
+    if not before.up_to_date:
+        # Rebuilding tables under a running worker (older code that accepted
+        # the old schema) is unsafe; the launcher stops it first.
+        _refuse_while_the_worker_runs(settings, "upgrading")
     backup_path = None
     if backup and before.current is not None and not before.up_to_date:
         backup_path = backup_database(settings, UPGRADE_BACKUP_REASON)
@@ -67,6 +71,22 @@ def db_current() -> None:
     settings = get_settings()
     status = migration_status(settings)
     typer.echo(json.dumps({"database": str(settings.database_path), **status.as_dict()}, indent=2))
+
+
+EXIT_WORKER_RUNNING = 3
+
+
+def _refuse_while_the_worker_runs(settings: Settings, action: str) -> None:
+    try:
+        with exclusive_file_lock(worker_lock_path(settings), timeout=0):
+            pass
+    except LockTimeout:
+        typer.echo(
+            f"stop `runway worker` before {action} the database "
+            "(it holds data/runtime/worker.lock; its PID is in data/runtime/worker.pid)",
+            err=True,
+        )
+        raise typer.Exit(code=EXIT_WORKER_RUNNING) from None
 
 
 def _supported_targets(script: ScriptDirectory) -> set[str]:
@@ -102,12 +122,7 @@ def db_downgrade(
             err=True,
         )
         raise typer.Exit(code=2)
-    try:
-        with exclusive_file_lock(worker_lock_path(settings), timeout=0):
-            pass
-    except LockTimeout:
-        typer.echo("stop `runway worker` before downgrading the database", err=True)
-        raise typer.Exit(code=3) from None
+    _refuse_while_the_worker_runs(settings, "downgrading")
     backup_path = backup_database(settings, f"before-downgrade-to-{revision}")
     command.downgrade(config, revision)
     after = migration_status(settings)

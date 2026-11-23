@@ -462,10 +462,13 @@ def test_launcher_starts_one_worker_and_never_fails_the_launch_for_it(tmp_path: 
 def test_launcher_starts_the_worker_with_the_api() -> None:
     text = (Path(__file__).resolve().parents[2] / "run-runway.ps1").read_text(encoding="utf-8")
     main = text[text.rindex("try {") :]
-    api = main.index("Start-Component 'api' 8000")
-    worker = main.index("Start-WorkerBesideApi")
-    assert api < worker < main.index("Start-Component 'web' 3000")
+    assert main.index("Start-ApiAndWorker (Get-RuntimeStatus)") < main.index(
+        "Start-Component 'web' 3000"
+    )
+    api_and_worker = _launcher_function("Start-ApiAndWorker")
+    api = api_and_worker.index("Start-Component 'api' 8000")
+    assert api < api_and_worker.index("Start-WorkerBesideApi")
     # A worker failure is logged inside Start-WorkerBesideApi, never thrown.
-    assert "Start-Worker " not in main
+    assert "Start-Worker " not in api_and_worker
     # Health checks are unchanged: only the API and web components are probed.
     assert "Test-Ready 'worker'" not in text

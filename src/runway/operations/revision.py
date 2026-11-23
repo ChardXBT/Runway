@@ -15,7 +15,11 @@ def checkout_revision() -> str:
 
     The launcher computes the same value (`git rev-parse --short=12 HEAD`) to
     tell whether a running API or worker is older code than the checkout.
+    Outside a Runway checkout (an installed wheel) it is "unknown", never the
+    revision of some unrelated repository the package happens to sit in.
     """
+    if not (REPOSITORY_ROOT / "run-runway.ps1").is_file():
+        return "unknown"
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short=12", "HEAD"],
