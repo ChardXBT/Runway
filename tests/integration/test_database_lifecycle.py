@@ -7,7 +7,9 @@ import os
 import socket
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic.config import Config
@@ -26,6 +28,7 @@ from runway.db.bootstrap import (
     migration_status,
     require_database_at_head,
 )
+from runway.db.models import ConnectedAccount
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -196,18 +199,77 @@ def test_uvicorn_exits_non_zero_with_a_clear_error_when_not_migrated(tmp_path: P
     assert not (data_dir / "runway.db").exists()
 
 
-def test_the_api_runs_no_sync_thread_even_with_an_interval(tmp_path: Path) -> None:
+def test_the_api_schedules_and_runs_no_sync_even_with_an_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scheduled sync is produced and executed by `runway worker` only (audit C8).
+
+    Inspects the real mechanisms instead of a thread name: building a sync
+    scheduler (the old in-process one took a SyncService, the new producer a
+    queue), building a worker, starting any sync, or a background thread running
+    platform or job code would all be recorded; and no job may be queued.
+    """
+    import sqlite3
     import threading
 
-    settings = Settings(data_dir=tmp_path / "data", platform_sync_interval_minutes=5)
-    initialize_database(settings).engine.dispose()
+    from runway.jobs import runtime, worker
+    from runway.platforms import sync
+
+    settings = Settings(data_dir=tmp_path / "data", platform_sync_interval_minutes=1)
+    database = initialize_database(settings)
+    with database.session() as session:
+        session.add(
+            ConnectedAccount(
+                platform="youtube",
+                external_account_id="channel-1",
+                status="connected",
+                granted_scopes_json="[]",
+            )
+        )
+    database.engine.dispose()
+
+    calls: list[str] = []
+
+    def record(name: str) -> Callable[..., None]:
+        def recorder(*_args: object, **_kwargs: object) -> None:
+            calls.append(name)
+
+        return recorder
+
+    real_scheduler_init = sync.PlatformSyncScheduler.__init__
+
+    def scheduler_init(self: sync.PlatformSyncScheduler, *args: Any, **kwargs: Any) -> None:
+        calls.append("PlatformSyncScheduler")
+        real_scheduler_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(sync.PlatformSyncScheduler, "__init__", scheduler_init)
+    monkeypatch.setattr(sync.PlatformSyncScheduler, "produce", record("produce"))
+    monkeypatch.setattr(sync.SyncService, "run", record("SyncService.run"))
+    monkeypatch.setattr(sync.SyncService, "start_background", record("start_background"))
+    monkeypatch.setattr(runtime, "build_worker", record("build_worker"))
+    monkeypatch.setattr(worker.Worker, "run_forever", record("Worker.run_forever"))
+
+    started: list[str] = []
+    real_start = threading.Thread.start
+
+    def thread_start(self: threading.Thread) -> None:
+        target = getattr(self, "_target", None)
+        started.append(f"{getattr(target, '__module__', '')}.{getattr(target, '__qualname__', '')}")
+        real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", thread_start)
 
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
-        assert client.get("/health").status_code == 200
-        names = {thread.name for thread in threading.enumerate()}
+        health = client.get("/health").json()
 
-    # Scheduled sync is produced and executed by `runway worker` (audit C8).
-    assert "runway-platform-sync" not in names
+    assert calls == []
+    assert not [name for name in started if name.startswith(("runway.platforms", "runway.jobs"))]
+    assert health["sync_scheduler"] == "worker"
+    with sqlite3.connect(settings.database_path) as connection:
+        queued = connection.execute("SELECT COUNT(*) FROM publish_jobs").fetchone()[0]
+        runs = connection.execute("SELECT COUNT(*) FROM sync_runs").fetchone()[0]
+    connection.close()
+    assert (queued, runs) == (0, 0)
 
 
 @pytest.mark.parametrize(

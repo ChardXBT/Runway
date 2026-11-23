@@ -313,6 +313,25 @@ def test_worker_stops_promptly_when_asked(queue: JobQueue) -> None:
     assert not thread.is_alive()
 
 
+def test_the_idle_sleep_waits_in_short_slices_so_a_signal_can_stop_it(queue: JobQueue) -> None:
+    # A signal handler runs only between waits on the main thread; one 30 s
+    # Event.wait would hold the launcher's stop request for up to 30 s.
+    waits: list[float | None] = []
+
+    class RecordingEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            waits.append(timeout)
+            if len(waits) == 3:
+                self.set()
+            return super().wait(0)
+
+    worker = _worker(queue, {"purge": lambda _job: None})
+    worker.stop_event = RecordingEvent()
+    worker.sleep(30)
+    assert len(waits) == 3
+    assert all(timeout is not None and timeout <= 0.5 for timeout in waits)
+
+
 # ------------------------------------------------------ scheduled platform sync
 
 

@@ -6,6 +6,7 @@ import logging
 import os
 import socket
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,6 +20,8 @@ logger = logging.getLogger(__name__)
 # Never sleep longer than this, so new jobs from the API and a stop request are
 # noticed promptly, yet an idle worker does not poll the database every second.
 MAX_IDLE_SECONDS = 30.0
+# Longest time a stop request waits for the idle sleep to notice it.
+STOP_POLL_SECONDS = 0.5
 
 Handler = Callable[[Job], None]
 
@@ -75,11 +78,25 @@ class Worker:
                     wait = self.failure_backoff(failures)
                     logger.exception("worker iteration failed; retrying in %.1f s", wait)
                 if wait > 0:
-                    self.stop_event.wait(wait)
+                    self.sleep(wait)
         finally:
             logger.info(
                 "runway worker stop id=%s", self.worker_id, extra={"event_type": "worker_stop"}
             )
+
+    def sleep(self, seconds: float) -> None:
+        """Wait up to `seconds`, returning as soon as a stop is requested.
+
+        The wait is cut into short slices because a signal handler (the
+        launcher's Ctrl+Break, SIGTERM) only runs between them on the main
+        thread: one long Event.wait would hold a stop request for up to 30 s.
+        """
+        deadline = time.monotonic() + seconds
+        while not self.stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self.stop_event.wait(min(remaining, STOP_POLL_SECONDS))
 
     def failure_backoff(self, failures: int) -> float:
         return float(min(2 ** min(failures - 1, 10), self.max_idle_seconds))
