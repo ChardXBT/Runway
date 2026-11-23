@@ -117,3 +117,25 @@ def test_fresh_and_upgraded_databases_have_the_same_new_tables(tmp_path: Path) -
             engine.dispose()
 
     assert describe(fresh) == describe(upgraded)
+
+
+def test_offline_sql_generation_covers_0016h(tmp_path: Path) -> None:
+    # `alembic upgrade --sql` has no database to inspect; 0016h must emit its
+    # DDL instead of calling sa.inspect() on a missing bind.
+    import contextlib
+    import io
+
+    settings = Settings(data_dir=tmp_path / "data")
+    config = _config(settings)
+    upgrade_sql = io.StringIO()
+    config.output_buffer = upgrade_sql
+    with contextlib.redirect_stdout(upgrade_sql):
+        command.upgrade(config, "0013_workspaces:0016h_hosted_identity", sql=True)
+    for table in NEW_TABLES:
+        assert f"CREATE TABLE {table}" in upgrade_sql.getvalue()
+    downgrade_sql = io.StringIO()
+    config.output_buffer = downgrade_sql
+    with contextlib.redirect_stdout(downgrade_sql):
+        command.downgrade(config, "0016h_hosted_identity:0013_workspaces", sql=True)
+    for table in NEW_TABLES:
+        assert f"DROP TABLE {table}" in downgrade_sql.getvalue()
