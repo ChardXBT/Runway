@@ -38,7 +38,7 @@ FAKE_PEM = "-----BEGIN " + "RSA PRIVATE KEY" + "-----"
 FAKE_CLIENT_SECRET = "client_secret" + "=Zq8Rw2Lp5Tn7Vb3Xm9Kc"
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _git(repo: Path, *args: str, input: str | None = None) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ,
         "GIT_CONFIG_GLOBAL": os.devnull,
@@ -49,7 +49,13 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
         "GIT_COMMITTER_EMAIL": "t@example.invalid",
     }
     result = subprocess.run(
-        ["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=False
+        ["git", *args],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        input=input,
     )
     assert result.returncode == 0, result.stderr
     return result
@@ -444,9 +450,241 @@ def test_ci_scans_every_pushed_commit_and_the_whole_history_of_a_new_branch(
     assert clean.returncode == 0, clean.stdout + clean.stderr
 
 
-def test_ci_workflow_checks_out_full_history_and_runs_the_range_scan() -> None:
-    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    backend = workflow.split("bash scripts/secret_scan_ci.sh", 1)[0]
-    assert "fetch-depth: 0" in backend
-    assert "BEFORE_SHA: ${{ github.event.before }}" in workflow
-    assert "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}" in workflow
+def test_secret_scan_workflow_scans_all_history_and_cannot_be_cancelled() -> None:
+    yaml = pytest.importorskip("yaml")
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "secret-scan.yml").read_text(encoding="utf-8")
+    )
+    triggers = workflow.get("on", workflow.get(True))  # YAML 1.1 parses ``on:`` as True
+    assert set(triggers) == {"push", "pull_request"}
+    assert workflow["permissions"] == {"contents": "read"}
+    # No concurrency cancellation: a cancelled run could leave a pushed secret unscanned.
+    assert "concurrency" not in workflow
+    [job] = workflow["jobs"].values()
+    steps = job["steps"]
+    checkout = next(
+        step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@")
+    )
+    # Same pinned SHA as ci.yml, full history, no persisted credentials.
+    assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    assert checkout["with"] == {"persist-credentials": False, "fetch-depth": 0}
+    setup_python = next(
+        step for step in steps if str(step.get("uses", "")).startswith("actions/setup-python@")
+    )
+    assert setup_python["uses"] == "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"
+    assert any(
+        "scripts/secret_scan.py --all-history" in str(step.get("run", "")) for step in steps
+    ), "the repository is small enough to scan every commit every time"
+
+
+def test_ci_workflow_no_longer_runs_the_secret_scan() -> None:
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "secret_scan" not in ci
+
+
+# --- p6 review fixes ----------------------------------------------------------
+
+FAKE_AGE_KEY = "AGE-SECRET-KEY-" + "1" + "A" * 58
+FAKE_OPENAI = "sk-" + "aB3xK9" * 5
+FAKE_OPENAI_PROJ = "sk-" + "proj-" + "x9K2mN7pQ" * 3
+FAKE_OPENAI_SVCACCT = "sk-" + "svcacct-" + "r4T8yU1i" * 3
+FAKE_OPENAI_ADMIN = "sk-" + "admin-" + "w2E5rT8y" * 3
+FAKE_GITHUB_TOKEN = "gh" + "p_" + "a1B2c3" * 6
+FAKE_GITHUB_OAUTH = "gh" + "o_" + "Z9x8Y7" * 6
+FAKE_ASSIGNED = "Rt5" + "yU8iO1pA4sD7fG9h"
+
+
+@pytest.mark.parametrize(
+    ("text", "rule"),
+    [
+        (f"identity: {FAKE_AGE_KEY}", "age-secret-key"),
+        (f'OPENAI_API_KEY="{FAKE_OPENAI}"', "openai-api-key"),
+        (f"key = {FAKE_OPENAI_PROJ}", "openai-api-key"),
+        (f"token {FAKE_OPENAI_SVCACCT}", "openai-api-key"),
+        (f"{FAKE_OPENAI_ADMIN}", "openai-api-key"),
+        (f"OPENAI_API_KEY={FAKE_ASSIGNED}", "api-key-assignment"),
+        (f"SEARCH_API_KEY={FAKE_ASSIGNED}", "api-key-assignment"),
+        (f"TWELVEDATA_API_KEY={FAKE_ASSIGNED}", "api-key-assignment"),
+        (f'RUNWAY_SEARCH_API_KEY: "{FAKE_ASSIGNED}"', "api-key-assignment"),
+        (f"token = {FAKE_GITHUB_TOKEN}", "github-token"),
+        (f"oauth = {FAKE_GITHUB_OAUTH}", "github-token"),
+        (f"Bearer {FAKE_GOOGLE}", "google-oauth-access-token"),
+    ],
+)
+def test_review_token_shapes_and_assignments_are_caught(text: str, rule: str) -> None:
+    rules = {finding.rule for finding in secret_scan.scan_text("config.env", text + "\n")}
+    assert rule in rules, (text, rules)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "from sk-" + "learn import svm",  # an ordinary ``sk-`` word is not a key
+        "sk-" + "a" * 19,  # below the 20-character key body
+        "docs mention sk-proj- and sk-svcacct- prefixes",
+        "OPENAI_API_KEY=",
+        "OPENAI_API_KEY=changeme",
+        "OPENAI_API_KEY=<your key here>",
+        "OPENAI_API_KEY=your-key-here",
+        "MY_API_KEY=placeholder",
+        "api_key=os.environ['OPENAI_API_KEY']",
+        "openai_api_key: str | None = None",
+        "your OPENAI_API_KEY environment variable",
+        "AGE-SECRET-KEY-" + "1" + "A" * 57,  # one character short
+        "gh" + "p_" + "a" * 35,  # 35 characters, below the 36-character body
+        "the age identity file is sops/age/keys.txt",
+    ],
+)
+def test_review_rules_do_not_flag_short_keys_placeholders_or_prose(text: str) -> None:
+    assert secret_scan.scan_text("notes.md", text) == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "real" + "test" + "Value9xK2mQ",  # contains the word ``test`` but is not a placeholder
+        "ab" + "xxx" + "1234567890abcdef",  # ``xxx`` inside a real-looking value
+        "prodkey" + "your" + "123456789",  # ``your`` inside a real-looking value
+    ],
+)
+def test_a_placeholder_word_inside_a_real_value_does_not_exempt_it(value: str) -> None:
+    findings = secret_scan.scan_text("config.env", f"RUNWAY_TOKEN_KEY={value}\n")
+    assert [finding.rule for finding in findings] == ["token-key-assignment"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "sops/age/keys.txt",
+        "config/sops/age/keys.txt",
+        "backups/master.agekey",
+    ],
+)
+def test_age_key_material_is_refused(path: str) -> None:
+    assert secret_scan.blocked_name(path) is not None
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["sops/age/key.txt", "sops/keys.txt", "age/keys.txt", "keys.txt", "notes.txt"],
+)
+def test_other_file_names_still_pass(path: str) -> None:
+    assert secret_scan.blocked_name(path) is None
+
+
+def _git_object(repo: Path, data: bytes) -> str:
+    """Write DATA as a blob object in REPO and return its object id."""
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+    result = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=repo,
+        env=env,
+        input=data,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.decode("ascii").strip()
+
+
+def test_a_staged_typechange_is_scanned(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    (repo / "a.txt").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "--quiet", "-m", "base")
+    # a.txt becomes a symlink (status T) whose blob still holds the token text.
+    sha = _git_object(repo, f'TOKEN = "{FAKE_GOOGLE}"\n'.encode())
+    _git(repo, "update-index", "--cacheinfo", f"120000,{sha},a.txt")
+
+    staged = _run(repo, "--staged")
+    assert staged.returncode == 1, staged.stderr
+    assert "google-oauth-access-token" in staged.stderr
+
+    _git(repo, "commit", "--quiet", "-m", "typechange")
+    history = _run(repo, "--all-history")
+    assert history.returncode == 1 and "google-oauth-access-token" in history.stderr
+
+
+def test_a_gitlink_commit_does_not_desynchronise_the_blob_reader(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    (repo / "a.txt").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "--quiet", "-m", "base")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    # A submodule pointer (mode 160000) at a commit that exists in this object store.
+    _git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},aaa-sub")
+    _git(repo, "commit", "--quiet", "-m", "gitlink")
+    (repo / "zzz.py").write_text(f'TOKEN = "{FAKE_GOOGLE}"\n', encoding="utf-8")
+    _git(repo, "add", "zzz.py")
+    _git(repo, "commit", "--quiet", "-m", "after the gitlink")
+
+    history = _run(repo, "--all-history")
+    assert history.returncode == 1, history.stderr
+    assert "zzz.py:1: google-oauth-access-token" in history.stderr
+
+
+def test_file_names_with_newlines_are_scanned(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    (repo / "a.txt").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "--quiet", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    # update-index refuses control characters, so the commit is built with mktree.
+    a_sha = _git(repo, "rev-parse", "HEAD:a.txt").stdout.strip()
+    token_sha = _git_object(repo, f'TOKEN = "{FAKE_GOOGLE}"\n'.encode())
+    tree_input = f"100644 blob {a_sha}\ta.txt\x00100644 blob {token_sha}\twe\nird.txt\x00"
+    tree = _git(repo, "mktree", "-z", input=tree_input).stdout.strip()
+    leak = _git(repo, "commit-tree", tree, "-p", base, "-m", "newline name").stdout.strip()
+    _git(repo, "update-ref", "HEAD", leak)
+
+    in_range = _run(repo, "--range", f"{base}..HEAD")
+    assert in_range.returncode == 1, in_range.stderr
+    assert "google-oauth-access-token" in in_range.stderr
+    history = _run(repo, "--all-history")
+    assert history.returncode == 1 and "google-oauth-access-token" in history.stderr
+
+
+def test_content_beyond_the_old_five_mebibyte_limit_is_scanned(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    payload = b"a" * (5 * 1024 * 1024 + 100) + f'\nTOKEN = "{FAKE_GOOGLE}"\n'.encode()
+    (repo / "big.txt").write_bytes(payload)
+    _git(repo, "add", "big.txt")
+
+    staged = _run(repo, "--staged")
+    assert staged.returncode == 1, staged.stderr
+    assert "google-oauth-access-token" in staged.stderr
+
+    _git(repo, "commit", "--quiet", "-m", "big")
+    history = _run(repo, "--all-history")
+    assert history.returncode == 1 and "google-oauth-access-token" in history.stderr
+
+
+def test_binary_database_and_archive_content_is_flagged(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    # Innocent names: only the magic bytes give the content away.
+    (repo / "data.txt").write_bytes(b"SQLite format 3\x00" + b"\x00" * 64)
+    (repo / "pack.bin").write_bytes(b"\x1f\x8b\x08\x00" + b"\x00" * 64)
+    _git(repo, "add", "-f", "data.txt", "pack.bin")
+
+    staged = _run(repo, "--staged")
+    assert staged.returncode == 1, staged.stderr
+    assert "SQLite" in staged.stderr and "gzip" in staged.stderr
+
+    findings = secret_scan.scan_blob("data.txt", b"SQLite format 3\x00" + b"\x00" * 8)
+    assert [finding.rule for finding in findings] == ["SQLite database binary"]
+    findings = secret_scan.scan_blob("pack.bin", b"\x1f\x8b\x08\x00rest")
+    assert [finding.rule for finding in findings] == ["gzip archive binary"]

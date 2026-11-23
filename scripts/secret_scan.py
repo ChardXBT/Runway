@@ -28,7 +28,6 @@ from pathlib import Path, PurePosixPath
 from typing import IO
 
 ALLOWLIST = Path(__file__).with_name("secret_scan_allowlist.txt")
-MAX_SCAN_BYTES = 5 * 1024 * 1024
 
 # Private instance files and snapshots that may never enter the public repository.
 BLOCKED_NAME_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -40,10 +39,15 @@ BLOCKED_NAME_PATTERNS: tuple[tuple[str, str], ...] = (
     ("*.sqlite3", "database file"),
     ("runway-operational-media.zip", "media snapshot"),
     ("*.key", "key file"),
+    ("*.agekey", "age private key file"),
     (".env*", "environment file"),
     ("platform-tokens.json", "platform token store"),
     ("secrets.enc.*", "encrypted instance secrets"),
     ("lease.json", "instance lease"),
+)
+# Names that are only refused under a specific path (``keys.txt`` elsewhere is fine).
+BLOCKED_PATH_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("sops/age/keys.txt", "SOPS age private key"),
 )
 ALLOWED_NAMES = frozenset({".env.example"})
 
@@ -60,24 +64,84 @@ TOKEN_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("tiktok-refresh-token", re.compile(_START + r"rft\.[0-9A-Za-z!*._-]{20,}")),
     ("private-key-block", re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----")),
     ("runway-live-api-key", re.compile(_START + r"rwy_live_[0-9A-Za-z_-]{16,}")),
-    ("github-token", re.compile(_START + r"gh[oprsu]_[0-9A-Za-z]{36,}")),
+    ("github-token", re.compile(_START + r"gh[pousr]_[0-9A-Za-z]{36,}")),
+    ("age-secret-key", re.compile(_START + r"AGE-SECRET-KEY-1[0-9A-Z]{58}")),
+    # 20+ key-alphabet characters after the prefix keep words like "sk-learn" clean.
+    ("openai-api-key", re.compile(_START + r"sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}")),
 )
 # ``name = value`` / ``"name": "value"`` / ``?name=value`` assignments, matched
 # with any prefix (RUNWAY_YOUTUBE_CLIENT_SECRET, youtube_client_secret, ...).
-_VALUE = r"""["']?\s*[=:]\s*(?P<quote>["']?)(?P<value>[^\s"'&,;)\]}#\\]+)"""
+_VALUE = r"""["']?\s*[=:]\s*(?P<quote>["']?)(?P<value>[^\s"'&,;)\]}#\\<>]+)"""
 ASSIGNMENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("client-secret-assignment", re.compile(r"(?i)client_secret" + _VALUE)),
     ("app-secret-assignment", re.compile(r"(?i)(?:app|client_key)_secret" + _VALUE)),
     ("token-key-assignment", re.compile(r"(?i)(?<![A-Za-z0-9])(?:RUNWAY_)?TOKEN_KEYS?" + _VALUE)),
+    ("api-key-assignment", re.compile(r"(?i)(?<![A-Za-z0-9_])[A-Za-z0-9_]*api_key" + _VALUE)),
 )
 MIN_ASSIGNED_SECRET = 8
-# Values that are obviously not a credential: fixtures, placeholders and prose.
-_PLACEHOLDER = re.compile(
-    r"(?i)fake|example|placeholder|dummy|changeme|change-me|redacted|your|xxx|sample|"
-    r"secret|fixture|test|mock|<|>|\.\.\."
+# A placeholder exempts a value only when the WHOLE value is one ("changeme",
+# "your-key-here", "<...>", "xxx"), never when a real-looking value merely
+# contains a word like "test". Kebab/snake phrases count only when one segment
+# is a placeholder word, so "yt-secret" is fine but "realtestValue123" is not.
+_PLACEHOLDER_WORDS = frozenset(
+    {
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+        "key",
+        "keys",
+        "password",
+        "passwords",
+        "credential",
+        "credentials",
+        "fake",
+        "example",
+        "examples",
+        "sample",
+        "samples",
+        "placeholder",
+        "placeholders",
+        "dummy",
+        "changeme",
+        "change",
+        "redacted",
+        "test",
+        "tests",
+        "mock",
+        "mocks",
+        "fixture",
+        "fixtures",
+        "your",
+        "yours",
+        "insert",
+        "replace",
+        "todo",
+        "here",
+        "none",
+        "null",
+        "fill",
+        "enter",
+        "put",
+        "add",
+        "not",
+        "value",
+        "values",
+        "me",
+        "xxx",
+        "real",
+        "use",
+        "my",
+    }
 )
+_PLACEHOLDER_FILLER = re.compile(r"(?i)<[^>\n]*>|[*#]{2,}|\.{3,}|x{2,}|-{4,}|_{4,}")
+_PLACEHOLDER_PHRASE = re.compile(r"[a-z0-9]+(?:[-_ .]+[a-z0-9]+)+", re.IGNORECASE)
+_PLACEHOLDER_SPLIT = re.compile(r"[-_ .]+")
 _CODE_EXPRESSION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$|[(\[]")
 _LOWER_IDENTIFIER = re.compile(r"^[a-z_]+$")
+# A PascalCase identifier in annotation position is a type (``SecretStr``), not a value.
+# Restricted to letters only: "Zq8Rw2Lp5Tn7Vb3Xm9Kc" still looks like a value.
+_TYPE_NAME = re.compile(r"^[A-Z][A-Za-z]*[a-z]$")
 
 
 @dataclass(frozen=True)
@@ -89,7 +153,8 @@ class Finding:
     commit: str | None = None
 
     def render(self) -> str:
-        where = f"{self.path}:{self.line}" if self.line is not None else self.path
+        path = self.path.replace("\n", "\\n")
+        where = f"{path}:{self.line}" if self.line is not None else path
         if self.commit:
             where = f"{self.commit[:12]}:{where}"
         suffix = f" (fingerprint {self.fingerprint})" if self.fingerprint else ""
@@ -101,23 +166,39 @@ def fingerprint(text: str) -> str:
 
 
 def blocked_name(path: str) -> str | None:
-    name = PurePosixPath(path.replace("\\", "/")).name
-    if name in ALLOWED_NAMES:
+    normalized = PurePosixPath(path.replace("\\", "/"))
+    if normalized.name in ALLOWED_NAMES:
         return None
     for pattern, label in BLOCKED_NAME_PATTERNS:
-        if fnmatch.fnmatchcase(name.casefold(), pattern):
+        if fnmatch.fnmatchcase(normalized.name.casefold(), pattern):
+            return label
+    folded = PurePosixPath(normalized.as_posix().casefold())
+    for pattern, label in BLOCKED_PATH_PATTERNS:
+        if folded.match(pattern):
             return label
     return None
+
+
+def _is_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    if lowered in _PLACEHOLDER_WORDS or _PLACEHOLDER_FILLER.fullmatch(value):
+        return True
+    if _PLACEHOLDER_PHRASE.fullmatch(value):
+        return bool(_PLACEHOLDER_WORDS & set(_PLACEHOLDER_SPLIT.split(lowered)))
+    return False
 
 
 def _assigned_secret(value: str, quoted: bool) -> bool:
     if len(value) < MIN_ASSIGNED_SECRET or value[0] in "{$%<":
         return False
-    if _PLACEHOLDER.search(value):
+    if _is_placeholder(value):
         return False
+    code = (
+        _CODE_EXPRESSION.search(value) or _LOWER_IDENTIFIER.match(value) or _TYPE_NAME.match(value)
+    )
     # Unquoted code references (settings.youtube_client_secret, os.environ[...],
-    # client_secret=client_secret) are not values.
-    return quoted or not (_CODE_EXPRESSION.search(value) or _LOWER_IDENTIFIER.match(value))
+    # client_secret=client_secret, token_key: SecretStr) are not values.
+    return quoted or not code
 
 
 def scan_text(path: str, text: str) -> list[Finding]:
@@ -153,12 +234,24 @@ def decode_text(data: bytes) -> str | None:
     return None
 
 
+# Binary payloads that may not enter the repository even under an innocent name.
+_BINARY_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"SQLite format 3\x00", "SQLite database binary"),
+    (b"\x1f\x8b", "gzip archive binary"),
+)
+
+
 def scan_blob(path: str, data: bytes) -> list[Finding]:
     findings: list[Finding] = []
     label = blocked_name(path)
     if label is not None:
         findings.append(Finding(path, f"{label} must not be committed"))
-    text = decode_text(data[:MAX_SCAN_BYTES])
+    for magic, binary in _BINARY_MAGIC:
+        if data.startswith(magic):
+            findings.append(Finding(path, binary))
+            break
+    # The whole blob is scanned line by line; nothing is truncated.
+    text = decode_text(data)
     if text is not None:
         findings.extend(scan_text(path, text))
     return findings
@@ -193,12 +286,52 @@ def _split_z(output: bytes) -> list[str]:
 
 Source = tuple[str, Callable[[], bytes], str | None]
 
+# A, M, R, C and T (type change) all carry a new blob worth scanning; D does not.
+_SCANNED_STATUS = frozenset("AMCRT")
+_GITLINK_MODE = "160000"  # submodule pointer: the object id is a commit, not a blob
+
+
+def _raw_changes(output: bytes) -> Iterator[tuple[str, str, str]]:
+    """``(new_mode, new_object, new_path)`` for each record of a ``-z --raw`` diff.
+
+    The NUL-separated raw format keeps names with newlines or quotes unambiguous.
+    """
+    fields = output.split(b"\0")
+    index = 0
+    while index < len(fields):
+        record = fields[index].lstrip()
+        index += 1
+        if not record.startswith(b":"):
+            continue  # blank lines and merge separators carry no record
+        header = record[1:].split(b" ")
+        if len(header) < 5:
+            continue
+        new_mode = header[1].decode("ascii", errors="replace")
+        new_object = header[3].decode("ascii", errors="replace")
+        status = header[4][:1].decode("ascii", errors="replace")
+        if status in "RC":
+            index += 1  # renames and copies name the source first; we want the new name
+        if index >= len(fields):
+            break
+        name = fields[index].decode("utf-8", errors="surrogateescape")
+        index += 1
+        if status in _SCANNED_STATUS:
+            yield new_mode, new_object, name
+
 
 def staged_sources() -> Iterable[Source]:
     """Files as they are in the index, i.e. exactly what the commit will contain."""
-    names = _split_z(_git(["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"]))
-    for name in names:
-        yield name, (lambda name=name: _git(["show", f":{name}"])), None
+    reader = _BlobReader()
+    try:
+        for mode, object_id, name in _raw_changes(
+            _git(["diff", "--cached", "-z", "--raw", "--full-index"])
+        ):
+            if mode == _GITLINK_MODE:
+                continue
+            data = reader.read(object_id)
+            yield name, (lambda data=data: data), None
+    finally:
+        reader.close()
 
 
 def tracked_sources() -> Iterable[Source]:
@@ -225,18 +358,20 @@ class _BlobReader:
             stdout=subprocess.PIPE,
         )
 
-    def read(self, spec: str) -> bytes:
+    def read(self, object_id: str) -> bytes:
+        """The blob's content; ``b""`` for a missing or non-blob object."""
         stdin: IO[bytes] | None = self._process.stdin
         stdout: IO[bytes] | None = self._process.stdout
         assert stdin is not None and stdout is not None
-        stdin.write(spec.encode("utf-8", errors="surrogateescape") + b"\n")
+        stdin.write(object_id.encode("ascii") + b"\n")
         stdin.flush()
         header = stdout.readline().split()
-        if len(header) < 3 or header[1] != b"blob":
-            return b""
-        data = stdout.read(int(header[2]))
-        stdout.read(1)  # the newline after each object
-        return data
+        if len(header) < 3:
+            return b""  # "<id> missing" answers carry no body
+        kind, size = header[1], int(header[2])
+        data = stdout.read(size)
+        stdout.read(1)  # the newline after each object, whatever its type
+        return data if kind == b"blob" else b""
 
     def close(self) -> None:
         if self._process.stdin is not None:
@@ -249,24 +384,25 @@ def commit_sources(commits: Sequence[str]) -> Iterator[Source]:
     reader = _BlobReader()
     try:
         for commit in commits:
-            names = _split_z(
+            for mode, object_id, name in _raw_changes(
                 _git(
                     [
                         "diff-tree",
                         "--root",
                         "-r",
                         "-z",
+                        "--raw",
+                        "--full-index",
                         "--no-commit-id",
-                        "--name-only",
-                        "--diff-filter=ACMR",
                         "-m",
                         "--first-parent",
                         commit,
                     ]
                 )
-            )
-            for name in names:
-                data = reader.read(f"{commit}:{name}")
+            ):
+                if mode == _GITLINK_MODE:
+                    continue
+                data = reader.read(object_id)
                 yield name, (lambda data=data: data), commit
     finally:
         reader.close()

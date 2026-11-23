@@ -35,23 +35,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history: the secret scan reads every commit of the push, not only HEAD.
+          # Full history: tests scan every commit of the repository.
           fetch-depth: 0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements.lock
-      # Standard library only; fails before anything is installed.
-      - name: Secret scan of every pushed commit
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: bash scripts/secret_scan_ci.sh
-      - run: python scripts/secret_scan.py --tracked
       - run: python -m pip install --upgrade pip
       # Install the exact locked environment, then the project without re-resolving it.
       - run: python -m pip install -r requirements.lock
