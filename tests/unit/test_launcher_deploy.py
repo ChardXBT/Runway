@@ -87,7 +87,8 @@ function Request-ConsoleStop([int]$ProcessId) {
 function New-FakeProcess([bool]$Exited, [int]$ExitCode) {
     $process = [pscustomobject]@{ Id = 900 + $world.events.Count; HasExited = $Exited; ExitCode = $ExitCode; Handle = 1 }
     $process | Add-Member -MemberType ScriptMethod -Name Refresh -Value { }
-    $process | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($Milliseconds) return $true }
+    # Like Process.WaitForExit: the timeout overload returns a bool, the other nothing.
+    $process | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($Milliseconds) if ($null -ne $Milliseconds) { return $true } }
     $process | Add-Member -MemberType ScriptMethod -Name Kill -Value { }
     return $process
 }
@@ -172,6 +173,35 @@ switch ($Scenario) {
         Assert ((Events) -eq '') 'no worker beside the old scheduler'
         Assert (@($diagnostics) -contains 'worker not started: the API on port 8000 still runs the in-process sync scheduler.') 'reported'
     }
+    'status-failure-leaves-a-healthy-api-alone' {
+        $world.api = 'legacy'
+        function Get-RuntimeStatus { throw 'python.exe is broken' }
+        Invoke-ApiStack
+        Assert ((Events) -eq '') 'nothing is stopped, upgraded or started'
+        Assert (@($diagnostics) -like 'Runtime status unavailable (python.exe is broken)*') 'reported'
+    }
+    'status-failure-without-an-api-fails-the-launch' {
+        function Get-RuntimeStatus { throw 'python.exe is broken' }
+        $failed = $false
+        try { Invoke-ApiStack } catch { $failed = $_.Exception.Message -eq 'python.exe is broken' }
+        Assert $failed 'the launch fails'
+        Assert ((Events) -eq '') 'nothing started'
+    }
+    'status-is-queried-through-the-process-runner' {
+        # The real Get-RuntimeStatus runs launch_status via the runner and parses its JSON.
+        function Start-HiddenCommand([string]$Command) {
+            $world.events.Add('status')
+            Assert ($Command -match '-m runway\.operations\.launch_status 1>"[^"]*status\.json" 2>"[^"]*status\.stderr\.log"') "command: $Command"
+            Set-Content -LiteralPath (Join-Path $runtime 'status.json') -Value '{"database": "x", "current": null, "head": "0016_shared_contracts", "up_to_date": false, "known_revision": true, "revision": "abc", "worker_lock": "l", "worker_pid": "p"}'
+            return New-FakeProcess $true 0
+        }
+        $got = Get-RuntimeStatus
+        Assert ($got.head -eq '0016_shared_contracts' -and $got.up_to_date -eq $false -and $null -eq $got.current) 'parsed'
+        function Start-HiddenCommand([string]$Command) { return New-FakeProcess $true 2 }
+        $failed = $false
+        try { Get-RuntimeStatus } catch { $failed = $_.Exception.Message.Contains('code 2') }
+        Assert $failed 'a failed query is an error, not an empty status'
+    }
     default { throw "unknown scenario $Scenario" }
 }
 Write-Output "scenario $Scenario passed"
@@ -186,6 +216,9 @@ SCENARIOS = [
     "stubborn-legacy-api-is-left-running",
     "stubborn-worker-blocks-the-deploy",
     "no-worker-beside-an-in-process-scheduler",
+    "status-failure-leaves-a-healthy-api-alone",
+    "status-failure-without-an-api-fails-the-launch",
+    "status-is-queried-through-the-process-runner",
 ]
 
 

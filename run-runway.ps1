@@ -387,6 +387,22 @@ function Start-ApiAndWorker($Status) {
     Start-WorkerBesideApi $Status.worker_lock $Status.worker_pid
 }
 
+function Invoke-ApiStack {
+    # A healthy API is never disturbed because the status query failed (for
+    # example a broken venv after an update): it is left as it is and the
+    # worker is not managed this run. Without a healthy API the failure stops
+    # the launch.
+    $status = $null
+    try {
+        $status = Get-RuntimeStatus
+    } catch {
+        if (-not (Test-Ready 'api')) { throw }
+        Write-Diagnostic "Runtime status unavailable ($($_.Exception.Message)); the healthy API was left as it is and the worker was not managed this run."
+        return
+    }
+    Start-ApiAndWorker $status
+}
+
 function Start-WorkerBesideApi([string]$LockPath, [string]$PidPath) {
     # The API and web are what the Supervisor health-checks. A worker that
     # cannot start is logged and left for the next launcher run to retry; it
@@ -480,7 +496,7 @@ try {
     # Check both ports before creating either child; never disturb another application.
     if (-not $WebOnly) { Assert-PortOwner 'api' 8000 }
     if (-not $ApiOnly) { Assert-PortOwner 'web' 3000 }
-    if (-not $WebOnly) { Start-ApiAndWorker (Get-RuntimeStatus) }
+    if (-not $WebOnly) { Invoke-ApiStack }
     if (-not $ApiOnly) { Start-Component 'web' 3000 }
     if ((-not $WebOnly -and -not (Test-Ready 'api')) -or
         (-not $ApiOnly -and -not (Test-Ready 'web'))) { throw 'Stack readiness was lost during startup.' }
