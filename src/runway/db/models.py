@@ -1901,3 +1901,85 @@ class EventRecord(Base):
     subject_id: Mapped[str | None] = mapped_column(String(200))
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# -----------------------------------------------------------------------------
+# Webhook inbox (migration 0018, spec 04 section 2)
+
+
+class PlatformSubscription(Base, WorkspaceOwned, TimestampMixin):
+    """A platform push subscription (YouTube WebSub today).
+
+    `hub_secret` is the per-subscription WebSub secret; it only authenticates
+    hints and is never logged or returned by any API.
+    """
+
+    __tablename__ = "platform_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "provider", "topic", name="uq_platform_subscription"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="CASCADE",
+            name="fk_platform_subscriptions_account",
+        ),
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(20))
+    topic: Mapped[str] = mapped_column(String(500))
+    hub_secret: Mapped[str | None] = mapped_column(String(128))
+    lease_seconds: Mapped[int | None] = mapped_column(Integer)
+    subscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default=sql_text("'pending'")
+    )
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class WebhookEvent(Base):
+    """One raw webhook delivery, stored before anything trusts it.
+
+    The body is the unverified hint; `signature_ok` records whether the
+    platform signature matched. `dedupe_key` is NULL for unverified events so
+    a forged copy can never block the real delivery with the same bytes.
+    `workspace_id` stays NULL until `process_webhook` resolves the account.
+    """
+
+    __tablename__ = "webhook_events"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_webhook_events_dedupe_key"),
+        Index("ix_webhook_events_provider_received", "provider", "received_at"),
+        Index("ix_webhook_events_processed_at", "processed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "platform_subscriptions.id",
+            ondelete="SET NULL",
+            name="fk_webhook_events_subscription",
+        )
+    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    signature_ok: Mapped[bool] = mapped_column(Boolean)
+    dedupe_key: Mapped[str | None] = mapped_column(String(120))
+    body: Mapped[bytes] = mapped_column(LargeBinary)
+    content_type: Mapped[str | None] = mapped_column(String(100))
+    source: Mapped[str | None] = mapped_column(String(64))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(String(500))
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="SET NULL",
+            name="fk_webhook_events_account",
+        )
+    )
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_webhook_events_workspace")
+    )
