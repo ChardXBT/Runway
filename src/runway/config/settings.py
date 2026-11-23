@@ -106,6 +106,44 @@ class Settings(BaseSettings):
     platform_sync_comment_content_limit: int = Field(default=10, ge=0, le=100)
     platform_sync_analytics_days: int = Field(default=90, ge=7, le=365)
 
+    # Publishing engine (spec 03, spec 05 section 4, spec 08 section 5).
+    # Stops every send in every workspace; a workspace can also be paused from
+    # the API (`publishing_controls`). Checked by the worker before each send.
+    publishing_paused: bool = False
+    # Operator app-approval status. Defaults are the owner-install values: an
+    # unverified Google project "In production", a Meta app whose accounts
+    # have a role on it, and a TikTok sandbox app.
+    youtube_app_status: Literal["unverified", "verified", "audited"] = "unverified"
+    instagram_app_status: Literal["development", "live_standard", "live_advanced"] = (
+        "development"
+    )
+    tiktok_app_status: Literal["sandbox", "production", "audited"] = "sandbox"
+    # True only once Google admitted the project to the YouTube `posts` pilot.
+    youtube_posts_api_access: bool = False
+    # Mock publishers only (RUNWAY_PLATFORM_PROVIDER=mock): force an outcome.
+    mock_publish_scenario: Literal[
+        "success",
+        "uncertain",
+        "container_error",
+        "quota_exceeded",
+        "revoked_token",
+        "processing_failure",
+    ] = "success"
+    mock_publish_processing_seconds: int = Field(default=3, ge=0, le=3600)
+    # Media uploads (spec 02). Sizes in bytes.
+    media_max_upload_bytes: int = Field(default=4 * 1024**3, ge=1, le=256 * 1024**3)
+    media_api_chunk_bytes: int = Field(default=8 * 1024**2, ge=256 * 1024, le=64 * 1024**2)
+    ffprobe_path: str = "ffprobe"
+    ffmpeg_path: str = "ffmpeg"
+    media_probe_timeout_seconds: int = Field(default=60, ge=5, le=900)
+    # Cloudflare R2 (optional in local, required for hosted media). Secrets are
+    # never returned by the API or logged.
+    r2_account_id: str | None = None
+    r2_bucket: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_endpoint: str | None = None
+
     @field_validator(
         "codex_cli_path",
         "publisher_chrome_path",
@@ -128,6 +166,11 @@ class Settings(BaseSettings):
         "instagram_app_secret",
         "tiktok_client_key",
         "tiktok_client_secret",
+        "r2_account_id",
+        "r2_bucket",
+        "r2_access_key_id",
+        "r2_secret_access_key",
+        "r2_endpoint",
         mode="before",
     )
     @classmethod
@@ -256,6 +299,15 @@ class Settings(BaseSettings):
     def tiktok_oauth_configured(self) -> bool:
         return bool(self.tiktok_client_key and self.tiktok_client_secret)
 
+    @property
+    def r2_configured(self) -> bool:
+        return bool(
+            self.r2_account_id
+            and self.r2_bucket
+            and self.r2_access_key_id
+            and self.r2_secret_access_key
+        )
+
     def ensure_directories(self) -> list[Path]:
         directories = [
             self.resolved_data_dir,
@@ -335,6 +387,13 @@ class Settings(BaseSettings):
             "tiktok_oauth_configured": self.tiktok_oauth_configured,
             "inbox_replies_enabled": self.inbox_replies_enabled,
             "platform_sync_interval_minutes": self.platform_sync_interval_minutes,
+            "publishing_paused": self.publishing_paused,
+            "youtube_app_status": self.youtube_app_status,
+            "instagram_app_status": self.instagram_app_status,
+            "tiktok_app_status": self.tiktok_app_status,
+            "youtube_posts_api_access": self.youtube_posts_api_access,
+            "r2_configured": self.r2_configured,
+            "media_max_upload_bytes": self.media_max_upload_bytes,
             "oauth_redirect_base_url": self.resolved_oauth_redirect_base_url,
             "data_dir": str(self.resolved_data_dir),
         }

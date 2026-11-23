@@ -386,28 +386,81 @@ DRAFT_STATUS_MACHINE: StateMachine[DraftStatus] = StateMachine(
 )
 
 _T = TargetState
-# Today a target is created unsent and the owner marks it published by hand.
-# The remaining spec 03 states are declared so the publishing engine extends
-# this table instead of inventing strings; until then nothing may enter them.
+# The spec 03 section 2 machine. Writes go through
+# runway.posts.states.set_target_state, which also mirrors the legacy
+# `status` column and records the `target.state_changed` event.
+#
+# - Editing returns an unsent target to draft or ready (release cleared).
+# - `published` is reached by the worker, by a reconcile that found the post,
+#   or by a person marking it published (assisted and manual workflow).
+# - `uncertain` is left only by reconciliation or a person; never by a retry.
+# - A crash before the point of no return goes sending -> failed_retryable
+#   -> queued; after it, sending -> uncertain.
 TARGET_STATE_MACHINE: StateMachine[TargetState] = StateMachine(
     "draft target",
     TargetState,
     {
-        _T.DRAFT: frozenset({_T.PUBLISHED}),
-        _T.READY: frozenset(),
-        _T.RELEASED: frozenset(),
-        _T.QUEUED: frozenset(),
-        _T.SENDING: frozenset(),
-        _T.PROCESSING: frozenset(),
-        _T.PUBLISHED: frozenset(),
+        _T.DRAFT: frozenset({_T.READY, _T.PUBLISHED, _T.CANCELLED}),
+        _T.READY: frozenset({_T.DRAFT, _T.RELEASED, _T.PUBLISHED, _T.CANCELLED}),
+        _T.RELEASED: frozenset({_T.DRAFT, _T.READY, _T.QUEUED, _T.PUBLISHED, _T.CANCELLED}),
+        _T.QUEUED: frozenset({_T.DRAFT, _T.READY, _T.SENDING, _T.PUBLISHED, _T.CANCELLED}),
+        _T.SENDING: frozenset(
+            {
+                _T.PROCESSING,
+                _T.PUBLISHED,
+                _T.VERIFIED,
+                _T.NEEDS_USER,
+                _T.FAILED_RETRYABLE,
+                _T.FAILED_FINAL,
+                _T.UNCERTAIN,
+                # The send never started (paused, missed window, payload changed).
+                _T.QUEUED,
+                _T.READY,
+            }
+        ),
+        _T.PROCESSING: frozenset(
+            {
+                _T.PUBLISHED,
+                _T.VERIFIED,
+                _T.NEEDS_USER,
+                _T.FAILED_RETRYABLE,
+                _T.FAILED_FINAL,
+                _T.UNCERTAIN,
+            }
+        ),
+        _T.PUBLISHED: frozenset({_T.VERIFIED}),
         _T.VERIFIED: frozenset(),
-        _T.NEEDS_USER: frozenset(),
-        _T.FAILED_RETRYABLE: frozenset(),
-        _T.FAILED_FINAL: frozenset(),
-        _T.UNCERTAIN: frozenset(),
-        _T.CANCELLED: frozenset(),
+        _T.NEEDS_USER: frozenset({_T.PUBLISHED, _T.VERIFIED, _T.FAILED_FINAL}),
+        _T.FAILED_RETRYABLE: frozenset(
+            {_T.QUEUED, _T.DRAFT, _T.READY, _T.RELEASED, _T.PUBLISHED, _T.CANCELLED}
+        ),
+        _T.FAILED_FINAL: frozenset({_T.DRAFT, _T.READY, _T.PUBLISHED, _T.CANCELLED}),
+        _T.UNCERTAIN: frozenset({_T.PUBLISHED, _T.PROCESSING, _T.FAILED_RETRYABLE, _T.FAILED_FINAL}),
+        _T.CANCELLED: frozenset({_T.DRAFT, _T.READY}),
     },
     initial=frozenset({_T.DRAFT}),
+    column="state",
+)
+
+# States in which nothing has been sent and an edit is allowed.
+TARGET_EDITABLE_STATES: frozenset[TargetState] = frozenset(
+    {
+        _T.DRAFT,
+        _T.READY,
+        _T.RELEASED,
+        _T.QUEUED,
+        _T.FAILED_RETRYABLE,
+        _T.FAILED_FINAL,
+        _T.CANCELLED,
+    }
+)
+# States a person may cancel ("only before sending").
+TARGET_CANCELLABLE_STATES: frozenset[TargetState] = frozenset(
+    {_T.DRAFT, _T.READY, _T.RELEASED, _T.QUEUED, _T.FAILED_RETRYABLE, _T.FAILED_FINAL}
+)
+# Settled states: nothing more will happen without a person.
+TARGET_TERMINAL_STATES: frozenset[TargetState] = frozenset(
+    {_T.VERIFIED, _T.FAILED_FINAL, _T.CANCELLED}
 )
 
 # Target states that count as "went out" when deriving a draft's status.

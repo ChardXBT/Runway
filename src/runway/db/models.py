@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -1700,6 +1701,8 @@ class SyncCursor(Base, WorkspaceOwned):
 
 
 class ContentDraft(Base, WorkspaceOwned, TimestampMixin):
+    """A post (spec 03 section 1). The table keeps its historical name."""
+
     __tablename__ = "content_drafts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1708,11 +1711,28 @@ class ContentDraft(Base, WorkspaceOwned, TimestampMixin):
     media_path: Mapped[str | None] = mapped_column(Text)
     media_kind: Mapped[str | None] = mapped_column(String(20))
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    # Legacy cache for the unversioned /api/drafts views; v1 derives a post's
+    # status from its targets (runway.posts.states.derive_post_status).
     status: Mapped[str] = mapped_column(String(30), index=True, default=DraftStatus.DRAFT.value)
     notes: Mapped[str | None] = mapped_column(Text)
+    # Added in 0017_publishing_engine.
+    source: Mapped[str] = mapped_column(String(20), default="human", server_default="human")
+    source_ref: Mapped[str | None] = mapped_column(String(200))
+    ai_generated: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=sql_text("0")
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=sql_text("1"))
+    created_by: Mapped[str | None] = mapped_column(String(200))
 
 
 class DraftTarget(Base, WorkspaceOwned):
+    """One post going to one account (spec 03 section 1).
+
+    `state` is the declared target machine's column. `status` is its legacy
+    mirror for the unversioned routes and sync; both are written only by
+    `runway.posts.states.set_target_state`.
+    """
+
     __tablename__ = "draft_targets"
     __table_args__ = (
         UniqueConstraint("draft_id", "platform", "account_id", name="uq_draft_target"),
@@ -1729,6 +1749,159 @@ class DraftTarget(Base, WorkspaceOwned):
     published_url: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    # Added in 0017_publishing_engine.
+    post_type: Mapped[str | None] = mapped_column(String(40))
+    planned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    release_state: Mapped[str] = mapped_column(String(20), default="none", server_default="none")
+    released_by: Mapped[str | None] = mapped_column(String(200))
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payload_hash: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(
+        String(30),
+        index=True,
+        default=TargetState.DRAFT.value,
+        server_default=TargetState.DRAFT.value,
+    )
+    state_reason: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str | None] = mapped_column(String(200))
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=sql_text("1"))
+    publisher: Mapped[str | None] = mapped_column(String(80))
+
+
+# -----------------------------------------------------------------------------
+# Publishing engine (migration 0017): media assets, post media, the attempt
+# ledger, per-account publisher choice and the publishing pause switch.
+
+
+class MediaAssetV2(Base, WorkspaceOwned):
+    """An uploaded video or image (spec 02 section 3).
+
+    Named v2 because `media_assets` already holds the intelligence images.
+    """
+
+    __tablename__ = "media_assets_v2"
+    __table_args__ = (UniqueConstraint("storage_key", name="uq_media_assets_v2_storage_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Decided by the probe from the bytes; null until the probe ran.
+    kind: Mapped[str | None] = mapped_column(String(20))
+    original_filename: Mapped[str | None] = mapped_column(String(512))
+    content_type: Mapped[str] = mapped_column(String(120))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage: Mapped[str] = mapped_column(String(10))
+    storage_key: Mapped[str] = mapped_column(String(300))
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    rejected_reason: Mapped[str | None] = mapped_column(Text)
+    probe_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+    poster_key: Mapped[str | None] = mapped_column(String(300))
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delete_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MediaUpload(Base, WorkspaceOwned):
+    """The resumable upload of one asset; `plan_json` is `UploadPlan.to_dict()`."""
+
+    __tablename__ = "media_uploads"
+    __table_args__ = (UniqueConstraint("asset_id", name="uq_media_uploads_asset"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("media_assets_v2.id", name="fk_media_uploads_asset")
+    )
+    upload_id: Mapped[str] = mapped_column(String(200))
+    part_size: Mapped[int] = mapped_column(BigInteger)
+    parts_json: Mapped[str] = mapped_column(Text, default="[]", server_default=sql_text("'[]'"))
+    plan_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DraftMedia(Base, WorkspaceOwned):
+    """The ordered media of a post (spec 03 section 1)."""
+
+    __tablename__ = "draft_media"
+    __table_args__ = (
+        UniqueConstraint("draft_id", "position", name="uq_draft_media_position"),
+        UniqueConstraint("draft_id", "asset_id", name="uq_draft_media_asset"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("content_drafts.id", name="fk_draft_media_draft"), index=True
+    )
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("media_assets_v2.id", name="fk_draft_media_asset"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+
+
+class TargetAttempt(Base, WorkspaceOwned):
+    """One step of publishing one target (spec 03 section 1). Append-only.
+
+    A row is inserted (`outcome="pending"`) and committed before any platform
+    call; `request_sent_at` and the outcome are each written once. `job_id` is
+    a plain integer so the ledger outlives purged queue rows.
+    """
+
+    __tablename__ = "target_attempts"
+    __table_args__ = (Index("ix_target_attempts_target_id_id", "target_id", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    target_id: Mapped[int] = mapped_column(
+        ForeignKey("draft_targets.id", name="fk_target_attempts_target")
+    )
+    job_id: Mapped[int | None] = mapped_column(Integer)
+    adapter: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(20), default="send", server_default="send")
+    payload_hash: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    request_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str] = mapped_column(String(30))
+    request_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+    response_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+    external_id: Mapped[str | None] = mapped_column(String(200))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    resumable_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default=sql_text("'{}'")
+    )
+
+
+class AccountPublisher(Base, WorkspaceOwned):
+    """The owner's publisher choice for one account and post type (spec 03 section 5)."""
+
+    __tablename__ = "account_publishers"
+    __table_args__ = (
+        UniqueConstraint("account_id", "post_type", name="uq_account_publisher_post_type"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("connected_accounts.id", name="fk_account_publishers_account")
+    )
+    post_type: Mapped[str] = mapped_column(String(40))
+    publisher: Mapped[str] = mapped_column(String(80))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PublishingControl(Base):
+    """The per-workspace `publishing_paused` switch, checked before every send."""
+
+    __tablename__ = "publishing_controls"
+
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_publishing_controls_workspace"), primary_key=True
+    )
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sql_text("0"))
+    reason: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 # -----------------------------------------------------------------------------
