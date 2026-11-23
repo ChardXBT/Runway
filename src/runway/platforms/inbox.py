@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Literal
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
@@ -18,6 +17,8 @@ from runway.db.models import (
     ReplyDraft,
     utcnow,
 )
+from runway.domain.enums import CommentStatus, PlatformActionState
+from runway.domain.state_machine import COMMENT_STATUS_MACHINE, PLATFORM_ACTION_MACHINE
 from runway.platforms.base import (
     AuthorizationExpired,
     ProviderError,
@@ -37,9 +38,12 @@ from runway.platforms.registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 
-CommentStatus = Literal["new", "read", "answered", "escalated", "ignored"]
-COMMENT_STATUSES = ("new", "read", "answered", "escalated", "ignored")
-UNANSWERED_STATUSES = ("new", "read", "escalated")
+COMMENT_STATUSES = tuple(status.value for status in CommentStatus)
+UNANSWERED_STATUSES = (
+    CommentStatus.NEW.value,
+    CommentStatus.READ.value,
+    CommentStatus.ESCALATED.value,
+)
 
 
 def unanswered_clause() -> ColumnElement[bool]:
@@ -157,7 +161,7 @@ class InboxService:
                 .select_from(CommentRecord)
                 .where(
                     CommentRecord.parent_external_id.is_(None),
-                    CommentRecord.status == "new",
+                    CommentRecord.status == CommentStatus.NEW.value,
                 )
             )
             return {
@@ -249,7 +253,7 @@ class InboxService:
             comment = session.get(CommentRecord, comment_id)
             if comment is None:
                 raise LookupError("comment not found")
-            comment.status = status
+            COMMENT_STATUS_MACHINE.apply(comment, status)
             session.flush()
             return comment_view(comment)
 
@@ -303,7 +307,7 @@ class InboxService:
                 action_type="comment_reply",
                 target_type="comment",
                 target_id=comment.id,
-                state="proposed",
+                state=PLATFORM_ACTION_MACHINE.start(PlatformActionState.PROPOSED),
                 request_json=json.dumps(redact_payload({"text": text})),
             )
             session.add(action)
@@ -322,7 +326,7 @@ class InboxService:
             # Nothing reached the platform, so the action is plainly failed.
             with self.database.session() as session:
                 record = _action(session)
-                record.state = "failed"
+                PLATFORM_ACTION_MACHINE.apply(record, PlatformActionState.FAILED)
                 record.error = safe_error_summary(exc)
                 record.completed_at = utcnow()
 
@@ -347,7 +351,7 @@ class InboxService:
 
         with self.database.session() as session:
             record = _action(session)
-            record.state = "attempted"
+            PLATFORM_ACTION_MACHINE.apply(record, PlatformActionState.ATTEMPTED)
             record.attempted_at = utcnow()
         try:
             result = provider.reply_to_comment(
@@ -366,7 +370,10 @@ class InboxService:
                 logger.exception("comment reply action %s failed", action_id)
             with self.database.session() as session:
                 record = _action(session)
-                record.state = "uncertain" if uncertain else "failed"
+                PLATFORM_ACTION_MACHINE.apply(
+                    record,
+                    PlatformActionState.UNCERTAIN if uncertain else PlatformActionState.FAILED,
+                )
                 record.error = safe_error_summary(exc)
                 record.completed_at = utcnow()
             if uncertain:
@@ -384,7 +391,10 @@ class InboxService:
             raise
         with self.database.session() as session:
             action = _action(session)
-            action.state = "completed" if result.verified else "uncertain"
+            PLATFORM_ACTION_MACHINE.apply(
+                action,
+                PlatformActionState.COMPLETED if result.verified else PlatformActionState.UNCERTAIN,
+            )
             action.external_result_id = result.external_id
             action.response_json = json.dumps(
                 {"external_id": result.external_id, "verified": result.verified}
@@ -394,7 +404,7 @@ class InboxService:
                 action.verified_at = utcnow()
             comment = session.get(CommentRecord, comment_id)
             if comment is not None:
-                comment.status = "answered"
+                COMMENT_STATUS_MACHINE.apply(comment, CommentStatus.ANSWERED)
                 comment.has_owner_reply = True
             return {
                 "id": action.id,

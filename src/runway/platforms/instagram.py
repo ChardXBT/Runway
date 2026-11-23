@@ -191,7 +191,9 @@ class InstagramProvider(PlatformProvider):
         data = self._json_or_raise(response)
         access_token = data.get("access_token")
         if not isinstance(access_token, str) or not access_token:
-            raise AuthorizationExpired("Instagram refresh returned no token")
+            # A success response without a token is a platform fault, not a
+            # revoked grant; the current token stays usable until it expires.
+            raise ProviderError("Instagram refresh returned no token", retryable=True)
         expires_in = _int_or_none(data.get("expires_in"))
         return token.model_copy(
             update={

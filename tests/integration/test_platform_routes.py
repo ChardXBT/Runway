@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from runway.api.app import create_app
 from runway.config import Settings
+from runway.db import initialize_database
 from runway.db.base import Database
 from runway.db.models import (
     AccountMetricSnapshot,
@@ -24,14 +25,20 @@ from runway.platforms.tokens import TokenStore
 from runway.platforms.youtube import YouTubeProvider
 
 
+def migrated(settings: Settings) -> Settings:
+    """The API never migrates; tests upgrade their temporary database first."""
+    initialize_database(settings).engine.dispose()
+    return settings
+
+
 @pytest.fixture()
 def live_settings(tmp_path: Path) -> Settings:
-    return Settings(data_dir=tmp_path / "data", platform_provider="live")
+    return migrated(Settings(data_dir=tmp_path / "data", platform_provider="live"))
 
 
 @pytest.fixture()
 def mock_settings(tmp_path: Path) -> Settings:
-    return Settings(data_dir=tmp_path / "data", platform_provider="mock")
+    return migrated(Settings(data_dir=tmp_path / "data", platform_provider="mock"))
 
 
 def test_live_mode_without_credentials_reports_unconfigured(live_settings: Settings) -> None:
@@ -104,7 +111,7 @@ def test_oauth_connect_and_callback_happy_path(
         return original(self, platform)
 
     monkeypatch.setattr(ProviderRegistry, "provider", patched)
-    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
+    with TestClient(create_app(migrated(settings)), base_url="http://127.0.0.1:8000") as web:
         connect = web.post("/api/platforms/youtube/connect")
         assert connect.status_code == 200
         payload = connect.json()
@@ -294,7 +301,7 @@ def test_settings_endpoint_exposes_no_secret_values(tmp_path: Path) -> None:
         instagram_app_secret="ig-secret-abc",
         tiktok_client_secret="tt-secret-abc",
     )
-    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
+    with TestClient(create_app(migrated(settings)), base_url="http://127.0.0.1:8000") as client:
         body = client.get("/api/settings").text
         for secret in ("yt-secret-abc", "ig-secret-abc", "tt-secret-abc"):
             assert secret not in body

@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from runway.api.app import create_app
 from runway.config import Settings
+from runway.db import initialize_database
 from runway.db.base import Database
 from runway.db.models import (
     AccountMetricDay,
@@ -26,14 +27,20 @@ from runway.platforms.overview import (
 PLATFORMS = {"youtube", "instagram", "tiktok"}
 
 
+def migrated(settings: Settings) -> Settings:
+    """The API never migrates; tests upgrade their temporary database first."""
+    initialize_database(settings).engine.dispose()
+    return settings
+
+
 @pytest.fixture()
 def live_settings(tmp_path: Path) -> Settings:
-    return Settings(data_dir=tmp_path / "data", platform_provider="live")
+    return migrated(Settings(data_dir=tmp_path / "data", platform_provider="live"))
 
 
 @pytest.fixture()
 def mock_settings(tmp_path: Path) -> Settings:
-    return Settings(data_dir=tmp_path / "data", platform_provider="mock")
+    return migrated(Settings(data_dir=tmp_path / "data", platform_provider="mock"))
 
 
 def _assert_overview_contract(payload: Any) -> None:

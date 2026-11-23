@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-# API modules create the application at import time. Force that initialization into a
-# disposable directory before any repository modules can read the developer's .env file.
+# API modules build the application at import time (without touching the database). Point
+# the settings at a disposable directory before any repository modules can read a .env file.
 _COLLECTION_DATA_DIR = tempfile.mkdtemp(prefix="runway-pytest-collection-")
 os.environ["RUNWAY_DATA_DIR"] = _COLLECTION_DATA_DIR
 os.environ["RUNWAY_AGENT_RUNTIME"] = "mock"

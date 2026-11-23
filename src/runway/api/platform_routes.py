@@ -6,11 +6,12 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from runway.auth.principal import get_principal
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -279,7 +280,7 @@ def _enrich_token(
 
 
 def build_platform_router(database: Database, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["platforms"])
+    router = APIRouter(prefix="/api", tags=["platforms"], dependencies=[Depends(get_principal)])
     registry = ProviderRegistry(database, settings)
     oauth_states = OAuthStateService(database)
     sync_service = SyncService(database, settings, registry)
@@ -880,6 +881,10 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            # The draft state machine refused the status (e.g. a published
+            # draft back to draft, or scheduled without a time).
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.delete("/drafts/{draft_id}")
     def drafts_archive(draft_id: int) -> dict[str, object]:

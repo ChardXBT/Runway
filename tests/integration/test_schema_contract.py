@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 
 from alembic import command
 from runway.config import Settings
+from runway.db.bootstrap import migration_head
 from runway.db.schema_contract import (
     compare_schema_snapshots,
     schema_fingerprint,
@@ -158,3 +159,81 @@ def test_schema_comparison_identifies_changed_column_attributes(
     changed = proposal_differences["changed_columns"]
     assert isinstance(changed, list)
     assert changed[0]["expected"]["name"] == "status"
+
+
+WORKSPACE_SCOPED_TABLES = (
+    "channels",
+    "connected_accounts",
+    "oauth_states",
+    "content_groups",
+    "platform_content",
+    "content_metric_snapshots",
+    "account_metric_snapshots",
+    "account_metric_days",
+    "comment_records",
+    "reply_drafts",
+    "platform_actions",
+    "sync_runs",
+    "sync_cursors",
+    "content_drafts",
+    "draft_targets",
+    "publish_jobs",
+)
+
+
+def test_committed_contract_gives_every_platform_table_a_workspace() -> None:
+    snapshot_path = Settings().project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
+    snapshot: object = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert isinstance(snapshot, dict)
+    tables = snapshot["contract"]["tables"]
+    assert {"workspaces", "users", "workspace_members", "api_keys", "audit_log"} <= set(tables)
+    for table in WORKSPACE_SCOPED_TABLES:
+        column = next(c for c in tables[table]["columns"] if c["name"] == "workspace_id")
+        assert column["nullable"] is False, table
+        assert column["default"] == "1", table
+        assert {
+            "columns": ["workspace_id"],
+            "referred_table": "workspaces",
+            "referred_columns": ["id"],
+            "ondelete": None,
+        } in tables[table]["foreign_keys"], table
+    unique = {
+        row["name"]: row["columns"] for row in tables["connected_accounts"]["unique_constraints"]
+    }
+    assert unique["uq_connected_account_external"] == [
+        "workspace_id",
+        "platform",
+        "external_account_id",
+    ]
+
+
+def test_committed_contract_has_the_shared_v1_tables() -> None:
+    snapshot_path = Settings().project_root / "docs" / "schema" / "intelligence-data-flywheel.json"
+    snapshot: object = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert isinstance(snapshot, dict)
+    assert snapshot["migration"] == migration_head(Settings())
+    tables = snapshot["contract"]["tables"]
+    assert {column["name"] for column in tables["events"]["columns"]} == {
+        "id",
+        "workspace_id",
+        "type",
+        "subject_type",
+        "subject_id",
+        "payload_json",
+        "created_at",
+    }
+    assert {column["name"] for column in tables["idempotency_keys"]["columns"]} == {
+        "id",
+        "workspace_id",
+        "principal_id",
+        "key",
+        "request_hash",
+        "response_status",
+        "response_body",
+        "created_at",
+    }
+    for table in ("events", "idempotency_keys"):
+        assert any(
+            fk["referred_table"] == "workspaces" and fk["columns"] == ["workspace_id"]
+            for fk in tables[table]["foreign_keys"]
+        ), table

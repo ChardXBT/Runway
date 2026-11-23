@@ -6,15 +6,16 @@ import logging
 from fastapi.testclient import TestClient
 
 from runway.config import Settings
+from runway.db import Database
 
 
 def test_api_start_and_stop_are_logged_with_mode_and_no_secrets(
     settings: Settings,
+    database: Database,
 ) -> None:
-    # The migration runner inside create_app loads alembic.ini through
-    # fileConfig; the application must keep its loggers alive and install its
-    # own configuration afterwards, so capture on the app logger itself rather
-    # than relying on root handlers surviving startup.
+    # The database fixture migrates through alembic.ini, whose fileConfig must
+    # not disable the application's loggers, so capture on the app logger
+    # itself rather than relying on root handlers surviving startup.
     app_module = importlib.import_module("runway.api.app")
     secret = "client-secret-value-must-not-appear"
     configured = settings.model_copy(

@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from enum import StrEnum
+from typing import Generic, Protocol, TypeVar
 
-from runway.domain.enums import ProposalStatus, PublishAttemptStatus
+from runway.domain.enums import (
+    CommentStatus,
+    DraftStatus,
+    PlatformActionState,
+    ProposalStatus,
+    PublishAttemptStatus,
+    TargetState,
+)
 
 ALLOWED_TRANSITIONS: dict[ProposalStatus, set[ProposalStatus]] = {
     ProposalStatus.GENERATING: {ProposalStatus.NEEDS_REVIEW, ProposalStatus.CANCELLED},
@@ -276,3 +285,186 @@ def transition_attempt(
         attempt.submitted_at = now
     attempt.completed_at = now if new_status in ATTEMPT_COMPLETED_STATUSES else None
     return new_status
+
+
+# ---------------------------------------------------------------------------
+# Creator-platform lifecycles: content drafts, draft targets, comment-reply
+# actions and comment moderation labels.
+#
+# One generic machine per persisted column. Every write goes through
+# `StateMachine.apply`, which validates the from->to edge against the declared
+# table. Writing the current value again is not a transition and is allowed.
+# ---------------------------------------------------------------------------
+
+StateT = TypeVar("StateT", bound=StrEnum)
+
+
+@dataclass(slots=True)
+class InvalidStateTransition(ValueError):
+    machine: str
+    old: str
+    new: str
+
+    def __str__(self) -> str:
+        return f"{self.machine} cannot transition from {self.old} to {self.new}"
+
+
+@dataclass(slots=True)
+class UnknownState(ValueError):
+    machine: str
+    value: object
+
+    def __str__(self) -> str:
+        return f"{self.machine} has no state {self.value!r}"
+
+
+class StateMachine(Generic[StateT]):
+    def __init__(
+        self,
+        name: str,
+        states: type[StateT],
+        transitions: Mapping[StateT, frozenset[StateT]],
+        *,
+        initial: frozenset[StateT],
+        column: str = "status",
+    ) -> None:
+        missing = set(states) - set(transitions)
+        if missing:
+            raise ValueError(f"{name} machine has no transition entry for {sorted(missing)}")
+        self.name = name
+        self.states = states
+        self.transitions: dict[StateT, frozenset[StateT]] = dict(transitions)
+        self.initial = initial
+        self.column = column
+
+    def parse(self, value: object) -> StateT:
+        if not isinstance(value, str):
+            raise UnknownState(self.name, value)
+        try:
+            return self.states(value)
+        except ValueError:
+            raise UnknownState(self.name, value) from None
+
+    def allowed(self, old: StateT | str, new: StateT | str) -> bool:
+        old_state = self.parse(old)
+        new_state = self.parse(new)
+        return old_state == new_state or new_state in self.transitions[old_state]
+
+    def require(self, old: StateT | str, new: StateT | str) -> StateT:
+        old_state = self.parse(old)
+        new_state = self.parse(new)
+        if not self.allowed(old_state, new_state):
+            raise InvalidStateTransition(self.name, old_state.value, new_state.value)
+        return new_state
+
+    def start(self, state: StateT) -> str:
+        """The stored value for a newly created row."""
+        if state not in self.initial:
+            raise InvalidStateTransition(self.name, "(new)", state.value)
+        return state.value
+
+    def apply(self, record: object, new: StateT | str) -> StateT:
+        """Validate and write the transition onto ``record``'s state column."""
+        new_state = self.require(getattr(record, self.column), new)
+        setattr(record, self.column, new_state.value)
+        return new_state
+
+
+_D = DraftStatus
+DRAFT_STATUS_MACHINE: StateMachine[DraftStatus] = StateMachine(
+    "content draft",
+    DraftStatus,
+    {
+        _D.DRAFT: frozenset({_D.SCHEDULED, _D.PARTIALLY_PUBLISHED, _D.PUBLISHED, _D.ARCHIVED}),
+        _D.SCHEDULED: frozenset({_D.DRAFT, _D.PARTIALLY_PUBLISHED, _D.PUBLISHED, _D.ARCHIVED}),
+        _D.PARTIALLY_PUBLISHED: frozenset({_D.PUBLISHED, _D.ARCHIVED}),
+        _D.PUBLISHED: frozenset({_D.ARCHIVED}),
+        # Restoring an archived draft returns it to editing, never to published.
+        _D.ARCHIVED: frozenset({_D.DRAFT, _D.SCHEDULED}),
+    },
+    initial=frozenset({_D.DRAFT, _D.SCHEDULED}),
+)
+
+_T = TargetState
+# Today a target is created unsent and the owner marks it published by hand.
+# The remaining spec 03 states are declared so the publishing engine extends
+# this table instead of inventing strings; until then nothing may enter them.
+TARGET_STATE_MACHINE: StateMachine[TargetState] = StateMachine(
+    "draft target",
+    TargetState,
+    {
+        _T.DRAFT: frozenset({_T.PUBLISHED}),
+        _T.READY: frozenset(),
+        _T.RELEASED: frozenset(),
+        _T.QUEUED: frozenset(),
+        _T.SENDING: frozenset(),
+        _T.PROCESSING: frozenset(),
+        _T.PUBLISHED: frozenset(),
+        _T.VERIFIED: frozenset(),
+        _T.NEEDS_USER: frozenset(),
+        _T.FAILED_RETRYABLE: frozenset(),
+        _T.FAILED_FINAL: frozenset(),
+        _T.UNCERTAIN: frozenset(),
+        _T.CANCELLED: frozenset(),
+    },
+    initial=frozenset({_T.DRAFT}),
+)
+
+# Target states that count as "went out" when deriving a draft's status.
+TARGET_DELIVERED_STATES: frozenset[TargetState] = frozenset({_T.PUBLISHED, _T.VERIFIED})
+
+_A = PlatformActionState
+PLATFORM_ACTION_MACHINE: StateMachine[PlatformActionState] = StateMachine(
+    "platform action",
+    PlatformActionState,
+    {
+        # Failing before anything was sent is a plain failure.
+        _A.PROPOSED: frozenset({_A.ATTEMPTED, _A.FAILED}),
+        _A.ATTEMPTED: frozenset({_A.COMPLETED, _A.UNCERTAIN, _A.FAILED}),
+        _A.COMPLETED: frozenset(),
+        _A.FAILED: frozenset(),
+        # Only a reconciliation that re-read the platform may settle these;
+        # an uncertain write is never retried automatically (invariant 4).
+        _A.UNCERTAIN: frozenset({_A.COMPLETED, _A.FAILED}),
+    },
+    initial=frozenset({_A.PROPOSED}),
+    column="state",
+)
+
+_C = CommentStatus
+_ALL_COMMENT_STATUSES = frozenset(CommentStatus)
+# Moderation labels are the owner's choice; any label may follow any other.
+COMMENT_STATUS_MACHINE: StateMachine[CommentStatus] = StateMachine(
+    "comment",
+    CommentStatus,
+    {status: _ALL_COMMENT_STATUSES - {status} for status in CommentStatus},
+    initial=frozenset({_C.NEW}),
+)
+
+
+def derive_draft_status(
+    current: DraftStatus | str,
+    *,
+    scheduled: bool,
+    target_states: list[TargetState | str],
+) -> DraftStatus:
+    """The one rule for a draft's status from its schedule and targets.
+
+    Archived drafts stay archived. Delivery only ever moves a draft forward
+    (published targets cannot be un-sent), and an unsent draft is `scheduled`
+    exactly when it has a planned time.
+    """
+    state = DRAFT_STATUS_MACHINE.parse(current)
+    if state is DraftStatus.ARCHIVED:
+        return state
+    targets = [TARGET_STATE_MACHINE.parse(value) for value in target_states]
+    delivered = sum(1 for target in targets if target in TARGET_DELIVERED_STATES)
+    if targets and delivered == len(targets):
+        return DraftStatus.PUBLISHED
+    # Checked before the partial case: a published draft that gains an unsent
+    # target stays published rather than moving back to partially_published.
+    if state is DraftStatus.PUBLISHED:
+        return state
+    if delivered or state is DraftStatus.PARTIALLY_PUBLISHED:
+        return DraftStatus.PARTIALLY_PUBLISHED
+    return DraftStatus.SCHEDULED if scheduled else DraftStatus.DRAFT
