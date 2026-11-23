@@ -87,12 +87,14 @@ def test_hosted_requests_to_api_routes_are_401_but_health_answers(tmp_path: Path
     # Without the context manager the lifespan (database check) does not run;
     # authentication must refuse before any handler touches the database.
     client = TestClient(application, base_url="http://127.0.0.1:8000")
-    for path in ("/api/platforms", "/api/settings", "/api/drafts", "/api/v1/workspace"):
+    for path in ("/api/settings", "/api/v1/workspace", "/api/v1/workspace/members"):
         response = client.get(path)
         assert response.status_code == 401, path
         assert response.json()["code"] == "authentication_required"
-    # Local-only surfaces do not exist in hosted (spec 01 section 7).
-    assert client.get("/api/queue").status_code == 404
+    # Local-only surfaces do not exist in hosted (spec 01 section 7), nor do
+    # the platform routes, which are not scoped to a workspace yet.
+    for path in ("/api/queue", "/api/platforms", "/api/drafts", "/api/inbox"):
+        assert client.get(path).status_code == 404, path
     assert client.get("/health").status_code == 200
     assert client.get("/openapi.json").status_code == 404
     assert _unguarded_routes(application) == []

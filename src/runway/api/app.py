@@ -148,7 +148,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.include_router(build_discovery_router(database, active_settings))
         application.include_router(build_intelligence_router(database, active_settings))
         application.include_router(build_proposal_router(database, active_settings))
-    application.include_router(build_platform_router(database, active_settings))
+        # Accounts, content, inbox, drafts and overview read and write the
+        # global platform tables with no workspace filter and no scope checks,
+        # so a member of one hosted workspace would reach another's accounts.
+        # Hosted serves none of it (404) until the workspace-tenancy work
+        # scopes every query by principal.workspace_id and calls require().
+        application.include_router(build_platform_router(database, active_settings))
     application.include_router(build_workspace_router(database, active_settings))
     if hosted and active_settings.identity_provider.strip() == "clerk":
         application.include_router(build_identity_hook_router(database, active_settings))

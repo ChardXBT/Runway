@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from identity_support import (
     ISSUER,
@@ -31,10 +32,18 @@ from identity_support import (
 from sqlalchemy import func, select
 
 from runway.api.app import create_app
+from runway.api.platform_routes import build_platform_router
 from runway.config import Settings
 from runway.db import Database, initialize_database
 from runway.db.hosted_models import IdentityWebhookDelivery, WorkspaceIdentityLink
-from runway.db.models import AuditLogEntry, User, Workspace, WorkspaceMember
+from runway.db.models import (
+    AuditLogEntry,
+    ConnectedAccount,
+    ContentDraft,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from runway.hosted.quotas import set_quota_overrides
 from runway.identity.registry import build_identity_provider
 
@@ -117,7 +126,7 @@ def _problem(response: httpx.Response, status: int, code: str) -> dict[str, Any]
 
 
 def test_hosted_request_without_a_token_is_401(hosted: Hosted) -> None:
-    for path in ("/api/v1/workspace", "/api/v1/workspace/members", "/api/platforms"):
+    for path in ("/api/v1/workspace", "/api/v1/workspace/members", "/api/settings"):
         response = hosted.client.get(path)
         _problem(response, 401, "authentication_required")
         assert response.headers["www-authenticate"] == "Bearer"
@@ -440,11 +449,63 @@ def test_hosted_hides_the_local_only_routes(hosted: Hosted) -> None:
         response = hosted.client.request(method, path, headers=headers)
         assert response.status_code == 404, (method, path)
     # Shared surfaces stay.
-    assert hosted.client.get("/api/platforms", headers=headers).status_code == 200
     view = hosted.client.get("/api/settings", headers=headers)
     assert view.status_code == 200
     assert view.json()["profile"] == "hosted"
     assert not {"data_dir", "connector_account_email", "publisher_channel_id"} & set(view.json())
+
+
+def _platform_route_requests(settings: Settings, database: Database) -> list[tuple[str, str]]:
+    """Every (method, concrete path) the legacy platform router serves."""
+    filled = {"platform": "youtube", "account_id": "1", "run_id": "1", "content_id": "1"}
+    filled |= {"comment_id": "1", "draft_id": "1", "target_id": "1"}
+    requests: list[tuple[str, str]] = []
+    for route in build_platform_router(database, settings).routes:
+        assert isinstance(route, APIRoute)
+        path = route.path
+        for name, value in filled.items():
+            path = path.replace("{" + name + "}", value)
+        assert "{" not in path, path
+        requests.extend((method, path) for method in sorted(route.methods))
+    return requests
+
+
+def test_hosted_does_not_serve_the_unscoped_platform_routes(hosted: Hosted) -> None:
+    # The platform router reads and writes the global tables with no workspace
+    # filter and no scope checks: a viewer of workspace B could disconnect
+    # workspace A's account. Hosted must not serve any of it until tenancy lands.
+    with hosted.database.session() as session:
+        session.add(
+            ConnectedAccount(platform="youtube", external_account_id="UC_a", status="connected")
+        )
+    hosted.hook(membership_event("created", "org_b", "user_b"), "msg_b")
+    owner_a = hosted.auth("user_a", "org_a")
+    viewer_b = hosted.auth("user_b", "org_b", role="member")
+    assert hosted.client.get("/api/v1/workspace", headers=owner_a).status_code == 200
+    viewer = hosted.client.get("/api/v1/workspace", headers=viewer_b)
+    assert viewer.json()["your_role"] == "viewer"
+
+    requests = _platform_route_requests(hosted.settings, hosted.database)
+    assert len(requests) > 25
+    for headers in (owner_a, viewer_b):
+        for method, path in requests:
+            body = {"confirmed": True} if method != "GET" else None
+            response = hosted.client.request(method, path, headers=headers, json=body)
+            assert response.status_code == 404, (method, path, response.text)
+
+    with hosted.database.session() as session:
+        account = session.scalar(select(ConnectedAccount))
+        assert account is not None and account.status == "connected"
+        assert session.scalar(select(func.count()).select_from(ContentDraft)) == 0
+
+
+def test_local_profile_still_serves_platform_routes_without_login(
+    settings: Settings, database: Database
+) -> None:
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
+        for path in ("/api/platforms", "/api/platforms/accounts", "/api/inbox", "/api/drafts"):
+            response = client.get(path)
+            assert response.status_code == 200, (path, response.text)
 
 
 def test_cookie_sessions_need_the_web_origin_for_state_changes(hosted: Hosted) -> None:
