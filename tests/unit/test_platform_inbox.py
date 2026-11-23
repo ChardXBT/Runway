@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from runway.db.base import Database
 from runway.db.models import CommentRecord, ConnectedAccount, PlatformAction, utcnow
+from runway.hosted.quotas import PublishingPaused, set_publishing_disabled
 from runway.platforms.base import ProviderError, TokenSet, provider_request
 from runway.platforms.capabilities import YOUTUBE_ENGAGE_SCOPE, Platform
 from runway.platforms.inbox import InboxService
@@ -221,3 +222,43 @@ def test_reply_rejected_by_the_platform_is_still_failed(database: Database) -> N
         action = session.scalar(select(PlatformAction))
         assert action is not None
         assert action.state == "failed"
+
+
+class _CountingReply(MockPlatformProvider):
+    sent: list[str] = []
+
+    def reply_to_comment(self, token, *, comment_external_id, text):
+        type(self).sent.append(text)
+        return super().reply_to_comment(token, comment_external_id=comment_external_id, text=text)
+
+
+@pytest.mark.parametrize("switch", ["global", "workspace"])
+def test_reply_is_refused_while_publishing_is_paused(database: Database, switch: str) -> None:
+    # The kill switches must stop a reply before anything is recorded or sent.
+    _CountingReply.sent = []
+    service, comment_id = _reply_service(database, _CountingReply)
+    if switch == "global":
+        service.settings = service.settings.model_copy(update={"publishing_paused": True})
+    else:
+        with database.session() as session:
+            set_publishing_disabled(
+                session, 1, disabled=True, reason="abuse review", updated_by="operator"
+            )
+
+    with pytest.raises(PublishingPaused) as refused:
+        service.reply(comment_id, "hello", workspace_id=1)
+
+    assert refused.value.status_code == 409
+    assert refused.value.code == "publishing_paused"
+    assert _CountingReply.sent == []
+    with database.session() as session:
+        assert session.scalar(select(PlatformAction)) is None
+
+    # Lifting the switch lets the same reply through.
+    if switch == "global":
+        service.settings = service.settings.model_copy(update={"publishing_paused": False})
+    else:
+        with database.session() as session:
+            set_publishing_disabled(session, 1, disabled=False, reason=None, updated_by="operator")
+    service.reply(comment_id, "hello", workspace_id=1)
+    assert _CountingReply.sent == ["hello"]

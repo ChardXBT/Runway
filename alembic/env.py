@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import Connection, Engine, engine_from_config, event, pool
 
+import runway.db.hosted_models  # noqa: F401
 from alembic import context
 from runway.db import models  # noqa: F401
 from runway.db.base import Base

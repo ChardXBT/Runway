@@ -5816,6 +5816,88 @@
           }
         ]
       },
+      "identity_webhook_deliveries": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "delivery_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "event_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "event_type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "outcome",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "provider",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "received_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "subject_key",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(420)"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [
+          {
+            "columns": [
+              "provider",
+              "subject_key",
+              "event_at"
+            ],
+            "name": "ix_identity_webhook_subject",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "provider",
+              "delivery_id"
+            ],
+            "name": "uq_identity_webhook_delivery"
+          }
+        ]
+      },
       "image_generation_runs": {
         "check_constraints": [],
         "columns": [
@@ -12152,6 +12234,177 @@
           }
         ]
       },
+      "workspace_identity_links": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "claimed_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "external_deleted_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "external_org_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "provider",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [],
+        "unique_constraints": [
+          {
+            "columns": [
+              "provider",
+              "external_org_id"
+            ],
+            "name": "uq_workspace_identity_org"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "uq_workspace_identity_workspace"
+          }
+        ]
+      },
+      "workspace_limits": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "api_requests_per_minute",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "connected_accounts",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "posts_per_day",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": "0",
+            "name": "publishing_disabled",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BOOLEAN"
+          },
+          {
+            "default": null,
+            "name": "publishing_disabled_reason",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "storage_bytes",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "BIGINT"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "updated_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [],
+        "unique_constraints": []
+      },
       "workspace_members": {
         "check_constraints": [],
         "columns": [
@@ -12292,7 +12545,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "bf37abbdd41fde72921966781e6c5b07fb0591e97a5c50dcdac48920b62b54e3",
-  "migration": "0016_shared_contracts",
-  "table_count": 74
+  "fingerprint": "136647b079e661784c13205d59d438c3a857068b64d4e333fbe785bc5e7fe659",
+  "migration": "0016h_hosted_identity",
+  "table_count": 77
 }

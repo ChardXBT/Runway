@@ -51,6 +51,36 @@ jobs:
       - run: pytest
       - run: pip-audit
 
+  container-image:
+    # Builds the hosted images on every push to prove the Dockerfiles work.
+    # Nothing is pushed to any registry and no secrets are used.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --pull --tag runway:ci .
+      - name: Image runs as a non-root user with ffmpeg and the CLI
+        run: |
+          test "$(docker run --rm --entrypoint id runway:ci -u)" != "0"
+          docker run --rm --entrypoint ffprobe runway:ci -version
+          docker run --rm runway:ci db --help
+          docker run --rm runway:ci hosted --help
+      - run: docker build --pull --file deploy/web.Dockerfile --tag runway-web:ci .
+      - name: Compose file is valid with placeholder values
+        env:
+          RUNWAY_CLERK_ISSUER: https://clerk.example.invalid
+          RUNWAY_CLERK_WEBHOOK_SECRET: whsec_placeholder
+          RUNWAY_WEB_ORIGINS: https://app.example.invalid
+          RUNWAY_OAUTH_REDIRECT_BASE_URL: https://api.example.invalid
+          RUNWAY_PUBLIC_API_URL: https://api.example.invalid
+          RUNWAY_DB_SUPERUSER_PASSWORD: placeholder
+          RUNWAY_DB_OWNER_PASSWORD: placeholder
+          RUNWAY_DB_APP_PASSWORD: placeholder
+        run: docker compose -f deploy/compose.hosted.yml --profile release config --quiet
+      - run: bash -n deploy/backup.sh && bash -n deploy/restore.sh && bash -n deploy/postgres/init-roles.sh
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 30

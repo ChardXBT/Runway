@@ -25,6 +25,7 @@ from runway.capture.browser import BrowserCaptureService, CapturePaused
 from runway.capture.service import CaptureService
 from runway.catalog.service import CatalogService
 from runway.cli.db_commands import db_app
+from runway.cli.hosted_commands import hosted_app
 from runway.cli.worker_commands import worker_command
 from runway.config import get_settings
 from runway.db import initialize_database
@@ -113,6 +114,7 @@ intelligence_app.add_typer(composed_app, name="composed-retrieval")
 app.add_typer(platforms_app, name="platforms")
 app.add_typer(db_app, name="db")
 app.command("worker")(worker_command)
+app.add_typer(hosted_app, name="hosted")
 
 
 @app.callback()
@@ -1909,14 +1911,27 @@ def publisher_verify(proposal_id: int = typer.Option(..., min=1)) -> None:
 
 @app.command()
 def serve(
-    host: str | None = typer.Option(None, help="Loopback host only."),
+    host: str | None = typer.Option(None, help="Loopback host only in the local profile."),
     port: int | None = typer.Option(None, help="API port."),
 ) -> None:
-    """Run the local FastAPI service."""
+    """Run the FastAPI service (local: loopback only; hosted: behind a reverse proxy)."""
     import uvicorn
 
     settings = get_settings()
     bind_host = host or settings.host
+    if settings.profile == "hosted":
+        # Behind a TLS-terminating proxy: trust X-Forwarded-* only from it, so
+        # rate limits see the real client address.
+        uvicorn.run(
+            "runway.api.app:app",
+            host=bind_host,
+            port=port or settings.api_port,
+            reload=False,
+            proxy_headers=True,
+            forwarded_allow_ips=settings.forwarded_allow_ips,
+            server_header=False,
+        )
+        return
     if bind_host not in {"127.0.0.1", "localhost", "::1"}:
         raise typer.BadParameter("Runway may only bind to a loopback host")
     uvicorn.run("runway.api.app:app", host=bind_host, port=port or settings.api_port, reload=False)

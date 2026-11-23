@@ -18,6 +18,7 @@ from runway.db.base import Database
 from runway.db.models import AuditEvent, CandidateImage, MediaAsset, Proposal, PublishAttempt
 from runway.db.repositories import get_channel
 from runway.discovery.service import DiscoveryService
+from runway.hosted.quotas import PublishingPaused, set_publishing_disabled
 from runway.intelligence.profile import StyleProfileService
 from runway.proposals.service import ProposalService
 from runway.publishing.base import PreparedPost, PublisherSessionStatus
@@ -1803,3 +1804,60 @@ async def test_verify_still_rejects_a_timestamp_outside_the_channel_timezone(
     with pytest.raises(ValueError, match="only a submitted YouTube action can be verified"):
         await publisher.verify_scheduled_post(proposal_id)
     assert adapter.verify_calls == []
+
+
+@pytest.mark.asyncio
+async def test_publishing_pause_stops_a_confirmed_submission_before_the_browser(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    enabled = _authorized_settings(settings)
+    preparation = await YouTubeBrowserPublisher(database, enabled, adapter).prepare_attempt(
+        proposal_id
+    )
+    paused = YouTubeBrowserPublisher(
+        database, enabled.model_copy(update={"publishing_paused": True}), adapter
+    )
+    with pytest.raises(PublishingPaused):
+        await paused.confirm_schedule(
+            preparation.attempt_id,
+            confirmation_token=preparation.confirmation_token,
+            confirmation_phrase=preparation.confirmation_phrase,
+        )
+    assert adapter.schedule_calls == []
+    # The one-time confirmation was not consumed; it still works once resumed.
+    assert paused.attempt_status(preparation.attempt_id)["status"] == "prepared"
+    result = await YouTubeBrowserPublisher(database, enabled, adapter).confirm_schedule(
+        preparation.attempt_id,
+        confirmation_token=preparation.confirmation_token,
+        confirmation_phrase=preparation.confirmation_phrase,
+    )
+    assert result.status == "externally_scheduled"
+    assert len(adapter.schedule_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_kill_switch_leaves_a_queued_submission_queued(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    adapter = FakeYouTubeAdapter()
+    publisher = YouTubeBrowserPublisher(database, _authorized_settings(settings), adapter)
+    queued = publisher.queue_attempt(proposal_id)
+    with database.session() as session:
+        set_publishing_disabled(session, 1, disabled=True, reason="review", updated_by="op")
+
+    with pytest.raises(PublishingPaused, match="review"):
+        await publisher.process_queued_attempt(int(queued["id"]))
+    assert adapter.schedule_calls == []
+    assert adapter.validate_calls == 0
+    assert publisher.attempt_status(int(queued["id"]))["status"] == "queued"
+
+    with database.session() as session:
+        set_publishing_disabled(session, 1, disabled=False, reason=None, updated_by="op")
+    result = await publisher.process_queued_attempt(int(queued["id"]))
+    assert result.status == "externally_scheduled"
+    assert len(adapter.schedule_calls) == 1

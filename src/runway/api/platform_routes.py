@@ -11,7 +11,8 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from runway.auth.principal import get_principal
+from runway.auth.principal import LOCAL_WORKSPACE_ID, Principal, get_principal
+from runway.auth.problems import Problem
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -22,6 +23,7 @@ from runway.db.models import (
     SyncRun,
     utcnow,
 )
+from runway.hosted.quotas import require_connected_account_slot
 from runway.platforms.base import (
     ProviderError,
     TokenSet,
@@ -294,6 +296,8 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         token: TokenSet,
         scopes: list[str],
         scopes_source: str = "granted",
+        *,
+        workspace_id: int = LOCAL_WORKSPACE_ID,
     ) -> ConnectedAccount:
         provider = registry.provider(platform)
         identity = provider.fetch_identity(token)
@@ -306,6 +310,9 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                     ConnectedAccount.external_account_id == identity.external_account_id,
                 )
             )
+            if account is None or account.status == "disconnected":
+                # A new or disconnected account takes a connection slot.
+                require_connected_account_slot(session, settings, workspace_id)
             if account is None:
                 account = ConnectedAccount(
                     platform=platform.value,
@@ -400,12 +407,17 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         )
         return {"authorization_url": authorization_url, "state": issued.state}
 
+    def _require_slot(principal: Principal) -> None:
+        with database.session() as session:
+            require_connected_account_slot(session, settings, principal.workspace_id)
+
     @router.post("/platforms/{platform}/connect")
-    def connect(platform: str) -> dict[str, object]:
+    def connect(platform: str, principal: Principal = Depends(get_principal)) -> dict[str, object]:
         try:
             parsed = parse_platform(platform)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _require_slot(principal)
         return _issue_connect(parsed)
 
     @router.get("/platforms/{platform}/oauth/callback")
@@ -414,6 +426,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         code: str | None = None,
         state: str | None = None,
         error: str | None = None,
+        principal: Principal = Depends(get_principal),
     ) -> Response:
         web_base = settings.resolved_web_base_url
 
@@ -442,7 +455,10 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 redirect_uri=record.redirect_uri,
                 code_verifier=record.code_verifier,
             )
-            _persist_connection(parsed, token, token.scopes)
+            _persist_connection(parsed, token, token.scopes, workspace_id=principal.workspace_id)
+        except Problem as exc:
+            # The workspace reached its connected-accounts quota meanwhile.
+            return fail(exc.code)
         except ProviderError as exc:
             logger.warning("oauth callback failed for %s: %s", platform, exc.detail)
             return fail("exchange_failed")
@@ -455,7 +471,9 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         )
 
     @router.post("/platforms/instagram/import-token")
-    def import_instagram_token(payload: ImportTokenRequest) -> dict[str, object]:
+    def import_instagram_token(
+        payload: ImportTokenRequest, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
         if settings.platform_provider == "mock":
             raise HTTPException(
                 status_code=400,
@@ -472,7 +490,11 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 token = provider.exchange_long_lived(token)
         scopes = list(dict.fromkeys(str(scope) for scope in payload.granted_scopes))
         account = _persist_connection(
-            Platform.instagram, token, scopes, scopes_source="user_declared"
+            Platform.instagram,
+            token,
+            scopes,
+            scopes_source="user_declared",
+            workspace_id=principal.workspace_id,
         )
         return {"account_id": account.id, "platform": "instagram"}
 
@@ -510,8 +532,12 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         return {"account_id": account_id, "status": "disconnected"}
 
     @router.post("/platforms/accounts/{account_id}/reconnect")
-    def reconnect(account_id: int) -> dict[str, object]:
+    def reconnect(
+        account_id: int, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
         account = _account_or_404(account_id)
+        if account.status == "disconnected":
+            _require_slot(principal)
         return _issue_connect(Platform(account.platform))
 
     @router.post("/platforms/accounts/{account_id}/sync")
@@ -840,9 +866,13 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         return inbox_service.delete_draft(comment_id)
 
     @router.post("/inbox/{comment_id}/reply")
-    def inbox_reply(comment_id: int, payload: ReplyRequest) -> dict[str, object]:
+    def inbox_reply(
+        comment_id: int, payload: ReplyRequest, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
         try:
-            return inbox_service.reply(comment_id, payload.text)
+            return inbox_service.reply(
+                comment_id, payload.text, workspace_id=principal.workspace_id
+            )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except InboxReplyForbidden as exc:

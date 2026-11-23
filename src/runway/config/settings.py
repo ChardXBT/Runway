@@ -3,11 +3,14 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+# Identity providers with an implementation in runway.identity (spec 05 section 2).
+SUPPORTED_IDENTITY_PROVIDERS = frozenset({"clerk"})
 
 
 class Settings(BaseSettings):
@@ -26,6 +29,39 @@ class Settings(BaseSettings):
     # Name of the configured identity provider; empty until one is set up.
     # Hosted mode refuses to start without it.
     identity_provider: str = ""
+    # ---- Hosted profile (spec 05). `local` ignores every setting in this block
+    # except `publishing_paused`, which only ever stops publishing.
+    # Browser origins of the web app, comma-separated (https://app.example.com).
+    # Defaults to the origin of RUNWAY_WEB_BASE_URL.
+    web_origins: str = ""
+    # Clerk: the instance's Frontend API URL is the token issuer. The JWKS URL
+    # defaults to <issuer>/.well-known/jwks.json. Authorized parties (the `azp`
+    # claim) default to the web origins.
+    clerk_issuer: str = ""
+    clerk_jwks_url: str = ""
+    clerk_authorized_parties: str = ""
+    clerk_audience: str = ""
+    # Svix signing secret(s) of the Clerk webhook endpoint (`whsec_...`); several
+    # may be given, space- or comma-separated, while one is being rotated. The
+    # hosted API refuses to start without one; migrations and the worker need none.
+    clerk_webhook_secret: SecretStr | None = None
+    identity_token_leeway_seconds: int = Field(default=5, ge=0, le=60)
+    # Runway role for a member who joins an existing workspace. The first member
+    # of a new organization's workspace becomes its owner.
+    hosted_default_member_role: Literal["viewer", "editor", "approver"] = "viewer"
+    # Proxies whose X-Forwarded-For uvicorn trusts in `runway serve` (hosted only).
+    forwarded_allow_ips: str = "127.0.0.1"
+    rate_limit_ip_per_minute: int = Field(default=300, ge=1)
+    rate_limit_principal_per_minute: int = Field(default=120, ge=1)
+    # Default per-workspace quotas (spec 05 section 6); operators override them
+    # per workspace with `runway hosted quota`. Hosted only: `local` is unlimited.
+    quota_storage_bytes: int = Field(default=1024**3, ge=0)
+    quota_connected_accounts: int = Field(default=3, ge=0)
+    quota_posts_per_day: int = Field(default=10, ge=0)
+    quota_api_requests_per_minute: int = Field(default=120, ge=1)
+    # Operator switch checked before every platform-mutating send, in both
+    # profiles (runway.hosted.quotas.require_send_allowed).
+    publishing_paused: bool = False
     product_name: str = "Runway"
     connector_account_email: str = "tryrunwaytoday@gmail.com"
     channel_name: str = "Qlob"
@@ -157,8 +193,17 @@ class Settings(BaseSettings):
         problems: list[str] = []
         if self.database_url.startswith("sqlite"):
             problems.append("a Postgres database (SQLite is local-only)")
-        if not self.identity_provider.strip():
+        provider = self.identity_provider.strip()
+        if not provider:
             problems.append("a configured identity provider (RUNWAY_IDENTITY_PROVIDER)")
+        elif provider not in SUPPORTED_IDENTITY_PROVIDERS:
+            problems.append(
+                "RUNWAY_IDENTITY_PROVIDER set to one of "
+                + ", ".join(sorted(SUPPORTED_IDENTITY_PROVIDERS))
+            )
+        elif provider == "clerk":
+            problems.extend(self._clerk_problems())
+        problems.extend(self._web_origin_problems())
         if self.publishing_mode == "authorized_browser":
             problems.append(
                 "RUNWAY_PUBLISHING_MODE other than authorized_browser "
@@ -167,6 +212,36 @@ class Settings(BaseSettings):
         if problems:
             raise ValueError("RUNWAY_PROFILE=hosted requires " + "; ".join(problems))
         return self
+
+    def _clerk_problems(self) -> list[str]:
+        problems: list[str] = []
+        if not _is_https_url(self.clerk_issuer):
+            problems.append("an https Clerk issuer (RUNWAY_CLERK_ISSUER)")
+        if self.clerk_jwks_url.strip() and not _is_https_url(self.clerk_jwks_url):
+            problems.append("an https Clerk JWKS URL (RUNWAY_CLERK_JWKS_URL)")
+        # The secret itself is required by the API only (create_app refuses to
+        # start without it), so migrations and the worker run without it. A
+        # value that is given must decode wherever it is given.
+        secrets = self.clerk_webhook_secrets
+        if secrets and not all(_is_svix_secret(secret) for secret in secrets):
+            # Refused at startup, not at the first delivery: an undecodable
+            # secret would answer every webhook with 401 and Clerk would retry.
+            problems.append(
+                "Clerk webhook secrets of the form whsec_<base64> (RUNWAY_CLERK_WEBHOOK_SECRET)"
+            )
+        return problems
+
+    def _web_origin_problems(self) -> list[str]:
+        origins = self.hosted_web_origin_list
+        if not origins:
+            return ["at least one web origin (RUNWAY_WEB_ORIGINS)"]
+        invalid = [origin for origin in origins if not _is_web_origin(origin)]
+        if invalid:
+            return [
+                "web origins of the form https://host[:port] (RUNWAY_WEB_ORIGINS): "
+                + ", ".join(invalid)
+            ]
+        return []
 
     @model_validator(mode="after")
     def authorized_browser_requires_both_interlocks(self) -> Settings:
@@ -251,6 +326,42 @@ class Settings(BaseSettings):
         return f"http://127.0.0.1:{self.web_port}"
 
     @property
+    def hosted_web_origin_list(self) -> list[str]:
+        """Browser origins allowed in `hosted`, normalized, in configured order."""
+        configured = _csv(self.web_origins)
+        if not configured and self.web_base_url:
+            parsed = urlsplit(self.web_base_url)
+            if parsed.scheme and parsed.netloc:
+                configured = [f"{parsed.scheme}://{parsed.netloc}"]
+        return list(dict.fromkeys(origin.rstrip("/").casefold() for origin in configured))
+
+    @property
+    def clerk_issuer_normalized(self) -> str:
+        """The issuer compared with the token's `iss` claim.
+
+        Clerk's `iss` has no trailing slash; one pasted into the setting would
+        otherwise refuse every token, so it is removed (as for the JWKS URL).
+        """
+        return self.clerk_issuer.strip().rstrip("/")
+
+    @property
+    def clerk_jwks_endpoint(self) -> str:
+        if self.clerk_jwks_url.strip():
+            return self.clerk_jwks_url.strip()
+        return self.clerk_issuer_normalized + "/.well-known/jwks.json"
+
+    @property
+    def clerk_authorized_party_list(self) -> list[str]:
+        return _csv(self.clerk_authorized_parties) or self.hosted_web_origin_list
+
+    @property
+    def clerk_webhook_secrets(self) -> list[str]:
+        if self.clerk_webhook_secret is None:
+            return []
+        raw = self.clerk_webhook_secret.get_secret_value()
+        return [part for part in raw.replace(",", " ").split() if part]
+
+    @property
     def youtube_oauth_configured(self) -> bool:
         return bool(self.youtube_client_id and self.youtube_client_secret)
 
@@ -297,6 +408,7 @@ class Settings(BaseSettings):
             "approval_required": self.approval_required,
             "publishing_enabled": self.publishing_enabled,
             "publishing_mode": self.publishing_mode,
+            "publishing_paused": self.publishing_paused,
             "youtube_automation_authorized": self.youtube_automation_authorized,
             "authorized_browser_ready": self.authorized_browser_ready,
             "publisher_channel_id": self.publisher_channel_id,
@@ -344,6 +456,38 @@ class Settings(BaseSettings):
             "oauth_redirect_base_url": self.resolved_oauth_redirect_base_url,
             "data_dir": str(self.resolved_data_dir),
         }
+
+
+def _csv(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _is_svix_secret(secret: str) -> bool:
+    # Imported here: runway.identity imports runway.config at module level.
+    from runway.identity.svix import decode_secret
+
+    try:
+        decode_secret(secret)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_https_url(value: str) -> bool:
+    parsed = urlsplit(value.strip())
+    return parsed.scheme == "https" and bool(parsed.hostname)
+
+
+def _is_web_origin(origin: str) -> bool:
+    """https://host[:port] with no path; plain http only for a loopback rehearsal."""
+    parsed = urlsplit(origin)
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment or not parsed.hostname:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    if parsed.scheme == "https":
+        return True
+    return parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS
 
 
 @lru_cache(maxsize=1)

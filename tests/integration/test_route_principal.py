@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
+from identity_support import WEBHOOK_SECRET
 from starlette.routing import Mount, Route
 
 from runway.api.app import create_app
@@ -21,6 +22,9 @@ from runway.config import Settings
 # The only routes that may be served without a principal. Each is listed
 # explicitly; anything else without the dependency fails this test.
 EXEMPT_HEALTH_ROUTES = frozenset({"/health"})
+# Webhook receivers authenticated by the sender's signature, not by a
+# principal (hosted profile only). Each verifies its own signature first.
+EXEMPT_SIGNATURE_ROUTES = frozenset({"/hooks/identity/clerk"})
 EXEMPT_STATIC_MOUNTS = frozenset({"/media"})
 
 
@@ -38,7 +42,7 @@ def _unguarded_routes(application: FastAPI) -> list[str]:
     for context in iter_route_contexts(application.routes):
         route = context.original_route
         if isinstance(route, APIRoute):
-            if context.path in EXEMPT_HEALTH_ROUTES:
+            if context.path in EXEMPT_HEALTH_ROUTES | EXEMPT_SIGNATURE_ROUTES:
                 continue
             if get_principal not in set(_calls(context.dependant)):
                 missing.append(f"{sorted(context.methods or [])} {context.path}")
@@ -98,10 +102,64 @@ def test_hosted_requests_to_api_routes_are_401_but_health_answers(tmp_path: Path
     # Without the context manager the lifespan (database check) does not run;
     # authentication must refuse before any handler touches the database.
     client = TestClient(application, base_url="http://127.0.0.1:8000")
-    for path in ("/api/platforms", "/api/settings", "/api/queue", "/api/drafts"):
+    for path in ("/api/settings", "/api/v1/workspace", "/api/v1/workspace/members"):
         response = client.get(path)
         assert response.status_code == 401, path
         assert response.json()["code"] == "authentication_required"
+    # Local-only surfaces do not exist in hosted (spec 01 section 7), nor do
+    # the platform routes, which are not scoped to a workspace yet.
+    for path in ("/api/queue", "/api/platforms", "/api/drafts", "/api/inbox"):
+        assert client.get(path).status_code == 404, path
     assert client.get("/health").status_code == 200
     assert client.get("/openapi.json").status_code == 404
     assert _unguarded_routes(application) == []
+
+
+def test_hosted_clerk_app_exempts_only_its_signed_webhook(tmp_path: Path) -> None:
+    hosted = Settings(
+        data_dir=tmp_path / "data",
+        clerk_issuer="https://clerk.runway.test",
+        web_origins="https://app.runway.test",
+        clerk_webhook_secret=WEBHOOK_SECRET,
+    ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    application = create_app(hosted)
+    paths = {context.path for context in iter_route_contexts(application.routes)}
+    assert paths >= EXEMPT_SIGNATURE_ROUTES
+    assert _unguarded_routes(application) == []
+
+
+# Every route the hosted API serves, and why each is safe there. Adding a
+# router to hosted must add it here, with its tenancy argument.
+HOSTED_ROUTES = {
+    # Liveness probe: product name, version and switches; no tenant data.
+    ("GET", "/health"),
+    # Product switches only (hosted_settings_view), behind get_principal.
+    ("GET", "/api/settings"),
+    # Workspace router: every query is filtered by principal.workspace_id and
+    # role changes require workspace:admin.
+    ("GET", "/api/v1/workspace"),
+    ("GET", "/api/v1/workspace/members"),
+    ("PATCH", "/api/v1/workspace/members/{user_id}"),
+    # Event stream: every query is filtered by principal.workspace_id.
+    ("GET", "/api/v1/events/stream"),
+    # Clerk webhook: authenticated by the Svix signature, not by a principal.
+    ("POST", "/hooks/identity/clerk"),
+}
+
+
+def test_hosted_serves_exactly_the_listed_routes(tmp_path: Path) -> None:
+    hosted = Settings(
+        data_dir=tmp_path / "data",
+        clerk_issuer="https://clerk.runway.test",
+        web_origins="https://app.runway.test",
+        clerk_webhook_secret=WEBHOOK_SECRET,
+    ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    application = create_app(hosted)
+    served = {
+        (method, context.path)
+        for context in iter_route_contexts(application.routes)
+        for method in (context.methods or set())
+        if method != "HEAD"
+    }
+    assert served == HOSTED_ROUTES
+    assert not [route for route in application.routes if isinstance(route, Mount)]
