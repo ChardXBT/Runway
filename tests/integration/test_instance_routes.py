@@ -17,6 +17,8 @@ from runway.db.base import Database
 from runway.db.models import CommentRecord, ConnectedAccount, PlatformAction
 from runway.operations import instance_lease
 from runway.operations.instance_lease import Lease, read_lease, write_lease
+from runway.platforms.base import TokenSet
+from runway.platforms.mock import MockPlatformProvider
 from runway.platforms.tokens import TokenStore
 
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
@@ -56,7 +58,17 @@ def _hold(settings: Settings, holder: str) -> None:
     (settings.resolved_instance_dir / instance_lease.LEASE_CHECK_FILE_NAME).unlink(missing_ok=True)
 
 
-def test_standby_disconnect_is_refused_before_revoking(tmp_path: Path) -> None:
+def test_standby_disconnect_is_refused_before_revoking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    revoked: list[TokenSet] = []
+
+    def record_revoke(_provider: MockPlatformProvider, token: TokenSet) -> bool:
+        revoked.append(token)
+        return True
+
+    # A revoke is a platform write: a standby machine must not even send it.
+    monkeypatch.setattr(MockPlatformProvider, "revoke", record_revoke)
     settings = _instance_settings(tmp_path, platform_provider="mock")
     _hold(settings, "this-machine")  # active while the mock accounts are seeded
     app = create_app(settings)
@@ -76,6 +88,7 @@ def test_standby_disconnect_is_refused_before_revoking(tmp_path: Path) -> None:
 
         assert response.status_code == 409
         assert "standby" in response.json()["detail"]
+        assert revoked == []
         assert TokenStore.from_settings(settings).load(token_ref) is not None
         with database.session() as session:
             record = session.get(ConnectedAccount, account["id"])
