@@ -7,7 +7,7 @@ published). A scenario forces each failure the engine must handle:
 | Scenario | What happens |
 | --- | --- |
 | `success` | the normal path |
-| `uncertain` | a read timeout right after the point of no return; the post *was* created, so reconciliation finds it |
+| `uncertain` | a read timeout after the point of no return; the post *was* created |
 | `container_error` | the platform accepts, then processing reports `ERROR` (final) |
 | `quota_exceeded` | refused before sending with a quota error (retry after the reset) |
 | `revoked_token` | the authorization is gone (final; reconnect) |

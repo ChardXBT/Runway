@@ -19,6 +19,11 @@ from runway.db.base import Database
 from runway.db.models import utcnow
 from runway.platforms.publisher import Publisher, adapter_kind
 
+# The adapters a live (non-mock) build registers. Update this together with
+# `build_publisher_registry` when a real adapter is added; a test compares
+# them, and docs/PLATFORM_CAPABILITIES.md is generated from this set.
+LIVE_PUBLISHER_NAMES: frozenset[str] = frozenset({"assisted"})
+
 
 class DuplicatePublisher(ValueError):
     pass

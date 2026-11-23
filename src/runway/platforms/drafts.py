@@ -29,6 +29,35 @@ from runway.platforms.capabilities import (
     Platform,
     capability_matrix,
 )
+from runway.posts.jobs import cancel_pending_jobs
+from runway.posts.states import current_state, set_target_state
+
+
+def legacy_post_type(platform: str) -> str | None:
+    """Targets created by the unversioned routes get the platform's default post type."""
+    from runway.posts.types import DEFAULT_POST_TYPE
+
+    try:
+        return DEFAULT_POST_TYPE[Platform(platform)].value
+    except ValueError:
+        return None
+
+
+def invalidate_releases(session: Session, draft: ContentDraft) -> None:
+    """Return released or queued targets of `draft` to ready; cancel their jobs."""
+    from runway.posts.service import clear_release
+
+    for target in session.scalars(select(DraftTarget).where(DraftTarget.draft_id == draft.id)):
+        if current_state(target) in {TargetState.RELEASED, TargetState.QUEUED}:
+            cancel_pending_jobs(session, target.id)
+            clear_release(target)
+            set_target_state(
+                session,
+                target,
+                TargetState.READY,
+                reason="edited after release; release it again",
+                post=draft,
+            )
 
 
 class DuplicateDraftTarget(ValueError):
@@ -207,6 +236,9 @@ class DraftService:
                             else None
                         ),
                         status=TARGET_STATE_MACHINE.start(TargetState.DRAFT),
+                        state=TARGET_STATE_MACHINE.start(TargetState.DRAFT),
+                        post_type=legacy_post_type(str(target["platform"])),
+                        planned_at=_as_utc(scheduled_for),
                     )
                 )
             session.flush()
@@ -237,6 +269,10 @@ class DraftService:
                 draft.scheduled_for = _as_utc(scheduled_for)
             if notes is not None:
                 draft.notes = notes
+            if body is not None:
+                # The body is every target's caption: a released target's
+                # approval no longer matches (spec 03 section 2).
+                invalidate_releases(session, draft)
             scheduled = draft.scheduled_for is not None
             if status is not None:
                 requested = DRAFT_STATUS_MACHINE.parse(status)
@@ -312,7 +348,8 @@ class DraftService:
                     PlatformContent.platform == target.platform,
                 )
             )
-            TARGET_STATE_MACHINE.apply(target, TargetState.PUBLISHED)
+            cancel_pending_jobs(session, target.id)
+            set_target_state(session, target, TargetState.PUBLISHED, post=draft)
             target.published_url = published_url
             target.published_at = utcnow()
             target.published_content_id = match.id if match else None

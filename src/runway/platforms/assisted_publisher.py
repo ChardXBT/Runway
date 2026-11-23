@@ -10,12 +10,14 @@ never fails.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime
 
 from sqlalchemy import or_, select
 
 from runway.db.base import Database
 from runway.db.models import PlatformContent
+from runway.platforms.post_settings import parse_settings, privacy_in_words
 from runway.platforms.publisher import (
     Issue,
     PollResult,
@@ -25,7 +27,6 @@ from runway.platforms.publisher import (
     SendResult,
     VerifyResult,
 )
-from runway.platforms.post_settings import parse_settings, privacy_in_words
 from runway.posts.types import TargetPostType
 
 _STUDIO = {
@@ -66,10 +67,8 @@ class AssistedPublisher:
     def checklist(self, ctx: PublishContext) -> tuple[str, ...]:
         post_type = TargetPostType(ctx.post_type)
         settings = parse_settings(post_type, {})
-        try:
+        with contextlib.suppress(ValueError):
             settings = parse_settings(post_type, ctx.settings)
-        except ValueError:
-            pass
         steps: list[str] = [_STUDIO[ctx.platform.value]]
         if ctx.account is not None:
             handle = ctx.account.handle or ctx.account.external_account_id

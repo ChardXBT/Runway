@@ -194,7 +194,9 @@ class InvalidTargetSettings(ValueError):
         self.errors = errors
 
 
-def parse_settings(post_type: TargetPostType | str, raw: Mapping[str, Any] | None) -> TargetSettings:
+def parse_settings(
+    post_type: TargetPostType | str, raw: Mapping[str, Any] | None
+) -> TargetSettings:
     """Structural validation; raises `InvalidTargetSettings` (loc/msg/type only)."""
     kind = TargetPostType(post_type)
     model = SETTINGS_MODELS[kind]
@@ -283,9 +285,8 @@ def settings_issues(
             )
     elif isinstance(settings, TikTokVideoSettings):
         issues.extend(_tiktok_issues(settings, caption))
-    elif kind is TargetPostType.TIKTOK_DRAFT:
-        if _utf16_length(caption) > TIKTOK_TITLE_MAX_UTF16:
-            issues.append(_tiktok_title_issue())
+    elif kind is TargetPostType.TIKTOK_DRAFT and _utf16_length(caption) > TIKTOK_TITLE_MAX_UTF16:
+        issues.append(_tiktok_title_issue())
     return issues
 
 

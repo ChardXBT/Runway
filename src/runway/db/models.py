@@ -1718,9 +1718,7 @@ class ContentDraft(Base, WorkspaceOwned, TimestampMixin):
     # Added in 0017_publishing_engine.
     source: Mapped[str] = mapped_column(String(20), default="human", server_default="human")
     source_ref: Mapped[str | None] = mapped_column(String(200))
-    ai_generated: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=sql_text("0")
-    )
+    ai_generated: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sql_text("0"))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default=sql_text("1"))
     created_by: Mapped[str | None] = mapped_column(String(200))
 
@@ -1867,9 +1865,7 @@ class TargetAttempt(Base, WorkspaceOwned):
     external_id: Mapped[str | None] = mapped_column(String(200))
     error_code: Mapped[str | None] = mapped_column(String(80))
     error_detail: Mapped[str | None] = mapped_column(Text)
-    resumable_json: Mapped[str] = mapped_column(
-        Text, default="{}", server_default=sql_text("'{}'")
-    )
+    resumable_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
 
 
 class AccountPublisher(Base, WorkspaceOwned):

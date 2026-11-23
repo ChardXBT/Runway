@@ -68,8 +68,16 @@ DIRECT_ADAPTERS: dict[TargetPostType, str] = {
 
 # Any one of these grants the post type's publishing permission.
 REQUIRED_SCOPES: dict[TargetPostType, tuple[str, ...]] = {
-    TargetPostType.YOUTUBE_VIDEO: (YOUTUBE_UPLOAD_SCOPE, YOUTUBE_MANAGE_SCOPE, YOUTUBE_ENGAGE_SCOPE),
-    TargetPostType.YOUTUBE_SHORT: (YOUTUBE_UPLOAD_SCOPE, YOUTUBE_MANAGE_SCOPE, YOUTUBE_ENGAGE_SCOPE),
+    TargetPostType.YOUTUBE_VIDEO: (
+        YOUTUBE_UPLOAD_SCOPE,
+        YOUTUBE_MANAGE_SCOPE,
+        YOUTUBE_ENGAGE_SCOPE,
+    ),
+    TargetPostType.YOUTUBE_SHORT: (
+        YOUTUBE_UPLOAD_SCOPE,
+        YOUTUBE_MANAGE_SCOPE,
+        YOUTUBE_ENGAGE_SCOPE,
+    ),
     TargetPostType.YOUTUBE_POST: (YOUTUBE_ENGAGE_SCOPE, YOUTUBE_MANAGE_SCOPE),
     TargetPostType.INSTAGRAM_REEL: (INSTAGRAM_PUBLISH_SCOPE,),
     TargetPostType.INSTAGRAM_IMAGE: (INSTAGRAM_PUBLISH_SCOPE,),
@@ -338,10 +346,10 @@ def capability_document(implemented_in_build: Collection[str]) -> str:
     for post_type in TargetPostType:
         cells: list[str] = []
         for _label, profile, app, granted, media_host in _SCENARIOS:
-            scopes = REQUIRED_SCOPES[post_type][:1] if granted else ()
+            granted_scopes = REQUIRED_SCOPES[post_type][:1] if granted else ()
             capability = publishing_capability(
                 post_type,
-                account=AccountFacts(status="connected", granted_scopes=tuple(scopes)),
+                account=AccountFacts(status="connected", granted_scopes=granted_scopes),
                 app=app,
                 profile=profile,
                 implemented=every_adapter,

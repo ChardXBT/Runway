@@ -23,7 +23,7 @@ from runway.db.schema_contract import schema_snapshot
 
 # Fingerprint of docs/schema/intelligence-data-flywheel.json at 0012_creator_platforms.
 SCHEMA_0012_FINGERPRINT = "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be"
-HEAD = "0016_shared_contracts"
+HEAD = "0017_publishing_engine"
 SCOPED_TABLES = (
     "channels",
     "connected_accounts",

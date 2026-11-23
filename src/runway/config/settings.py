@@ -114,9 +114,7 @@ class Settings(BaseSettings):
     # unverified Google project "In production", a Meta app whose accounts
     # have a role on it, and a TikTok sandbox app.
     youtube_app_status: Literal["unverified", "verified", "audited"] = "unverified"
-    instagram_app_status: Literal["development", "live_standard", "live_advanced"] = (
-        "development"
-    )
+    instagram_app_status: Literal["development", "live_standard", "live_advanced"] = "development"
     tiktok_app_status: Literal["sandbox", "production", "audited"] = "sandbox"
     # True only once Google admitted the project to the YouTube `posts` pilot.
     youtube_posts_api_access: bool = False

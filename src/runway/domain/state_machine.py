@@ -386,16 +386,19 @@ DRAFT_STATUS_MACHINE: StateMachine[DraftStatus] = StateMachine(
 )
 
 _T = TargetState
-# The spec 03 section 2 machine. Writes go through
+# The spec 03 section 2 machine, on `DraftTarget.state`. Writes go through
 # runway.posts.states.set_target_state, which also mirrors the legacy
 # `status` column and records the `target.state_changed` event.
 #
 # - Editing returns an unsent target to draft or ready (release cleared).
 # - `published` is reached by the worker, by a reconcile that found the post,
 #   or by a person marking it published (assisted and manual workflow).
-# - `uncertain` is left only by reconciliation or a person; never by a retry.
-# - A crash before the point of no return goes sending -> failed_retryable
-#   -> queued; after it, sending -> uncertain.
+# - `verified` is reached only from `published`, by reading the post back
+#   from the platform (invariant 3).
+# - `uncertain` is left only by reconciliation or a person; never by a retry
+#   (invariant 4): it has no edge to queued, released or sending.
+# - A crash before the point of no return goes sending -> queued (re-run);
+#   after it, sending -> uncertain.
 TARGET_STATE_MACHINE: StateMachine[TargetState] = StateMachine(
     "draft target",
     TargetState,
@@ -408,20 +411,21 @@ TARGET_STATE_MACHINE: StateMachine[TargetState] = StateMachine(
             {
                 _T.PROCESSING,
                 _T.PUBLISHED,
-                _T.VERIFIED,
                 _T.NEEDS_USER,
                 _T.FAILED_RETRYABLE,
                 _T.FAILED_FINAL,
                 _T.UNCERTAIN,
-                # The send never started (paused, missed window, payload changed).
+                # Nothing was sent: re-run after a crash before the marker, or
+                # waiting for planned_at after an Instagram container was made.
                 _T.QUEUED,
+                # Refused by the engine before any call (payload changed,
+                # missed while offline, rate limit).
                 _T.READY,
             }
         ),
         _T.PROCESSING: frozenset(
             {
                 _T.PUBLISHED,
-                _T.VERIFIED,
                 _T.NEEDS_USER,
                 _T.FAILED_RETRYABLE,
                 _T.FAILED_FINAL,
@@ -430,19 +434,24 @@ TARGET_STATE_MACHINE: StateMachine[TargetState] = StateMachine(
         ),
         _T.PUBLISHED: frozenset({_T.VERIFIED}),
         _T.VERIFIED: frozenset(),
-        _T.NEEDS_USER: frozenset({_T.PUBLISHED, _T.VERIFIED, _T.FAILED_FINAL}),
+        # A TikTok inbox draft or the assisted checklist: the person finishes
+        # it (published) or drops it (cancelled; assisted only, nothing sent).
+        _T.NEEDS_USER: frozenset({_T.PUBLISHED, _T.FAILED_FINAL, _T.CANCELLED}),
         _T.FAILED_RETRYABLE: frozenset(
             {_T.QUEUED, _T.DRAFT, _T.READY, _T.RELEASED, _T.PUBLISHED, _T.CANCELLED}
         ),
-        _T.FAILED_FINAL: frozenset({_T.DRAFT, _T.READY, _T.PUBLISHED, _T.CANCELLED}),
-        _T.UNCERTAIN: frozenset({_T.PUBLISHED, _T.PROCESSING, _T.FAILED_RETRYABLE, _T.FAILED_FINAL}),
+        _T.FAILED_FINAL: frozenset({_T.DRAFT, _T.READY, _T.RELEASED, _T.PUBLISHED, _T.CANCELLED}),
+        _T.UNCERTAIN: frozenset(
+            {_T.PUBLISHED, _T.PROCESSING, _T.NEEDS_USER, _T.FAILED_RETRYABLE, _T.FAILED_FINAL}
+        ),
         _T.CANCELLED: frozenset({_T.DRAFT, _T.READY}),
     },
     initial=frozenset({_T.DRAFT}),
     column="state",
 )
 
-# States in which nothing has been sent and an edit is allowed.
+# States in which nothing is in flight and an edit is allowed. Editing a
+# released or queued target clears its release (spec 03 section 2).
 TARGET_EDITABLE_STATES: frozenset[TargetState] = frozenset(
     {
         _T.DRAFT,
@@ -457,6 +466,10 @@ TARGET_EDITABLE_STATES: frozenset[TargetState] = frozenset(
 # States a person may cancel ("only before sending").
 TARGET_CANCELLABLE_STATES: frozenset[TargetState] = frozenset(
     {_T.DRAFT, _T.READY, _T.RELEASED, _T.QUEUED, _T.FAILED_RETRYABLE, _T.FAILED_FINAL}
+)
+# States a release may start from: validated, or a failure a person retries.
+TARGET_RELEASABLE_STATES: frozenset[TargetState] = frozenset(
+    {_T.READY, _T.FAILED_RETRYABLE, _T.FAILED_FINAL}
 )
 # Settled states: nothing more will happen without a person.
 TARGET_TERMINAL_STATES: frozenset[TargetState] = frozenset(

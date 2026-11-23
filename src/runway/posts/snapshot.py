@@ -25,6 +25,8 @@ from runway.db.models import (
     DraftTarget,
     MediaAssetV2,
 )
+from runway.mediastore import MediaStore
+from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.post_settings import (
     InvalidTargetSettings,
@@ -50,7 +52,9 @@ from runway.posts.types import TargetPostType, platform_of
 NATIVE_MIN_LEAD = timedelta(minutes=15)
 NATIVE_WARN_LEAD = timedelta(hours=1)
 NATIVE_LARGE_FILE_BYTES = 1024**3
-PAST_TOLERANCE = timedelta(minutes=1)
+# Spec 03 section 6 missed-window rule: a target less than this late is still
+# sent; later than that a person must choose a new time.
+MISSED_WINDOW = timedelta(minutes=60)
 
 # Media items each post type takes: (minimum, maximum, kinds allowed).
 MEDIA_RULES: dict[TargetPostType, tuple[int, int, frozenset[str]]] = {
@@ -122,14 +126,24 @@ class TargetSnapshot:
         return explicit_privacy(self.post_type, self.settings)
 
 
+TokenProvider = Callable[[ConnectedAccount], TokenSet]
+
+
 @dataclass
 class SnapshotSources:
-    """The inputs a snapshot needs besides the rows: configuration and the clock."""
+    """What the engine needs besides the rows: configuration, adapters, stores, clock.
+
+    `media_stores` maps an asset's `storage` ("local", "r2") to its store;
+    `token_provider` returns a fresh token for an account (refreshed under the
+    account lock). Both are optional so a build without them still validates.
+    """
 
     settings: Settings
     registry: PublisherRegistry
     clock: Callable[[], datetime]
     media_validator: MediaValidator = no_media_validation
+    media_stores: Mapping[str, MediaStore] = field(default_factory=dict)
+    token_provider: TokenProvider | None = None
 
     @property
     def app_status(self) -> AppStatus:
@@ -138,6 +152,13 @@ class SnapshotSources:
     @property
     def media_host_available(self) -> bool:
         return self.settings.r2_configured
+
+    @property
+    def timezone(self) -> str:
+        return self.settings.timezone
+
+    def media_store_for(self, storage: str) -> MediaStore | None:
+        return self.media_stores.get(storage)
 
 
 def post_media(session: Session, post: ContentDraft) -> list[MediaAssetV2]:
@@ -303,15 +324,18 @@ def _schedule_issues(
     now = sources.clock()
     issues: list[Issue] = []
     lead = planned - now
-    if lead < -PAST_TOLERANCE:
+    if lead < -MISSED_WINDOW:
         issues.append(
             Issue(
                 "error",
                 "planned_time_past",
-                "the planned time has passed; choose a new time or send now",
+                "the planned time passed more than an hour ago; choose a new time or send now",
                 field="planned_at",
             )
         )
+        return issues
+    if lead <= timedelta(0):
+        # "Now", or a time that just passed: it is sent as soon as it is released.
         return issues
     if isinstance(settings, YouTubeVideoSettings) and (settings.schedule_mode or "native") == (
         "native"
@@ -333,8 +357,7 @@ def _schedule_issues(
                 Issue(
                     "warning",
                     "native_lead_short_for_size",
-                    "large file: the upload may not finish within the hour before the "
-                    "planned time",
+                    "large file: the upload may not finish within the hour before the planned time",
                     field="planned_at",
                 )
             )

@@ -325,9 +325,7 @@ def classify_send_failure(
             state: FailureState = "failed_final" if exc.final else "failed_retryable"
             return FailureClass(state, exc.code, text, exc.retry_after)
         if not request_sent:
-            return FailureClass(
-                "failed_final" if exc.final else "failed_retryable", exc.code, text
-            )
+            return FailureClass("failed_final" if exc.final else "failed_retryable", exc.code, text)
         return FailureClass("uncertain", exc.code, text)
     if not request_sent:
         return FailureClass("failed_retryable", "not_sent", text)
@@ -471,9 +469,17 @@ class Preparer(Protocol):
     def prepare(self, ctx: PublishContext) -> Mapping[str, Any]: ...
 
 
+_ADAPTER_KINDS: dict[str, AdapterKind] = {
+    "direct": "direct",
+    "draft": "draft",
+    "vendor": "vendor",
+    "assisted": "assisted",
+    "mock": "mock",
+}
+
+
 def adapter_kind(publisher: Publisher) -> AdapterKind:
-    kind = getattr(publisher, "kind", "direct")
-    return kind if kind in {"direct", "draft", "vendor", "assisted", "mock"} else "direct"
+    return _ADAPTER_KINDS.get(str(getattr(publisher, "kind", "direct")), "direct")
 
 
 def adapter_platform(publisher: Publisher) -> Platform | None:

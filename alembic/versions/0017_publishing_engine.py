@@ -88,7 +88,9 @@ def _workspace_column() -> sa.Column[object]:
 
 
 def _workspace_fk(table: str) -> sa.ForeignKeyConstraint:
-    return sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name=f"fk_{table}_workspace")
+    return sa.ForeignKeyConstraint(
+        ["workspace_id"], ["workspaces.id"], name=f"fk_{table}_workspace"
+    )
 
 
 def _create_media_assets_v2() -> None:
@@ -115,8 +117,6 @@ def _create_media_assets_v2() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("storage_key", name="uq_media_assets_v2_storage_key"),
     )
-    op.create_index("ix_media_assets_v2_workspace_id", "media_assets_v2", ["workspace_id"])
-    op.create_index("ix_media_assets_v2_status", "media_assets_v2", ["status"])
 
 
 def _create_media_uploads() -> None:
@@ -133,11 +133,12 @@ def _create_media_uploads() -> None:
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         _workspace_fk("media_uploads"),
-        sa.ForeignKeyConstraint(["asset_id"], ["media_assets_v2.id"], name="fk_media_uploads_asset"),
+        sa.ForeignKeyConstraint(
+            ["asset_id"], ["media_assets_v2.id"], name="fk_media_uploads_asset"
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("asset_id", name="uq_media_uploads_asset"),
     )
-    op.create_index("ix_media_uploads_workspace_id", "media_uploads", ["workspace_id"])
 
 
 def _create_draft_media() -> None:
@@ -155,9 +156,6 @@ def _create_draft_media() -> None:
         sa.UniqueConstraint("draft_id", "position", name="uq_draft_media_position"),
         sa.UniqueConstraint("draft_id", "asset_id", name="uq_draft_media_asset"),
     )
-    op.create_index("ix_draft_media_workspace_id", "draft_media", ["workspace_id"])
-    op.create_index("ix_draft_media_draft_id", "draft_media", ["draft_id"])
-    op.create_index("ix_draft_media_asset_id", "draft_media", ["asset_id"])
 
 
 def _create_target_attempts() -> None:
@@ -186,8 +184,6 @@ def _create_target_attempts() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_target_attempts_workspace_id", "target_attempts", ["workspace_id"])
-    op.create_index("ix_target_attempts_target_id_id", "target_attempts", ["target_id", "id"])
 
 
 def _create_account_publishers() -> None:
@@ -207,7 +203,6 @@ def _create_account_publishers() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("account_id", "post_type", name="uq_account_publisher_post_type"),
     )
-    op.create_index("ix_account_publishers_workspace_id", "account_publishers", ["workspace_id"])
 
 
 def _create_publishing_controls() -> None:
@@ -224,6 +219,21 @@ def _create_publishing_controls() -> None:
         sa.PrimaryKeyConstraint("workspace_id"),
     )
 
+
+# Indexes are ensured separately from their tables, so a rerun after an
+# interrupted upgrade (table created, index not yet) completes the work.
+INDEXES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("draft_targets", "ix_draft_targets_state", ("state",)),
+    ("media_assets_v2", "ix_media_assets_v2_workspace_id", ("workspace_id",)),
+    ("media_assets_v2", "ix_media_assets_v2_status", ("status",)),
+    ("media_uploads", "ix_media_uploads_workspace_id", ("workspace_id",)),
+    ("draft_media", "ix_draft_media_workspace_id", ("workspace_id",)),
+    ("draft_media", "ix_draft_media_draft_id", ("draft_id",)),
+    ("draft_media", "ix_draft_media_asset_id", ("asset_id",)),
+    ("target_attempts", "ix_target_attempts_workspace_id", ("workspace_id",)),
+    ("target_attempts", "ix_target_attempts_target_id_id", ("target_id", "id")),
+    ("account_publishers", "ix_account_publishers_workspace_id", ("workspace_id",)),
+)
 
 _CREATORS: dict[str, Callable[[], None]] = {
     "media_assets_v2": _create_media_assets_v2,
@@ -267,14 +277,15 @@ def upgrade() -> None:
     for column in _target_columns():
         if column.name not in present:
             op.add_column("draft_targets", column)
-    if "ix_draft_targets_state" not in _index_names("draft_targets"):
-        op.create_index("ix_draft_targets_state", "draft_targets", ["state"])
     _backfill_targets()
 
     existing = set(_inspector().get_table_names())
     for table in NEW_TABLES:
         if table not in existing:
             _CREATORS[table]()
+    for table, name, columns in INDEXES:
+        if name not in _index_names(table):
+            op.create_index(name, table, list(columns))
 
 
 def downgrade() -> None:
