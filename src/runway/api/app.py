@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from runway import __version__
+from runway.agent.webhooks import WebhookService
 from runway.api.catalog_routes import build_catalog_router
 from runway.api.discovery_routes import build_discovery_router
 from runway.api.intelligence_routes import build_intelligence_router
@@ -25,6 +26,7 @@ from runway.api.v1.events_routes import build_events_router
 from runway.api.v1.keys_routes import build_keys_router
 from runway.api.v1.media_routes import build_media_router
 from runway.api.v1.posts_routes import build_cross_post_router, build_posts_router
+from runway.api.v1.webhooks_routes import build_webhooks_router
 from runway.auth.audit import AgentAuditMiddleware
 from runway.auth.principal import get_principal
 from runway.config import Settings, get_settings
@@ -167,6 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(build_events_router(database))
     application.include_router(build_keys_router(database, active_settings))
     application.include_router(build_approvals_router(database, active_settings))
+    application.include_router(build_webhooks_router(WebhookService(database, active_settings)))
     # Spec 03 section 8. Nothing here publishes: a release only queues a job
     # for the separate `runway worker` process.
     from runway.posts.bridge import ProposalBridge
