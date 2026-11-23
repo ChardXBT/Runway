@@ -79,8 +79,8 @@ class FakeGitHub:
         self.reject_pushes = False
         gitconfig = root / "gitconfig"
         gitconfig.write_text("[init]\n\tdefaultBranch = main\n", encoding="utf-8")
-        self.git_env = {
-            **os.environ,
+        # Fixed values layered over the environment _git_environment builds per call.
+        self.git_env_overrides = {
             "GIT_CONFIG_GLOBAL": str(gitconfig),
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_ALLOW_PROTOCOL": "file",
@@ -115,17 +115,44 @@ class FakeGitHub:
             if call[:3] in (["gh", "release", "upload"], ["gh", "release", "create"])
         ]
 
+    def _git_environment(self) -> dict[str, str]:
+        """os.environ without GIT_CONFIG_* injection, like the production runner."""
+        env = {
+            name: value
+            for name, value in os.environ.items()
+            if name != "GIT_CONFIG"
+            and not name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+            and name not in ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
+        }
+        env.update(self.git_env_overrides)
+        return env
+
+    def _untranslate(self, text: str) -> str:
+        """Show the bare repositories the way the code addressed them: as URLs."""
+        for repo in self.repos.values():
+            url = f"https://github.com/{repo['name']}.git"
+            bare = Path(repo["bare"])
+            for form in (str(bare), bare.as_posix()):
+                text = text.replace(form, url)
+        return text
+
     def _real_git(
         self, args: Sequence[str], cwd: Path | None = None
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        result = subprocess.run(
             list(args),
             cwd=cwd,
-            env=self.git_env,
+            env=self._git_environment(),
             capture_output=True,
             text=True,
             check=False,
             shell=False,
+        )
+        return _completed(
+            args,
+            result.returncode,
+            self._untranslate(result.stdout),
+            self._untranslate(result.stderr),
         )
 
     def _translate(self, value: str) -> str:
@@ -140,7 +167,7 @@ class FakeGitHub:
         args = list(args)
         self.calls.append(args)
         if args[0] == "git":
-            if self.reject_pushes and "push" in args:
+            if self.reject_pushes and "push" in args and "--dry-run" not in args:
                 return _completed(args, 1, stderr="! [rejected] HEAD -> main (fetch first)")
             return self._real_git([self._translate(arg) for arg in args], cwd)
         if args[0] == "gh":
@@ -1090,6 +1117,15 @@ def test_every_external_command_has_a_timeout_and_no_prompt(
     seen: list[dict[str, Any]] = []
     # The parent shell may already set it; the runner must set it on its own.
     monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+    # Git config injected through the environment must never reach a child git:
+    # remote.<url>.pushurl and url.<base>.pushInsteadOf could redirect the push.
+    monkeypatch.setenv("GIT_CONFIG", "/tmp/injected-config")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "remote.x.pushurl")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "file:///tmp/injected")
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'url.x.insteadof'='y'")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/home/user/.gitconfig")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i key")
 
     def fake_run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         seen.append(kwargs)
@@ -1099,9 +1135,13 @@ def test_every_external_command_has_a_timeout_and_no_prompt(
 
     monkeypatch.setattr(ops.shutil, "which", lambda name: name)
     monkeypatch.setattr(ops.subprocess, "run", fake_run)
+    # The git rows use the argument shape remote_git really builds: the four
+    # GIT_CREDENTIALS items and -C before the subcommand.
     for args in (
         ["git", "status"],
-        ["git", "-c", "x", "-C", "d", "push", "url", "HEAD:main"],
+        ["git", *ops.GIT_CREDENTIALS, "-C", "d", "push", "url", "HEAD:main"],
+        ["git", *ops.GIT_CREDENTIALS, "-C", "d", "fetch", "url", "+a:b"],
+        ["git", *ops.GIT_CREDENTIALS, "-C", "d", "remote", "get-url", "origin"],
         ["gh", "repo", "view", "o/n"],
         ["gh", "release", "upload", "t", "f"],
         ["sops", "--encrypt"],
@@ -1110,11 +1150,25 @@ def test_every_external_command_has_a_timeout_and_no_prompt(
     assert [call["timeout"] for call in seen] == [
         ops.COMMAND_TIMEOUT_SECONDS,
         ops.NETWORK_TIMEOUT_SECONDS,
+        ops.NETWORK_TIMEOUT_SECONDS,
+        ops.COMMAND_TIMEOUT_SECONDS,
         ops.COMMAND_TIMEOUT_SECONDS,
         ops.TRANSFER_TIMEOUT_SECONDS,
         instance_config.SOPS_TIMEOUT_SECONDS,
     ]
     assert all(call["env"]["GIT_TERMINAL_PROMPT"] == "0" for call in seen)
+    assert all(call["env"]["GIT_CONFIG_NOSYSTEM"] == "1" for call in seen)
+    for call in seen:
+        env = call["env"]
+        assert not any(
+            name == "GIT_CONFIG"
+            or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+            or name in ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
+            for name in env
+        ), env
+        # The user's own files still apply: the credential helper lives there.
+        assert env["GIT_CONFIG_GLOBAL"] == "/home/user/.gitconfig"
+        assert env["GIT_SSH_COMMAND"] == "ssh -i key"
     assert all(call["shell"] is False for call in seen)
     with pytest.raises(InstanceError, match="did not finish"):
         ops.subprocess_runner(["slow"])

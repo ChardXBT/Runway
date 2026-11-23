@@ -224,15 +224,70 @@ class CommandRunner(Protocol):
     ) -> subprocess.CompletedProcess[str]: ...
 
 
+# Git config injected through the process environment could redirect a push
+# (remote.<url>.pushurl, url.<base>.pushInsteadOf): it never reaches a child.
+_GIT_CONFIG_ENV_NAMES = frozenset({"GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"})
+_GIT_CONFIG_ENV_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
+
+def _isolated_env() -> dict[str, str]:
+    """os.environ without injectable git config, plus no-prompt defaults.
+
+    GIT_CONFIG_GLOBAL is kept: the user's credential helper lives there.
+    GIT_CONFIG_NOSYSTEM drops the system file, which this process cannot control.
+    """
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in _GIT_CONFIG_ENV_NAMES and not name.startswith(_GIT_CONFIG_ENV_PREFIXES)
+    }
+    env.update(
+        {
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GCM_INTERACTIVE": "never",
+            "GH_PROMPT_DISABLED": "1",
+        }
+    )
+    return env
+
+
+def _git_subcommand(args: Sequence[str]) -> str | None:
+    """The first git subcommand after global options and their values."""
+    value_options = {
+        "-c",
+        "-C",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--config-env",
+    }
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in value_options:
+            index += 2
+            continue
+        if arg.startswith("-"):
+            index += 1  # e.g. --git-dir=..., --work-tree=..., -P, --version
+            continue
+        return arg
+    return None
+
+
+_GIT_NETWORK_SUBCOMMANDS = frozenset({"push", "fetch", "clone", "ls-remote"})
+
+
 def _timeout_for(args: Sequence[str]) -> int:
     if args[0] == "sops":
         return SOPS_TIMEOUT_SECONDS
     words = set(args[1:6])
     if args[0] == "gh" and {"release"} <= words and words & {"upload", "download", "create"}:
         return TRANSFER_TIMEOUT_SECONDS
-    if args[0] == "git" and words & {"push", "fetch", "clone"}:
-        return NETWORK_TIMEOUT_SECONDS
     if args[0] == "gh" and "clone" in words:
+        return NETWORK_TIMEOUT_SECONDS
+    if args[0] == "git" and _git_subcommand(args[1:]) in _GIT_NETWORK_SUBCOMMANDS:
         return NETWORK_TIMEOUT_SECONDS
     return COMMAND_TIMEOUT_SECONDS
 
@@ -245,17 +300,11 @@ def subprocess_runner(
         hint = _INSTALL_HINTS.get(args[0], "Install it")
         raise InstanceError(f"'{args[0]}' was not found on PATH. {hint}.")
     timeout = _timeout_for(args)
-    env = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GCM_INTERACTIVE": "never",
-        "GH_PROMPT_DISABLED": "1",
-    }
     try:
         return subprocess.run(
             [executable, *args[1:]],
             cwd=cwd,
-            env=env,
+            env=_isolated_env(),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -389,6 +438,17 @@ def _origin_repository(ctx: InstanceContext, instance_dir: Path) -> str | None:
     return parse_github_remote(result.stdout) if result.returncode == 0 else None
 
 
+def _config_entries(result: subprocess.CompletedProcess[str]) -> list[tuple[str, str]]:
+    """``(key, value)`` pairs from ``git config -z`` output (``key\nvalue\0`` records)."""
+    entries = []
+    for record in result.stdout.split("\0"):
+        if not record.strip():
+            continue
+        key, _newline, value = record.partition("\n")
+        entries.append((key.strip(), value.strip()))
+    return entries
+
+
 def verify_push_destination(ctx: InstanceContext, instance_dir: Path, repository: str) -> None:
     """Refuse unless every way git could send this clone's data leads to ``repository``."""
     expected = repository.casefold()
@@ -409,17 +469,32 @@ def verify_push_destination(ctx: InstanceContext, instance_dir: Path, repository
                 f"Run: git -C {instance_dir} remote set-url origin {github_url(repository)} "
                 "(and remove any remote.origin.pushurl)"
             )
+    # A remote *named* like a URL (remote."https://github.com/<repo>.git") takes
+    # over an explicit-URL push: git resolves the argument as a remote name first.
+    remotes = ctx.git(instance_dir, "config", "-z", "--get-regexp", r"^remote\.", check=False)
+    remote_names = {
+        key[len("remote.") :].rsplit(".", 1)[0]
+        for key, _value in _config_entries(remotes)
+        if "." in key[len("remote.") :]
+    }
+    for remote_name in sorted(remote_names):
+        if remote_name != "origin" and (":" in remote_name or "@" in remote_name):
+            raise InstanceError(
+                f"refused: the clone has a remote named {remote_name!r}; a remote named "
+                "like a URL could redirect an explicit-URL push. Keep only 'origin' "
+                f"(git -C {instance_dir} remote remove {remote_name})"
+            )
     rewrites = ctx.git(
         instance_dir,
         "config",
+        "-z",
         "--get-regexp",
         r"^url\..*\.(insteadof|pushinsteadof)$",
         check=False,
     )
     target_url = github_url(repository).casefold()
-    for line in rewrites.stdout.splitlines():
-        _key, _space, prefix = line.strip().partition(" ")
-        if prefix and target_url.startswith(prefix.strip().casefold()):
+    for _key, prefix in _config_entries(rewrites):
+        if prefix and target_url.startswith(prefix.casefold()):
             raise InstanceError(
                 f"refused: a git url.<base>.insteadOf or pushInsteadOf rule rewrites "
                 f"{github_url(repository)} to another address; remove it "
@@ -555,15 +630,38 @@ def _push_head(
 ) -> subprocess.CompletedProcess[str]:
     verify_push_destination(ctx, instance_dir, repository)
     branch = _current_branch(ctx, instance_dir)
-    return ctx.remote_git(
-        instance_dir,
-        "push",
-        "--quiet",
-        "--no-verify",
-        github_url(repository),
-        f"HEAD:refs/heads/{branch}",
-        check=False,
+    # The exact remote/refspec arguments of the real push.
+    push_args = ("--no-verify", github_url(repository), f"HEAD:refs/heads/{branch}")
+    # Resolve the effective destination first: every `To <url>` line of a
+    # --porcelain dry-run is one push URL after all of git's own rewriting
+    # (remote-name lookup, insteadOf, pushInsteadOf, every config scope).
+    dry_run = ctx.remote_git(
+        instance_dir, "push", "--dry-run", "--porcelain", *push_args, check=False
     )
+    destinations = [
+        line[len("To ") :].strip() for line in dry_run.stdout.splitlines() if line.startswith("To ")
+    ]
+    expected = repository.casefold()
+    for url in destinations:
+        name = parse_github_remote(url)
+        if name is None or name.casefold() != expected:
+            target = name or "an address that is not a plain github.com repository URL"
+            raise InstanceError(
+                f"refused: git would push to {target}, not {repository}; a remote named "
+                "like a URL or a url.<base>.insteadOf rule is redirecting the push. "
+                "Nothing was pushed."
+            )
+    if not destinations:
+        raise InstanceError(
+            f"refused: could not verify where a push from {instance_dir} would land; "
+            f"the dry-run produced no destination ({_failure(['git', 'push'], dry_run)}). "
+            "Nothing was pushed."
+        )
+    if dry_run.returncode != 0:
+        # The destination is verified; let the caller treat this as the failed push
+        # (for example a non-fast-forward when another machine pushed first).
+        return dry_run
+    return ctx.remote_git(instance_dir, "push", "--quiet", *push_args, check=False)
 
 
 def _record_pushed_lease(instance_dir: Path) -> None:
@@ -597,6 +695,9 @@ def _commit_and_push(
     }
     if not _commit(ctx, instance_dir, message, paths):
         return False
+    # Re-confirm the repository is still private immediately before pushing to it:
+    # _prepare ran a snapshot build ago and the owner may have flipped visibility.
+    repository = ensure_private_repository(ctx, repository)
     pushed = _push_head(ctx, instance_dir, repository)
     if pushed.returncode == 0:
         _record_pushed_lease(instance_dir)
@@ -1275,6 +1376,9 @@ def push(
                 else:
                     (instance_dir / name).write_bytes(content)
             raise
+        # The lease/manifest commit won the arbitration; re-confirm privacy once
+        # more before the snapshot assets leave this machine.
+        ensure_private_repository(ctx, repository)
         _upload_snapshot(ctx, repository, tag, workdir, assets)
     pruned = _prune_snapshots(ctx, repository, settings.instance_snapshot_keep, tag)
     return {
