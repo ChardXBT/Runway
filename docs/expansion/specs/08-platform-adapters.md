@@ -107,8 +107,11 @@ proposal.
 
 ### Flavour
 
-Stay on **Instagram API with Instagram Login** now. Add **Unified Login** as a second
-connection adapter before the hosted launch.
+Keep **Instagram API with Instagram Login** (`instagram`) and add **Instagram API with Unified
+Login** (`instagram_unified`) as a second connection adapter now (research/recheck-20261123 §1:
+it is documented, uses Facebook Login for Business with a `config_id`, a Business Integration
+System User token, `graph.facebook.com`, and resumable video upload from disk through
+`rupload.facebook.com`, which removes the R2 requirement for Reels on a local install).
 
 Why not migrate immediately: the existing integration works for the owner's account with no
 review; Meta states no end date; migrating now would delay the owner's publishing for a login
@@ -166,8 +169,27 @@ not at creation; a URL with non-ASCII characters fails; the account must be prof
 
 ### Later
 
-Comment webhooks after App Review (spec 04). Upload-from-disk through Unified Login, once
-verified by test, removes the signed-URL step for Reels.
+Comment webhooks after App Review (spec 04).
+
+### Unified Login adapter (`instagram_unified`)
+
+- Connect: `https://www.facebook.com/dialog/oauth?client_id=<META_APP_ID>&config_id=<CONFIG_ID>`
+  `&redirect_uri=<HTTPS callback>&response_type=code`; exchange at
+  `graph.facebook.com/<version>/oauth/access_token` with the Meta app id/secret. Then
+  `GET /me?fields=client_business_id` and `GET /me/assigned_instagram_accounts?fields=id,username`;
+  the owner picks the account. Store `client_business_id`, `config_id` and IG account ids with the
+  token. Permissions come from the configuration (`instagram_basic`, `instagram_content_publish`,
+  plus `instagram_manage_comments`/`instagram_manage_insights` for sync); capability maps both scope
+  families.
+- Token: lifetime set by the configuration; refresh through the Business Integration System User
+  Access Token Management API only when it expires (needs `business_management`). A token that
+  stops working (app removed from the portfolio, account moved) is `needs_reauth`, never retried.
+- Send: videos and Reels create the container with `upload_type=resumable`, upload the file from
+  disk to `rupload.facebook.com/ig-api-upload/<container-id>` (offset/size headers, resumable on
+  failure), then the same poll / `media_publish` / 9007 rule / verify steps as above. Images still
+  need a public `image_url` (R2 signed URL). Point of no return is unchanged (`media_publish`).
+- Owner prerequisite: the Meta app is owned by a (free) business portfolio and uses the
+  **Manage messaging & content on Instagram** use case.
 
 ## 4. TikTok
 
