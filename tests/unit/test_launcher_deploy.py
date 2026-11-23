@@ -28,6 +28,7 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($Launcher, [ref
 $ast.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
 }, $false) | ForEach-Object { Invoke-Expression $_.Extent.Text }
+$realGetWorkerRecord = ${function:Get-WorkerRecord}
 function Assert($Value, $Label) { if (-not $Value) { throw "$Label. events: $($world.events -join ' | '). diagnostics: $($diagnostics -join ' | ')" } }
 
 $root = $Runtime
@@ -44,18 +45,29 @@ function Write-Diagnostic([string]$Message) { $script:diagnostics.Add($Message) 
 $world = @{
     api = 'down'; apiStops = $true; db = 'head'
     worker = $false; workerPid = 77; workerRevision = 'abc123def456'; workerStops = $true
-    workerFails = $false; events = New-Object System.Collections.Generic.List[string]
+    workerFails = $false; workerIsRunway = $true; portOwnerOk = $true; events = New-Object System.Collections.Generic.List[string]
 }
 $status = [pscustomobject]@{
     current = '0016_shared_contracts'; head = '0016_shared_contracts'; up_to_date = $true
     revision = 'abc123def456'; worker_lock = 'worker.lock'; worker_pid = 'worker.pid'
+    known_revision = $true
+}
+function Set-DatabaseAhead {
+    $status.current = '0099_from_newer_code'
+    $status.up_to_date = $false
+    $status.known_revision = $false
 }
 function Set-DatabaseBehind {
     $world.db = 'behind'
     $status.current = '0012_creator_platforms'
     $status.up_to_date = $false
 }
-function Assert-PortOwner { }  # ownership rules are covered in test_windows_launcher.py
+# Ownership rules are covered in test_windows_launcher.py; here only the order matters.
+function Assert-PortOwner([string]$Component, [int]$Port) {
+    $world.events.Add("check owner $Port")
+    if (-not $world.portOwnerOk) { throw "port $Port is owned by another program" }
+}
+function Test-RunwayWorkerProcess([int]$ProcessId) { return $world.workerIsRunway }
 function Get-Listener([int]$Port) {
     if ($Port -eq 8000 -and $world.api -ne 'down') { return @([pscustomobject]@{ OwningProcess = 500 }) }
     return @()
@@ -123,45 +135,45 @@ switch ($Scenario) {
         # The first deploy: the pre-expansion API is healthy on the old schema.
         $world.api = 'legacy'; Set-DatabaseBehind
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'ctrl-break 500 | db upgrade | start api | start worker') 'deploy order'
+        Assert ((Events) -eq 'check owner 8000 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'deploy order'
         Assert (@($diagnostics) -like 'The running API must restart: it is older code that runs the in-process sync scheduler*') 'restart reason'
     }
     'deploy-over-previous-revision' {
         # A later deploy: API and worker are expansion code at an older revision.
         $world.api = 'previous'; $world.worker = $true; $world.workerRevision = '0ld0ld0ld0ld'
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'ctrl-break 77 | ctrl-break 500 | db upgrade | start api | start worker') 'worker stops before the API'
+        Assert ((Events) -eq 'check owner 8000 | ctrl-break 77 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'worker stops before the API'
     }
     'behind-with-api-down-and-worker-up' {
         $world.worker = $true; Set-DatabaseBehind
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'ctrl-break 77 | db upgrade | start api | start worker') 'worker stops before the upgrade'
+        Assert ((Events) -eq 'ctrl-break 77 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'worker stops before the upgrade'
     }
     'current-stack-is-left-alone' {
         $world.api = 'current'; $world.worker = $true
         Start-ApiAndWorker $status
-        Assert ((Events) -eq '') 'nothing is started or stopped'
+        Assert ((Events) -eq 'check owner 8000') 'nothing is started or stopped'
         Assert (@($diagnostics) -contains 'api already ready on port 8000.') 'api kept'
         Assert (@($diagnostics) -contains 'worker already running (PID 77).') 'worker kept'
     }
     'worker-failure-keeps-the-api' {
         $world.api = 'legacy'; Set-DatabaseBehind; $world.workerFails = $true
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'ctrl-break 500 | db upgrade | start api | start worker') 'order'
+        Assert ((Events) -eq 'check owner 8000 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'order'
         Assert ($world.api -eq 'current') 'the API stays up'
         Assert (@($diagnostics) -like 'worker did not start: worker exited with code 3*The API stays up*') 'worker failure logged'
     }
     'stubborn-legacy-api-is-left-running' {
         $world.api = 'legacy'; Set-DatabaseBehind; $world.apiStops = $false
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'ctrl-break 500 | ctrl-break 500') 'asked twice, never killed, nothing else'
+        Assert ((Events) -eq 'check owner 8000 | ctrl-break 500 | ctrl-break 500') 'asked twice, never killed, nothing else'
         Assert ($world.db -eq 'behind') 'no upgrade under a running API'
         Assert (@($diagnostics) -like 'Deploy incomplete: the API (PID 500) did not stop*') 'reported'
     }
     'stubborn-worker-blocks-the-deploy' {
         $world.api = 'previous'; $world.worker = $true; $world.workerStops = $false
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'ctrl-break 77 | ctrl-break 77') 'API untouched when the worker does not stop'
+        Assert ((Events) -eq 'check owner 8000 | ctrl-break 77 | ctrl-break 77') 'API untouched when the worker does not stop'
         Assert ($world.api -eq 'previous') 'API still serving'
     }
     'no-worker-beside-an-in-process-scheduler' {
@@ -170,7 +182,7 @@ switch ($Scenario) {
         $world.api = 'legacy'
         function Stop-StaleApi($Status) { return $true }
         Start-ApiAndWorker $status
-        Assert ((Events) -eq '') 'no worker beside the old scheduler'
+        Assert ((Events) -eq 'check owner 8000') 'no worker beside the old scheduler'
         Assert (@($diagnostics) -contains 'worker not started: the API on port 8000 still runs the in-process sync scheduler.') 'reported'
     }
     'status-failure-leaves-a-healthy-api-alone' {
@@ -202,6 +214,49 @@ switch ($Scenario) {
         try { Get-RuntimeStatus } catch { $failed = $_.Exception.Message.Contains('code 2') }
         Assert $failed 'a failed query is an error, not an empty status'
     }
+    'database-ahead-leaves-a-healthy-api-alone' {
+        # Older code checked out over a newer schema (rollback without db downgrade).
+        $world.api = 'current'; $world.worker = $true; Set-DatabaseAhead
+        Start-ApiAndWorker $status
+        Assert ((Events) -eq '') 'nothing is stopped, migrated or started'
+        Assert (@($diagnostics) -like 'The database is at revision 0099_from_newer_code, which this checkout does not know*db downgrade*') 'reported'
+    }
+    'database-ahead-without-an-api-fails-clearly' {
+        Set-DatabaseAhead
+        $failed = $false
+        try { Start-ApiAndWorker $status } catch { $failed = $_.Exception.Message -like '*does not know*db downgrade*' }
+        Assert $failed 'the launch fails with the rollback instruction'
+        Assert ((Events) -eq '') 'no upgrade is attempted'
+    }
+    'a-foreign-process-behind-worker-pid-is-never-signalled' {
+        # worker.pid is stale and Windows reused its PID for another program.
+        $world.api = 'previous'; $world.worker = $true; $world.workerIsRunway = $false
+        Start-ApiAndWorker $status
+        Assert (-not ((Events) -like '*ctrl-break 77*')) 'the foreign process is not signalled'
+        Assert ($world.api -eq 'previous') 'the API keeps serving'
+        Assert (@($diagnostics) -like '*PID 77 is not a Runway worker*') 'reported'
+    }
+    'an-unverifiable-api-owner-stops-nothing' {
+        $world.api = 'previous'; $world.worker = $true; $world.portOwnerOk = $false
+        $failed = $false
+        try { Start-ApiAndWorker $status } catch { $failed = $true }
+        Assert $failed 'the launch fails'
+        Assert (-not ((Events) -like '*ctrl-break*')) 'the worker is not stopped before the owner check'
+    }
+    'deferred-deploy-restarts-a-stopped-worker-when-safe' {
+        # The worker stopped, the API (expansion code, same schema) would not.
+        $world.api = 'previous'; $world.worker = $true; $world.apiStops = $false
+        Start-ApiAndWorker $status
+        Assert ((Events) -eq 'check owner 8000 | ctrl-break 77 | ctrl-break 500 | ctrl-break 500 | start worker') 'worker restarted beside the API'
+        Assert ($world.worker) 'a worker runs again'
+    }
+    'a-malformed-worker-pid-file-is-ignored' {
+        $file = Join-Path $runtime 'worker.pid'
+        Set-Content -LiteralPath $file -Value '{"pid": "abc", "revision": "x"}'
+        Assert ($null -eq (& $realGetWorkerRecord $file)) 'non-numeric pid'
+        Set-Content -LiteralPath $file -Value '{"pid": 4242, "revision": "x"}'
+        Assert ((& $realGetWorkerRecord $file).pid -eq 4242) 'numeric pid'
+    }
     default { throw "unknown scenario $Scenario" }
 }
 Write-Output "scenario $Scenario passed"
@@ -219,6 +274,12 @@ SCENARIOS = [
     "status-failure-leaves-a-healthy-api-alone",
     "status-failure-without-an-api-fails-the-launch",
     "status-is-queried-through-the-process-runner",
+    "database-ahead-leaves-a-healthy-api-alone",
+    "database-ahead-without-an-api-fails-clearly",
+    "a-foreign-process-behind-worker-pid-is-never-signalled",
+    "an-unverifiable-api-owner-stops-nothing",
+    "deferred-deploy-restarts-a-stopped-worker-when-safe",
+    "a-malformed-worker-pid-file-is-ignored",
 ]
 
 

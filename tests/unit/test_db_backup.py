@@ -71,3 +71,32 @@ def test_pruning_keeps_the_newest_automatic_backups_and_every_manual_one(tmp_pat
     assert sorted(path.name for path in directory.iterdir()) == sorted(
         [*names[2:], "runway-20260101T000000000000Z-manual.db"]
     )
+
+
+def test_a_backup_that_fails_midway_leaves_no_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    _seed(settings.database_path)
+    real_connect = sqlite3.connect
+
+    class FailingSource:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        def backup(self, target: sqlite3.Connection) -> None:
+            raise sqlite3.OperationalError("disk I/O error")
+
+        def close(self) -> None:
+            self._connection.close()
+
+    def connect(database: object, *args: object, **kwargs: object) -> object:
+        connection = real_connect(database, *args, **kwargs)  # type: ignore[call-overload]
+        return FailingSource(connection) if kwargs.get("uri") else connection
+
+    monkeypatch.setattr("runway.db.backup.sqlite3.connect", connect)
+
+    with pytest.raises(sqlite3.OperationalError):
+        backup_database(settings, "pre-upgrade")
+
+    assert list(backup_directory(settings).iterdir()) == []

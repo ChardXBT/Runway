@@ -173,7 +173,9 @@ function Start-HiddenCommand([string]$Command) {
     # Ctrl+Break later.
     $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
         -ArgumentList $Command -WorkingDirectory $root -WindowStyle Hidden -PassThru
-    $null = $child.Handle # Retain the handle so rapid exits still have an exit code.
+    # Retain the handle so rapid exits still have an exit code. A child that has
+    # already exited raises here; its exit is reported by the caller's wait.
+    try { $null = $child.Handle } catch { }
     return $child
 }
 
@@ -195,7 +197,7 @@ function Get-RuntimeStatus {
         throw "The runtime status query failed with code $($query.ExitCode). Inspect data/runtime/status.stderr.log."
     }
     $status = Get-Content -LiteralPath $out -Raw | ConvertFrom-Json
-    foreach ($name in 'current', 'head', 'up_to_date', 'revision', 'worker_lock', 'worker_pid') {
+    foreach ($name in 'current', 'head', 'up_to_date', 'known_revision', 'revision', 'worker_lock', 'worker_pid') {
         if (-not $status.PSObject.Properties[$name]) { throw "The runtime status lacks '$name'." }
     }
     return $status
@@ -278,7 +280,9 @@ function Get-WorkerRecord([string]$PidPath) {
     # worker while it holds the lock and removed when it exits.
     try {
         $record = Get-Content -LiteralPath $PidPath -Raw -ErrorAction Stop | ConvertFrom-Json
-        if ($record -and $record.PSObject.Properties['pid']) { return $record }
+        if ($record -and $record.PSObject.Properties['pid'] -and "$($record.pid)" -match '^\d+$') {
+            return $record
+        }
     } catch { }
     return $null
 }
@@ -312,6 +316,16 @@ function Start-Worker([string]$LockPath, [string]$PidPath, [double]$GraceSeconds
     Write-Diagnostic "worker running (PID $($child.Id))."
 }
 
+function Test-RunwayWorkerProcess([int]$ProcessId) {
+    # worker.pid can outlive its worker (power loss, taskkill) and Windows reuses
+    # PIDs, so the PID alone never justifies a Ctrl+Break: the process must be
+    # running the Runway worker.
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    if (-not $process -or -not $process.CommandLine) { return $false }
+    return ($process.CommandLine -match 'runway\.cli\.worker_commands') -or
+        ($process.CommandLine -match 'runway(\.exe)?"?\s+worker(\s|$)')
+}
+
 function Stop-WorkerForRestart($Status) {
     # The worker is identified by its lock and PID record only. Returns $true
     # when no worker runs any more.
@@ -319,6 +333,10 @@ function Stop-WorkerForRestart($Status) {
     $record = Get-WorkerRecord $Status.worker_pid
     if (-not $record -or -not (Test-ProcessAlive ([int]$record.pid))) {
         Write-Diagnostic 'worker.lock is held but worker.pid names no running process; stop that worker by hand.'
+        return $false
+    }
+    if (-not (Test-RunwayWorkerProcess ([int]$record.pid))) {
+        Write-Diagnostic "worker.lock is held but PID $($record.pid) is not a Runway worker; nothing was signalled. Stop the worker by hand."
         return $false
     }
     if (-not (Stop-ByConsole ([int]$record.pid) 'worker')) {
@@ -340,11 +358,12 @@ function Stop-StaleApi($Status) {
     $reason = Get-ApiRestartReason $health $Status
     if (-not $reason) { return $true }
     Write-Diagnostic "The running API must restart: $reason."
+    # Prove the API can be stopped before stopping anything else.
+    Assert-PortOwner 'api' 8000
     if (-not (Stop-WorkerForRestart $Status)) {
         Write-Diagnostic 'Deploy incomplete: the worker did not stop, so the API was left running on its older code, the database was not upgraded and no worker was started.'
         return $false
     }
-    Assert-PortOwner 'api' 8000
     foreach ($listener in (Get-Listener 8000)) {
         $owner = [int]$listener.OwningProcess
         if (Stop-ByConsole $owner 'api') { continue }
@@ -366,8 +385,37 @@ function Test-WorkerStale($Status) {
         $running -ne $Status.revision)
 }
 
+function Resume-WorkerIfSafe($Status) {
+    # After a deferred deploy the worker may have been stopped while the API kept
+    # serving. Start it again only beside an API that runs no in-process
+    # scheduler and expects the schema the database is at.
+    $health = Get-Health 'api'
+    if ((Get-HealthField $health 'sync_scheduler') -eq 'worker' -and $Status.up_to_date -and
+        (Get-HealthField $health 'migration_head') -eq $Status.head) {
+        Start-WorkerBesideApi $Status.worker_lock $Status.worker_pid
+        return
+    }
+    if (-not (Test-WorkerLockHeld $Status.worker_lock)) {
+        Write-Diagnostic 'The worker is not running: scheduled sync and queued jobs wait until the deploy completes.'
+    }
+}
+
 function Start-ApiAndWorker($Status) {
-    if (-not (Stop-StaleApi $Status)) { return }
+    if ($Status.PSObject.Properties['known_revision'] -and $Status.known_revision -eq $false) {
+        # The database is at a revision this checkout does not define: newer code
+        # migrated it (a rollback ran without `runway db downgrade`). Upgrading
+        # cannot work and stopping a healthy API would only cause an outage.
+        $message = "The database is at revision $($Status.current), which this checkout does not know (its migration head is $($Status.head)). Nothing was stopped or migrated. Run 'runway db downgrade' with the newer checkout first (docs/OPERATIONS.md, Rollback)."
+        if (Test-Ready 'api') {
+            Write-Diagnostic $message
+            return
+        }
+        throw $message
+    }
+    if (-not (Stop-StaleApi $Status)) {
+        Resume-WorkerIfSafe $Status
+        return
+    }
     if (-not $Status.up_to_date) {
         # `runway db upgrade` refuses to migrate under a running worker.
         if (-not (Stop-WorkerForRestart $Status)) {
@@ -498,8 +546,13 @@ try {
     if (-not $ApiOnly) { Assert-PortOwner 'web' 3000 }
     if (-not $WebOnly) { Invoke-ApiStack }
     if (-not $ApiOnly) { Start-Component 'web' 3000 }
-    if ((-not $WebOnly -and -not (Test-Ready 'api')) -or
-        (-not $ApiOnly -and -not (Test-Ready 'web'))) { throw 'Stack readiness was lost during startup.' }
+    # One transient probe failure must not roll back a stack that was just ready.
+    $lost = $true
+    foreach ($attempt in 1..3) {
+        if ((($WebOnly) -or (Test-Ready 'api')) -and (($ApiOnly) -or (Test-Ready 'web'))) { $lost = $false; break }
+        Start-Sleep -Seconds 2
+    }
+    if ($lost) { throw 'Stack readiness was lost during startup.' }
     Write-Diagnostic 'Requested Runway services are ready. http://127.0.0.1:3000/review'
 } catch {
     Write-Diagnostic "Launch failed: $($_.Exception.Message)"

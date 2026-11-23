@@ -40,6 +40,9 @@ def backup_database(settings: Settings, reason: str) -> Path:
             check = target.execute("PRAGMA quick_check").fetchone()
         finally:
             target.close()
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
     finally:
         source.close()
     if check is None or check[0] != "ok":

@@ -50,13 +50,21 @@ checkout's commit (`python -m runway.operations.launch_status`), and reads the r
 code: it lacks `sync_scheduler`, reports a different revision or head, or the database is behind
 head. In that case the launcher:
 
-1. stops the worker (Ctrl+Break on its console, PID from `worker.pid`) and then the API (the
-   process listening on port 8000), and waits for both to exit. Nothing is force-killed. If either
-   does not stop, the healthy older API is left serving, the database is not upgraded, no worker
-   is started, and `launcher.log` says "Deploy incomplete";
+1. checks that the process on port 8000 is this checkout's API, then stops the worker (Ctrl+Break
+   on its console, PID from `worker.pid`, only after confirming that PID is running the Runway
+   worker) and then the API, and waits for both to exit. Nothing is force-killed. If either does
+   not stop while the API stays healthy, the older API is left serving, the database is not
+   upgraded, `launcher.log` says "Deploy incomplete", and the worker is started again only if the
+   API runs no in-process scheduler and expects the database's schema. If the API neither stops
+   nor stays healthy, the launch fails and says so;
 2. runs `db upgrade` (with its backup) and starts the API;
 3. starts the worker, but only beside an API whose `/health` reports `sync_scheduler: worker`.
    The old in-process scheduler and the worker therefore never sync at the same time.
+
+If the database is at a revision this checkout does not define (newer code migrated it and the
+older code was checked out without `runway db downgrade`), the launcher stops nothing and migrates
+nothing: with a healthy API it only logs the problem; without one the launch fails with the
+instruction to run `runway db downgrade` from the newer checkout (see Rollback below).
 
 A worker that cannot start (it exits within 5 seconds, or the lock check fails) never fails the
 launch and never stops the API or web: the launcher logs it to `launcher.log` (output in
