@@ -399,3 +399,7 @@ def test_github_remote_parsing_is_strict() -> None:
         "https://gitlab.com/owner/runway-instance.git",
     ):
         assert parse(url) is None, url
+
+
+def test_instance_snapshot_keep_defaults_to_five(tmp_path: Path) -> None:
+    assert Settings(data_dir=tmp_path / "data").instance_snapshot_keep == 5
