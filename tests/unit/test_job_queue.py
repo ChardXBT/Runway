@@ -30,6 +30,7 @@ from runway.jobs.runtime import build_worker
 from runway.jobs.worker import PermanentJobError, Worker
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.sync import SYNC_ACCOUNT_JOB, PlatformSyncScheduler
+from runway.realtime.processing import PROCESS_WEBHOOK_JOB
 
 START = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
@@ -402,7 +403,7 @@ def test_the_worker_runs_scheduled_sync_with_the_existing_sync_code(tmp_path, cl
 def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database: Database) -> None:
     worker = build_worker(settings, database)
     assert [type(producer) for producer in worker.producers] == [RetentionPurgeScheduler]
-    assert set(worker.handlers) == {SYNC_ACCOUNT_JOB, PURGE_JOB}
+    assert set(worker.handlers) == {SYNC_ACCOUNT_JOB, PURGE_JOB, PROCESS_WEBHOOK_JOB}
 
 
 def test_hourly_purge_removes_only_expired_keys_and_events(

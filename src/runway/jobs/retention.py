@@ -1,6 +1,7 @@
 """Hourly `purge` job: keeps the database and the lock directories from growing forever.
 
 - idempotency keys after 24 hours and events after 7 days;
+- webhook inbox rows after 30 days;
 - finished `publish_jobs` after 14 days, `send`/`reconcile` history after 90;
 - lock files of accounts and token references that no longer exist, when no
   process holds them.
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import ConnectedAccount, PublishJob, utcnow
+from runway.db.models import ConnectedAccount, PublishJob, WebhookEvent, utcnow
 from runway.events.log import purge_expired_events
 from runway.jobs.queue import RECONCILE, SEND, Job, JobQueue, JobState
 from runway.locks import LockTimeout, exclusive_file_lock
@@ -32,6 +33,8 @@ PURGE_INTERVAL = timedelta(hours=1)
 FINISHED_JOB_RETENTION = timedelta(days=14)
 # Sends and reconciliations are the evidence for "did this post go out?".
 PUBLISHING_JOB_RETENTION = timedelta(days=90)
+# Raw webhook bodies are debugging evidence, not history; 30 days is plenty.
+WEBHOOK_EVENT_RETENTION = timedelta(days=30)
 FINISHED_JOB_STATES = (
     JobState.COMPLETED.value,
     JobState.FAILED.value,
@@ -80,6 +83,12 @@ def purge_finished_jobs(session: Session, *, now: datetime | None = None) -> int
     return removed
 
 
+def purge_webhook_events(session: Session, *, now: datetime | None = None) -> int:
+    cutoff = (now or utcnow()) - WEBHOOK_EVENT_RETENTION
+    result = session.execute(delete(WebhookEvent).where(WebhookEvent.received_at < cutoff))
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
 def remove_stale_lock_files(directory: Path, keep: Iterable[str]) -> int:
     """Delete `<name>.lock` files whose name is not in `keep` and that nobody holds."""
     if not directory.is_dir():
@@ -110,6 +119,7 @@ def run_purge_job(database: Database, settings: Settings, _job: Job) -> None:
     with database.session() as session:
         keys = IdempotencyStore(database).purge_expired(session)
         events = purge_expired_events(session)
+        webhook_events = purge_webhook_events(session)
         jobs = purge_finished_jobs(session)
         accounts = session.execute(select(ConnectedAccount.id, ConnectedAccount.token_ref)).all()
     token_refs = {str(token_ref) for _id, token_ref in accounts if token_ref}
@@ -118,9 +128,11 @@ def run_purge_job(database: Database, settings: Settings, _job: Job) -> None:
     locks = remove_stale_lock_files(refresh_dir, token_refs)
     locks += remove_stale_lock_files(sync_lock_path(settings, 0).parent, sync_names)
     logger.info(
-        "retention purge removed %s idempotency keys, %s events, %s jobs and %s lock files",
+        "retention purge removed %s idempotency keys, %s events, %s webhook events, "
+        "%s jobs and %s lock files",
         keys,
         events,
+        webhook_events,
         jobs,
         locks,
     )

@@ -16,6 +16,7 @@ from runway.platforms.sync import (
     SyncService,
     run_sync_account_job,
 )
+from runway.realtime.processing import PROCESS_WEBHOOK_JOB, run_process_webhook_job
 
 __all__ = ["build_worker", "worker_lock_path"]
 
@@ -26,6 +27,7 @@ def build_worker(settings: Settings, database: Database) -> Worker:
     handlers: dict[str, Handler] = {
         SYNC_ACCOUNT_JOB: partial(run_sync_account_job, sync_service),
         PURGE_JOB: partial(run_purge_job, database, settings),
+        PROCESS_WEBHOOK_JOB: partial(run_process_webhook_job, database, settings, queue),
     }
     producers: list[JobProducer] = [RetentionPurgeScheduler(queue)]
     if settings.platform_sync_interval_minutes > 0:
