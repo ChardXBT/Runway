@@ -21,7 +21,7 @@ from collections.abc import Callable
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0017_publishing_engine"
 down_revision = "0016h_hosted_identity"
@@ -75,12 +75,27 @@ def _inspector() -> sa.Inspector:
     return sa.inspect(op.get_bind())
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _column_names(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {str(column["name"]) for column in _inspector().get_columns(table)}
 
 
 def _index_names(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {str(index["name"]) for index in _inspector().get_indexes(table)}
+
+
+def _table_names() -> set[str]:
+    if _offline():
+        return set()
+    return set(_inspector().get_table_names())
 
 
 def _workspace_column() -> sa.Column[object]:
@@ -246,11 +261,11 @@ _CREATORS: dict[str, Callable[[], None]] = {
 
 
 def _backfill_targets() -> None:
-    bind = op.get_bind()
+    # op.execute renders in offline (--sql) mode as well as running online.
     # The machine's column starts as a copy of the legacy status column.
-    bind.execute(sa.text("UPDATE draft_targets SET state = status WHERE state <> status"))
+    op.execute(sa.text("UPDATE draft_targets SET state = status WHERE state <> status"))
     # A target's own planned time starts as its post's schedule.
-    bind.execute(
+    op.execute(
         sa.text(
             "UPDATE draft_targets SET planned_at = ("
             "SELECT content_drafts.scheduled_for FROM content_drafts "
@@ -259,12 +274,11 @@ def _backfill_targets() -> None:
         )
     )
     for platform, post_type in LEGACY_POST_TYPES.items():
-        bind.execute(
+        op.execute(
             sa.text(
                 "UPDATE draft_targets SET post_type = :post_type "
                 "WHERE post_type IS NULL AND platform = :platform"
-            ),
-            {"post_type": post_type, "platform": platform},
+            ).bindparams(post_type=post_type, platform=platform)
         )
 
 
@@ -279,7 +293,7 @@ def upgrade() -> None:
             op.add_column("draft_targets", column)
     _backfill_targets()
 
-    existing = set(_inspector().get_table_names())
+    existing = _table_names()
     for table in NEW_TABLES:
         if table not in existing:
             _CREATORS[table]()
@@ -289,17 +303,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    existing = set(_inspector().get_table_names())
+    offline = _offline()
+    existing = _table_names()
     for table in reversed(NEW_TABLES):
-        if table in existing:
+        if offline or table in existing:
             op.drop_table(table)
-    if "ix_draft_targets_state" in _index_names("draft_targets"):
+    if offline or "ix_draft_targets_state" in _index_names("draft_targets"):
         op.drop_index("ix_draft_targets_state", table_name="draft_targets")
     present = _column_names("draft_targets")
     for column in reversed(_target_columns()):
-        if column.name in present:
+        if offline or column.name in present:
             op.drop_column("draft_targets", column.name)
     present = _column_names("content_drafts")
     for column in reversed(_post_columns()):
-        if column.name in present:
+        if offline or column.name in present:
             op.drop_column("content_drafts", column.name)
