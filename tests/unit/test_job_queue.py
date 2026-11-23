@@ -237,6 +237,30 @@ def test_an_expired_send_is_never_rerun_but_handed_to_reconcile(
         assert reconcile.idempotency_key == f"reconcile:job:{send.id}"
 
 
+def test_the_reconcile_job_gets_the_read_job_retry_budget_not_the_sends(
+    queue: JobQueue, database: Database, clock: Clock
+) -> None:
+    # A send job runs once (SEND_MAX_ATTEMPTS = 1); the reconcile job it leaves
+    # behind only reads, so it must get the read-job budget, not copy the 1.
+    queue.enqueue(SEND, idempotency_key="target:1:hash", max_attempts=1)
+    assert queue.claim("dead-worker", {SEND}, lease_seconds=60) is not None
+    clock.advance(minutes=2)
+
+    assert queue.claim("w2", {SEND}) is None
+    with database.session() as session:
+        reconcile = session.scalar(select(PublishJob).where(PublishJob.kind == RECONCILE))
+        assert reconcile is not None
+        assert reconcile.max_attempts == 3
+
+
+def test_the_reconcile_retry_budget_matches_the_read_job_budget() -> None:
+    # queue.py must not import runway.posts; keep the constant in lock-step by test.
+    from runway.jobs.queue import RECONCILE_MAX_ATTEMPTS
+    from runway.posts.jobs import READ_JOB_MAX_ATTEMPTS
+
+    assert RECONCILE_MAX_ATTEMPTS == READ_JOB_MAX_ATTEMPTS == 3
+
+
 def test_the_expired_send_hook_is_replaceable(database: Database, clock: Clock) -> None:
     seen: list[int] = []
 
