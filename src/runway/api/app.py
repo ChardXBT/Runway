@@ -21,6 +21,7 @@ from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
 from runway.api.v1.errors import install_problem_handlers
 from runway.api.v1.events_routes import build_events_router
+from runway.api.v1.posts_routes import build_posts_router
 from runway.auth.principal import get_principal
 from runway.config import Settings, get_settings
 from runway.db.base import Database
@@ -156,6 +157,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(build_platform_router(database, active_settings))
     # Versioned surface (spec 06): every router comes from build_v1_router.
     application.include_router(build_events_router(database))
+    # Spec 03 section 8. Nothing here publishes: a release only queues a job
+    # for the separate `runway worker` process.
+    from runway.posts.runtime import build_post_service
+
+    post_service = build_post_service(active_settings, database)
+    application.state.post_service = post_service
+    application.include_router(build_posts_router(post_service))
 
     @application.get("/health", tags=["system"])
     def health() -> dict[str, object]:
