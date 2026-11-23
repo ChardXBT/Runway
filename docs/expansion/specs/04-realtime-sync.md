@@ -62,7 +62,13 @@ Subscriptions:
 
 - YouTube: on connect, subscribe the channel's topic at the hub with a per-subscription secret.
   A `renew_subscription` job renews before the lease ends (lease length to be read from the
-  hub's response; assume it can be as short as a few days).
+  hub's response; assume it can be as short as a few days). Re-check 2026-11-22: Google's hub
+  grants about 5 days (432,000 s) and stops silently at expiry, so renew at 80% of the granted
+  lease. With a `hub.secret` the hub signs the raw body with HMAC-SHA1 (`X-Hub-Signature:
+  sha1=<hex>`); accept `sha256=` too if it appears.
+- Instagram token upkeep (not a subscription, listed here because it is also a timed job):
+  long-lived Instagram Login tokens last 60 days and can be refreshed only after 24 hours and
+  before expiry, so a `refresh_token` job runs at about day 50.
 - Instagram: after App Review, `POST /{ig-id}/subscribed_apps` on connect. Before that, do not
   subscribe; the capability matrix says "polling".
 - TikTok: one callback URL per app, configured in the portal.

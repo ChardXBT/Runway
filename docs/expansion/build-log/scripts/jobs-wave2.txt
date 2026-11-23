@@ -1,0 +1,1 @@
+rwy-realtime|$HOME/Downloads/RunWay-k-realtime|%USERPROFILE%\Downloads\RunWay-k-realtime|$HOME/Downloads/kiro-wave-20261122-runway/prompts/rwy-realtime.md|start

@@ -16,6 +16,7 @@ re-doing the research. Every decision states why it was chosen and what was reje
 
 | Order | File | What it is |
 | --- | --- | --- |
+| 0 | [`HANDOFF.md`](HANDOFF.md) | **Build status and remaining work (2026-11-22). Start here.** |
 | 1 | this file | Summary, decisions at a glance, what is not known |
 | 2 | [`01-AUDIT.md`](01-AUDIT.md) | What the earlier research got right, got wrong, and missed; code problems found |
 | 3 | [`research/`](research/) | Source-cited fact files (one per platform, plus build-vs-buy, hosting, private data, agent interface) |

@@ -12,6 +12,24 @@
 - Where a file says [Unverified] or "working knowledge", it means I did not re-read a source in
   this pass.
 
+## Decisions taken for the build (2026-11-22)
+
+The owner wrote on 2026-11-22: "Complete the runaway repo do deeper research you have full
+permission Runway should be done". With that permission the build proceeds on these answers. Any
+of them can be reversed later; each is a setting or an additive module, not a fork.
+
+| # | Decision |
+| --- | --- |
+| Q1 | The assumption stands: one codebase, `local` and `hosted` profiles; a second channel is a second workspace. |
+| Q2 | Muse's calls could not be inspected (no Muse code or request logs on this machine). Every existing route stays unchanged; the v1 API is additive; `RUNWAY_LOCAL_REQUIRE_KEY_FOR_WRITES` defaults to `false`. |
+| Q3 | TikTok: build `tiktok_inbox` (default once connected) and keep `assisted`. `tiktok_direct` is built and tested against mocks but hidden below `audited`. No vendor adapter is built, because a vendor needs a sign-up only the owner can approve. |
+| Q4 | Build P0–P8 code paths. Everything hosted stays behind `RUNWAY_PROFILE=hosted` and is tested with mocks; nothing is deployed, signed up for or paid for. |
+| Q5 | Open (owner). Research now says a registered sole proprietorship is the realistic minimum (recheck-20261122 §2). |
+| Q6 | No sign-ups by agents. R2, tunnel, Clerk stay owner actions in spec 09; the code works without them. |
+| Q7 | One primary machine (this laptop); the lease supports a second. |
+| Q8 | Yes: agent-created posts default `ai_generated=true`; a human can change it. |
+| Q9 | Yes, the repository stays public; spec 07's private companion repository is the answer. |
+
 ## Questions for the owner
 
 | # | Question | Why it matters | My assumption until told otherwise |

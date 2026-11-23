@@ -42,6 +42,7 @@ HTTP helpers (`provider_request`, `safe_error_summary`, `request_may_have_been_d
 | `category_id` | Required by Runway; choices from `videoCategories.list`, cached |
 | `privacy` | Required: `public`, `unlisted` or `private`. No default. |
 | `made_for_kids` | Required boolean (`status.selfDeclaredMadeForKids`). No default. |
+| `has_paid_product_placement` | Required boolean (`paidProductPlacementDetails.hasPaidProductPlacement`). No default: since 2026-11-16 an omitted value means "not declared free of paid placement" (research/recheck-20261122 §1). |
 | `contains_synthetic_media` | Boolean; defaults from the post's `ai_generated` |
 | `notify_subscribers` | Default true |
 | `embeddable`, `license` | Optional |
@@ -78,8 +79,29 @@ Errors to map by name: `uploadLimitExceeded` (final for today; reschedule sugges
 
 ### Community posts
 
-Unchanged. No API exists. The assisted and authorized-browser Lineup paths stay as they are and
-remain local-only.
+The assisted and authorized-browser Lineup paths stay as they are, remain local-only, and stay
+the default.
+
+Added 2026-11-22: YouTube's `posts` resource (pilot since 2026-11-16, general availability planned
+for 2027; research/recheck-20261122 §1) is a real Community-post API. Build a `youtube_post`
+adapter (post type `youtube_post`) against mocks now:
+
+1. Preflight: `youtube_posts_api_access=true` (operator setting, default false; true only once
+   Google has admitted the project to the pilot); scope `youtube.force-ssl` granted; 1–10 images,
+   each JPEG/PNG/GIF/WebP, ≤ 16 MB, aspect 2:5 to 5:2; text optional for image posts.
+2. For each image: `POST https://www.googleapis.com/upload/youtube/v3/posts/image?channelId=…`
+   and keep the `imageUploadToken` (a fresh upload per post; tokens are not reused).
+3. Mark `request_sent_at`; `POST /youtube/v3/posts?part=snippet,attachments` with
+   `snippet.channelId`, `snippet.textDisplay` and the tokens. This is the point of no return.
+4. Response id: `published`. Verify with `posts.list` for that id: `verified`.
+5. Reconcile: list the channel's newest posts and match by text and image count within the
+   attempt window, as for uploads.
+
+The API has no scheduling ("Scheduled posts aren't supported"), so `youtube_post` targets are
+always held until `planned_at`. With access off, the capability is `needs_app_approval` and the
+Lineup keeps today's flow. When access is on, the "Also post to…" bridge (spec 03 §7) and the
+Lineup can offer "Publish by API" as an alternative to the browser publisher. Never both for one
+proposal.
 
 ## 3. Instagram
 
@@ -107,9 +129,9 @@ changes.
 
 | Post type | Fields |
 | --- | --- |
-| `instagram_reel` | `caption` (≤ 2,200 characters, ≤ 30 hashtags, ≤ 20 mentions), `share_to_feed`, `cover_asset_id` or `thumb_offset_ms`, `audio_name`, `collaborators[≤3]`, `trial` (`MANUAL` or `SS_PERFORMANCE`), `is_ai_generated` |
+| `instagram_reel` | `caption` (≤ 2,200 characters, ≤ 30 hashtags, ≤ 20 mentions), `share_to_feed`, `cover_asset_id` or `thumb_offset_ms`, `audio_name`, `collaborators[≤3]`, `trial` (`MANUAL` or `SS_PERFORMANCE`), `is_ai_generated` (no `alt_text`: not supported on Reels) |
 | `instagram_image` | `caption`, `alt_text` (≤ 1,000), `user_tags`, `location_id`, `collaborators`, `is_ai_generated` |
-| `instagram_carousel` | 2–20 children (images or videos), `caption` on the parent only |
+| `instagram_carousel` | 2–20 children (images or videos), `caption` and `is_ai_generated` on the parent only (setting `is_ai_generated` on a child is an API error) |
 | `instagram_story` | image or video; no caption, no stickers |
 
 Instagram has no privacy field; the post inherits the account's visibility. The release dialog
@@ -127,6 +149,12 @@ says so explicitly ("visible to everyone who can see this account").
 4. At `planned_at`: mark `request_sent_at`, call `media_publish` with `creation_id`. This is
    the point of no return.
 5. The response gives the media id: `published`.
+   Error 9007 with subcode 2207027 ("Media ID is not available") is common for a short time even
+   after `FINISHED` (research/recheck-20261122 §2). It is not a refusal: read the container; if
+   `PUBLISHED`, take the media id; otherwise retry `media_publish` with the **same**
+   `creation_id` every 10 s for up to 2 minutes, then move to `uncertain`. Never create a second
+   container for a target whose first container may have been published; a container can be
+   published only once, which is what makes this retry safe.
 6. Verify with `GET /{media-id}?fields=id,permalink,media_type,timestamp`. Store the permalink.
 7. Delete the temporary R2 copy if one was made.
 

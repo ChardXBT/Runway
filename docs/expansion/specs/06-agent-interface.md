@@ -123,7 +123,11 @@ service functions:
   with no key for owner trust.
 - Hosted: mount the HTTP transport under `/mcp`. **Before building, read the transport and
   authorization sections of the current MCP revision**; I did not re-verify them
-  (research/agent-interface §2).
+  (research/agent-interface §2). Re-check 2026-11-22 (research/recheck-20261122 §4): the current
+  revision is `2026-07-28`, which is stateless (no `initialize`, no `Mcp-Session-Id`; version in
+  each request's `_meta` and the `MCP-Protocol-Version` header; mandatory `server/discover`) and
+  deprecates roots, sampling and logging. Use the official Python SDK at a release that answers
+  both `2025-11-25` and `2026-07-28`, and none of the deprecated features.
 - Long uploads and publishes: return the post or target id immediately and let the agent poll
   `get_target_status`. Adopt the Tasks extension only if a target host needs it.
 
