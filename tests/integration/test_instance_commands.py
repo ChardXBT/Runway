@@ -19,6 +19,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,6 +38,7 @@ from runway.cli.main import app
 from runway.config import Settings
 from runway.db import Database, initialize_database
 from runway.db.models import ConnectedAccount, MediaAsset
+from runway.locks import exclusive_file_lock
 from runway.operations import instance as ops
 from runway.operations import instance_lease
 from runway.operations.instance import InstanceContext, InstanceError
@@ -1189,4 +1192,84 @@ def test_the_heartbeat_thread_beats_and_stops(
     )
     beater.start()
     beater.stop()
+    assert beater.last_result is not None and beater.last_result["status"] == "renewed"
+
+
+# --- the instance operation lock ---------------------------------------------------
+
+
+def _operation_lock_path(machine: Machine) -> Path:
+    return machine.instance_dir / "tmp" / "instance.lock"
+
+
+def test_concurrent_remote_lease_reads_all_see_the_holder(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    settings = machine.settings()
+
+    def delayed_fetch(
+        args: Sequence[str], *, cwd: Path | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        result = fake_github(args, cwd=cwd)
+        if "fetch" in args:
+            # Stand in for network latency: without serialized fetches into a
+            # shared ref this is the window where a concurrent read sees nothing.
+            time.sleep(0.2)
+        return result
+
+    holders: list[str | None] = []
+
+    def reader() -> None:
+        lease = ops.read_remote_lease(settings, delayed_fetch)
+        holders.append(lease.holder if lease is not None else None)
+
+    threads = [threading.Thread(target=reader) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert holders == ["machine-a"] * 6
+
+
+def test_an_instance_command_waits_for_the_operation_lock_then_fails_clearly(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    monkeypatch.setattr(ops, "INSTANCE_LOCK_WAIT_SECONDS", 0.2)
+    uploads_before = len(fake_github.uploads())
+
+    with exclusive_file_lock(_operation_lock_path(machine), timeout=0):
+        with pytest.raises(InstanceError, match="another runway instance operation"):
+            ops.push(machine.context(monkeypatch))
+        with pytest.raises(InstanceError, match="another runway instance operation"):
+            ops.heartbeat(machine.context(monkeypatch))
+
+    assert len(fake_github.uploads()) == uploads_before
+    lease = read_lease(machine.instance_dir)
+    assert lease is not None and lease.holder == "machine-a"
+
+
+def test_the_heartbeat_thread_skips_a_beat_while_the_lock_is_held(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    clock.advance(hours=6)
+    beater = ops.LeaseHeartbeat(
+        machine.settings(),
+        interval_seconds=3600,
+        context_factory=lambda settings: InstanceContext(
+            settings=settings, runner=fake_github, now=clock.now
+        ),
+    )
+    with exclusive_file_lock(_operation_lock_path(machine), timeout=0):
+        beater.beat()
+        assert beater.last_result is not None and beater.last_result["status"] == "skipped"
+
+    beater.beat()
     assert beater.last_result is not None and beater.last_result["status"] == "renewed"

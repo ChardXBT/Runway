@@ -28,7 +28,9 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Sequence
+import uuid
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -52,6 +54,7 @@ from runway.config.instance import (
     resolve_instance_dir,
     scrub_tool_output,
 )
+from runway.locks import FileLockTimeout, exclusive_file_lock
 from runway.operations.database_release import (
     DATABASE_ARCHIVE_NAME,
     MANIFEST_NAME,
@@ -118,9 +121,14 @@ ASSET_NAMES = (DATABASE_ARCHIVE_NAME, MEDIA_ARCHIVE_NAME, MANIFEST_NAME)
 WORKER_POLL_SECONDS = 5.0
 DEFAULT_WORKER_WAIT_SECONDS = 300
 HEARTBEAT_THREAD_INTERVAL_SECONDS = 3600.0
-# A private ref, so concurrent commands never race on FETCH_HEAD.
+# A private ref prefix, so concurrent commands never race on FETCH_HEAD; each
+# fetch uses its own ``refs/runway/remote-<uuid4hex>`` ref, deleted in finally.
 REMOTE_REF = "refs/runway/remote"
 INSTANCE_TMP_DIR = "tmp"
+# An OS file lock serializes git-mutating and ref-reading instance operations on
+# one clone across the API process, its heartbeat thread and the CLI.
+INSTANCE_LOCK_NAME = "instance.lock"
+INSTANCE_LOCK_WAIT_SECONDS = 120.0
 
 COMMAND_TIMEOUT_SECONDS = 120
 NETWORK_TIMEOUT_SECONDS = 600
@@ -208,6 +216,10 @@ _RELEASE_NOTES = (
 
 class InstanceError(RuntimeError):
     """A ``runway instance`` command refused or failed safely."""
+
+
+class InstanceBusyError(InstanceError):
+    """Another instance operation still holds ``tmp/instance.lock`` on this clone."""
 
 
 INSTANCE_ERRORS: tuple[type[Exception], ...] = (
@@ -363,6 +375,28 @@ def _failure(args: Sequence[str], result: subprocess.CompletedProcess[str]) -> s
     words = [arg for arg in args if not arg.startswith("-") and "=" not in arg]
     shown = " ".join(word for word in words[:3] if not os.path.isabs(word) and "://" not in word)
     return f"'{shown}' failed (exit {result.returncode}): {scrub_tool_output(result.stderr or '')}"
+
+
+@contextmanager
+def _instance_operation(instance_dir: Path, timeout: float | None = None) -> Iterator[None]:
+    """Hold this clone's ``tmp/instance.lock`` while an operation mutates it.
+
+    The API heartbeat thread, API request handlers and CLI commands share the
+    clone's git state; without a lock an interleaved ``git add``/``commit``/
+    ``push``/``reset`` or a deleted remote ref corrupts the other operation.
+    Commands wait up to ``INSTANCE_LOCK_WAIT_SECONDS`` and then refuse; callers
+    that may not wait (the heartbeat thread) pass ``timeout=0``.
+    """
+    wait = INSTANCE_LOCK_WAIT_SECONDS if timeout is None else timeout
+    lock_path = instance_dir / INSTANCE_TMP_DIR / INSTANCE_LOCK_NAME
+    try:
+        with exclusive_file_lock(lock_path, timeout=wait):
+            yield
+    except FileLockTimeout as exc:
+        raise InstanceBusyError(
+            "another runway instance operation is still running on this clone "
+            f"({lock_path}); try again when it finishes"
+        ) from exc
 
 
 # --- repositories -----------------------------------------------------------------------
@@ -565,17 +599,21 @@ def _has_commits(ctx: InstanceContext, instance_dir: Path) -> bool:
     )
 
 
-def _fetch(ctx: InstanceContext, instance_dir: Path, repository: str) -> bool:
-    """Fetch the branch into ``REMOTE_REF``; False when the remote has no such branch yet."""
+def _remote_ref() -> str:
+    """A per-call fetch ref, so concurrent fetches never share one destination ref."""
+    return f"{REMOTE_REF}-{uuid.uuid4().hex}"
+
+
+def _fetch(ctx: InstanceContext, instance_dir: Path, repository: str, remote_ref: str) -> bool:
+    """Fetch the branch into ``remote_ref``; False when the remote has no such branch yet."""
     branch = _current_branch(ctx, instance_dir)
-    ctx.git(instance_dir, "update-ref", "-d", REMOTE_REF, check=False)
     result = ctx.remote_git(
         instance_dir,
         "fetch",
         "--quiet",
         "--no-tags",
         github_url(repository),
-        f"+refs/heads/{branch}:{REMOTE_REF}",
+        f"+refs/heads/{branch}:{remote_ref}",
         check=False,
     )
     if result.returncode == 0:
@@ -586,30 +624,48 @@ def _fetch(ctx: InstanceContext, instance_dir: Path, repository: str) -> bool:
 
 
 def _git_sync(ctx: InstanceContext, instance_dir: Path, repository: str) -> None:
-    if not _fetch(ctx, instance_dir, repository):
-        if _has_commits(ctx, instance_dir):
-            raise InstanceError(f"{repository} has no branch {_current_branch(ctx, instance_dir)}")
-        return
-    result = ctx.git(instance_dir, "merge", "--ff-only", "--quiet", REMOTE_REF, check=False)
-    if result.returncode != 0:
-        raise InstanceError(
-            "could not fast-forward the instance clone from its remote "
-            f"({_failure(['git', 'merge'], result)}); resolve it with git in {instance_dir}"
-        )
+    remote_ref = _remote_ref()
+    try:
+        if not _fetch(ctx, instance_dir, repository, remote_ref):
+            if _has_commits(ctx, instance_dir):
+                raise InstanceError(
+                    f"{repository} has no branch {_current_branch(ctx, instance_dir)}"
+                )
+            return
+        result = ctx.git(instance_dir, "merge", "--ff-only", "--quiet", remote_ref, check=False)
+        if result.returncode != 0:
+            raise InstanceError(
+                "could not fast-forward the instance clone from its remote "
+                f"({_failure(['git', 'merge'], result)}); resolve it with git in {instance_dir}"
+            )
+    finally:
+        ctx.git(instance_dir, "update-ref", "-d", remote_ref, check=False)
 
 
 def read_remote_lease(settings: Settings, runner: CommandRunner | None = None) -> Lease | None:
-    """``lease.json`` as it is in the private repository right now."""
+    """``lease.json`` as it is in the private repository right now.
+
+    ``None`` means the remote copy is confirmed absent: the remote branch or
+    the file genuinely does not exist. A failed fetch raises instead, so a
+    missing answer is never mistaken for "nobody holds the lease".
+    """
     ctx = InstanceContext(settings=settings, runner=runner or default_runner)
     instance_dir = _require_instance_dir(settings)
     repository = _configured_repository(ctx, instance_dir)
-    if not _fetch(ctx, instance_dir, repository):
-        return None
-    exists = ctx.git(instance_dir, "cat-file", "-e", f"{REMOTE_REF}:{LEASE_FILE_NAME}", check=False)
-    if exists.returncode != 0:
-        return None
-    shown = ctx.git(instance_dir, "show", f"{REMOTE_REF}:{LEASE_FILE_NAME}")
-    return Lease.from_text(shown.stdout)
+    with _instance_operation(instance_dir):
+        remote_ref = _remote_ref()
+        try:
+            if not _fetch(ctx, instance_dir, repository, remote_ref):
+                return None
+            exists = ctx.git(
+                instance_dir, "cat-file", "-e", f"{remote_ref}:{LEASE_FILE_NAME}", check=False
+            )
+            if exists.returncode != 0:
+                return None
+            shown = ctx.git(instance_dir, "show", f"{remote_ref}:{LEASE_FILE_NAME}")
+            return Lease.from_text(shown.stdout)
+        finally:
+            ctx.git(instance_dir, "update-ref", "-d", remote_ref, check=False)
 
 
 def _commit(ctx: InstanceContext, instance_dir: Path, message: str, paths: Sequence[str]) -> bool:
@@ -1005,12 +1061,20 @@ def init(ctx: InstanceContext, repository: str, *, directory: Path | None = None
         instance_dir = _require_instance_dir(settings)
 
     if not instance_dir.exists() or (instance_dir.is_dir() and not any(instance_dir.iterdir())):
+        # The lock lives under <instance dir>/tmp, so it is taken only after the
+        # clone exists: git clone needs an empty directory.
         instance_dir.parent.mkdir(parents=True, exist_ok=True)
         ctx.run(["gh", "repo", "clone", repo, str(instance_dir)])
     elif not (instance_dir / ".git").exists():
         raise InstanceError(
             f"{instance_dir} exists and is not a git clone; choose an empty or new directory"
         )
+    with _instance_operation(instance_dir):
+        return _init(ctx, repo, instance_dir)
+
+
+def _init(ctx: InstanceContext, repo: str, instance_dir: Path) -> dict[str, Any]:
+    settings = ctx.settings
     origin = _origin_repository(ctx, instance_dir)
     if origin is None or origin.casefold() != repo.casefold():
         raise InstanceError(
@@ -1138,7 +1202,8 @@ def status(ctx: InstanceContext, *, refresh: bool = False) -> dict[str, Any]:
         return report
     if refresh:
         _instance_dir, repository = _prepare(ctx)
-        _git_sync(ctx, instance_dir, repository)
+        with _instance_operation(instance_dir):
+            _git_sync(ctx, instance_dir, repository)
     lease = read_lease(instance_dir)
     now = ctx.now()
     report["lease"] = {
@@ -1304,6 +1369,11 @@ def push(
     ctx: InstanceContext, *, wait_seconds: float = DEFAULT_WORKER_WAIT_SECONDS
 ) -> dict[str, Any]:
     """Snapshot the database and media, arbitrate through git, then upload."""
+    with _instance_operation(_require_instance_dir(ctx.settings)):
+        return _push(ctx, wait_seconds=wait_seconds)
+
+
+def _push(ctx: InstanceContext, *, wait_seconds: float) -> dict[str, Any]:
     settings = ctx.settings
     instance_dir, repository = _prepare(ctx)
     _git_sync(ctx, instance_dir, repository)
@@ -1397,32 +1467,37 @@ def handover(
     ctx: InstanceContext, *, wait_seconds: float = DEFAULT_WORKER_WAIT_SECONDS
 ) -> dict[str, Any]:
     """Push, then release the lease so another machine can pull."""
-    result = push(ctx, wait_seconds=wait_seconds)
-    instance_dir, repository = _prepare(ctx)
-    released = release(read_lease(instance_dir), ctx.machine, ctx.now())
-    _publish_lease(
-        ctx, instance_dir, repository, released, f"Hand over the lease from {ctx.machine}"
-    )
-    return {**result, "status": "handed over", "mode": "standby"}
+    with _instance_operation(_require_instance_dir(ctx.settings)):
+        result = _push(ctx, wait_seconds=wait_seconds)
+        instance_dir, repository = _prepare(ctx)
+        released = release(read_lease(instance_dir), ctx.machine, ctx.now())
+        _publish_lease(
+            ctx, instance_dir, repository, released, f"Hand over the lease from {ctx.machine}"
+        )
+        return {**result, "status": "handed over", "mode": "standby"}
 
 
 def heartbeat(
-    ctx: InstanceContext, *, renew_after: timedelta = HEARTBEAT_RENEW_AFTER
+    ctx: InstanceContext,
+    *,
+    renew_after: timedelta = HEARTBEAT_RENEW_AFTER,
+    lock_timeout: float | None = None,
 ) -> dict[str, Any]:
     """Renew this machine's lease heartbeat in the private repository when it is due."""
-    instance_dir, repository = _prepare(ctx)
-    _git_sync(ctx, instance_dir, repository)
-    me = ctx.machine
-    lease = read_lease(instance_dir)
-    record_remote_check(instance_dir, lease.holder if lease else None, datetime.now(UTC))
-    if lease is None or lease.holder != me:
-        return {"status": "standby", "lease": describe_lease(lease)}
-    now = ctx.now()
-    if lease.heartbeat_at is not None and now - lease.heartbeat_at < renew_after:
-        return {"status": "current", "lease": describe_lease(lease)}
-    renewed = replace(lease, heartbeat_at=now)
-    _publish_lease(ctx, instance_dir, repository, renewed, f"Heartbeat from {me}")
-    return {"status": "renewed", "lease": describe_lease(renewed)}
+    with _instance_operation(_require_instance_dir(ctx.settings), timeout=lock_timeout):
+        instance_dir, repository = _prepare(ctx)
+        _git_sync(ctx, instance_dir, repository)
+        me = ctx.machine
+        lease = read_lease(instance_dir)
+        record_remote_check(instance_dir, lease.holder if lease else None, datetime.now(UTC))
+        if lease is None or lease.holder != me:
+            return {"status": "standby", "lease": describe_lease(lease)}
+        now = ctx.now()
+        if lease.heartbeat_at is not None and now - lease.heartbeat_at < renew_after:
+            return {"status": "current", "lease": describe_lease(lease)}
+        renewed = replace(lease, heartbeat_at=now)
+        _publish_lease(ctx, instance_dir, repository, renewed, f"Heartbeat from {me}")
+        return {"status": "renewed", "lease": describe_lease(renewed)}
 
 
 class LeaseHeartbeat:
@@ -1447,7 +1522,14 @@ class LeaseHeartbeat:
 
     def beat(self) -> None:
         try:
-            self.last_result = heartbeat(self._context_factory(self.settings))
+            self.last_result = heartbeat(self._context_factory(self.settings), lock_timeout=0.0)
+        except InstanceBusyError:
+            # A CLI command (or another beat) holds the clone: this beat is
+            # skipped, not failed; the next one runs on schedule.
+            self.last_result = {
+                "status": "skipped",
+                "reason": "another instance operation is running",
+            }
         except (
             InstanceError,
             InstanceConfigError,
@@ -1546,6 +1628,17 @@ def pull(
     wait_seconds: float = DEFAULT_WORKER_WAIT_SECONDS,
 ) -> dict[str, Any]:
     """Download and verify the latest snapshot, take the lease, then install it."""
+    with _instance_operation(_require_instance_dir(ctx.settings)):
+        return _pull(ctx, take=take, force=force, wait_seconds=wait_seconds)
+
+
+def _pull(
+    ctx: InstanceContext,
+    *,
+    take: bool,
+    force: bool,
+    wait_seconds: float,
+) -> dict[str, Any]:
     settings = ctx.settings
     instance_dir, repository = _prepare(ctx)
     _git_sync(ctx, instance_dir, repository)
