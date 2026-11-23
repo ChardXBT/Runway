@@ -366,3 +366,87 @@ def test_the_pre_commit_hook_refuses_a_fake_token_commit(tmp_path: Path) -> None
     assert "platform token store" in refused.stderr
     assert "google-oauth-access-token" in refused.stderr
     assert FAKE_GOOGLE not in refused.stderr
+
+
+def _bash() -> str | None:
+    found = shutil.which("bash")
+    # On Windows, System32\bash.exe is WSL, not Git Bash; CI runs this on Linux.
+    if found is None or "system32" in found.casefold():
+        return None
+    return found
+
+
+BASH = _bash()
+ZERO_SHA = "0" * 40
+
+
+@pytest.mark.skipif(BASH is None, reason="bash (Git Bash on Windows) is not installed")
+def test_ci_scans_every_pushed_commit_and_the_whole_history_of_a_new_branch(
+    tmp_path: Path,
+) -> None:
+    assert BASH is not None
+    repo = tmp_path / "pushed"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    (repo / "README.md").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "--quiet", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "config.py").write_text(f'ACCESS = "{FAKE_GOOGLE}"\n', encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "--quiet", "-m", "leak")
+    (repo / "config.py").write_text("ACCESS = None\n", encoding="utf-8")
+    _git(repo, "commit", "--quiet", "-am", "remove the leak")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    removal_parent = _git(repo, "rev-parse", "HEAD~1").stdout.strip()
+    # The scanner and the CI script stay untracked, as a checkout of the code would have them.
+    (repo / "scripts").mkdir()
+    shutil.copy2(SCRIPT, repo / "scripts" / "secret_scan.py")
+    shutil.copy2(REPO_ROOT / "scripts" / "secret_scan_ci.sh", repo / "scripts")
+
+    def ci(**event: str) -> subprocess.CompletedProcess[str]:
+        env = {
+            **os.environ,
+            "PATH": os.pathsep.join([str(Path(sys.executable).parent), os.environ["PATH"]]),
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "EVENT_NAME": "push",
+            "BEFORE_SHA": "",
+            "HEAD_SHA": head,
+            "PR_BASE_SHA": "",
+            "PR_HEAD_SHA": "",
+            **event,
+        }
+        return subprocess.run(
+            [BASH, "scripts/secret_scan_ci.sh"],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+    # A push whose final tree is clean still fails on the commit in the middle.
+    pushed = ci(BEFORE_SHA=base)
+    assert pushed.returncode == 1, pushed.stdout + pushed.stderr
+    assert "google-oauth-access-token" in pushed.stderr
+    # A new branch (no upstream: before is all zeros) scans the whole history.
+    new_branch = ci(BEFORE_SHA=ZERO_SHA)
+    assert new_branch.returncode == 1 and "every commit" in new_branch.stdout
+    # A before-SHA that no longer exists (force push) falls back to the whole history.
+    gone = ci(BEFORE_SHA="1" * 40)
+    assert gone.returncode == 1 and "every commit" in gone.stdout
+    # A pull request scans its range.
+    pull_request = ci(EVENT_NAME="pull_request", PR_BASE_SHA=base, PR_HEAD_SHA=head)
+    assert pull_request.returncode == 1 and "google-oauth-access-token" in pull_request.stderr
+    # Only the pushed range is scanned: a push of just the clean-up commit passes.
+    clean = ci(BEFORE_SHA=removal_parent)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+
+
+def test_ci_workflow_checks_out_full_history_and_runs_the_range_scan() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    backend = workflow.split("bash scripts/secret_scan_ci.sh", 1)[0]
+    assert "fetch-depth: 0" in backend
+    assert "BEFORE_SHA: ${{ github.event.before }}" in workflow
+    assert "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}" in workflow
