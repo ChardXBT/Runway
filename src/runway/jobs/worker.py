@@ -27,6 +27,15 @@ class PermanentJobError(Exception):
     """A handler failure that retrying the same job cannot fix."""
 
 
+class DeferJob(Exception):  # noqa: N818 - a control signal, not an error
+    """Raised by a handler that did no work: run the job again at `run_at`."""
+
+    def __init__(self, run_at: datetime, reason: str) -> None:
+        super().__init__(reason)
+        self.run_at = run_at
+        self.reason = reason
+
+
 class JobProducer(Protocol):
     """Something that enqueues jobs on a schedule (e.g. scheduled platform sync)."""
 
@@ -106,6 +115,12 @@ class Worker:
         heartbeat.start()
         try:
             handler(job)
+        except DeferJob as deferred:
+            heartbeat.stop()
+            try:
+                self.queue.defer(job.id, self.worker_id, deferred.run_at, reason=deferred.reason)
+            except LeaseLost:
+                logger.error("job %s was deferred after its lease was recovered", job.id)
         except PermanentJobError as exc:
             heartbeat.stop()
             self._fail(job, exc, retryable=False)

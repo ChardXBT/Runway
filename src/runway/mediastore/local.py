@@ -1,6 +1,7 @@
 """Media storage on the local disk, the ``local`` profile default (spec 02 §2).
 
-Layout under the root (by default ``<data_dir>/media/uploads``):
+Layout under the root (by default ``<data_dir>/mediastore``, outside the ``/media``
+static mount so uploads are never served publicly):
 
 - ``w/{workspace}/{asset}/{hash}.{ext}``: completed objects, named by their key;
 - ``.staging/{upload_id}.part``: the bytes of an upload in progress;
@@ -94,7 +95,9 @@ class LocalDiskStore:
 
     @classmethod
     def from_settings(cls, settings: Settings, **options: Any) -> LocalDiskStore:
-        return cls(settings.resolved_data_dir / "media" / "uploads", **options)
+        # Never under <data_dir>/media: the API serves that folder as a static
+        # mount, and uploaded media must only leave through guarded routes.
+        return cls(settings.resolved_data_dir / "mediastore", **options)
 
     @property
     def root(self) -> Path:

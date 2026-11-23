@@ -683,5 +683,7 @@ def test_local_store_refuses_part_urls(tmp_path: Path) -> None:
 
 def test_default_root_is_under_the_data_dir(tmp_path: Path) -> None:
     store = LocalDiskStore.from_settings(Settings(data_dir=tmp_path / "data"))
-    assert store.root == (tmp_path / "data" / "media" / "uploads").resolve()
+    assert store.root == (tmp_path / "data" / "mediastore").resolve()
+    # Outside the /media static mount (data/media), so uploads are never public.
+    assert not store.root.is_relative_to((tmp_path / "data" / "media").resolve())
     assert store.scratch_dir == store.root / ".scratch"
