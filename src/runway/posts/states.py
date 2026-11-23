@@ -4,7 +4,9 @@
 the machine's `state` column and its legacy `status` mirror, bumps the
 target's version and records `target.state_changed` (plus
 `target.awaiting_release` when an agent-created target becomes ready) in the
-caller's transaction, so a committed change always has its event.
+caller's transaction, so a committed change always has its event. The write is
+a compare-and-set on the state the object was read in: a stale session gets a
+409 `version_conflict` instead of silently overwriting a committed move.
 """
 
 from __future__ import annotations
@@ -12,9 +14,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from runway.auth.problems import Problem, ProblemCode
 from runway.db.models import ContentDraft, DraftTarget
 from runway.domain.enums import TargetState
 from runway.domain.state_machine import (
@@ -36,6 +39,32 @@ _ATTENTION = frozenset({_T.UNCERTAIN, _T.FAILED_RETRYABLE, _T.FAILED_FINAL, _T.N
 _IN_FLIGHT = frozenset({_T.SENDING, _T.PROCESSING})
 _DELIVERED = frozenset({_T.PUBLISHED, _T.VERIFIED})
 _WAITING = frozenset({_T.RELEASED, _T.QUEUED})
+# The columns set_target_state's compare-and-set UPDATE writes; expired on the
+# object afterwards so a stale in-memory value is never reused.
+_STATE_COLUMNS = ["state", "status", "state_reason", "version"]
+
+
+def _state_conflict(session: Session, target: DraftTarget) -> Problem:
+    """The compare-and-set matched no row: the target moved (or went) since we read it.
+
+    Same 409 `version_conflict` shape `bump_version` raises for a stale version.
+    """
+    row = session.execute(
+        select(DraftTarget.__table__.c.state, DraftTarget.__table__.c.version).where(
+            DraftTarget.__table__.c.id == target.id
+        )
+    ).one_or_none()
+    # The UPDATE did not happen; do not leave the stale read on the object.
+    session.expire(target, _STATE_COLUMNS)
+    if row is None:
+        return Problem.of(ProblemCode.NOT_FOUND, "this item does not exist")
+    state, version = row
+    return Problem.of(
+        ProblemCode.VERSION_CONFLICT,
+        "the target changed state; reload and try again",
+        extra={"current_state": state, "current_version": int(version)},
+        headers={"ETag": f'"{int(version)}"'},
+    )
 
 
 def current_state(target: DraftTarget) -> TargetState:
@@ -56,14 +85,32 @@ def set_target_state(
     post: ContentDraft | None = None,
     event_payload: dict[str, object] | None = None,
 ) -> TargetState:
-    """Move `target` to `new` (validated), with its event, in the caller's transaction."""
+    """Move `target` to `new` (validated), with its event, in the caller's transaction.
+
+    The write is a compare-and-set: the UPDATE matches the row only while it is
+    still in the state this object was read in, so a session holding a stale
+    `queued` can never overwrite a `sending` another transaction committed
+    (otherwise a cancelled post would still go out).
+    """
     old = current_state(target)
     TARGET_STATE_MACHINE.require(old, new)
-    target.state = new.value
-    target.status = new.value
-    target.state_reason = reason[:_REASON_LIMIT] if reason else None
-    target.version = (target.version or 0) + 1
-    session.flush()
+    table = DraftTarget.__table__
+    result = session.execute(
+        update(table)  # type: ignore[arg-type]
+        .where(table.c.id == target.id, table.c.state == old.value)
+        .values(
+            state=new.value,
+            status=new.value,
+            state_reason=reason[:_REASON_LIMIT] if reason else None,
+            version=table.c.version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(getattr(result, "rowcount", 0) or 0) != 1:
+        raise _state_conflict(session, target)
+    # The row moved; expire the columns the UPDATE wrote so the loaded object
+    # says exactly what is committed (the version came from the database).
+    session.expire(target, _STATE_COLUMNS)
     owner = post or session.get(ContentDraft, target.draft_id)
     if old is not new:
         payload: dict[str, object] = {
