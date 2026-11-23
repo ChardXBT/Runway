@@ -1,12 +1,11 @@
 """Agent interface: release policy, per-key release grants and outbound webhooks.
 
 Revision ID: 0019_agent_interface
-Revises: 0016_shared_contracts
+Revises: 0017_publishing_engine
 
-Built on a branch whose head was 0016. The publishing engine (0017) and the
-real-time job (0018) land in parallel; when they merge, `down_revision` is
-re-chained to follow them. Only new tables are added, so the order does not
-matter for the schema.
+Follows the publishing engine (0017). The real-time job's 0018 lands in
+parallel; when it merges, the orchestrator re-chains whichever comes later.
+Only new tables are added, so the order does not matter for the schema.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0019_agent_interface"
-down_revision = "0016_shared_contracts"
+down_revision = "0017_publishing_engine"
 branch_labels = None
 depends_on = None
 

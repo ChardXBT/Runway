@@ -22,6 +22,9 @@ class ProblemCode(StrEnum):
     NOT_FOUND = "not_found"
     IDEMPOTENCY_CONFLICT = "idempotency_conflict"
     RATE_LIMITED = "rate_limited"
+    # The item is in a state that does not allow this action (e.g. editing a
+    # target while it is being sent).
+    INVALID_STATE = "invalid_state"
     # Raised by get_principal (spec 01 section 3).
     AUTHENTICATION_REQUIRED = "authentication_required"
     API_KEY_UNSUPPORTED = "api_key_unsupported"
@@ -36,6 +39,7 @@ _DEFAULTS: dict[ProblemCode, tuple[int, str]] = {
     ProblemCode.NOT_FOUND: (404, "Not found"),
     ProblemCode.IDEMPOTENCY_CONFLICT: (409, "Idempotency key conflict"),
     ProblemCode.RATE_LIMITED: (429, "Rate limited"),
+    ProblemCode.INVALID_STATE: (409, "Not allowed in this state"),
     ProblemCode.AUTHENTICATION_REQUIRED: (401, "Authentication required"),
     ProblemCode.API_KEY_UNSUPPORTED: (401, "API keys are not available yet"),
 }

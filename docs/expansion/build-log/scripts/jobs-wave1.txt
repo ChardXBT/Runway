@@ -1,0 +1,3 @@
+rwy-p0|$HOME/Downloads/RunWay-k-p0|%USERPROFILE%\Downloads\RunWay-k-p0|$HOME/Downloads/kiro-wave-20261122-runway/prompts/rwy-p0.md|start
+rwy-p6|$HOME/Downloads/RunWay-k-p6|%USERPROFILE%\Downloads\RunWay-k-p6|$HOME/Downloads/kiro-wave-20261122-runway/prompts/rwy-p6.md|start
+rwy-media|$HOME/Downloads/RunWay-k-media|%USERPROFILE%\Downloads\RunWay-k-media|$HOME/Downloads/kiro-wave-20261122-runway/prompts/rwy-media.md|start

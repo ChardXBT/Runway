@@ -321,6 +321,21 @@ class JobQueue:
                 return JOB_STATE_MACHINE.apply(row, JobState.PENDING)
             return JOB_STATE_MACHINE.apply(row, JobState.FAILED)
 
+    def defer(self, job_id: int, worker_id: str, run_at: datetime, *, reason: str) -> None:
+        """Put a running job back to `run_at` without counting the attempt.
+
+        For a handler that decided "not yet" before doing any work (publishing
+        paused, an Instagram container made ahead of `planned_at`).
+        """
+        with self._exclusive() as session:
+            row = self._leased(session, job_id, worker_id)
+            JOB_STATE_MACHINE.apply(row, JobState.PENDING)
+            row.attempts = max(row.attempts - 1, 0)
+            row.run_at = run_at
+            row.locked_by = None
+            row.locked_until = None
+            row.last_error = reason[:_ERROR_LIMIT]
+
     # ---------------------------------------------------------------- reading
 
     def get(self, job_id: int) -> Job | None:
