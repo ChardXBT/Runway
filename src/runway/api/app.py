@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,36 +22,19 @@ from runway.api.v1.events_routes import build_events_router
 from runway.auth.principal import get_principal
 from runway.config import Settings, get_settings
 from runway.db.base import Database
-from runway.db.bootstrap import DatabaseNotCurrent, require_database_at_head
+from runway.db.bootstrap import DatabaseNotCurrent, migration_head, require_database_at_head
 from runway.logging import configure_logging
+from runway.operations.revision import checkout_revision
 from runway.platforms.sync import SyncService
 
 logger = logging.getLogger(__name__)
-
-
-def _checkout_revision() -> str:
-    """Short commit of the checkout serving this API, or "unknown"."""
-    repo = Path(__file__).resolve().parents[3]
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short=12", "HEAD"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    revision = result.stdout.strip()
-    return revision if result.returncode == 0 and revision else "unknown"
 
 
 def _startup_summary(settings: Settings) -> str:
     # Mode switches only. Client ids, secrets and API keys are never logged.
     return (
         "runway api start "
-        f"version={__version__} git={_checkout_revision()} "
+        f"version={__version__} git={checkout_revision()} "
         f"platform_provider={settings.platform_provider} "
         f"publishing_enabled={settings.publishing_enabled} "
         f"publishing_mode={settings.publishing_mode} "
@@ -116,6 +97,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     database = Database(active_settings)
     configure_logging()
     hosted = active_settings.profile == "hosted"
+    # Identity of the running code, so the launcher can tell a stale API
+    # (older checkout or older schema) from a current one.
+    revision = checkout_revision()
+    schema_head = migration_head(active_settings)
 
     application = FastAPI(
         title="Runway API",
@@ -169,6 +154,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "one_bot_post_per_day": True,
             "scheduling_horizon_days": None,
             "platform_provider": active_settings.platform_provider,
+            "revision": revision,
+            "migration_head": schema_head,
+            # Scheduled sync runs in `runway worker`; this API runs no sync
+            # thread. Older APIs lack the field (they synced in-process).
+            "sync_scheduler": "worker",
         }
 
     if not hosted:

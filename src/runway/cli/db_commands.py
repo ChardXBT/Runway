@@ -1,22 +1,46 @@
-"""`runway db`: the only way the configured database is migrated."""
+"""`runway db`: the only way the configured database is migrated.
+
+Also runnable as `python -m runway.cli.db_commands` (the launcher uses this:
+it starts in about a third of the time of the full CLI).
+"""
 
 from __future__ import annotations
 
 import json
 
 import typer
+from alembic.script import ScriptDirectory
 
+from alembic import command
 from runway.config import get_settings
-from runway.db.bootstrap import initialize_database, migration_status
+from runway.db.backup import AUTOMATIC_BACKUPS_KEPT, backup_database, prune_automatic_backups
+from runway.db.bootstrap import alembic_config, initialize_database, migration_status
+from runway.locks import LockTimeout, exclusive_file_lock
+from runway.operations.runtime_files import worker_lock_path
 
 db_app = typer.Typer(help="Migrate and inspect the configured database.")
 
+# The oldest schema the expansion code can roll back to without --force:
+# the last revision the pre-expansion release (main) understands.
+OLDEST_SUPPORTED_DOWNGRADE = "0012_creator_platforms"
+UPGRADE_BACKUP_REASON = "before-upgrade"
+
 
 @db_app.command("upgrade")
-def db_upgrade() -> None:
+def db_upgrade(
+    backup: bool = typer.Option(
+        True,
+        "--backup/--no-backup",
+        help="Take an online SQLite backup first when migrations are pending (default on).",
+    ),
+) -> None:
     """Upgrade the configured database to the newest migration and seed defaults."""
     settings = get_settings()
     before = migration_status(settings)
+    backup_path = None
+    if backup and before.current is not None and not before.up_to_date:
+        backup_path = backup_database(settings, UPGRADE_BACKUP_REASON)
+        prune_automatic_backups(settings, UPGRADE_BACKUP_REASON, AUTOMATIC_BACKUPS_KEPT)
     database = initialize_database(settings)
     database.engine.dispose()
     after = migration_status(settings)
@@ -28,6 +52,7 @@ def db_upgrade() -> None:
                 "current": after.current,
                 "head": after.head,
                 "up_to_date": after.up_to_date,
+                "backup": str(backup_path) if backup_path else None,
             },
             indent=2,
         )
@@ -42,3 +67,62 @@ def db_current() -> None:
     settings = get_settings()
     status = migration_status(settings)
     typer.echo(json.dumps({"database": str(settings.database_path), **status.as_dict()}, indent=2))
+
+
+def _supported_targets(script: ScriptDirectory) -> set[str]:
+    return {
+        revision.revision
+        for revision in script.walk_revisions(base=OLDEST_SUPPORTED_DOWNGRADE, head="heads")
+    }
+
+
+@db_app.command("downgrade")
+def db_downgrade(
+    revision: str = typer.Argument(..., help="Target revision, e.g. 0012_creator_platforms."),
+    force: bool = typer.Option(
+        False, "--force", help=f"Allow targets older than {OLDEST_SUPPORTED_DOWNGRADE}."
+    ),
+) -> None:
+    """Roll the schema back to REVISION, after an online backup.
+
+    Run it with the NEW checkout (it holds the downgrade steps), with the API
+    and worker stopped, then check out the older code.
+    """
+    settings = get_settings()
+    status = migration_status(settings)
+    if status.current is None:
+        typer.echo("there is no migrated database to downgrade", err=True)
+        raise typer.Exit(code=1)
+    config = alembic_config(settings)
+    script = ScriptDirectory.from_config(config)
+    if not force and revision not in _supported_targets(script):
+        typer.echo(
+            f"refusing to downgrade to {revision!r}: the supported targets are "
+            f"{OLDEST_SUPPORTED_DOWNGRADE} and newer (use --force to override)",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    try:
+        with exclusive_file_lock(worker_lock_path(settings), timeout=0):
+            pass
+    except LockTimeout:
+        typer.echo("stop `runway worker` before downgrading the database", err=True)
+        raise typer.Exit(code=3) from None
+    backup_path = backup_database(settings, f"before-downgrade-to-{revision}")
+    command.downgrade(config, revision)
+    after = migration_status(settings)
+    typer.echo(
+        json.dumps(
+            {
+                "database": str(settings.database_path),
+                "previous": status.current,
+                "current": after.current,
+                "backup": str(backup_path),
+            },
+            indent=2,
+        )
+    )
+
+
+if __name__ == "__main__":
+    db_app()

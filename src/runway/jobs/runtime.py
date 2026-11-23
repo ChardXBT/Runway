@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from functools import partial
-from pathlib import Path
 
 from runway.config import Settings
 from runway.db.base import Database
 from runway.jobs.queue import JobQueue
 from runway.jobs.retention import PURGE_JOB, RetentionPurgeScheduler, run_purge_job
 from runway.jobs.worker import Handler, JobProducer, Worker
+from runway.operations.runtime_files import worker_lock_path
 from runway.platforms.sync import (
     SYNC_ACCOUNT_JOB,
     PlatformSyncScheduler,
@@ -17,10 +17,7 @@ from runway.platforms.sync import (
     run_sync_account_job,
 )
 
-
-def worker_lock_path(settings: Settings) -> Path:
-    """Held for the worker's lifetime: SQLite installs run exactly one worker."""
-    return settings.resolved_data_dir / "runtime" / "worker.lock"
+__all__ = ["build_worker", "worker_lock_path"]
 
 
 def build_worker(settings: Settings, database: Database) -> Worker:
