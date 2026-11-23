@@ -207,7 +207,13 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        return f"sqlite:///{self.database_path.as_posix()}"
+        path = self.database_path
+        if "?" in path.as_posix():
+            # SQLAlchemy reads everything after `?` as URL query parameters and does
+            # not percent-decode the database part, so such a path is passed as an
+            # encoded SQLite URI filename instead. Other paths keep the plain form.
+            return f"sqlite:///{path.resolve().as_uri()}?uri=true"
+        return f"sqlite:///{path.as_posix()}"
 
     @property
     def browser_profile_dir(self) -> Path:
