@@ -1,0 +1,43 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "mjpeg",
+      "profile": "Baseline",
+      "codec_type": "video",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "width": 1080,
+      "height": 1350,
+      "coded_width": 1080,
+      "coded_height": 1350,
+      "closed_captions": 0,
+      "film_grain": 0,
+      "has_b_frames": 0,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "4:5",
+      "pix_fmt": "yuvj420p",
+      "level": -99,
+      "color_range": "pc",
+      "color_space": "bt470bg",
+      "chroma_location": "center",
+      "refs": 1,
+      "r_frame_rate": "25/1",
+      "avg_frame_rate": "25/1",
+      "time_base": "1/25",
+      "bits_per_raw_sample": "8",
+      "disposition": {
+        "attached_pic": 0
+      }
+    }
+  ],
+  "format": {
+    "filename": "file:upload.bin",
+    "nb_streams": 1,
+    "nb_programs": 0,
+    "nb_stream_groups": 0,
+    "format_name": "jpeg_pipe",
+    "size": "62614",
+    "probe_score": 26
+  }
+}
