@@ -46,7 +46,9 @@ def default_media_stores(settings: Settings) -> dict[str, MediaStore]:
     """`local` always; `r2` when its settings are configured (no network at construction)."""
     stores: dict[str, MediaStore] = {
         "local": LocalDiskStore.from_settings(
-            settings, max_object_bytes=settings.media_max_upload_bytes
+            settings,
+            part_size=settings.media_api_chunk_bytes,
+            max_object_bytes=settings.media_max_upload_bytes,
         )
     }
     config = r2_config(settings)

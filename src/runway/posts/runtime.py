@@ -11,6 +11,7 @@ from runway.db.base import Database
 from runway.db.models import ConnectedAccount, utcnow
 from runway.platforms.publisher_registry import PublisherRegistry, build_publisher_registry
 from runway.posts.media import default_media_stores, probe_media_validator
+from runway.posts.media_service import MediaService
 from runway.posts.service import PostService
 from runway.posts.snapshot import TokenProvider
 
@@ -47,3 +48,19 @@ def build_post_service(
         media_stores=dict(default_media_stores(settings)),
     )
 
+
+def build_media_service(
+    settings: Settings,
+    database: Database,
+    *,
+    registry: PublisherRegistry | None = None,
+    stores: dict[str, Any] | None = None,
+    clock: Callable[[], datetime] = utcnow,
+) -> MediaService:
+    return MediaService(
+        database=database,
+        settings=settings,
+        stores=stores if stores is not None else dict(default_media_stores(settings)),
+        registry=registry or build_publisher_registry(settings, database, clock=clock),
+        clock=clock,
+    )

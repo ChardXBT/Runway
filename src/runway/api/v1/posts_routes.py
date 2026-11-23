@@ -13,8 +13,10 @@ from runway.api.v1.idempotency import idempotent
 from runway.api.v1.pagination import CursorPage, CursorParams, cursor_params
 from runway.api.v1.router import build_v1_router
 from runway.auth.principal import Principal, get_principal
+from runway.posts.bridge import ProposalBridge
 from runway.posts.schemas import (
     AttemptOut,
+    CrossPostRequest,
     MarkPublishedRequest,
     PostCreate,
     PostOut,
@@ -182,5 +184,25 @@ def build_posts_router(service: PostService) -> APIRouter:
         """The target's append-only attempt ledger, newest first (`posts:read`)."""
         items, next_cursor = service.list_attempts(principal, post_id, target_id, params)
         return CursorPage[AttemptOut](items=items, next_cursor=next_cursor)
+
+    return router
+
+
+def build_cross_post_router(bridge: ProposalBridge) -> APIRouter:
+    router = build_v1_router(tags=["posts"], prefix="/proposals")
+
+    @router.post("/{proposal_id}/cross-post", status_code=status.HTTP_201_CREATED)
+    @idempotent
+    def cross_post(
+        proposal_id: int,
+        payload: CrossPostRequest,
+        response: Response,
+        principal: Principal = Depends(get_principal),
+    ) -> PostOut:
+        """ "Also post to…": a new post from an accepted proposal (`posts:write`).
+
+        The proposal's own Community-post path is unchanged; nothing is released.
+        """
+        return _with_etag(response, bridge.cross_post(principal, proposal_id, payload))
 
     return router

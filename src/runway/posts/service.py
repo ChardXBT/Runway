@@ -712,30 +712,45 @@ class PostService:
     def create_post(self, principal: Principal, data: PostCreate) -> PostOut:
         require(principal, POSTS_WRITE)
         with self.database.session() as session:
-            agent = principal.kind == "agent"
-            post = ContentDraft(
-                workspace_id=principal.workspace_id,
-                title=data.title,
-                body=data.body,
-                scheduled_for=utc(data.scheduled_for),
-                notes=data.notes,
-                status=DRAFT_STATUS_MACHINE.start(
-                    DraftStatus.SCHEDULED if data.scheduled_for else DraftStatus.DRAFT
-                ),
-                source=(PostSource.AGENT if agent else PostSource.HUMAN).value,
-                ai_generated=data.ai_generated if data.ai_generated is not None else agent,
-                version=1,
-                created_by=principal_name(principal),
-            )
-            session.add(post)
-            session.flush()
-            self._set_media(session, post, self._media(session, principal, data.media_ids))
-            sources = self.sources
-            for item in data.targets:
-                target = self._add_target(session, principal, post, item)
-                revalidate(session, sources, target, post)
-            session.flush()
-            return post_view(session, sources, post)
+            post = self.create_post_in(session, principal, data)
+            return post_view(session, self.sources, post)
+
+    def create_post_in(
+        self,
+        session: Session,
+        principal: Principal,
+        data: PostCreate,
+        *,
+        source: PostSource | None = None,
+        source_ref: str | None = None,
+    ) -> ContentDraft:
+        """Create a post in the caller's transaction (the proposal bridge uses this)."""
+        require(principal, POSTS_WRITE)
+        agent = principal.kind == "agent"
+        post = ContentDraft(
+            workspace_id=principal.workspace_id,
+            title=data.title,
+            body=data.body,
+            scheduled_for=utc(data.scheduled_for),
+            notes=data.notes,
+            status=DRAFT_STATUS_MACHINE.start(
+                DraftStatus.SCHEDULED if data.scheduled_for else DraftStatus.DRAFT
+            ),
+            source=(source or (PostSource.AGENT if agent else PostSource.HUMAN)).value,
+            source_ref=source_ref,
+            ai_generated=data.ai_generated if data.ai_generated is not None else agent,
+            version=1,
+            created_by=principal_name(principal),
+        )
+        session.add(post)
+        session.flush()
+        self._set_media(session, post, self._media(session, principal, data.media_ids))
+        sources = self.sources
+        for item in data.targets:
+            target = self._add_target(session, principal, post, item)
+            revalidate(session, sources, target, post)
+        session.flush()
+        return post
 
     def add_target(self, principal: Principal, post_id: int, data: TargetInput) -> PostOut:
         require(principal, POSTS_WRITE)
