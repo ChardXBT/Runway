@@ -60,9 +60,8 @@ ROLE_SCOPES: dict[Role, frozenset[str]] = {
 
 LOCAL_WORKSPACE_ID = 1
 LOCAL_OWNER_ID = "local-owner"
-# Agent keys use this bearer prefix (spec 06 section 2). Key resolution arrives
-# with the api_keys work; until then a presented key is refused, never mapped
-# to the owner.
+# Agent keys use this bearer prefix (spec 06 section 2); runway.auth.api_keys
+# resolves them. A presented key is never mapped to the owner.
 API_KEY_PREFIX = "rwy_"
 
 
@@ -120,10 +119,11 @@ def _presented_api_key(request: Request) -> bool:
 
 def resolve_principal(settings: Settings, request: Request) -> Principal:
     if _presented_api_key(request):
-        raise Problem.of(
-            ProblemCode.API_KEY_UNSUPPORTED,
-            "this Runway version cannot verify API keys; send the request without one",
-        )
+        # API-KEY SEAM (spec 06 section 2): resolved before the profile branch,
+        # in both profiles; never mapped to the local owner or to a session.
+        from runway.auth.api_keys import resolve_api_key
+
+        return resolve_api_key(settings, request)
     if settings.profile == "local":
         return local_owner()
     # Hosted: the identity provider seam is a later job, so nobody is authenticated.
@@ -141,5 +141,9 @@ def get_principal(request: Request) -> Principal:
         # Fail closed: without the app's settings the profile is unknown.
         raise RuntimeError("the application has no settings; build it with create_app()")
     principal = resolve_principal(settings, request)
+    # Route-level rules that depend on who is asking (spec 06 sections 3, 4, 9).
+    from runway.auth.request_policy import enforce_request_policy
+
+    enforce_request_policy(settings, request, principal)
     request.state.principal = principal
     return principal

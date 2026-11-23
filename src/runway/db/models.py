@@ -1901,3 +1901,94 @@ class EventRecord(Base):
     subject_id: Mapped[str | None] = mapped_column(String(200))
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# -----------------------------------------------------------------------------
+# Agent interface (migration 0019, spec 06)
+
+
+class WorkspacePolicy(Base):
+    """Per-workspace agent policy. A workspace without a row uses the defaults."""
+
+    __tablename__ = "workspace_policies"
+
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_workspace_policies_workspace"), primary_key=True
+    )
+    # `never` (default) or `per_key` (spec 06 section 4).
+    agent_release: Mapped[str] = mapped_column(String(20), default="never")
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ApiKeyReleaseGrant(Base, WorkspaceOwned):
+    """`posts:release` for one key on one platform, with a daily cap (agent_release=per_key)."""
+
+    __tablename__ = "api_key_release_grants"
+    __table_args__ = (UniqueConstraint("key_id", "platform", name="uq_api_key_release_grant"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key_id: Mapped[int] = mapped_column(
+        ForeignKey("api_keys.id", name="fk_api_key_release_grants_key"), index=True
+    )
+    platform: Mapped[str] = mapped_column(String(20))
+    daily_cap: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WebhookEndpoint(Base, WorkspaceOwned, TimestampMixin):
+    """An outbound webhook target for agent events (spec 06 section 8).
+
+    The signing secret is stored Fernet-encrypted with the token-store key and
+    is shown once at creation. `cursor_event_id` is the newest event already
+    turned into deliveries, so a new endpoint never replays old events.
+    """
+
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    url: Mapped[str] = mapped_column(Text)
+    secret_encrypted: Mapped[str] = mapped_column(Text)
+    # Empty list: every event type the workspace emits.
+    event_types_json: Mapped[str] = mapped_column(Text, default="[]")
+    state: Mapped[str] = mapped_column(String(20), default="active")
+    description: Mapped[str | None] = mapped_column(String(200))
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    cursor_event_id: Mapped[int] = mapped_column(Integer, default=0)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    failing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Runway's own summary (status code or error class), never the response body.
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_reason: Mapped[str | None] = mapped_column(String(300))
+
+
+class WebhookDelivery(Base, WorkspaceOwned):
+    """One event for one endpoint; retried with backoff for up to 24 hours.
+
+    `event_id` has no foreign key: events are purged after 7 days and a
+    delivery row must not block that.
+    """
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint("endpoint_id", "event_id", name="uq_webhook_delivery_event"),
+        Index("ix_webhook_deliveries_state_next", "state", "next_attempt_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    endpoint_id: Mapped[int] = mapped_column(
+        ForeignKey("webhook_endpoints.id", name="fk_webhook_deliveries_endpoint"), index=True
+    )
+    event_id: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(80))
+    state: Mapped[str] = mapped_column(String(20), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_status_code: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

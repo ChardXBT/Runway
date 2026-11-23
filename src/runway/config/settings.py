@@ -106,6 +106,20 @@ class Settings(BaseSettings):
     platform_sync_comment_content_limit: int = Field(default=10, ge=0, le=100)
     platform_sync_analytics_days: int = Field(default=90, ge=7, le=365)
 
+    # Agent interface (spec 06). With the switch on, the unauthenticated
+    # loopback API refuses writes outside the legacy exemption list, so an
+    # agent has to use a scoped key (spec 06 section 9). Off by default.
+    local_require_key_for_writes: bool = False
+    # Limits applied to every API key separately (spec 06 section 3).
+    api_key_rate_limit_per_minute: int = Field(default=120, ge=1, le=100_000)
+    api_key_daily_post_cap: int = Field(default=50, ge=0, le=100_000)
+    # Default daily release cap of a per-key release grant (agent_release=per_key).
+    api_key_default_release_cap: int = Field(default=5, ge=1, le=1_000)
+    # Outbound webhooks never reach loopback or private addresses in hosted;
+    # in local only when the owner turns this on.
+    webhook_allow_private_targets: bool = False
+    webhook_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+
     @field_validator(
         "codex_cli_path",
         "publisher_chrome_path",
@@ -335,6 +349,12 @@ class Settings(BaseSettings):
             "tiktok_oauth_configured": self.tiktok_oauth_configured,
             "inbox_replies_enabled": self.inbox_replies_enabled,
             "platform_sync_interval_minutes": self.platform_sync_interval_minutes,
+            "agent_interface": {
+                "local_require_key_for_writes": self.local_require_key_for_writes,
+                "key_rate_limit_per_minute": self.api_key_rate_limit_per_minute,
+                "key_daily_post_cap": self.api_key_daily_post_cap,
+                "webhook_allow_private_targets": self.webhook_allow_private_targets,
+            },
             "oauth_redirect_base_url": self.resolved_oauth_redirect_base_url,
             "data_dir": str(self.resolved_data_dir),
         }
