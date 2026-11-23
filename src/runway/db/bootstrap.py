@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +16,7 @@ from alembic import command
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import Channel
+from runway.locks import exclusive_file_lock
 
 
 class DatabaseNotCurrent(RuntimeError):
@@ -77,8 +81,41 @@ def migration_head(settings: Settings) -> str:
     return head
 
 
+_migration_lock_depth = threading.local()
+
+
+def migration_lock_path(settings: Settings) -> Path:
+    return settings.resolved_data_dir / "runtime" / "db-migrate.lock"
+
+
+@contextmanager
+def migration_lock(settings: Settings, *, timeout: float | None) -> Iterator[None]:
+    """Hold the per-data-directory migration lock; re-entrant within a thread.
+
+    Every migration path (`runway db`, `runway init`, any CLI command that calls
+    `initialize_database`) takes it, so two processes never migrate one database
+    at once. The OS lock is per open handle, so nested use in one thread only
+    counts depth instead of opening a second, self-conflicting handle.
+    """
+    depth = getattr(_migration_lock_depth, "value", 0)
+    if depth:
+        _migration_lock_depth.value = depth + 1
+        try:
+            yield
+        finally:
+            _migration_lock_depth.value = depth
+        return
+    with exclusive_file_lock(migration_lock_path(settings), timeout=timeout):
+        _migration_lock_depth.value = 1
+        try:
+            yield
+        finally:
+            _migration_lock_depth.value = 0
+
+
 def run_migrations(settings: Settings) -> None:
-    command.upgrade(alembic_config(settings), "head")
+    with migration_lock(settings, timeout=None):
+        command.upgrade(alembic_config(settings), "head")
 
 
 def migration_status(settings: Settings) -> MigrationStatus:

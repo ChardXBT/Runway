@@ -1,4 +1,7 @@
-"""`runway db`: the only way the configured database is migrated.
+"""`runway db`: migrate and inspect the configured database.
+
+Every migration path (this module, `runway init`, CLI commands that call
+`initialize_database`) holds the same per-data-directory migration lock.
 
 Also runnable as `python -m runway.cli.db_commands` (the launcher uses this:
 it starts in about a third of the time of the full CLI).
@@ -8,8 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
+from contextlib import ExitStack, contextmanager
 
 import typer
 from alembic.script import ScriptDirectory
@@ -17,9 +19,15 @@ from alembic.script import ScriptDirectory
 from alembic import command
 from runway.config import Settings, get_settings
 from runway.db.backup import AUTOMATIC_BACKUPS_KEPT, backup_database, prune_automatic_backups
-from runway.db.bootstrap import alembic_config, initialize_database, migration_status
+from runway.db.bootstrap import (
+    alembic_config,
+    initialize_database,
+    migration_lock,
+    migration_lock_path,
+    migration_status,
+)
 from runway.locks import LockTimeout, exclusive_file_lock
-from runway.operations.runtime_files import runtime_directory, worker_lock_path
+from runway.operations.runtime_files import worker_lock_path
 
 db_app = typer.Typer(help="Migrate and inspect the configured database.")
 
@@ -84,9 +92,7 @@ def db_current() -> None:
 EXIT_WORKER_RUNNING = 3
 EXIT_MIGRATION_RUNNING = 4
 
-
-def migration_lock_path(settings: Settings) -> Path:
-    return runtime_directory(settings) / "db-migrate.lock"
+__all__ = ["EXIT_MIGRATION_RUNNING", "EXIT_WORKER_RUNNING", "db_app", "migration_lock_path"]
 
 
 @contextmanager
@@ -96,12 +102,15 @@ def _only_migration(settings: Settings) -> Iterator[None]:
     The launcher stops waiting for a slow migration but leaves it running; the
     next launcher run must not start a second one beside it.
     """
-    try:
-        with exclusive_file_lock(migration_lock_path(settings), timeout=0):
-            yield
-    except LockTimeout:
-        typer.echo("another `runway db` migration is running; wait for it to finish", err=True)
-        raise typer.Exit(code=EXIT_MIGRATION_RUNNING) from None
+    with ExitStack() as stack:
+        # Acquired outside the body's try, so a LockTimeout raised by the
+        # migration itself is never reported as "another migration is running".
+        try:
+            stack.enter_context(migration_lock(settings, timeout=0))
+        except LockTimeout:
+            typer.echo("another `runway db` migration is running; wait for it to finish", err=True)
+            raise typer.Exit(code=EXIT_MIGRATION_RUNNING) from None
+        yield
 
 
 def _refuse_while_the_worker_runs(settings: Settings, action: str) -> None:

@@ -280,7 +280,8 @@ function Get-WorkerRecord([string]$PidPath) {
     # worker while it holds the lock and removed when it exits.
     try {
         $record = Get-Content -LiteralPath $PidPath -Raw -ErrorAction Stop | ConvertFrom-Json
-        if ($record -and $record.PSObject.Properties['pid'] -and "$($record.pid)" -match '^\d+$') {
+        if ($record -and $record.PSObject.Properties['pid'] -and "$($record.pid)" -match '^\d{1,10}$' -and
+            [long]"$($record.pid)" -le [int]::MaxValue) {
             return $record
         }
     } catch { }
@@ -316,14 +317,24 @@ function Start-Worker([string]$LockPath, [string]$PidPath, [double]$GraceSeconds
     Write-Diagnostic "worker running (PID $($child.Id))."
 }
 
+function Test-RunwayWorkerCommandLine([string]$CommandLine) {
+    # The ways a Runway worker is started: `python -m runway.cli.worker_commands`
+    # (the launcher), `python -m runway.cli.main worker`, and the `runway worker`
+    # console script (runway.exe / runway.cmd).
+    if (-not $CommandLine) { return $false }
+    $end = '(\s|"|$)'
+    return ($CommandLine -match "-m\s+runway\.cli\.worker_commands$end") -or
+        ($CommandLine -match "-m\s+runway\.cli\.main\s+worker$end") -or
+        ($CommandLine -match "(^|[\\/`"])runway(\.exe|\.cmd)?`"?\s+worker$end")
+}
+
 function Test-RunwayWorkerProcess([int]$ProcessId) {
     # worker.pid can outlive its worker (power loss, taskkill) and Windows reuses
     # PIDs, so the PID alone never justifies a Ctrl+Break: the process must be
     # running the Runway worker.
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
-    if (-not $process -or -not $process.CommandLine) { return $false }
-    return ($process.CommandLine -match 'runway\.cli\.worker_commands') -or
-        ($process.CommandLine -match 'runway(\.exe)?"?\s+worker(\s|$)')
+    if (-not $process) { return $false }
+    return Test-RunwayWorkerCommandLine $process.CommandLine
 }
 
 function Stop-WorkerForRestart($Status) {
@@ -364,6 +375,9 @@ function Stop-StaleApi($Status) {
         Write-Diagnostic 'Deploy incomplete: the worker did not stop, so the API was left running on its older code, the database was not upgraded and no worker was started.'
         return $false
     }
+    # Stopping the worker can take a minute; prove again that port 8000 is still
+    # this checkout's API before signalling whatever listens there now.
+    Assert-PortOwner 'api' 8000
     foreach ($listener in (Get-Listener 8000)) {
         $owner = [int]$listener.OwningProcess
         if (Stop-ByConsole $owner 'api') { continue }

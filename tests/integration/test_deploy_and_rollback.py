@@ -203,3 +203,35 @@ def test_a_second_migration_refuses_while_one_is_running(migrated: Settings) -> 
     assert "another `runway db` migration is running" in upgrade.output
     assert _version(migrated) == OLDEST
     assert runner.invoke(cli_app, ["db", "upgrade"]).exit_code == 0
+
+
+def test_every_migration_path_waits_for_a_running_migration(migrated: Settings) -> None:
+    # `runway init`, `runway doctor` and other CLI commands migrate through
+    # initialize_database; they must not run beside a `runway db upgrade`.
+    import threading
+
+    from runway.db.bootstrap import migration_lock_path
+
+    command.downgrade(alembic_config(migrated), OLDEST)
+    finished = threading.Event()
+
+    def migrate() -> None:
+        initialize_database(migrated).engine.dispose()
+        finished.set()
+
+    with exclusive_file_lock(migration_lock_path(migrated), timeout=0):
+        worker = threading.Thread(target=migrate, daemon=True)
+        worker.start()
+        assert not finished.wait(2.0)
+        assert _version(migrated) == OLDEST
+    worker.join(timeout=120)
+    assert finished.is_set()
+    assert _version(migrated) == migration_head(migrated)
+
+
+def test_an_unmigrated_database_is_known_so_the_launcher_upgrades_it(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "data")
+    status = migration_status(settings)
+    assert status.current is None
+    assert status.known is True
+    assert status.as_dict()["known_revision"] is True

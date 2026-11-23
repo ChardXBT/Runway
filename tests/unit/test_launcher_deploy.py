@@ -135,14 +135,14 @@ switch ($Scenario) {
         # The first deploy: the pre-expansion API is healthy on the old schema.
         $world.api = 'legacy'; Set-DatabaseBehind
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'check owner 8000 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'deploy order'
+        Assert ((Events) -eq 'check owner 8000 | check owner 8000 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'deploy order'
         Assert (@($diagnostics) -like 'The running API must restart: it is older code that runs the in-process sync scheduler*') 'restart reason'
     }
     'deploy-over-previous-revision' {
         # A later deploy: API and worker are expansion code at an older revision.
         $world.api = 'previous'; $world.worker = $true; $world.workerRevision = '0ld0ld0ld0ld'
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'check owner 8000 | ctrl-break 77 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'worker stops before the API'
+        Assert ((Events) -eq 'check owner 8000 | ctrl-break 77 | check owner 8000 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'worker stops before the API'
     }
     'behind-with-api-down-and-worker-up' {
         $world.worker = $true; Set-DatabaseBehind
@@ -159,14 +159,14 @@ switch ($Scenario) {
     'worker-failure-keeps-the-api' {
         $world.api = 'legacy'; Set-DatabaseBehind; $world.workerFails = $true
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'check owner 8000 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'order'
+        Assert ((Events) -eq 'check owner 8000 | check owner 8000 | ctrl-break 500 | check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'order'
         Assert ($world.api -eq 'current') 'the API stays up'
         Assert (@($diagnostics) -like 'worker did not start: worker exited with code 3*The API stays up*') 'worker failure logged'
     }
     'stubborn-legacy-api-is-left-running' {
         $world.api = 'legacy'; Set-DatabaseBehind; $world.apiStops = $false
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'check owner 8000 | ctrl-break 500 | ctrl-break 500') 'asked twice, never killed, nothing else'
+        Assert ((Events) -eq 'check owner 8000 | check owner 8000 | ctrl-break 500 | ctrl-break 500') 'asked twice, never killed, nothing else'
         Assert ($world.db -eq 'behind') 'no upgrade under a running API'
         Assert (@($diagnostics) -like 'Deploy incomplete: the API (PID 500) did not stop*') 'reported'
     }
@@ -247,7 +247,7 @@ switch ($Scenario) {
         # The worker stopped, the API (expansion code, same schema) would not.
         $world.api = 'previous'; $world.worker = $true; $world.apiStops = $false
         Start-ApiAndWorker $status
-        Assert ((Events) -eq 'check owner 8000 | ctrl-break 77 | ctrl-break 500 | ctrl-break 500 | start worker') 'worker restarted beside the API'
+        Assert ((Events) -eq 'check owner 8000 | ctrl-break 77 | check owner 8000 | ctrl-break 500 | ctrl-break 500 | start worker') 'worker restarted beside the API'
         Assert ($world.worker) 'a worker runs again'
     }
     'a-malformed-worker-pid-file-is-ignored' {
@@ -256,6 +256,48 @@ switch ($Scenario) {
         Assert ($null -eq (& $realGetWorkerRecord $file)) 'non-numeric pid'
         Set-Content -LiteralPath $file -Value '{"pid": 4242, "revision": "x"}'
         Assert ((& $realGetWorkerRecord $file).pid -eq 4242) 'numeric pid'
+    }
+    'fresh-install-is-migrated-not-refused' {
+        # A never-migrated database: current is null and known_revision true.
+        $status.current = $null; $status.up_to_date = $false; $world.db = 'behind'
+        Start-ApiAndWorker $status
+        Assert ((Events) -eq 'check owner 8000 | db upgrade | start api | check owner 8000 | start worker') 'fresh install order'
+    }
+    'worker-command-lines-are-recognised-exactly' {
+        $yes = @(
+            '"C:\Python313\python.exe" -m runway.cli.worker_commands',
+            '"C:\repo\.venv\Scripts\python.exe"  -m runway.cli.worker_commands 1>"C:\repo\data\runtime\worker.log" 2>&1',
+            '/d /s /c ""C:\repo\.venv\Scripts\python.exe" -m runway.cli.worker_commands 1>"x" 2>&1"',
+            '"C:\repo\.venv\Scripts\python.exe" -m runway.cli.main worker',
+            '"C:\repo\.venv\Scripts\runway.exe" worker',
+            'C:\repo\.venv\Scripts\runway.exe worker --once',
+            'runway worker'
+        )
+        $no = @(
+            '', 'python -c "import runway.cli.worker_commands"', 'notepad runway.cli.worker_commands.log',
+            'cmd /c "echo runway worker"', '"C:\bots\xrunway.exe" worker', 'python -m runway.cli.worker_commands_extra',
+            '"C:\Python313\python.exe" -m runway.cli.main serve', '"C:\bots\csfloat\bot.exe" --worker 3'
+        )
+        foreach ($line in $yes) { Assert (Test-RunwayWorkerCommandLine $line) "should match: $line" }
+        foreach ($line in $no) { Assert (-not (Test-RunwayWorkerCommandLine $line)) "should not match: $line" }
+    }
+    'an-out-of-range-worker-pid-is-ignored' {
+        $file = Join-Path $runtime 'worker.pid'
+        Set-Content -LiteralPath $file -Value '{"pid": 99999999999, "revision": "x"}'
+        Assert ($null -eq (& $realGetWorkerRecord $file)) 'pid beyond Int32'
+    }
+    'a-foreign-process-on-the-api-port-after-the-worker-stop-is-never-signalled' {
+        # The API exits while the worker is being stopped and another program binds 8000.
+        $world.api = 'previous'; $world.worker = $true
+        $script:checks = 0
+        function Assert-PortOwner([string]$Component, [int]$Port) {
+            $world.events.Add("check owner $Port"); $script:checks++
+            if ($script:checks -ge 2) { throw "port $Port is owned by another program" }
+        }
+        $failed = $false
+        try { Start-ApiAndWorker $status } catch { $failed = $true }
+        Assert $failed 'the launch fails'
+        Assert (-not ((Events) -like '*ctrl-break 500*')) 'the port owner is not signalled'
     }
     default { throw "unknown scenario $Scenario" }
 }
@@ -280,6 +322,10 @@ SCENARIOS = [
     "an-unverifiable-api-owner-stops-nothing",
     "deferred-deploy-restarts-a-stopped-worker-when-safe",
     "a-malformed-worker-pid-file-is-ignored",
+    "fresh-install-is-migrated-not-refused",
+    "worker-command-lines-are-recognised-exactly",
+    "an-out-of-range-worker-pid-is-ignored",
+    "a-foreign-process-on-the-api-port-after-the-worker-stop-is-never-signalled",
 ]
 
 
