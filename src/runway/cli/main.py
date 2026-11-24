@@ -26,6 +26,7 @@ from runway.capture.service import CaptureService
 from runway.catalog.service import CatalogService
 from runway.cli.db_commands import db_app
 from runway.cli.hosted_commands import hosted_app
+from runway.cli.instance import instance_app
 from runway.cli.worker_commands import worker_command
 from runway.config import get_settings
 from runway.db import initialize_database
@@ -115,6 +116,7 @@ app.add_typer(platforms_app, name="platforms")
 app.add_typer(db_app, name="db")
 app.command("worker")(worker_command)
 app.add_typer(hosted_app, name="hosted")
+app.add_typer(instance_app, name="instance")
 
 
 @app.callback()

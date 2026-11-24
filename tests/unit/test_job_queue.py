@@ -650,3 +650,62 @@ def test_purge_removes_only_unreferenced_unheld_lock_files(
 
     assert sorted(path.stem for path in refresh_dir.glob("*.lock")) == ["heldref", "liveref"]
     assert [path.stem for path in sync_dir.glob("*.lock")] == [f"account-{live_id}"]
+
+
+def test_a_standby_machine_claims_no_job(queue: JobQueue, database: Database) -> None:
+    queue.enqueue("probe", idempotency_key="standby-1")
+    ran: list[int] = []
+    worker = _worker(queue, {"probe": lambda job: ran.append(job.id)}, is_active=lambda: False)
+
+    assert worker.run_once() is False
+    assert ran == []
+    with database.session() as session:
+        assert session.scalar(select(PublishJob.state)) == "pending"
+
+
+def test_a_job_that_finds_standby_after_marking_busy_is_deferred_not_run(
+    queue: JobQueue, database: Database, clock: Clock
+) -> None:
+    from contextlib import contextmanager
+
+    job = queue.enqueue("probe", idempotency_key="standby-2")
+    answers = iter([True, False])
+    events: list[str] = []
+
+    @contextmanager
+    def busy(kind: str):  # type: ignore[no-untyped-def]
+        events.append(f"busy {kind}")
+        yield
+        events.append("idle")
+
+    worker = _worker(
+        queue,
+        {"probe": lambda job: events.append("ran")},
+        is_active=lambda: next(answers),
+        busy=busy,
+    )
+
+    assert worker.run_once() is False
+    assert events == ["busy probe", "idle"]
+    row = _row(database, job.id)
+    assert (row.state, row.attempts) == ("pending", 0)
+    assert row.run_at.replace(tzinfo=UTC) > clock.now
+
+
+def test_an_active_machine_runs_the_job_inside_its_busy_marker(queue: JobQueue) -> None:
+    from contextlib import contextmanager
+
+    queue.enqueue("probe", idempotency_key="standby-3")
+    events: list[str] = []
+
+    @contextmanager
+    def busy(kind: str):  # type: ignore[no-untyped-def]
+        events.append("busy")
+        yield
+        events.append("idle")
+
+    worker = _worker(
+        queue, {"probe": lambda job: events.append("ran")}, is_active=lambda: True, busy=busy
+    )
+    assert worker.run_once() is True
+    assert events == ["busy", "ran", "idle"]

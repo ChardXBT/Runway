@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -28,8 +28,11 @@ from runway.config import Settings, get_settings
 from runway.db.base import Database
 from runway.db.bootstrap import DatabaseNotCurrent, migration_head, require_database_at_head
 from runway.hosted.app_setup import configure_hosted, hosted_settings_view
+from runway.locks import FileLockTimeout, exclusive_file_lock
 from runway.logging import configure_logging
+from runway.operations.instance_lease import StandbyError, clear_stale_instance_transfer
 from runway.operations.revision import checkout_revision
+from runway.operations.runtime_files import api_lock_path
 from runway.platforms.sync import SyncService
 
 logger = logging.getLogger(__name__)
@@ -71,9 +74,36 @@ def _lifespan(
         # Scheduled platform sync is produced and run by `runway worker`; the
         # API process runs no timer thread (audit C8).
         try:
-            yield
-        finally:
-            logger.info("runway api stop", extra={"event_type": "api_stop"})
+            # A crashed push or handover leaves its transfer marker behind;
+            # drop it before the first request would read it as standby.
+            clear_stale_instance_transfer(settings)
+        except Exception:  # noqa: BLE001
+            logger.exception("stale instance-transfer cleanup failed during startup")
+        lease_heartbeat = None
+        if settings.instance_dir is not None:
+            # Private instance only: keep this machine's lease heartbeat fresh while it runs.
+            from runway.operations.instance import LeaseHeartbeat
+
+            lease_heartbeat = LeaseHeartbeat(settings)
+            lease_heartbeat.start()
+        with ExitStack() as locks:
+            try:
+                # A running API holds this lock for its lifetime: 'runway
+                # instance pull' checks it (and the worker's lock) and refuses
+                # before replacing the database under a live process.
+                locks.enter_context(exclusive_file_lock(api_lock_path(settings), timeout=0))
+            except FileLockTimeout:
+                logger.warning(
+                    "another Runway process already holds %s; "
+                    "'runway instance pull' will refuse while it runs",
+                    api_lock_path(settings),
+                )
+            try:
+                yield
+            finally:
+                if lease_heartbeat is not None:
+                    lease_heartbeat.stop()
+                logger.info("runway api stop", extra={"event_type": "api_stop"})
 
     return lifespan
 
@@ -124,6 +154,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.settings = active_settings
     install_problem_handlers(application)
     application.state.database = database
+
+    @application.exception_handler(StandbyError)
+    async def standby_error(_request: Request, exc: StandbyError) -> JSONResponse:
+        # A platform write or token use reached on a machine without the instance lease.
+        return JSONResponse(status_code=409, content={"detail": exc.detail})
+
     if hosted:
         # Web-origin CORS and origin guard, rate limits, security headers and
         # the identity provider (spec 05 sections 2 and 6).

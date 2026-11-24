@@ -8,8 +8,9 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from runway.jobs.queue import DEFAULT_LEASE_SECONDS, Job, JobQueue, LeaseLost
@@ -60,6 +61,13 @@ class Worker:
     lease_seconds: int = DEFAULT_LEASE_SECONDS
     max_idle_seconds: float = MAX_IDLE_SECONDS
     stop_event: threading.Event = field(default_factory=threading.Event)
+    # Private instance (spec 07 section 4): a machine without the instance lease
+    # runs no jobs. `is_active` is a cheap local check; `busy` marks a running
+    # job so `runway instance push/handover` waits for it.
+    is_active: Callable[[], bool] | None = None
+    busy: Callable[[str], AbstractContextManager[object]] | None = None
+    standby_recheck: timedelta = timedelta(seconds=60)
+    _standby_logged: bool = field(default=False, init=False, repr=False)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -129,13 +137,45 @@ class Worker:
         wait = (min(upcoming) - now).total_seconds()
         return min(max(wait, 0.0), self.max_idle_seconds)
 
+    def _standby(self) -> bool:
+        if self.is_active is None or self.is_active():
+            self._standby_logged = False
+            return False
+        if not self._standby_logged:
+            logger.info("this machine is on standby for the private instance; no jobs run")
+            self._standby_logged = True
+        return True
+
     def run_once(self) -> bool:
         """Claim and run one due job. Returns False when nothing was due."""
+        if self._standby():
+            return False
         job = self.queue.claim(
             self.worker_id, self.handlers.keys(), lease_seconds=self.lease_seconds
         )
         if job is None:
             return False
+        if self.busy is None:
+            self._run(job)
+            return True
+        with self.busy(job.kind):
+            # Busy first, then check: a push that set its transfer marker in
+            # between either sees this job running or this job sees standby.
+            if self._standby():
+                try:
+                    self.queue.defer(
+                        job.id,
+                        self.worker_id,
+                        self.queue.clock() + self.standby_recheck,
+                        reason="this machine is on standby for the private instance",
+                    )
+                except LeaseLost:
+                    logger.error("job %s was deferred after its lease was recovered", job.id)
+                return False
+            self._run(job)
+        return True
+
+    def _run(self, job: Job) -> None:
         handler = self.handlers[job.kind]
         heartbeat = _LeaseHeartbeat(self.queue, job.id, self.worker_id, self.lease_seconds)
         heartbeat.start()
@@ -160,7 +200,6 @@ class Worker:
                 self.queue.complete(job.id, self.worker_id)
             except LeaseLost:
                 logger.error("job %s finished after its lease was recovered", job.id)
-        return True
 
     def _fail(self, job: Job, exc: BaseException, *, retryable: bool) -> None:
         try:

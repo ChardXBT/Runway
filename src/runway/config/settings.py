@@ -6,7 +6,9 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+from runway.config.instance import TOKENS_DIR_NAME, instance_settings_sources, resolve_instance_dir
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 # Identity providers with an implementation in runway.identity (spec 05 section 2).
@@ -177,6 +179,53 @@ class Settings(BaseSettings):
     r2_access_key_id: str | None = None
     r2_secret_access_key: str | None = None
     r2_endpoint: str | None = None
+    # Private instance data (spec 07). Unset means today's single-checkout behaviour.
+    instance_dir: Path | None = None
+    instance_repository: str | None = None
+    # Environment only (never instance.toml); default: an id kept in the user profile.
+    machine_id: str | None = None
+    token_key: SecretStr | None = None
+    instance_snapshot_keep: int = Field(default=5, ge=1, le=100)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        instance_layers = instance_settings_sources(
+            settings_cls,
+            Path(__file__).resolve().parents[3],
+            init_settings,
+            env_settings,
+            dotenv_settings,
+        )
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            *instance_layers,
+            file_secret_settings,
+        )
+
+    @field_validator(
+        "instance_dir", "instance_repository", "machine_id", "token_key", mode="before"
+    )
+    @classmethod
+    def blank_instance_setting(cls, value: object) -> object | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
+    @field_validator("host")
+    @classmethod
+    def loopback_only(cls, value: str) -> str:
+        if value not in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("Runway may only bind to a loopback host")
+        return value
 
     @field_validator(
         "codex_cli_path",
@@ -330,6 +379,19 @@ class Settings(BaseSettings):
             # encoded SQLite URI filename instead. Other paths keep the plain form.
             return f"sqlite:///{path.resolve().as_uri()}?uri=true"
         return f"sqlite:///{path.as_posix()}"
+
+    @property
+    def resolved_instance_dir(self) -> Path | None:
+        if self.instance_dir is None:
+            return None
+        return resolve_instance_dir(self.instance_dir, self.project_root)
+
+    @property
+    def token_store_dir(self) -> Path:
+        instance_dir = self.resolved_instance_dir
+        if instance_dir is None:
+            return self.resolved_data_dir / "secrets"
+        return instance_dir / TOKENS_DIR_NAME
 
     @property
     def browser_profile_dir(self) -> Path:

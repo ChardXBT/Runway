@@ -42,4 +42,12 @@ def build_worker(settings: Settings, database: Database) -> Worker:
         producers.append(
             PlatformSyncScheduler(database, queue, settings.platform_sync_interval_minutes)
         )
-    return Worker(queue=queue, handlers=handlers, producers=producers)
+    from runway.operations.instance_lease import instance_is_active, worker_busy
+
+    return Worker(
+        queue=queue,
+        handlers=handlers,
+        producers=producers,
+        is_active=partial(instance_is_active, settings),
+        busy=partial(worker_busy, settings),
+    )

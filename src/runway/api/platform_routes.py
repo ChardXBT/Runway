@@ -24,6 +24,7 @@ from runway.db.models import (
     utcnow,
 )
 from runway.hosted.quotas import require_connected_account_slot
+from runway.operations.instance_lease import StandbyError
 from runway.platforms.base import (
     ProviderError,
     TokenSet,
@@ -291,6 +292,14 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
     draft_service = DraftService(database, settings)
     overview_service = OverviewService(database, settings)
 
+    def _require_active_instance() -> None:
+        # A standby machine (private instance lease held elsewhere) must not mint,
+        # store or revoke tokens: TikTok rotation would break the active machine.
+        try:
+            registry.token_store.ensure_writable()
+        except StandbyError as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
+
     def _persist_connection(
         platform: Platform,
         token: TokenSet,
@@ -299,6 +308,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         *,
         workspace_id: int = LOCAL_WORKSPACE_ID,
     ) -> ConnectedAccount:
+        registry.token_store.ensure_writable()
         provider = registry.provider(platform)
         identity = provider.fetch_identity(token)
         token = _enrich_token(platform, token, identity.raw, identity.external_account_id)
@@ -388,6 +398,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 status_code=400,
                 detail="OAuth connect is unavailable in mock provider mode",
             )
+        _require_active_instance()
         provider = registry.provider(platform)
         if not provider.configured():
             raise HTTPException(
@@ -445,6 +456,13 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         if not code or not state:
             return fail("missing_code")
         try:
+            registry.token_store.ensure_writable()
+        except StandbyError:
+            # Standby check before the code exchange and before consuming the
+            # state: a standby machine must not burn the single-use
+            # authorization code on a token it could never store.
+            return fail("standby")
+        try:
             record = oauth_states.consume(parsed, state=state)
         except OAuthStateError as exc:
             return fail(str(exc))
@@ -479,6 +497,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 status_code=400,
                 detail="token import is unavailable in mock provider mode",
             )
+        _require_active_instance()
         provider = registry.provider(Platform.instagram)
         token = TokenSet(access_token=payload.access_token)
         try:
@@ -511,6 +530,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
     @router.post("/platforms/accounts/{account_id}/disconnect")
     def disconnect(account_id: int, payload: ConfirmedRequest) -> dict[str, object]:
         account = _account_or_404(account_id)
+        _require_active_instance()
         if account.token_ref:
             token = registry.token_store.load(account.token_ref)
             if token is not None:
@@ -877,6 +897,8 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except InboxReplyForbidden as exc:
             raise HTTPException(status_code=403, detail=exc.detail) from exc
+        except StandbyError as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
         except ProviderError as exc:
             raise HTTPException(status_code=502, detail=exc.detail) from exc
 

@@ -8,15 +8,18 @@ import re
 import secrets
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from runway.locks import LockTimeout, exclusive_file_lock
 from runway.platforms.base import TokenSet, deserialize_token, serialize_token
+
+if TYPE_CHECKING:
+    from runway.config import Settings
 
 
 class TokenStoreError(Exception):
@@ -36,15 +39,50 @@ class TokenStore:
     """Fernet-encrypted token persistence under ``data/secrets/``.
 
     The plaintext payload is a JSON object keyed by ``token_ref``. The Fernet key
-    lives in ``token.key`` next to the encrypted ``platform-tokens.json`` blob.
+    lives in ``token.key`` next to the encrypted ``platform-tokens.json`` blob,
+    unless a ``key`` is supplied (a private instance keeps it only in its
+    encrypted secrets, so no plain key file is ever written).
+
+    ``write_guard`` runs before every refresh and write; a private instance uses
+    it to keep machines that do not hold the lease in standby.
     """
 
-    def __init__(self, secrets_dir: Path) -> None:
+    def __init__(
+        self,
+        secrets_dir: Path,
+        *,
+        key: bytes | None = None,
+        key_file: bool = True,
+        write_guard: Callable[[], None] | None = None,
+    ) -> None:
         self.secrets_dir = secrets_dir
         self.key_path = secrets_dir / "token.key"
         self.store_path = secrets_dir / "platform-tokens.json"
         self.lock_path = secrets_dir / "token.lock"
         self.refresh_lock_dir = secrets_dir / "refresh-locks"
+        self._key = key
+        self._key_file = key_file
+        self._write_guard = write_guard
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> TokenStore:
+        """The store this installation uses: ``data/secrets`` or ``<instance>/tokens``."""
+        if settings.resolved_instance_dir is None:
+            return cls(settings.token_store_dir)
+        from runway.operations.instance_lease import ensure_active
+
+        key = settings.token_key.get_secret_value().encode("ascii") if settings.token_key else None
+        return cls(
+            settings.token_store_dir,
+            key=key,
+            key_file=False,
+            write_guard=lambda: ensure_active(settings),
+        )
+
+    def ensure_writable(self) -> None:
+        """Raise before a token refresh or write that this machine may not perform."""
+        if self._write_guard is not None:
+            self._write_guard()
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -77,6 +115,13 @@ class TokenStore:
             raise TokenRefreshBusy(str(exc)) from exc
 
     def _load_key(self) -> bytes:
+        if self._key is not None:
+            return self._key
+        if not self._key_file:
+            raise TokenStoreError(
+                "the platform token key is not configured: add RUNWAY_TOKEN_KEY to the "
+                "instance's secrets.enc.env ('runway instance init' creates one)"
+            )
         if self.key_path.is_file():
             key = self.key_path.read_bytes().strip()
             if key:
@@ -136,6 +181,7 @@ class TokenStore:
             raise
 
     def store(self, token_ref: str, token: TokenSet) -> None:
+        self.ensure_writable()
         with self._locked():
             fernet = Fernet(self._load_key())
             payload = self._read_store(fernet)
@@ -153,6 +199,7 @@ class TokenStore:
         return deserialize_token(entry)
 
     def delete(self, token_ref: str) -> None:
+        self.ensure_writable()
         with self._locked():
             fernet = Fernet(self._load_key())
             payload = self._read_store(fernet)

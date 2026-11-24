@@ -21,6 +21,7 @@ from runway.db.models import (
 from runway.domain.enums import CommentStatus, PlatformActionState
 from runway.domain.state_machine import COMMENT_STATUS_MACHINE, PLATFORM_ACTION_MACHINE
 from runway.hosted.quotas import require_send_allowed
+from runway.operations.instance_lease import worker_busy
 from runway.platforms.base import (
     AuthorizationExpired,
     ProviderError,
@@ -285,6 +286,8 @@ class InboxService:
         if self.registry is None:
             raise InboxReplyForbidden("reply service is unavailable")
         registry = self.registry
+        # Before anything is recorded: a standby machine never sends a platform write.
+        registry.ensure_platform_write_allowed()
         with self.database.session() as session:
             comment = session.get(CommentRecord, comment_id)
             if comment is None:
@@ -343,7 +346,7 @@ class InboxService:
         # YouTube access tokens last an hour; a reply long after the last sync
         # must refresh first rather than send an expired token.
         try:
-            token = registry.fresh_token(platform, account_token_ref)
+            token = registry.fresh_token(platform, account_token_ref, for_write=True)
         except AuthorizationExpired as exc:
             forbidden = InboxReplyForbidden(
                 f"account authorization expired; reconnect it ({safe_error_summary(exc)})"
@@ -360,9 +363,10 @@ class InboxService:
             PLATFORM_ACTION_MACHINE.apply(record, PlatformActionState.ATTEMPTED)
             record.attempted_at = utcnow()
         try:
-            result = provider.reply_to_comment(
-                token, comment_external_id=comment_external_id, text=text
-            )
+            with worker_busy(registry.settings, "comment_reply"):
+                result = provider.reply_to_comment(
+                    token, comment_external_id=comment_external_id, text=text
+                )
         except Exception as exc:  # noqa: BLE001
             # A reply is a public, non-idempotent write. When the failure may
             # have followed the request reaching the platform (a read timeout,
