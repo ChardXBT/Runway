@@ -22,6 +22,7 @@ import secrets
 import socket
 import sys
 import tempfile
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -45,6 +46,10 @@ REMOTE_CHECK_INTERVAL = timedelta(minutes=10)
 HEARTBEAT_RENEW_AFTER = timedelta(hours=5)
 LEGACY_WORKER_BUSY_MARKER = Path("runtime") / "worker.busy"
 WORKER_BUSY_DIR = Path("runtime") / "busy"
+# A push or handover sets this marker before waiting for an idle worker: it is
+# treated as standby, so no new job or platform write starts between the idle
+# wait and the lease release.
+TRANSFER_MARKER = Path("runtime") / "instance-transfer"
 MACHINE_ID_FILE_ENV = "RUNWAY_MACHINE_ID_FILE"
 
 WorkerBusyCheck = Callable[[Settings], bool]
@@ -287,6 +292,8 @@ def instance_is_active(settings: Settings) -> bool:
     instance_dir = settings.resolved_instance_dir
     if instance_dir is None:
         return True
+    if instance_transfer_in_progress(settings):
+        return False
     try:
         local = read_lease(instance_dir)
         me = machine_id(settings)
@@ -313,6 +320,14 @@ def ensure_active_or_raise(settings: Settings) -> None:
     if instance_is_active(settings):
         return
     instance_dir = settings.resolved_instance_dir
+    if instance_dir is not None and instance_transfer_in_progress(settings):
+        raise StandbyError(
+            f"this machine ({machine_id(settings)}) is in standby: an instance "
+            "transfer in progress is moving the lease. Token refresh, platform "
+            "writes and the worker are paused until 'runway instance push' or "
+            "'handover' finishes; if a crashed command left the marker, "
+            f"delete {instance_transfer_marker(settings)}."
+        )
     lease: Lease | None = None
     try:
         lease = read_lease(instance_dir) if instance_dir is not None else None
@@ -374,3 +389,62 @@ def worker_busy(settings: Settings, job: str) -> Iterator[None]:
         yield
     finally:
         clear_worker_busy(marker)
+
+
+# --- instance transfer marker ---------------------------------------------------
+
+
+def instance_transfer_marker(settings: Settings) -> Path:
+    return settings.resolved_data_dir / TRANSFER_MARKER
+
+
+def instance_transfer_in_progress(settings: Settings) -> bool:
+    """Whether a push or handover on this machine is moving the lease."""
+    return instance_transfer_marker(settings).is_file()
+
+
+def mark_instance_transfer(settings: Settings, operation: str) -> Path:
+    """Record that a push or handover is moving the lease; returns the marker."""
+    marker = instance_transfer_marker(settings)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "operation": operation,
+                "pid": os.getpid(),
+                "started_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return marker
+
+
+def clear_instance_transfer(marker: Path) -> None:
+    marker.unlink(missing_ok=True)
+
+
+# Marker paths this thread already holds; nested transfers (handover calls
+# push) share the outer marker and only the outermost scope clears it.
+_held_transfer_markers = threading.local()
+
+
+@contextmanager
+def instance_transfer(settings: Settings, operation: str) -> Iterator[None]:
+    """Hold the transfer marker while a push or handover runs on this machine."""
+    marker = instance_transfer_marker(settings)
+    held: set[Path] | None = getattr(_held_transfer_markers, "paths", None)
+    if held is None:
+        held = set()
+        _held_transfer_markers.paths = held
+    if marker in held:
+        yield
+        return
+    held.add(marker)
+    mark_instance_transfer(settings, operation)
+    try:
+        yield
+    finally:
+        held.discard(marker)
+        clear_instance_transfer(marker)

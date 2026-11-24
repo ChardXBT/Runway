@@ -320,3 +320,24 @@ def test_unexpired_tokens_for_platform_writes_are_refused_in_standby(tmp_path: P
     active_registry = ProviderRegistry(cast(Database, None), active)
     token = active_registry.fresh_token(Platform.youtube, "ref", for_write=True)
     assert token.access_token == "long-lived"
+
+
+def test_a_transfer_marker_makes_the_machine_standby(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    assert settings.resolved_instance_dir is not None
+    write_lease(
+        settings.resolved_instance_dir,
+        Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
+    )
+    assert instance_is_active(settings)
+
+    with instance_lease.instance_transfer(settings, "push"):
+        assert not instance_is_active(settings)
+        with pytest.raises(StandbyError, match="transfer in progress"):
+            ensure_active(settings)
+        # Nested (handover calls push): the inner scope must not clear it.
+        with instance_lease.instance_transfer(settings, "handover"):
+            assert not instance_is_active(settings)
+        assert not instance_is_active(settings)
+
+    assert instance_is_active(settings)

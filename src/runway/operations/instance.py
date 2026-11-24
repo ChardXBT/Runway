@@ -76,6 +76,7 @@ from runway.operations.instance_lease import (
     ensure_active,
     ensure_active_or_raise,
     instance_is_active,
+    instance_transfer,
     machine_id,
     read_lease,
     record_remote_check,
@@ -1385,72 +1386,78 @@ def _push(ctx: InstanceContext, *, wait_seconds: float) -> dict[str, Any]:
             f"only the machine holding the lease may push ({describe_lease(lease)}). "
             "To make this machine active, run 'runway instance pull'."
         )
-    wait_for_idle_worker(ctx, wait_seconds)
-    database = settings.database_path
-    if not database.is_file():
-        raise InstanceError(f"there is no database at {database} to snapshot")
-    commit, branch = _code_revision(ctx)
-    now = ctx.now()
-    tag = f"{DATED_TAG_PREFIX}{now.astimezone(UTC).strftime('%Y%m%d-%H%M%S')}"
-    with tempfile.TemporaryDirectory(prefix="runway-instance-push-") as temporary:
-        workdir = Path(temporary)
-        snapshot = create_release(
-            source_database=database,
-            data_root=settings.resolved_data_dir,
-            output_directory=workdir,
-            commit_sha=commit,
-            branch=branch,
-        )
-        assets = {name: _file_entry(workdir / name) for name in ASSET_NAMES}
-        manifest: dict[str, Any] = {
-            "format_version": MANIFEST_FORMAT_VERSION,
-            "created_at": now.isoformat(),
-            "machine": me,
-            "repository": repository,
-            "code": {
-                "repository": CODE_REPOSITORY,
-                "commit": snapshot["commit_sha"],
-                "branch": branch,
-            },
-            "alembic_revision": snapshot["migration"],
-            "database": {
-                "bytes": snapshot["database_bytes"],
-                "sha256": snapshot["database_sha256"],
-                "table_count": snapshot["table_count"],
-            },
-            "media": {
-                "entry_count": snapshot["database_media"]["entry_count"],
-                "content_bytes": snapshot["database_media"]["content_bytes"],
-            },
-            "release": {"tag": tag, "latest_tag": SNAPSHOT_TAG, "assets": assets},
-            "files": {
-                name: entry
-                for name in (TOKENS_FILE, SECRETS_FILE_NAME, INSTANCE_TOML_NAME)
-                if (entry := _file_entry(instance_dir / name)) is not None
-            },
-        }
-        originals = {
-            name: (instance_dir / name).read_bytes() if (instance_dir / name).is_file() else None
-            for name in (MANIFEST_FILE_NAME, LEASE_FILE_NAME)
-        }
-        _write_json(instance_dir / MANIFEST_FILE_NAME, manifest)
-        write_lease(instance_dir, acquire(lease, me, now, take_stale=False))
-        try:
-            # Arbitrate first: only after the fast-forward push wins is anything uploaded.
-            _commit_and_push(
-                ctx, instance_dir, repository, f"Snapshot {tag} from {me}", TRACKED_FILES
+    # The transfer marker makes this machine standby for new work before the
+    # idle wait: a job that slips in after the check would land its writes
+    # after the snapshot, and the next machine would repeat them.
+    with instance_transfer(settings, "push"):
+        wait_for_idle_worker(ctx, wait_seconds)
+        database = settings.database_path
+        if not database.is_file():
+            raise InstanceError(f"there is no database at {database} to snapshot")
+        commit, branch = _code_revision(ctx)
+        now = ctx.now()
+        tag = f"{DATED_TAG_PREFIX}{now.astimezone(UTC).strftime('%Y%m%d-%H%M%S')}"
+        with tempfile.TemporaryDirectory(prefix="runway-instance-push-") as temporary:
+            workdir = Path(temporary)
+            snapshot = create_release(
+                source_database=database,
+                data_root=settings.resolved_data_dir,
+                output_directory=workdir,
+                commit_sha=commit,
+                branch=branch,
             )
-        except InstanceError:
-            for name, content in originals.items():
-                if content is None:
-                    (instance_dir / name).unlink(missing_ok=True)
-                else:
-                    (instance_dir / name).write_bytes(content)
-            raise
-        # The lease/manifest commit won the arbitration; re-confirm privacy once
-        # more before the snapshot assets leave this machine.
-        ensure_private_repository(ctx, repository)
-        _upload_snapshot(ctx, repository, tag, workdir, assets)
+            assets = {name: _file_entry(workdir / name) for name in ASSET_NAMES}
+            manifest: dict[str, Any] = {
+                "format_version": MANIFEST_FORMAT_VERSION,
+                "created_at": now.isoformat(),
+                "machine": me,
+                "repository": repository,
+                "code": {
+                    "repository": CODE_REPOSITORY,
+                    "commit": snapshot["commit_sha"],
+                    "branch": branch,
+                },
+                "alembic_revision": snapshot["migration"],
+                "database": {
+                    "bytes": snapshot["database_bytes"],
+                    "sha256": snapshot["database_sha256"],
+                    "table_count": snapshot["table_count"],
+                },
+                "media": {
+                    "entry_count": snapshot["database_media"]["entry_count"],
+                    "content_bytes": snapshot["database_media"]["content_bytes"],
+                },
+                "release": {"tag": tag, "latest_tag": SNAPSHOT_TAG, "assets": assets},
+                "files": {
+                    name: entry
+                    for name in (TOKENS_FILE, SECRETS_FILE_NAME, INSTANCE_TOML_NAME)
+                    if (entry := _file_entry(instance_dir / name)) is not None
+                },
+            }
+            originals = {
+                name: (instance_dir / name).read_bytes()
+                if (instance_dir / name).is_file()
+                else None
+                for name in (MANIFEST_FILE_NAME, LEASE_FILE_NAME)
+            }
+            _write_json(instance_dir / MANIFEST_FILE_NAME, manifest)
+            write_lease(instance_dir, acquire(lease, me, now, take_stale=False))
+            try:
+                # Arbitrate first: only after the fast-forward push wins is anything uploaded.
+                _commit_and_push(
+                    ctx, instance_dir, repository, f"Snapshot {tag} from {me}", TRACKED_FILES
+                )
+            except InstanceError:
+                for name, content in originals.items():
+                    if content is None:
+                        (instance_dir / name).unlink(missing_ok=True)
+                    else:
+                        (instance_dir / name).write_bytes(content)
+                raise
+            # The lease/manifest commit won the arbitration; re-confirm privacy once
+            # more before the snapshot assets leave this machine.
+            ensure_private_repository(ctx, repository)
+            _upload_snapshot(ctx, repository, tag, workdir, assets)
     pruned = _prune_snapshots(ctx, repository, settings.instance_snapshot_keep, tag)
     return {
         "status": "pushed",
@@ -1468,12 +1475,22 @@ def handover(
     ctx: InstanceContext, *, wait_seconds: float = DEFAULT_WORKER_WAIT_SECONDS
 ) -> dict[str, Any]:
     """Push, then release the lease so another machine can pull."""
-    with _instance_operation(_require_instance_dir(ctx.settings)):
+    settings = ctx.settings
+    # The marker stays set through the release publish: this machine must
+    # not run new work between the snapshot and the lease release.
+    with (
+        _instance_operation(_require_instance_dir(settings)),
+        instance_transfer(settings, "handover"),
+    ):
         result = _push(ctx, wait_seconds=wait_seconds)
         instance_dir, repository = _prepare(ctx)
         released = release(read_lease(instance_dir), ctx.machine, ctx.now())
         _publish_lease(
-            ctx, instance_dir, repository, released, f"Hand over the lease from {ctx.machine}"
+            ctx,
+            instance_dir,
+            repository,
+            released,
+            f"Hand over the lease from {ctx.machine}",
         )
         return {**result, "status": "handed over", "mode": "standby"}
 

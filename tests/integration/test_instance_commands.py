@@ -1373,3 +1373,70 @@ def test_a_failed_install_releases_the_lease_and_restores_the_database(
     assert local is not None and local.holder is None
     # And the previous local database is back in place.
     assert database.read_bytes() == b"b standby database"
+
+
+# --- the transfer marker keeps the worker off during push/handover ---------------
+
+
+def test_a_job_starting_during_the_snapshot_is_refused(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    settings = machine.settings()
+    marker = instance_lease.instance_transfer_marker(settings)
+    seen: dict[str, object] = {}
+    real_create_release = ops.create_release
+
+    def create_release_during_transfer(**kwargs):  # type: ignore[no-untyped-def]
+        # After the idle wait passed, while the snapshot is being built, new
+        # work must already be refused: it would land after the snapshot.
+        seen["marker"] = marker.is_file()
+        seen["active"] = instance_is_active(settings)
+        try:
+            instance_lease.ensure_active_or_raise(settings)
+        except StandbyError as exc:
+            seen["refusal"] = str(exc)
+        return real_create_release(**kwargs)
+
+    monkeypatch.setattr(ops, "create_release", create_release_during_transfer)
+
+    pushed = ops.push(machine.context(monkeypatch))
+
+    assert pushed["status"] == "pushed"
+    assert seen == {
+        "marker": True,
+        "active": False,
+        "refusal": seen["refusal"],
+    }
+    assert "transfer in progress" in str(seen["refusal"])
+    # The marker is gone once the push finishes, and the machine is active.
+    assert not marker.is_file()
+    assert instance_is_active(settings)
+
+
+def test_handover_keeps_the_transfer_marker_until_the_lease_is_released(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    settings = machine.settings()
+    marker = instance_lease.instance_transfer_marker(settings)
+    seen: dict[str, object] = {}
+    real_publish_lease = ops._publish_lease
+
+    def publish_during_handover(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen["marker_on_release"] = marker.is_file()
+        return real_publish_lease(*args, **kwargs)
+
+    monkeypatch.setattr(ops, "_publish_lease", publish_during_handover)
+
+    handed = ops.handover(machine.context(monkeypatch))
+
+    assert handed["mode"] == "standby"
+    # The only _publish_lease in a handover is the lease release at the end.
+    assert seen["marker_on_release"] is True
+    assert not marker.is_file()
+    assert not instance_is_active(settings)

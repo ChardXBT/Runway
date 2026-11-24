@@ -109,6 +109,23 @@ def test_the_queue_worker_does_not_start_in_standby(tmp_path: Path) -> None:
     assert publisher.processed == []
 
 
+def test_the_queue_worker_does_not_start_during_an_instance_transfer(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path, "this-machine")
+    publisher = _StubPublisher(settings)
+    queue = _StubQueue(cast(YouTubeBrowserPublisher, publisher))
+
+    with instance_lease.instance_transfer(settings, "push"):
+        queue.start()
+        assert queue.status()["running"] is False
+        assert publisher.processed == []
+
+    queue.start()
+    assert publisher.done.wait(10)
+    assert publisher.processed == [1]
+
+
 def test_the_active_queue_worker_marks_itself_busy(tmp_path: Path) -> None:
     publisher = _StubPublisher(_settings(tmp_path, "this-machine"))
     queue = _StubQueue(cast(YouTubeBrowserPublisher, publisher))
