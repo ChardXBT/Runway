@@ -527,9 +527,7 @@ def test_a_skipped_scope_reschedules_a_day_out_not_the_normal_cadence(
     account_id = _account(database)
     _active_workspace(database)
 
-    record_scope_run(
-        database, account_id, "comments", status="completed", now=START
-    )
+    record_scope_run(database, account_id, "comments", status="completed", now=START)
     record_scope_run(
         database,
         account_id,
