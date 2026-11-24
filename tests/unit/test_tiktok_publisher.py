@@ -21,7 +21,7 @@ from runway.config import Settings
 from runway.mediastore.probe import ProbeResult
 from runway.platforms.base import ProviderError, TokenSet
 from runway.platforms.capabilities import Platform
-from runway.platforms.limits import TIKTOK_INIT_RATE
+from runway.platforms.limits import TIKTOK_DAILY_INBOX_SHARES, TIKTOK_INIT_RATE
 from runway.platforms.publisher import (
     AccountRef,
     Issue,
@@ -428,15 +428,21 @@ def test_inits_are_capped_at_six_a_minute_per_account(
     assert fake.events.count("init") > TIKTOK_INIT_RATE.max_count
 
 
-def test_the_pending_share_cap_is_a_final_refusal(
+def test_the_pending_share_cap_retries_at_the_next_day_boundary(
     inbox: TikTokInboxPublisher, fake: FakeTikTok
 ) -> None:
+    """`spam_risk_too_many_pending_share` is not final: the 24 h cap frees.
+
+    The inbox holds at most five pending shares a day (TIKTOK_DAILY_INBOX_SHARES);
+    the send retries at the next 24 h boundary like a quota reset, the way
+    YouTube's uploadLimitExceeded waits for the quota window.
+    """
     fake.init_error = (403, "spam_risk_too_many_pending_share", "too many pending shares")
     holder = Ctx(fake)
-    with pytest.raises(PublishRefused) as raised:
+    with pytest.raises(PublishRetryLater) as raised:
         inbox.send(holder.ctx, NullProgress())
     assert raised.value.code == "spam_risk_too_many_pending_share"
-    assert raised.value.final
+    assert raised.value.retry_after == NOW + TIKTOK_DAILY_INBOX_SHARES.window
 
 
 def test_the_daily_post_cap_is_a_final_refusal(

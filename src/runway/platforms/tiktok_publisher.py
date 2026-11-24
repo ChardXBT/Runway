@@ -35,7 +35,11 @@ from runway.platforms.base import (
     TokenSet,
 )
 from runway.platforms.capabilities import Platform
-from runway.platforms.limits import TIKTOK_CHUNKS, TIKTOK_INIT_RATE
+from runway.platforms.limits import (
+    TIKTOK_CHUNKS,
+    TIKTOK_DAILY_INBOX_SHARES,
+    TIKTOK_INIT_RATE,
+)
 from runway.platforms.publisher import (
     AdapterKind,
     Issue,
@@ -84,7 +88,6 @@ _REASON_DETAILS: dict[str, str] = {
 _INIT_FINAL_CODES = frozenset(
     {
         "spam_risk_too_many_posts",
-        "spam_risk_too_many_pending_share",
         "spam_risk_user_banned_from_posting",
         "reached_active_user_cap",
         "unaudited_client_can_only_post_to_private_accounts",
@@ -264,6 +267,15 @@ class _TikTokPublisherBase:
             if isinstance(exc, AuthorizationExpired):
                 raise PublishAuthRevoked(
                     "the TikTok account must be reconnected before posting"
+                ) from exc
+            if exc.code == "spam_risk_too_many_pending_share":
+                # The creator's inbox already holds its pending shares; the cap
+                # frees at the next 24 h boundary (TIKTOK_DAILY_INBOX_SHARES),
+                # so the job retries then instead of failing for good.
+                raise PublishRetryLater(
+                    "spam_risk_too_many_pending_share",
+                    _reason_detail("spam_risk_too_many_pending_share"),
+                    retry_after=ctx.now() + TIKTOK_DAILY_INBOX_SHARES.window,
                 ) from exc
             if exc.code in _INIT_FINAL_CODES:
                 raise PublishRefused(str(exc.code), exc.detail) from exc
