@@ -132,7 +132,11 @@ class PermissionMissing(ProviderError):
 
 
 class RateLimited(ProviderError):
-    """429 or quota exceeded; the run ends partial and can retry later."""
+    """429 or quota exceeded; the run ends partial and can retry later.
+
+    `retry_after` is the platform's hint in seconds when it sent one; the
+    sync scheduler honours it over its own backoff (spec 04 section 3).
+    """
 
     def __init__(
         self,
@@ -140,8 +144,10 @@ class RateLimited(ProviderError):
         *,
         retryable: bool = True,
         status: int | None = None,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(detail, retryable=retryable, status=status)
+        self.retry_after = retry_after
 
 
 class CapabilityUnsupported(ProviderError):

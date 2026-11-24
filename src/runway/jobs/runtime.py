@@ -17,6 +17,7 @@ from runway.platforms.sync import (
     run_sync_account_job,
 )
 from runway.realtime.processing import PROCESS_WEBHOOK_JOB, run_process_webhook_job
+from runway.realtime.schedule import AdaptiveSyncScheduler
 
 __all__ = ["build_worker", "worker_lock_path"]
 
@@ -30,7 +31,11 @@ def build_worker(settings: Settings, database: Database) -> Worker:
         PROCESS_WEBHOOK_JOB: partial(run_process_webhook_job, database, settings, queue),
     }
     producers: list[JobProducer] = [RetentionPurgeScheduler(queue)]
-    if settings.platform_sync_interval_minutes > 0:
+    if settings.adaptive_sync_enabled:
+        # Per-scope cadence (spec 04 section 3); replaces the fixed-slot
+        # scheduler. platform_sync_interval_minutes only governs the latter.
+        producers.append(AdaptiveSyncScheduler(database, queue, settings))
+    elif settings.platform_sync_interval_minutes > 0:
         producers.append(
             PlatformSyncScheduler(database, queue, settings.platform_sync_interval_minutes)
         )

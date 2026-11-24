@@ -1743,6 +1743,9 @@ class Workspace(Base):
     slug: Mapped[str] = mapped_column(String(80))
     name: Mapped[str] = mapped_column(String(200))
     profile_note: Mapped[str | None] = mapped_column(Text)
+    # Last request from a human principal; drives sync's 14-day inactivity
+    # rule (spec 04 section 3). Written by get_principal, throttled per app.
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -1982,4 +1985,69 @@ class WebhookEvent(Base):
     )
     workspace_id: Mapped[int | None] = mapped_column(
         ForeignKey("workspaces.id", name="fk_webhook_events_workspace")
+    )
+
+
+# -----------------------------------------------------------------------------
+# Adaptive sync state and provider quota (migration 0018b, spec 04 sections 3-4)
+
+
+class AccountSyncState(Base, WorkspaceOwned):
+    """The per-(account, scope) schedule the adaptive sync loop follows.
+
+    `source` records what last set the refresh in motion (`poll` or `push`),
+    `boosted_until` the temporary fast-cadence window, and
+    `consecutive_failures` the exponent for error backoff.
+    """
+
+    __tablename__ = "account_sync_state"
+    __table_args__ = (
+        UniqueConstraint("account_id", "scope", name="uq_account_sync_state_scope"),
+        Index("ix_account_sync_state_due", "next_run_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="CASCADE",
+            name="fk_account_sync_state_account",
+        ),
+        index=True,
+    )
+    scope: Mapped[str] = mapped_column(String(50))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(String(20))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    boosted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str | None] = mapped_column(String(10))
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=sql_text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class QuotaUsage(Base):
+    """Provider quota spend per (provider, bucket, day), project-level.
+
+    Deliberately not WorkspaceOwned: provider quota belongs to the project
+    credentials, not a workspace (spec 04 section 4). `day` is the
+    provider's quota-reset date - Pacific time for YouTube.
+    """
+
+    __tablename__ = "quota_usage"
+    __table_args__ = (
+        UniqueConstraint("provider", "bucket", "day", name="uq_quota_usage_day"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    bucket: Mapped[str] = mapped_column(String(60))
+    day: Mapped[date] = mapped_column(Date)
+    units_used: Mapped[int] = mapped_column(Integer, default=0, server_default=sql_text("0"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

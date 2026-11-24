@@ -225,6 +225,149 @@
         ],
         "unique_constraints": []
       },
+      "account_sync_state": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "boosted_until",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "0",
+            "name": "consecutive_failures",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "last_run_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "last_status",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "next_run_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "scope",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(50)"
+          },
+          {
+            "default": null,
+            "name": "source",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(10)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": "CASCADE",
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_account_sync_state_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "next_run_at"
+            ],
+            "name": "ix_account_sync_state_due",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_account_sync_state_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "account_id",
+              "scope"
+            ],
+            "name": "uq_account_sync_state_scope"
+          }
+        ]
+      },
       "active_learning_batches": {
         "check_constraints": [],
         "columns": [
@@ -10390,6 +10533,65 @@
           }
         ]
       },
+      "quota_usage": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "bucket",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(60)"
+          },
+          {
+            "default": null,
+            "name": "day",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATE"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "provider",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": "0",
+            "name": "units_used",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [],
+        "unique_constraints": [
+          {
+            "columns": [
+              "provider",
+              "bucket",
+              "day"
+            ],
+            "name": "uq_quota_usage_day"
+          }
+        ]
+      },
       "raw_post_records": {
         "check_constraints": [],
         "columns": [
@@ -12555,6 +12757,13 @@
           },
           {
             "default": null,
+            "name": "last_seen_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
             "name": "name",
             "nullable": false,
             "primary_key": 0,
@@ -12589,7 +12798,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "ecd61e90b8a8bcc58839bb559f48f4908cec77d362d91bae204cd151b2f0c425",
-  "migration": "0018_webhook_inbox",
-  "table_count": 76
+  "fingerprint": "a4277eecc9adcd8b1aa40b8167fcb6ea2134a7b2460a922b5d49b801eb880d72",
+  "migration": "0018b_sync_state",
+  "table_count": 78
 }

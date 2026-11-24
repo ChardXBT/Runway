@@ -46,11 +46,24 @@ from runway.platforms.capabilities import Platform
 from runway.platforms.drafts import external_id_candidates
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.registry import ProviderRegistry
+from runway.realtime import schedule as sync_schedule
 
 logger = logging.getLogger(__name__)
 
 STALE_RUN_AGE = timedelta(minutes=30)
 COMMENT_PAGE_LIMIT = 5
+# content_metrics_recent covers the 20 most recent items; the older scope
+# rotates through the rest of the catalogue in windows of 50 (spec 04 s.3).
+RECENT_METRICS_COUNT = 20
+OLDER_METRICS_BATCH = 50
+# The scope(s) each full-sync step covers, for freshness bookkeeping only.
+_STEP_TO_SCOPES: dict[str, tuple[str, ...]] = {
+    "identity": ("identity",),
+    "content": ("inventory",),
+    "content_metrics": ("content_metrics_recent",),
+    "account_daily_metrics": ("daily_metrics",),
+    "comments": ("comments",),
+}
 
 
 def sync_lock_path(settings: Settings, account_id: int) -> Path:
@@ -184,10 +197,22 @@ class SyncService:
             hold.close()
             raise
 
-    def run(self, account_id: int, trigger: str = "manual") -> SyncRun:
+    def run(
+        self,
+        account_id: int,
+        trigger: str = "manual",
+        scopes: list[str] | None = None,
+    ) -> SyncRun:
+        """Sync one account; `scopes` limits the run to the named steps.
+
+        `scopes=None` is the full sync the "Sync now" button and existing
+        callers use - its step list is unchanged. A scoped run performs only
+        the listed steps and records each scope's outcome on
+        `account_sync_state` (spec 04 section 3).
+        """
         hold, run_id = self._begin_run(account_id, trigger)
         with hold:
-            self._execute(run_id, account_id)
+            self._execute(run_id, account_id, scopes)
         return self.get_run(run_id)
 
     def start_background(self, account_id: int, trigger: str = "manual") -> SyncRun:
@@ -234,7 +259,7 @@ class SyncService:
             session.expunge(run)
             return run
 
-    def _execute(self, run_id: int, account_id: int) -> None:
+    def _execute(self, run_id: int, account_id: int, scopes: list[str] | None = None) -> None:
         # Every path out of this method must finish the run; an exception that
         # escapes before a step records its own failure (e.g. a transport error
         # in ensure_fresh or a provider construction failure) would otherwise
@@ -263,11 +288,13 @@ class SyncService:
                     quota_units=quota_units,
                     error_summary=detail,
                 )
+                self._record_scopes_failed(account_id, scopes, detail, exc)
                 return
             except ProviderError as exc:
                 # A transient refresh failure (timeout, 5xx, rate limit) fails
                 # this run but leaves the account connected, so the next run
                 # retries instead of demanding a reconnect.
+                detail = safe_error_summary(exc)
                 self._finish_run(
                     run_id,
                     account_id,
@@ -275,23 +302,16 @@ class SyncService:
                     steps=steps,
                     items_fetched=items_fetched,
                     quota_units=quota_units,
-                    error_summary=safe_error_summary(exc),
+                    error_summary=detail,
                 )
+                self._record_scopes_failed(account_id, scopes, detail, exc)
                 return
 
-            steps_to_run: list[tuple[str, Callable[[], dict[str, int]]]] = [
-                ("identity", lambda: self._step_identity(provider, account_id, token)),
-                ("content", lambda: self._step_content(provider, account_id, token)),
-                (
-                    "content_metrics",
-                    lambda: self._step_content_metrics(provider, account_id, token),
-                ),
-                (
-                    "account_daily_metrics",
-                    lambda: self._step_daily_metrics(provider, account_id, token),
-                ),
-                ("comments", lambda: self._step_comments(provider, account_id, token)),
-            ]
+            steps_to_run: list[tuple[str, Callable[[], dict[str, int]]]] = (
+                self._scoped_steps(provider, account_id, token, scopes)
+                if scopes is not None
+                else self._full_steps(provider, account_id, token)
+            )
             for name, step in steps_to_run:
                 record: dict[str, Any] = {
                     "step": name,
@@ -300,6 +320,7 @@ class SyncService:
                     "error": None,
                     "quota_units": 0,
                 }
+                failure: ProviderError | None = None
                 try:
                     result = step()
                     record["items"] = result.get("items", 0)
@@ -311,7 +332,9 @@ class SyncService:
                     record["error"] = safe_error_summary(exc)
                     final_status = "failed"
                     error_summary = record["error"]
+                    failure = exc
                     steps.append(record)
+                    self._record_step_outcome(account_id, name, record, failure, scopes)
                     self._finish_account_needs_reauth(account_id, record["error"])
                     break
                 except CapabilityUnsupported as exc:
@@ -322,11 +345,13 @@ class SyncService:
                     record["error"] = f"{safe_error_summary(exc)} (retryable)"
                     final_status = "partial"
                     error_summary = record["error"]
+                    failure = exc
                 except ProviderError as exc:
                     record["status"] = "failed"
                     record["error"] = safe_error_summary(exc)
                     final_status = "partial"
                     error_summary = record["error"]
+                    failure = exc
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("sync step %s failed for account %s", name, account_id)
                     record["status"] = "failed"
@@ -334,6 +359,7 @@ class SyncService:
                     final_status = "partial"
                     error_summary = record["error"]
                 steps.append(record)
+                self._record_step_outcome(account_id, name, record, failure, scopes)
 
             self._finish_run(
                 run_id,
@@ -358,6 +384,94 @@ class SyncService:
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("could not record failure for sync run %s", run_id)
+
+    def _full_steps(
+        self, provider: PlatformProvider, account_id: int, token: TokenSet
+    ) -> list[tuple[str, Callable[[], dict[str, int]]]]:
+        """The unchanged full-sync step list (`scopes=None`)."""
+        return [
+            ("identity", lambda: self._step_identity(provider, account_id, token)),
+            ("content", lambda: self._step_content(provider, account_id, token)),
+            (
+                "content_metrics",
+                lambda: self._step_content_metrics(provider, account_id, token),
+            ),
+            (
+                "account_daily_metrics",
+                lambda: self._step_daily_metrics(provider, account_id, token),
+            ),
+            ("comments", lambda: self._step_comments(provider, account_id, token)),
+        ]
+
+    def _scoped_steps(
+        self,
+        provider: PlatformProvider,
+        account_id: int,
+        token: TokenSet,
+        scopes: list[str],
+    ) -> list[tuple[str, Callable[[], dict[str, int]]]]:
+        """One step per requested scope, named after the scope itself."""
+        by_scope: dict[str, Callable[[], dict[str, int]]] = {
+            "identity": lambda: self._step_identity(provider, account_id, token),
+            "inventory": lambda: self._step_content(provider, account_id, token),
+            "content_metrics_recent": lambda: self._step_content_metrics_recent(
+                provider, account_id, token
+            ),
+            "content_metrics_older": lambda: self._step_content_metrics_older(
+                provider, account_id, token
+            ),
+            "comments": lambda: self._step_comments(provider, account_id, token),
+            "daily_metrics": lambda: self._step_daily_metrics(provider, account_id, token),
+        }
+        return [(scope, by_scope[scope]) for scope in scopes]
+
+    def _scopes_for_step(self, name: str, scopes: list[str] | None) -> list[str]:
+        if scopes is not None:
+            # A scoped run names each step after the scope itself.
+            return [name] if name in sync_schedule.SCOPES else []
+        return list(_STEP_TO_SCOPES.get(name, ()))
+
+    def _record_step_outcome(
+        self,
+        account_id: int,
+        name: str,
+        record: dict[str, Any],
+        failure: ProviderError | None,
+        scopes: list[str] | None,
+    ) -> None:
+        """Persist the step's outcome on `account_sync_state`, one row per scope."""
+        retry_after = failure.retry_after if isinstance(failure, RateLimited) else None
+        for scope in self._scopes_for_step(name, scopes):
+            sync_schedule.record_scope_run(
+                self.database,
+                account_id,
+                scope,
+                status=str(record["status"]),
+                error=record["error"] if record["status"] != "completed" else None,
+                retry_after=retry_after,
+            )
+
+    def _record_scopes_failed(
+        self,
+        account_id: int,
+        scopes: list[str] | None,
+        detail: str,
+        exc: ProviderError,
+    ) -> None:
+        """A run that never reached its steps still marks its scopes failed."""
+        names = scopes if scopes is not None else [
+            scope for group in _STEP_TO_SCOPES.values() for scope in group
+        ]
+        retry_after = exc.retry_after if isinstance(exc, RateLimited) else None
+        for scope in names or []:
+            sync_schedule.record_scope_run(
+                self.database,
+                account_id,
+                scope,
+                status="failed",
+                error=detail,
+                retry_after=retry_after,
+            )
 
     def ensure_fresh(self, account_id: int) -> TokenSet:
         with self.database.session() as session:
@@ -638,14 +752,53 @@ class SyncService:
     def _step_content_metrics(
         self, provider: PlatformProvider, account_id: int, token: TokenSet
     ) -> dict[str, int]:
+        external_ids = self._content_ids(account_id, limit=50)
+        return self._metrics_for_ids(provider, account_id, token, external_ids)
+
+    def _step_content_metrics_recent(
+        self, provider: PlatformProvider, account_id: int, token: TokenSet
+    ) -> dict[str, int]:
+        external_ids = self._content_ids(account_id, limit=RECENT_METRICS_COUNT)
+        return self._metrics_for_ids(provider, account_id, token, external_ids)
+
+    def _step_content_metrics_older(
+        self, provider: PlatformProvider, account_id: int, token: TokenSet
+    ) -> dict[str, int]:
+        """The catalogue beyond the recent window, in a rotating window of 50."""
+        external_ids = self._content_ids(account_id, limit=None)[RECENT_METRICS_COUNT:]
+        if not external_ids:
+            return {"items": 0, "quota_units": 0}
+        stored = self._load_cursor(account_id, "content_metrics_older") or {}
+        offset = int(stored.get("offset", 0) or 0)
+        if offset >= len(external_ids):
+            offset = 0
+        batch = external_ids[offset : offset + OLDER_METRICS_BATCH]
+        next_offset = offset + len(batch)
+        self._store_cursor(
+            account_id,
+            "content_metrics_older",
+            {"offset": next_offset if next_offset < len(external_ids) else 0},
+        )
+        return self._metrics_for_ids(provider, account_id, token, batch)
+
+    def _content_ids(self, account_id: int, *, limit: int | None) -> list[str]:
         with self.database.session() as session:
-            rows = session.scalars(
-                select(PlatformContent)
+            statement = (
+                select(PlatformContent.external_id)
                 .where(PlatformContent.account_id == account_id)
                 .order_by(PlatformContent.published_at.desc())
-                .limit(50)
-            ).all()
-            external_ids = [row.external_id for row in rows]
+            )
+            if limit is not None:
+                statement = statement.limit(limit)
+            return list(session.scalars(statement).all())
+
+    def _metrics_for_ids(
+        self,
+        provider: PlatformProvider,
+        account_id: int,
+        token: TokenSet,
+        external_ids: list[str],
+    ) -> dict[str, int]:
         if not external_ids:
             return {"items": 0, "quota_units": 0}
         try:
@@ -918,13 +1071,24 @@ class PlatformSyncScheduler:
 
 
 def run_sync_account_job(service: SyncService, job: Job) -> None:
-    """Worker handler for `sync_account`: the existing sync code, unchanged."""
+    """Worker handler for `sync_account`.
+
+    `payload.scope` names the single scope the adaptive scheduler produced;
+    a payload without `scope` is a full sync, the pre-RT2 job shape that
+    already-queued jobs and webhook hints still use.
+    """
     account_id = job.payload.get("account_id")
     if not isinstance(account_id, int):
         raise PermanentJobError("sync_account job has no integer account_id")
     trigger = str(job.payload.get("trigger") or "scheduled")
+    scope = job.payload.get("scope")
+    scopes: list[str] | None = None
+    if scope is not None:
+        if not isinstance(scope, str) or scope not in sync_schedule.SCOPES:
+            raise PermanentJobError(f"sync_account job has unknown scope {scope!r}")
+        scopes = [scope]
     try:
-        run = service.run(account_id, trigger=trigger)
+        run = service.run(account_id, trigger=trigger, scopes=scopes)
     except SyncRunInProgress:
         logger.info("account %s is already syncing; scheduled sync skipped", account_id)
         return

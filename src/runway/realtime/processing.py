@@ -30,6 +30,11 @@ from runway.jobs.queue import JOB_STATE_MACHINE, Job, JobQueue, JobState
 from runway.jobs.worker import PermanentJobError
 from runway.platforms.sync import SYNC_ACCOUNT_JOB
 from runway.realtime import PROCESS_WEBHOOK_JOB, hooks
+from runway.realtime.schedule import (
+    INVENTORY_BOOST_MINUTES,
+    RECENT_METRICS_BOOST_MINUTES,
+    boost,
+)
 
 try:
     from defusedxml import ElementTree as _ElementTree  # type: ignore[import-untyped]
@@ -179,6 +184,10 @@ def _process_tiktok(
         return
     if isinstance(name, str) and name.startswith("post.publish."):
         hooks.on_publish_event(session, account.id, _publish_id(parsed), name)
+        # A publish is also a push hint for the publish-adjacent scopes
+        # (spec 04 section 3): inventory for 30 min, recent metrics for 2 h.
+        boost(session, account.id, "inventory", INVENTORY_BOOST_MINUTES)
+        boost(session, account.id, "content_metrics_recent", RECENT_METRICS_BOOST_MINUTES)
         return
     _enqueue_sync(session, queue, event, account)
 
@@ -216,7 +225,13 @@ def _cancel_pending_jobs(session: Session, account_id: int) -> int:
 def _enqueue_sync(
     session: Session, queue: JobQueue, event: WebhookEvent, account: ConnectedAccount
 ) -> None:
-    """The scheduler's payload shape, keyed so webhook retries cannot duplicate it."""
+    """The scheduler's payload shape, keyed so webhook retries cannot duplicate it.
+
+    A verified hint also boosts `inventory` for 30 minutes (spec 04 section
+    3): the adaptive scheduler then keeps the scope on a 2-minute cadence
+    marked `push`.
+    """
+    boost(session, int(account.id), "inventory", INVENTORY_BOOST_MINUTES)
     queue.enqueue_pending_job(
         session,
         SYNC_ACCOUNT_JOB,

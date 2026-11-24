@@ -110,6 +110,9 @@ class Settings(BaseSettings):
     # request guard serves, and only for /hooks/ and OAuth callbacks.
     public_edge_url: str | None = None
     inbox_replies_enabled: bool = False
+    # Adaptive per-scope sync (spec 04 section 3). False restores the old
+    # fixed-slot scheduler, where platform_sync_interval_minutes applies.
+    adaptive_sync_enabled: bool = True
     platform_sync_interval_minutes: int = Field(default=0, ge=0, le=1440)
     platform_sync_max_content_items: int = Field(default=200, ge=10, le=2000)
     platform_sync_comment_content_limit: int = Field(default=10, ge=0, le=100)
