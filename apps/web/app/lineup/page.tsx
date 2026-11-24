@@ -1,10 +1,11 @@
 import { LineupCalendar } from "@/components/lineup-calendar";
-import { apiGetRequired } from "@/lib/api";
+import { apiGetOptional, apiGetRequired } from "@/lib/api";
 import {
   isLineupSchedule,
   isPublisherQueueStatus,
   proposalList,
 } from "@/lib/guards";
+import { isPostPage, type PostPage } from "@/lib/v1-guards";
 import type {
   LineupSchedule,
   Proposal,
@@ -14,7 +15,7 @@ import type {
 export const dynamic = "force-dynamic";
 
 export default async function LineupPage() {
-  const [lineup, published, settings, publisherQueue] = await Promise.all([
+  const [lineup, published, settings, publisherQueue, posts] = await Promise.all([
     apiGetRequired<LineupSchedule>("/api/queue?limit=5000", isLineupSchedule),
     apiGetRequired<Proposal[]>(
       "/api/proposals?status=published&limit=500&order=desc",
@@ -43,7 +44,22 @@ export default async function LineupPage() {
       "/api/publisher/queue",
       isPublisherQueueStatus,
     ),
+    // Optional: an API without the v1 posts routes shows the Lineup alone.
+    apiGetOptional<PostPage>("/api/v1/posts", isPostPage),
   ]);
+
+  const postTargets = (posts?.items ?? []).flatMap((post) =>
+    post.targets
+      .filter((target) => target.planned_at !== null)
+      .map((target) => ({
+        postId: post.id,
+        targetId: target.id,
+        platform: target.platform,
+        postType: target.post_type,
+        state: target.state,
+        plannedAt: target.planned_at as string,
+      })),
+  );
 
   return (
     <LineupCalendar
@@ -53,6 +69,7 @@ export default async function LineupPage() {
       publishingMode={settings.publishing_mode}
       channelName={settings.channel_name}
       initialPublisherQueue={publisherQueue}
+      postTargets={postTargets}
     />
   );
 }
