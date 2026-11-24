@@ -51,7 +51,9 @@ def alembic_config(settings: Settings) -> Config:
         return value.replace("%", "%%")
 
     config.set_main_option("script_location", option(str(settings.project_root / "alembic")))
-    config.set_main_option("sqlalchemy.url", option(settings.database_url))
+    # Migrations connect as the owner role when one is configured
+    # (RUNWAY_MIGRATION_DATABASE_URL); otherwise the application URL.
+    config.set_main_option("sqlalchemy.url", option(settings.migration_database_url))
     # Read by 0013_workspaces to name workspace 1 after the configured channel.
     config.attributes["runway_channel_name"] = settings.channel_name
     return config
@@ -125,9 +127,16 @@ def migration_status(settings: Settings) -> MigrationStatus:
     if head is None:
         raise RuntimeError("the migration script directory has no head revision")
     current: str | None = None
-    path = settings.database_path
-    if path.is_file():
-        engine = read_only_sqlite_engine(path)
+    engine: Engine | None = None
+    if settings.is_postgres:
+        # Postgres is always reachable-or-not: absence means a connection
+        # error, which should surface rather than read as "not migrated".
+        engine = create_engine(settings.database_url)
+    else:
+        path = settings.database_path
+        if path.is_file():
+            engine = read_only_sqlite_engine(path)
+    if engine is not None:
         try:
             with engine.connect() as connection:
                 current = MigrationContext.configure(connection).get_current_revision()
@@ -160,7 +169,11 @@ def require_database_at_head(settings: Settings) -> MigrationStatus:
 
 
 def ensure_default_channel(database: Database, settings: Settings) -> None:
-    with database.session() as session:
+    from runway.db.models import DEFAULT_WORKSPACE_ID
+
+    # The configured channel belongs to the local workspace; binding keeps
+    # this seed runnable in the hosted profile too (no request context here).
+    with database.session(workspace_id=DEFAULT_WORKSPACE_ID) as session:
         channel = session.scalar(select(Channel).where(Channel.handle == settings.channel_handle))
         if channel is None:
             session.add(

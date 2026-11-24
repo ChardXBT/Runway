@@ -347,7 +347,7 @@ def test_an_account_in_another_workspace_is_not_found(
     client: TestClient, database: Database
 ) -> None:
     """A workspace's accounts are invisible to another workspace's owner (404)."""
-    with database.session() as session:
+    with database.system_session() as session:
         other = Workspace(slug="other", name="Other workspace")
         session.add(other)
         session.flush()

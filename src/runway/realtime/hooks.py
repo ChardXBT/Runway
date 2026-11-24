@@ -27,14 +27,15 @@ def on_publish_event(
 ) -> None:
     """Queue an immediate poll for the named target, else record the hint.
 
-    The seam runs first: it writes in its own session, and SQLite admits one
-    writer at a time, so it must finish before this session's first flush.
+    The seam runs first, inside this session: a nested `database.session()`
+    deadlocked on SQLite's single writer and bypassed this session's
+    workspace binding.
     """
     account = session.get(ConnectedAccount, account_id)
     if account is None:
         return
     if realtime_seam.on_publish_event(
-        event_type, database, publish_id=publish_id, account_id=account_id
+        event_type, session, publish_id=publish_id, account_id=account_id
     ):
         return
     record_event(

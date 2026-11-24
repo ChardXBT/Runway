@@ -285,7 +285,7 @@ class ToolRunner:
                 platform = result.get("platform")
                 if isinstance(platform, str):
                     detail["platform"] = platform
-                with self.database.session() as session:
+                with self.database.session(workspace_id=principal.workspace_id) as session:
                     record_audit(
                         session,
                         principal,

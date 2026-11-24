@@ -69,7 +69,9 @@ def _resolve_member(
     for attempt in range(2):
         refused: MembershipRefused | None = None
         try:
-            with database.session() as session:
+            # Sign-in resolves org -> workspace before the request's workspace
+            # binding exists: system code (bypass-RLS role on Postgres).
+            with database.system_session() as session:
                 try:
                     member = mirror.resolve(session, identity)
                 except MembershipRefused as exc:

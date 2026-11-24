@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0004_feedback_and_publisher"
 down_revision = "0003_proposal_caption_context"
@@ -16,13 +16,28 @@ branch_labels = None
 depends_on = None
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _table_names() -> set[str]:
+    if _offline():
+        return set()
     return set(sa.inspect(op.get_bind()).get_table_names())
 
 
 def _column_names(table: str) -> set[str]:
+    if _offline():
+        return set()
     inspector = sa.inspect(op.get_bind())
     return {column["name"] for column in inspector.get_columns(table)}
+
+
+def _index_names(table: str) -> set[str]:
+    if _offline():
+        return set()
+    return {item["name"] for item in sa.inspect(op.get_bind()).get_indexes(table)}
 
 
 def upgrade() -> None:
@@ -97,7 +112,7 @@ def upgrade() -> None:
         op.create_index("ix_publish_attempts_publisher", "publish_attempts", ["publisher"])
         op.create_index("ix_publish_attempts_status", "publish_attempts", ["status"])
 
-    existing_indexes = {item["name"] for item in sa.inspect(op.get_bind()).get_indexes("proposals")}
+    existing_indexes = _index_names("proposals")
     if "ix_proposals_rights_decision" not in existing_indexes:
         op.create_index("ix_proposals_rights_decision", "proposals", ["rights_decision"])
     if "ix_proposals_external_post_id" not in existing_indexes:
@@ -106,9 +121,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     tables = _table_names()
-    if "publish_attempts" in tables:
+    if _offline() or "publish_attempts" in tables:
         op.drop_table("publish_attempts")
-    if "caption_feedback" in tables:
+    if _offline() or "caption_feedback" in tables:
         op.drop_table("caption_feedback")
 
     proposal_columns = _column_names("proposals")
@@ -119,5 +134,5 @@ def downgrade() -> None:
         "rights_reviewed_at",
         "rights_decision",
     ):
-        if name in proposal_columns:
+        if _offline() or name in proposal_columns:
             op.drop_column("proposals", name)

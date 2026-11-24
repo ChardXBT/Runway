@@ -202,20 +202,17 @@ class JobQueue:
 
     @contextmanager
     def _exclusive(self) -> Iterator[Session]:
-        """A write transaction that excludes other claimers from its first statement."""
-        session = self.database.session_factory()
-        try:
+        """A write transaction that excludes other claimers from its first statement.
+
+        Claims cross workspaces by definition, so this is a system session: on
+        Postgres the fail-closed RLS policy would otherwise show zero rows.
+        """
+        with self.database.system_session() as session:
             if self.dialect == "sqlite":
                 # pysqlite starts transactions lazily and as DEFERRED; take the
                 # write lock up front so read-then-update cannot interleave.
                 session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             yield session
-            session.commit()
-        except BaseException:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     # ---------------------------------------------------------------- enqueue
 
@@ -235,7 +232,10 @@ class JobQueue:
             raise ValueError("max_attempts must be at least 1")
         lookup = select(PublishJob).where(PublishJob.idempotency_key == idempotency_key)
         try:
-            with self.database.session() as session:
+            # Bound to the job's own workspace so callers need no context; the
+            # idempotency lookup is global either way (publish_jobs is
+            # deliberately not a scoped table).
+            with self.database.session(workspace_id=workspace_id) as session:
                 existing = session.scalar(lookup)
                 if existing is not None:
                     return Job.of(existing)
@@ -255,7 +255,7 @@ class JobQueue:
                 return Job.of(row)
         except IntegrityError:
             # Another producer inserted the same key between our read and write.
-            with self.database.session() as session:
+            with self.database.session(workspace_id=workspace_id) as session:
                 existing = session.scalar(lookup)
                 if existing is None:
                     raise
@@ -411,7 +411,8 @@ class JobQueue:
     # ---------------------------------------------------------------- reading
 
     def get(self, job_id: int) -> Job | None:
-        with self.database.session() as session:
+        # The claim bucket is cross-workspace system data.
+        with self.database.system_session() as session:
             row = session.get(PublishJob, job_id)
             return Job.of(row) if row is not None else None
 
@@ -419,7 +420,7 @@ class JobQueue:
         """When the earliest pending job (or expiring lease) of these kinds is due."""
         if not kinds:
             return None
-        with self.database.session() as session:
+        with self.database.system_session() as session:
             pending = session.scalar(
                 select(func.min(PublishJob.run_at)).where(
                     PublishJob.state == JobState.PENDING.value,

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Protocol
 
+from runway.db.workspace import workspace_context
 from runway.jobs.queue import DEFAULT_LEASE_SECONDS, Job, JobQueue, LeaseLost
 from runway.platforms.base import safe_error_summary
 
@@ -180,7 +181,10 @@ class Worker:
         heartbeat = _LeaseHeartbeat(self.queue, job.id, self.worker_id, self.lease_seconds)
         heartbeat.start()
         try:
-            handler(job)
+            # Every `database.session()` inside the handler binds to the job's
+            # workspace (phase P7); system code opts out via system_session().
+            with workspace_context(job.workspace_id):
+                handler(job)
         except DeferJob as deferred:
             heartbeat.stop()
             try:

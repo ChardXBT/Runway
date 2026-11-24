@@ -22,13 +22,11 @@ Still required before a hosted deployment can start (other work packages):
 
 | Missing | Why it blocks | Where it is tracked |
 | --- | --- | --- |
-| Postgres support: a driver (`psycopg`), `RUNWAY_DATABASE_URL`, Postgres-aware `runway db` | `Settings` refuses `hosted` on SQLite; the compose file already passes `RUNWAY_DATABASE_URL` | spec 01 section 6 |
 | `runway worker` | the `worker` service runs it | job queue work package (phase P0) |
-| Row-level security policies | the app role is created without `BYPASSRLS` so the policies will bind it | spec 01 section 5 |
 | Database token store, `RUNWAY_TOKEN_KEYS` | hosted tokens must not live in a file | spec 05 section 3 |
 | Clerk in the web app (sign-in pages, organization switcher, forwarding the session token) | the API accepts Clerk tokens; the web app does not obtain them yet | web work package |
 | API keys (`rwy_` bearers) | refused with `api_key_unsupported` until built | spec 06 |
-| Workspace scoping and scope checks on the platform routes (accounts, connect/disconnect, content, inbox, drafts, overview, analytics) | their queries read and write the global tables with no `workspace_id` filter and call no `require()`, so one workspace's member could read or disconnect another's accounts. Hosted therefore does **not mount** that router (404) | workspace tenancy (wave 4, spec 01 sections 4-5): add `workspace_id` filters and `require(ACCOUNTS_MANAGE / INBOX_REPLY / POSTS_WRITE ...)`, then mount it in hosted |
+| Workspace scoping and scope checks on the platform routes (accounts, disconnect, content, inbox, drafts, overview, analytics) | their queries read and write the global tables with no `workspace_id` filter and call no `require()`, so one workspace's member could read or disconnect another's accounts. Hosted mounts only the OAuth `connect` and `oauth/callback` routes (each state row carries the issuing workspace and the callback persists into it); the rest of that router stays unmounted (404) | workspace tenancy (wave 4, spec 01 sections 4-5): add `workspace_id` filters and `require(ACCOUNTS_MANAGE / INBOX_REPLY / POSTS_WRITE ...)`, then mount it in hosted |
 | `enforce_quota` call sites for storage (media upload) and posts per day (the publishing engine) | the quotas exist; connected accounts is enforced on connect, posts per day needs the engine's daily count, storage needs the upload path | media pipeline (spec 02) and publishing engine (spec 03) |
 
 ## 2. The pieces
@@ -49,9 +47,30 @@ verify the Clerk session, per-user rate limit, mirror the user, resolve the
 workspace and the Runway role, per-workspace rate limit. Routes call
 `require(principal, scope)`.
 
-Routes served in hosted today: `/health`, `/api/settings` (product switches only),
-`/api/v1/workspace*` (always filtered by `principal.workspace_id`) and the signed
-webhook `/hooks/identity/clerk`. Everything else is 404 until it is workspace-scoped.
+Postgres and tenancy are in place: `runway db` migrates through
+`RUNWAY_MIGRATION_DATABASE_URL` (the owner role) while the API and worker
+connect through `RUNWAY_DATABASE_URL` (the app role, `NOBYPASSRLS`). Every
+workspace-owned table carries row-level security (`0021_row_level_security`,
+`ENABLE` + `FORCE`, policy `runway_workspace`): a request's session emits
+`SET LOCAL app.workspace_id` per transaction and sees only that workspace;
+`system_session()`, used only by system code, emits
+`SET LOCAL app.system = 'on'` and sees every row; a session with neither GUC
+sees nothing - the policy fails closed. On top of the policy the application
+layer filters ORM reads and refuses cross-workspace writes
+(`runway.db.base`).
+
+Routes served in hosted today: `/health`, `/api/settings` (product switches
+only), the workspace-scoped `/api/v1` surface (`workspace`, `keys`,
+`approvals`, `webhooks`, `accounts` sync-status and publishing consent,
+`media`, `posts`, `policy`, `events/stream` - every route bound to
+`principal.workspace_id`), the platform OAuth routes
+`/api/platforms/{platform}/connect` and
+`/api/platforms/{platform}/oauth/callback` (the state row binds the flow to
+the principal's workspace and the callback refuses a state from another),
+and the signed webhooks `/hooks/identity/clerk`
+and the platform `/hooks/*` receivers. The local-only surfaces (capture,
+catalogue, discovery, intelligence, proposals, the browser-publisher routes
+under `/api/*`) stay unmounted - 404.
 
 ## 3. What the owner must sign up for and approve
 

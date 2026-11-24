@@ -317,7 +317,8 @@ def run_purge_job(database: Database, settings: Settings, _job: Job) -> None:
     from runway.api.v1.idempotency import IdempotencyStore
 
     token_store = TokenStore(settings.resolved_data_dir / "secrets")
-    with database.session() as session:
+    # Purge is cross-workspace system work by definition.
+    with database.system_session() as session:
         duties: list[tuple[str, Callable[[], int]]] = [
             ("idempotency keys", lambda: IdempotencyStore(database).purge_expired(session)),
             ("events", lambda: purge_expired_events(session)),

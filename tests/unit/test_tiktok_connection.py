@@ -297,16 +297,15 @@ def test_realtime_seam_nudges_the_named_target(database: Database) -> None:
         session.flush()
         target_id = target.id
 
-    assert (
-        realtime_seam.on_publish_event(
-            "post.publish.complete", publish_id="pub-9", database=database
+    with database.session() as session:
+        assert (
+            realtime_seam.on_publish_event("post.publish.complete", session, publish_id="pub-9")
+            is True
         )
-        is True
-    )
-    assert (
-        realtime_seam.on_publish_event("post.publish.failed", publish_id="other", database=database)
-        is False
-    )
+        assert (
+            realtime_seam.on_publish_event("post.publish.failed", session, publish_id="other")
+            is False
+        )
     with database.session() as session:
         jobs = session.scalars(
             select(PublishJob).where(

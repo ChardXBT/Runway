@@ -14341,6 +14341,6 @@
   },
   "contract_version": "runway-schema-contract-v1",
   "fingerprint": "78b796a11f56b14043f93fa44af863550e5589257621539f2e7647f1981f82a6",
-  "migration": "0020_youtube_publishing",
+  "migration": "0021_row_level_security",
   "table_count": 91
 }

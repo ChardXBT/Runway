@@ -142,7 +142,10 @@ def test_hosted_clerk_app_exempts_only_its_signed_webhook(tmp_path: Path) -> Non
 
 
 # Every route the hosted API serves, and why each is safe there. Adding a
-# router to hosted must add it here, with its tenancy argument.
+# router to hosted must add it here, with its tenancy argument. Since phase P7
+# every /api/v1 route runs inside bind_workspace_context, so its ORM queries
+# see only principal.workspace_id's rows and Postgres row-level security
+# enforces the same boundary below the ORM.
 HOSTED_ROUTES = {
     # Liveness probe: product name, version and switches; no tenant data.
     ("GET", "/health"),
@@ -155,8 +158,69 @@ HOSTED_ROUTES = {
     ("PATCH", "/api/v1/workspace/members/{user_id}"),
     # Event stream: every query is filtered by principal.workspace_id.
     ("GET", "/api/v1/events/stream"),
+    # Keys (spec 06 section 5): workspace-scoped CRUD and release grants.
+    ("GET", "/api/v1/keys"),
+    ("POST", "/api/v1/keys"),
+    ("GET", "/api/v1/keys/{key_id}"),
+    ("DELETE", "/api/v1/keys/{key_id}"),
+    ("PUT", "/api/v1/keys/{key_id}/release-grants"),
+    # Approvals (spec 06 section 8): workspace-scoped pending targets.
+    ("GET", "/api/v1/approvals"),
+    ("POST", "/api/v1/approvals/{target_id}/reject"),
+    # Outbound webhooks (spec 06 section 9): workspace-scoped endpoints and
+    # their deliveries.
+    ("GET", "/api/v1/webhooks"),
+    ("POST", "/api/v1/webhooks"),
+    ("GET", "/api/v1/webhooks/{endpoint_id}"),
+    ("PATCH", "/api/v1/webhooks/{endpoint_id}"),
+    ("DELETE", "/api/v1/webhooks/{endpoint_id}"),
+    ("GET", "/api/v1/webhooks/{endpoint_id}/deliveries"),
+    # Accounts (spec 08): sync status and per-platform publishing consent on
+    # workspace-scoped connected accounts.
+    ("GET", "/api/v1/accounts/{account_id}/sync-status"),
+    ("GET", "/api/v1/accounts/{account_id}/tiktok/creator-info"),
+    ("GET", "/api/v1/accounts/{account_id}/youtube/categories"),
+    ("POST", "/api/v1/accounts/{account_id}/publishing/enable"),
+    ("GET", "/api/v1/accounts/{account_id}/publishing/capability"),
+    # Media (spec 06 section 6): workspace-scoped assets and uploads.
+    ("GET", "/api/v1/media/{asset_id}"),
+    ("DELETE", "/api/v1/media/{asset_id}"),
+    ("GET", "/api/v1/media/{asset_id}/poster"),
+    ("GET", "/api/v1/media/{asset_id}/upload"),
+    ("POST", "/api/v1/media"),
+    ("POST", "/api/v1/media/{asset_id}/complete"),
+    ("PUT", "/api/v1/media/{asset_id}/parts/{part_number}"),
+    # Posts engine (spec 03/06): workspace-scoped posts, targets and attempts.
+    ("GET", "/api/v1/posts"),
+    ("POST", "/api/v1/posts"),
+    ("GET", "/api/v1/posts/{post_id}"),
+    ("PATCH", "/api/v1/posts/{post_id}"),
+    ("POST", "/api/v1/posts/{post_id}/targets"),
+    ("PUT", "/api/v1/posts/{post_id}/targets/{target_id}"),
+    ("GET", "/api/v1/posts/{post_id}/targets/{target_id}/attempts"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/cancel"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/mark-published"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/reconcile"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/release"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/schedule"),
+    # Workspace policy read/write (workspace-scoped singleton).
+    ("GET", "/api/v1/policy"),
+    ("PUT", "/api/v1/policy"),
+    # Platform webhooks (spec 04 section 2): the platform signature is the
+    # auth; the delivery resolves its workspace before touching tenant data.
+    ("GET", "/hooks/health"),
+    ("GET", "/hooks/instagram"),
+    ("POST", "/hooks/instagram"),
+    ("POST", "/hooks/tiktok"),
+    ("GET", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
+    ("POST", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
     # Clerk webhook: authenticated by the Svix signature, not by a principal.
     ("POST", "/hooks/identity/clerk"),
+    # OAuth connect + callback (spec 08): the only hosted platform routes.
+    # State rows carry the principal's workspace and the callback persists
+    # into it, so a state never crosses workspaces.
+    ("POST", "/api/platforms/{platform}/connect"),
+    ("GET", "/api/platforms/{platform}/oauth/callback"),
 }
 
 

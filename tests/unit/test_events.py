@@ -89,7 +89,11 @@ def test_resume_rules(database: Database) -> None:
     _second_workspace(database)
     with database.session() as session:
         mine = record_event(session, 1, types.MEDIA_READY, "media", 1).id
+    # A workspace-2 row cannot be written through a workspace-1 session; the
+    # seed goes through a system session like real cross-workspace work.
+    with database.system_session() as session:
         theirs = record_event(session, 2, types.MEDIA_READY, "media", 2).id
+    with database.session() as session:
         old = record_event(session, 1, types.MEDIA_READY, "media", 3).id
         session.execute(
             update(EventRecord)
@@ -177,9 +181,10 @@ def test_an_idle_stream_sends_a_heartbeat_every_20_seconds(database: Database) -
 
 def test_resume_replays_only_this_workspaces_later_events_in_order(database: Database) -> None:
     _second_workspace(database)
+    with database.system_session() as session:
+        record_event(session, 2, types.COMMENT_NEW, "comment", 99)
     with database.session() as session:
         first = record_event(session, 1, types.COMMENT_NEW, "comment", 1).id
-        record_event(session, 2, types.COMMENT_NEW, "comment", 99)
         second = record_event(session, 1, types.COMMENT_NEW, "comment", 2).id
         third = record_event(session, 1, types.COMMENT_NEW, "comment", 3).id
     frames = _collect(database, 3, last_event_id=first)
