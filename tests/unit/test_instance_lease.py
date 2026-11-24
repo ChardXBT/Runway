@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -320,6 +322,41 @@ def test_unexpired_tokens_for_platform_writes_are_refused_in_standby(tmp_path: P
     active_registry = ProviderRegistry(cast(Database, None), active)
     token = active_registry.fresh_token(Platform.youtube, "ref", for_write=True)
     assert token.access_token == "long-lived"
+
+
+def test_local_machine_id_retries_a_transiently_empty_file(tmp_path: Path) -> None:
+    path = instance_lease.machine_id_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")  # a create that died between open and write
+
+    def fill_in_the_id() -> None:
+        time.sleep(0.06)
+        path.write_text("machine-late\n", encoding="utf-8")
+
+    writer = threading.Thread(target=fill_in_the_id)
+    writer.start()
+    try:
+        assert instance_lease.local_machine_id() == "machine-late"
+    finally:
+        writer.join(timeout=10)
+
+
+def test_local_machine_id_refuses_a_file_that_stays_empty(tmp_path: Path) -> None:
+    path = instance_lease.machine_id_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+
+    with pytest.raises(LeaseError, match="empty"):
+        instance_lease.local_machine_id()
+
+
+def test_local_machine_id_never_overwrites_an_existing_id(tmp_path: Path) -> None:
+    path = instance_lease.machine_id_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("machine-first\n", encoding="utf-8")
+
+    assert instance_lease.local_machine_id() == "machine-first"
+    assert path.read_text(encoding="utf-8") == "machine-first\n"
 
 
 def test_a_transfer_marker_makes_the_machine_standby(tmp_path: Path) -> None:

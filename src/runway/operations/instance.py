@@ -67,6 +67,7 @@ from runway.operations.database_release import (
 from runway.operations.instance_lease import (
     HEARTBEAT_RENEW_AFTER,
     LEASE_FILE_NAME,
+    LEASE_STALE_AFTER,
     Lease,
     LeaseError,
     StandbyError,
@@ -1266,8 +1267,19 @@ def _local_database_is_newer(settings: Settings, manifest: dict[str, Any]) -> bo
     created_at = manifest.get("created_at")
     if not database.is_file() or not isinstance(created_at, str):
         return False
+    snapshot_at = datetime.fromisoformat(created_at)
+    # Runway runs SQLite in WAL mode: recent commits can sit in runway.db-wal
+    # while the main file's mtime does not move, so a non-empty WAL written
+    # after the snapshot is newer local work even when the .db looks unchanged.
+    wal = database.parent / f"{database.name}-wal"
+    if (
+        wal.is_file()
+        and wal.stat().st_size > 0
+        and datetime.fromtimestamp(wal.stat().st_mtime, UTC) > snapshot_at
+    ):
+        return True
     modified = datetime.fromtimestamp(database.stat().st_mtime, UTC)
-    if modified <= datetime.fromisoformat(created_at):
+    if modified <= snapshot_at:
         return False
     return sha256_file(database) != str(manifest.get("database", {}).get("sha256"))
 
@@ -1723,11 +1735,54 @@ def pull(
     *,
     take: bool = False,
     force: bool = False,
+    i_know_the_other_machine_is_off: bool = False,
     wait_seconds: float = DEFAULT_WORKER_WAIT_SECONDS,
 ) -> dict[str, Any]:
     """Download and verify the latest snapshot, take the lease, then install it."""
     with _instance_operation(_require_instance_dir(ctx.settings)):
-        return _pull(ctx, take=take, force=force, wait_seconds=wait_seconds)
+        return _pull(
+            ctx,
+            take=take,
+            force=force,
+            i_know_the_other_machine_is_off=i_know_the_other_machine_is_off,
+            wait_seconds=wait_seconds,
+        )
+
+
+def _refuse_a_recent_take(
+    ctx: InstanceContext, instance_dir: Path, remote_lease: Lease | None, me: str
+) -> None:
+    """The clock-skew guard for ``--take``, measured on the holder's own clock.
+
+    ``heartbeat_at`` is the holder's self-reported time and ``ctx.now`` is this
+    machine's clock; skew in either makes a live lease look stale. The fetched
+    lease commit's committer timestamp is in the same clock domain as the
+    heartbeat, so ``committed - heartbeat`` is the heartbeat's true age on the
+    holder's own timeline. Younger than three stale intervals means the
+    holder's clock admits the lease was fresh when last committed.
+    """
+    if remote_lease is None or remote_lease.holder is None or remote_lease.holder == me:
+        return
+    heartbeat = remote_lease.heartbeat_at
+    if heartbeat is None:
+        return
+    result = ctx.git(instance_dir, "log", "-1", "--format=%ct", "HEAD", check=False)
+    committed: datetime | None = None
+    if result.returncode == 0:
+        try:
+            committed = datetime.fromtimestamp(int(result.stdout.strip()), UTC)
+        except ValueError:
+            committed = None
+    if committed is not None and committed - heartbeat >= 3 * LEASE_STALE_AFTER:
+        return
+    holder_heartbeat = heartbeat.astimezone(UTC).isoformat()
+    raise LeaseError(
+        f"{remote_lease.holder} holds the lease (last heartbeat {holder_heartbeat}), and "
+        "the fetched lease commit does not prove that heartbeat old on the holder's own "
+        "clock — the staleness you see may be clock skew on either machine. If that "
+        "machine is truly off, confirm with 'runway instance pull --take "
+        "--i-know-the-other-machine-is-off'."
+    )
 
 
 def _pull(
@@ -1735,6 +1790,7 @@ def _pull(
     *,
     take: bool,
     force: bool,
+    i_know_the_other_machine_is_off: bool,
     wait_seconds: float,
 ) -> dict[str, Any]:
     settings = ctx.settings
@@ -1746,6 +1802,8 @@ def _pull(
     # is judged by the remote heartbeat, not by whatever this clone last saw.
     remote_lease = read_lease(instance_dir)
     new_lease = acquire(remote_lease, me, now, take_stale=take)
+    if take and not i_know_the_other_machine_is_off:
+        _refuse_a_recent_take(ctx, instance_dir, remote_lease, me)
     manifest = read_manifest(instance_dir)
     if manifest is None:
         raise InstanceError("no snapshot has been pushed yet; run 'runway instance push' first")

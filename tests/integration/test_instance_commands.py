@@ -653,7 +653,10 @@ def test_a_stale_lease_needs_take(
     clock.advance(hours=24, minutes=1)  # machine A went silent
     with pytest.raises(LeaseError, match="--take"):
         ops.pull(machine_b.context(monkeypatch))
-    assert ops.pull(machine_b.context(monkeypatch), take=True)["status"] == "pulled"
+    taken = ops.pull(
+        machine_b.context(monkeypatch), take=True, i_know_the_other_machine_is_off=True
+    )
+    assert taken["status"] == "pulled"
     assert instance_is_active(machine_b.settings())
     # A comes back: it is in standby and cannot push over B's lease.
     with pytest.raises(LeaseError, match="only the machine holding the lease"):
@@ -984,7 +987,7 @@ def test_a_holder_whose_stale_lease_was_taken_drops_to_standby(
     ops.push(machine_a.context(monkeypatch))
     ops.init(machine_b.context(monkeypatch), PRIVATE_REPO)
     clock.advance(hours=25)  # A went silent (offline), B takes over
-    ops.pull(machine_b.context(monkeypatch), take=True)
+    ops.pull(machine_b.context(monkeypatch), take=True, i_know_the_other_machine_is_off=True)
 
     # A comes back. Its own clone still says A holds the lease...
     local = read_lease(machine_a.instance_dir)
@@ -1092,6 +1095,63 @@ def test_pull_by_the_holder_refuses_to_overwrite_newer_local_work(
     backup = Path(pulled["replaced_files_backup"])
     assert (backup / "runway.db").read_bytes() == newer
     assert database.read_bytes() != newer
+
+
+def test_pull_by_the_holder_refuses_when_a_pending_wal_is_newer_than_the_snapshot(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine.settings())
+    ops.push(machine.context(monkeypatch))
+    settings = machine.settings()
+    database = settings.database_path
+    manifest = json.loads((machine.instance_dir / "manifest.json").read_text())
+    wal = database.parent / f"{database.name}-wal"
+
+    assert not ops._local_database_is_newer(settings, manifest)
+
+    # A crash can leave committed changes sitting in the write-ahead log while
+    # the main database file keeps its older modification time.
+    wal.write_bytes(b"committed wal frames not yet checkpointed")
+    later = datetime.now(UTC).timestamp() + 5
+    os.utime(wal, (later, later))
+    assert ops._local_database_is_newer(settings, manifest)
+
+    with pytest.raises(InstanceError, match="--force"):
+        ops.pull(machine.context(monkeypatch))
+
+    # An empty or pre-snapshot WAL is not newer work.
+    wal.write_bytes(b"")
+    assert not ops._local_database_is_newer(settings, manifest)
+
+
+def test_take_refuses_a_lease_whose_heartbeat_is_recent_on_the_remotes_own_clock(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine_a = _machine(tmp_path, "machine-a", fake_github, clock)
+    machine_b = _machine(tmp_path, "machine-b", fake_github, clock)
+    ops.init(machine_a.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine_a.settings())
+    ops.push(machine_a.context(monkeypatch))
+    ops.init(machine_b.context(monkeypatch), PRIVATE_REPO)
+
+    # 25 hours on B's clock make A's heartbeat look stale, but the remote lease
+    # commit carries it as fresh: the age gap is clock skew, not a dead holder.
+    clock.advance(hours=25)
+    with pytest.raises(LeaseError, match="--i-know-the-other-machine-is-off") as refused:
+        ops.pull(machine_b.context(monkeypatch), take=True)
+    assert "machine-a" in str(refused.value)
+    lease = json.loads(_remote_file(fake_github, "lease.json"))
+    assert lease["holder"] == "machine-a"
+
+    pulled = ops.pull(
+        machine_b.context(monkeypatch),
+        take=True,
+        i_know_the_other_machine_is_off=True,
+    )
+    assert pulled["status"] == "pulled"
+    assert instance_is_active(machine_b.settings())
 
 
 def test_secrets_plaintext_never_touches_the_shared_temp_directory(

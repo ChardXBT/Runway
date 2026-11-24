@@ -442,6 +442,13 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         if not code or not state:
             return fail("missing_code")
         try:
+            registry.token_store.ensure_writable()
+        except StandbyError:
+            # Standby check before the code exchange and before consuming the
+            # state: a standby machine must not burn the single-use
+            # authorization code on a token it could never store.
+            return fail("standby")
+        try:
             record = oauth_states.consume(parsed, state=state)
         except OAuthStateError as exc:
             return fail(str(exc))

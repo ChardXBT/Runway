@@ -67,6 +67,12 @@ def pull_command(
     take: bool = typer.Option(
         False, "--take", help="Take a lease whose holder has been silent for over 24 hours."
     ),
+    i_know_the_other_machine_is_off: bool = typer.Option(
+        False,
+        "--i-know-the-other-machine-is-off",
+        help="With --take, confirm the holder is really off even when its heartbeat "
+        "still looks recent on the remote's own clock.",
+    ),
     force: bool = typer.Option(
         False,
         "--force",
@@ -75,7 +81,15 @@ def pull_command(
     wait_seconds: int = WAIT_OPTION,
 ) -> None:
     """Verify the latest snapshot, take the lease and restore it on this machine."""
-    _run(lambda ctx: operations.pull(ctx, take=take, force=force, wait_seconds=wait_seconds))
+    _run(
+        lambda ctx: operations.pull(
+            ctx,
+            take=take,
+            force=force,
+            i_know_the_other_machine_is_off=i_know_the_other_machine_is_off,
+            wait_seconds=wait_seconds,
+        )
+    )
 
 
 @instance_app.command("handover")

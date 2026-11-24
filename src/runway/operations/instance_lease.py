@@ -23,8 +23,9 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -164,17 +165,27 @@ def local_machine_id() -> str:
     path = machine_id_file()
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Write the id to a sibling temp file, then hard-link it into place:
+        # readers never see a half-created empty file, and the loser of a
+        # create race can never overwrite the winner's id.
+        fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=".machine-id-", suffix=".tmp")
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            pass  # another process created it first; read theirs
-        else:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
                 handle.write(_new_machine_id() + "\n")
-    value = path.read_text(encoding="utf-8").strip()
-    if not value:
-        raise LeaseError(f"{path} is empty; delete it and Runway creates a new machine id")
-    return value
+            # Another process may have created the id first; read theirs.
+            with suppress(FileExistsError):
+                os.link(temp_name, path)
+        finally:
+            Path(temp_name).unlink(missing_ok=True)
+    # A still-empty file may be a just-created one mid-install elsewhere; give
+    # it a few retries before declaring it broken.
+    for attempt in range(5):
+        value = path.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+        if attempt < 4:
+            time.sleep(0.05)
+    raise LeaseError(f"{path} is empty; delete it and Runway creates a new machine id")
 
 
 def machine_id(settings: Settings) -> str:
