@@ -89,7 +89,10 @@ def _lock_posix(handle: IO[bytes], path: Path, deadline: float | None) -> None:
 
     while True:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(  # type: ignore[attr-defined]
+                handle.fileno(),
+                fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
+            )
             return
         except OSError as exc:
             _retry_or_raise(deadline, path, exc)
@@ -98,4 +101,4 @@ def _lock_posix(handle: IO[bytes], path: Path, deadline: float | None) -> None:
 def _unlock_posix(handle: IO[bytes]) -> None:
     import fcntl
 
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
