@@ -87,8 +87,6 @@ class ToolSpec:
     local_only: bool = False
     # Shown only to an API key whose posts:release is effective (agent_release=per_key).
     release: bool = False
-    # Counts against the key's daily cap on created posts.
-    creates_post: bool = False
 
     @property
     def mutates(self) -> bool:
@@ -609,7 +607,6 @@ TOOLS: tuple[ToolSpec, ...] = (
         CreatePostArgs,
         create_post,
         read_only=False,
-        creates_post=True,
     ),
     ToolSpec(
         "update_post",

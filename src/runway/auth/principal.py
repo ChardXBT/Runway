@@ -111,6 +111,16 @@ def require(principal: Principal, scope: str) -> None:
         raise Problem.of(ProblemCode.SCOPE_MISSING, f"this action needs the {scope} scope")
 
 
+def require_person(principal: Principal, action: str) -> None:
+    """Some decisions belong to a person, never to an API key (invariant 16).
+
+    Check this after the scope check: a key without the scope gets
+    `scope_missing`, a key holding it gets `human_required`.
+    """
+    if principal.kind == "agent":
+        raise Problem.of(ProblemCode.HUMAN_REQUIRED, f"only a person can {action}")
+
+
 def _presented_api_key(request: Request) -> bool:
     authorization = request.headers.get("authorization", "")
     scheme, _, credential = authorization.partition(" ")

@@ -12,6 +12,7 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 
+from runway.auth.key_limits import acquire_cap_lock
 from runway.auth.principal import POSTS_WRITE, Principal, require
 from runway.auth.problems import Problem, ProblemCode
 from runway.db.models import CandidateImage, Channel, MediaAsset, Proposal
@@ -45,6 +46,11 @@ class ProposalBridge:
         require(principal, POSTS_WRITE)
         database = self.posts.database
         with database.session() as session:
+            if principal.kind == "agent":
+                # The daily post cap is enforced in create_post_in below; the
+                # lock that makes its check-then-act atomic must be taken
+                # before this transaction's first statement.
+                acquire_cap_lock(session, principal)
             proposal = session.get(Proposal, proposal_id)
             channel = session.get(Channel, proposal.channel_id) if proposal is not None else None
             if (

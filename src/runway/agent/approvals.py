@@ -26,7 +26,7 @@ from sqlalchemy import select
 from runway.agent.services import AgentServices, ApprovalItem, ApprovalPage
 from runway.api.v1.pagination import decode_cursor, encode_cursor
 from runway.auth.audit import record_audit
-from runway.auth.principal import POSTS_RELEASE, Principal, require
+from runway.auth.principal import POSTS_RELEASE, Principal, require, require_person
 from runway.auth.problems import Problem, ProblemCode
 from runway.db.base import Database
 from runway.db.models import ContentDraft, DraftTarget
@@ -165,6 +165,9 @@ def reject_target(
 ) -> dict[str, object]:
     """A person rejects a target: engine hook, then `target.rejected` and an audit row."""
     require(principal, POSTS_RELEASE)
+    # Rejecting is a person's judgement call; a key with posts:release may
+    # release its granted platforms but can never send a target back.
+    require_person(principal, "reject a target")
     with database.session() as session:
         target = session.scalar(
             select(DraftTarget).where(

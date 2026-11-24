@@ -642,14 +642,54 @@ async def test_a_stale_version_is_refused_and_changes_nothing(
 
 
 def test_the_daily_post_cap_applies_to_mcp(
-    database: Database, settings: Settings, seed: Seed, engine: FakeEngine
+    database: Database, settings: Settings
 ) -> None:
+    """The cap is enforced inside the create transaction on the real engine,
+    counted on `content_drafts` — not pre-checked on audit rows."""
+    from runway.agent.engine import engine_agent_services
+
     capped = settings.model_copy(update={"api_key_daily_post_cap": 1})
-    runner = _runner(database, capped, _key(database, capped))
-    assert not runner.call("create_post", {"title": "one"}).is_error
-    second = runner.call("create_post", {"title": "two"})
+    secret = _key(database, capped)
+    runner = ToolRunner(
+        database,
+        capped,
+        PrincipalSource(database, capped, secret),
+        services_factory=engine_agent_services,
+    )
+    first = runner.call("create_post", {"title": "one", "targets": []})
+    assert not first.is_error, first.payload
+    second = runner.call("create_post", {"title": "two", "targets": []})
     assert second.is_error and second.payload["error"]["code"] == "rate_limited"
-    assert len(engine.posts) == 1
+    with database.session() as session:
+        assert session.scalar(select(func.count(ContentDraft.id))) == 1
+
+
+def test_an_unexpected_failure_is_a_generic_internal_error(
+    database: Database,
+    settings: Settings,
+    engine: FakeEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No exception text, type or traceback reaches the MCP caller."""
+    runner = _runner(database, settings, _key(database, settings))
+    detail = "delicate internals xyzzy"
+
+    def crash(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(detail)
+
+    monkeypatch.setattr(engine, "list_posts", crash)
+    outcome = runner.call("list_posts", {})
+    assert outcome.is_error
+    error = outcome.payload["error"]
+    assert error["code"] == "internal_error"
+    assert error["status"] == 500
+    assert detail not in json.dumps(outcome.payload)
+
+    # Principal resolution failing is sanitised the same way.
+    monkeypatch.setattr(runner.principals, "resolve", crash)
+    again = runner.call("list_posts", {})
+    assert again.is_error and again.payload["error"]["code"] == "internal_error"
+    assert detail not in json.dumps(again.payload)
 
 
 def test_invalid_arguments_and_revoked_keys_are_errors_without_echoing_input(

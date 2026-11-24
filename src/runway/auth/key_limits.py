@@ -2,8 +2,11 @@
 
 - The request rate is a sliding one-minute window held in memory by each
   process (the API and each `runway mcp` process count separately).
-- Daily caps count audit rows, so they survive restarts and are shared by the
-  REST API and the MCP server: every mutation by a key writes one.
+- Daily caps count the domain rows the key created (`content_drafts` for
+  posts, `draft_targets.released_*` for releases), read inside the mutation's
+  own transaction: enforcement cannot be bypassed by racing the audit write
+  or by a create path that writes no audit row. Audit rows remain, for the
+  record; they are no longer read for enforcement.
 """
 
 from __future__ import annotations
@@ -14,21 +17,15 @@ from collections import deque
 from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from runway.auth.audit import detail_fragment, http_action, mcp_action
 from runway.auth.principal import Principal
 from runway.auth.problems import Problem, ProblemCode
-from runway.db.models import AuditLogEntry, utcnow
+from runway.db.models import ApiKey, AuditLogEntry, ContentDraft, DraftTarget, utcnow
 
 WINDOW_SECONDS = 60.0
-# Actions that create a post: the v1 route (built by the publishing engine)
-# and the MCP tool. Both pass through the same daily cap.
-POST_CREATE_ACTIONS = frozenset({http_action("POST", "/api/v1/posts"), mcp_action("create_post")})
-# Releases: any v1 route ending in /release, and the MCP tool.
-RELEASE_ACTION_PATTERN = "POST /api/v1/%/release"
-RELEASE_MCP_ACTION = mcp_action("release_target")
 
 
 class SlidingWindowLimiter:
@@ -87,33 +84,85 @@ def _count(
     return int(session.scalar(statement) or 0)
 
 
+def _actor(principal: Principal) -> str:
+    """The `created_by` / `released_by` value the engine writes for `principal`."""
+    return f"{principal.kind}:{principal.id}"
+
+
+def acquire_cap_lock(session: Session, principal: Principal) -> None:
+    """Serialise the cap check-then-act inside the caller's write transaction.
+
+    Postgres: `SELECT ... FOR UPDATE` on the key's `api_keys` row, so two
+    requests by one key queue on it (a keyless agent has no row; the hosted
+    profile always uses keys). SQLite: `BEGIN IMMEDIATE` takes the database
+    write lock up front; a session that already wrote already holds it, and a
+    session that only read upgrades cleanly (WAL). Under contention the call
+    waits for `busy_timeout`, then fails honestly instead of letting two
+    creators both pass the cap.
+    """
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        if principal.id.isdigit():
+            session.execute(
+                select(ApiKey.id).where(ApiKey.id == int(principal.id)).with_for_update()
+            )
+        return
+    if dialect == "sqlite":
+        try:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        except OperationalError as exc:
+            # A transaction that already wrote is already holding the lock.
+            if "cannot start a transaction" not in str(exc):
+                raise
+
+
 def posts_created_today(session: Session, principal: Principal, now: datetime | None = None) -> int:
-    return _count(
-        session, principal, utc_day_start(now), AuditLogEntry.action.in_(POST_CREATE_ACTIONS)
+    """Posts this principal created since 00:00 UTC, counted on `content_drafts`."""
+    return int(
+        session.scalar(
+            select(func.count(ContentDraft.id)).where(
+                ContentDraft.workspace_id == principal.workspace_id,
+                ContentDraft.created_by == _actor(principal),
+                ContentDraft.created_at >= utc_day_start(now),
+            )
+        )
+        or 0
     )
 
 
 def releases_today(
     session: Session, principal: Principal, platform: str, now: datetime | None = None
 ) -> int:
-    return _count(
-        session,
-        principal,
-        utc_day_start(now),
-        or_(
-            AuditLogEntry.action.like(RELEASE_ACTION_PATTERN),
-            AuditLogEntry.action == RELEASE_MCP_ACTION,
-        ),
-        AuditLogEntry.detail_json.like(f"%{detail_fragment('platform', platform)}%"),
+    """Targets this principal released on `platform` since 00:00 UTC.
+
+    Counted on `draft_targets.released_by` / `released_at`, the release record
+    the engine writes inside the release transaction.
+    """
+    return int(
+        session.scalar(
+            select(func.count(DraftTarget.id)).where(
+                DraftTarget.workspace_id == principal.workspace_id,
+                DraftTarget.platform == platform,
+                DraftTarget.released_by == _actor(principal),
+                DraftTarget.released_at >= utc_day_start(now),
+            )
+        )
+        or 0
     )
 
 
 def enforce_daily_post_cap(
     session: Session, principal: Principal, cap: int, *, now: datetime | None = None
 ) -> None:
-    """429 `rate_limited` once a key has created `cap` posts today (UTC). Users are exempt."""
+    """429 `rate_limited` once a key has created `cap` posts today (UTC).
+
+    Users are exempt. Call inside the mutation's own transaction: this locks
+    first (`acquire_cap_lock`), then counts that key's posts on the domain
+    table, so concurrent creates cannot both pass.
+    """
     if principal.kind != "agent":
         return
+    acquire_cap_lock(session, principal)
     if posts_created_today(session, principal, now) >= cap:
         raise Problem.of(
             ProblemCode.RATE_LIMITED,

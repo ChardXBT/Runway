@@ -14,7 +14,10 @@ Called by `get_principal` on every route, after the principal is resolved:
    `posts:release` is 403 `scope_missing`, and keys need the workspace policy
    and a grant. The publishing engine's route calls it too; this guard makes
    the rule hold for every release route, whoever builds it.
-4. `POST /api/v1/posts` by a key counts against the key's daily post cap.
+
+The daily caps on created posts and releases are enforced inside the mutation
+transactions themselves (`runway.posts.service`), counted on the domain rows;
+this guard is an early, pre-handler check only.
 """
 
 from __future__ import annotations
@@ -23,7 +26,6 @@ from fastapi import Request
 from sqlalchemy import select
 
 from runway.auth.audit import AUDIT_DETAIL_STATE, AUDIT_TARGET_STATE, MUTATING_METHODS
-from runway.auth.key_limits import enforce_daily_post_cap
 from runway.auth.principal import LOCAL_OWNER_ID, Principal
 from runway.auth.problems import Problem, ProblemCode
 from runway.auth.release_policy import authorize_release
@@ -32,7 +34,6 @@ from runway.db.base import Database
 from runway.db.models import DraftTarget
 
 V1_PREFIX = "/api/v1"
-POSTS_CREATE_ROUTE = ("POST", "/api/v1/posts")
 # Read-only documents a key holder may fetch outside /api/v1.
 KEY_READABLE_LEGACY_ROUTES = frozenset({"/openapi.json", "/docs", "/redoc"})
 # Path parameters that name a draft target on release routes.
@@ -187,9 +188,4 @@ def enforce_request_policy(settings: Settings, request: Request, principal: Prin
         )
     if is_v1_path(path) and is_release_route(method, template):
         _guard_release(request, principal)
-    if principal.kind == "agent" and (method, template) == POSTS_CREATE_ROUTE:
-        database = _database(request)
-        if database is not None:
-            with database.session() as session:
-                enforce_daily_post_cap(session, principal, settings.api_key_daily_post_cap)
     setattr(request.state, _POLICY_DONE_STATE, True)

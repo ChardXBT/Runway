@@ -218,6 +218,103 @@ def test_a_granted_key_releases_only_its_platforms_within_its_daily_cap(
     assert again.json()["code"] == "scope_missing"
 
 
+def test_a_key_can_never_mark_a_target_published(
+    client: TestClient, database: Database, settings: Settings
+) -> None:
+    """Marking a post published by hand is a person's attestation (invariant 16)."""
+    youtube = _account(database, "youtube")
+    _per_key(client)
+    secret = _key(
+        database,
+        settings,
+        scopes=["posts:read", "posts:write", "posts:release"],
+        release_grants=[ReleaseGrantInput(platform="youtube", daily_cap=3)],
+    )
+    post = _create(client, youtube, secret=secret)
+    target_id = post["targets"][0]["id"]
+    url = f"/api/v1/posts/{post['id']}/targets/{target_id}/mark-published"
+    body = {"published_url": "https://www.youtube.com/post/UgkxABCDEF"}
+    refused = client.post(url, json=body, headers=_bearer(secret))
+    assert refused.status_code == 403
+    assert refused.json()["code"] == "human_required"
+    # The owner still can; nothing about the target changed for the key's attempt.
+    marked = client.post(url, json=body)
+    assert marked.status_code == 200, marked.text
+    assert marked.json()["targets"][0]["state"] == "published"
+
+
+def test_an_agent_key_reconciles_only_under_its_release_grant(
+    client: TestClient, database: Database, settings: Settings
+) -> None:
+    _per_key(client)
+    secret = _key(
+        database,
+        settings,
+        scopes=["posts:read", "posts:release"],
+        release_grants=[ReleaseGrantInput(platform="youtube")],
+    )
+    # A TikTok target is always human_required for a key, whatever its state.
+    tiktok_post, tiktok_target = _target(database, "tiktok")
+    refused = client.post(
+        f"/api/v1/posts/{tiktok_post}/targets/{tiktok_target}/reconcile",
+        json={},
+        headers=_bearer(secret),
+    )
+    assert refused.status_code == 403
+    assert refused.json()["code"] == "human_required"
+    # A platform the key holds no grant for is scope_missing.
+    insta_post, insta_target = _target(database, "instagram")
+    missing = client.post(
+        f"/api/v1/posts/{insta_post}/targets/{insta_target}/reconcile",
+        json={},
+        headers=_bearer(secret),
+    )
+    assert missing.status_code == 403
+    assert missing.json()["code"] == "scope_missing"
+    # The granted platform passes the guard; the owner reconciles as before.
+    youtube_post, youtube_target = _target(database, "youtube")
+    with database.session() as session:
+        for tid in (insta_target, youtube_target):
+            target = session.get(DraftTarget, tid)
+            assert target is not None
+            target.state = target.status = "uncertain"
+    by_key = client.post(
+        f"/api/v1/posts/{youtube_post}/targets/{youtube_target}/reconcile",
+        json={},
+        headers=_bearer(secret),
+    )
+    assert by_key.status_code == 200, by_key.text
+    by_person = client.post(
+        f"/api/v1/posts/{insta_post}/targets/{insta_target}/reconcile", json={}
+    )
+    assert by_person.status_code == 200, by_person.text
+
+
+def test_a_key_holding_posts_release_cannot_reject_targets(
+    client: TestClient, database: Database, settings: Settings
+) -> None:
+    """Rejection is a person's decision (spec 06 section 4); scope alone is not enough."""
+    youtube = _account(database, "youtube")
+    _per_key(client)
+    releaser = _key(
+        database,
+        settings,
+        scopes=["posts:read", "posts:write", "posts:release"],
+        release_grants=[ReleaseGrantInput(platform="youtube")],
+    )
+    post = _create(client, youtube, secret=releaser)
+    target_id = post["targets"][0]["id"]
+    refused = client.post(
+        f"/api/v1/approvals/{target_id}/reject",
+        json={"reason": "no"},
+        headers=_bearer(releaser),
+    )
+    assert refused.status_code == 403
+    assert refused.json()["code"] == "human_required"
+    accepted = client.post(f"/api/v1/approvals/{target_id}/reject", json={"reason": "no"})
+    assert accepted.status_code == 200, accepted.text
+
+
 def test_scope_missing_on_release_in_the_hosted_profile_too(
     settings: Settings, database: Database
 ) -> None:

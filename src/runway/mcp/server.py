@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -39,7 +40,7 @@ from runway.agent.services import AgentServices, build_agent_services
 from runway.api.v1.idempotency import IdempotencyStore, Reservation
 from runway.auth.api_keys import DEFAULT_AGENT_SCOPES, ApiKeyService
 from runway.auth.audit import mcp_action, record_audit
-from runway.auth.key_limits import SlidingWindowLimiter, enforce_daily_post_cap, rate_limited
+from runway.auth.key_limits import SlidingWindowLimiter, rate_limited
 from runway.auth.principal import (
     LOCAL_WORKSPACE_ID,
     POSTS_RELEASE,
@@ -56,6 +57,7 @@ from runway.platforms.inbox import InboxService
 
 SERVER_NAME = "runway"
 LOCAL_MCP_PRINCIPAL_ID = "local-mcp"
+logger = logging.getLogger(__name__)
 INSTRUCTIONS = (
     "Runway manages a creator's YouTube, Instagram and TikTok accounts. You can read accounts, "
     "content, analytics and comments, save reply drafts, upload media and prepare posts. You "
@@ -157,6 +159,17 @@ def _problem_payload(problem: Problem) -> dict[str, Any]:
     return {"error": wrap_untrusted(body)}
 
 
+def _internal_error_payload() -> dict[str, Any]:
+    """The generic `internal_error` result: a code and status, never the exception."""
+    return {
+        "error": {
+            "code": ProblemCode.INTERNAL_ERROR.value,
+            "status": 500,
+            "detail": "an unexpected error occurred",
+        }
+    }
+
+
 def _validation_payload(exc: ValidationError) -> dict[str, Any]:
     errors = [
         {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
@@ -222,6 +235,9 @@ class ToolRunner:
             principal = self.principals.resolve()
         except Problem as problem:
             return ToolOutcome(_problem_payload(problem), is_error=True)
+        except Exception:
+            logger.exception("mcp principal resolution failed")
+            return ToolOutcome(_internal_error_payload(), is_error=True)
         if spec is None or not tool_visible(spec, principal, self.settings):
             # Not in this caller's tools/list: the same answer as a tool that does not exist.
             raise MCPError(INVALID_PARAMS, f"Unknown tool: {name}")
@@ -236,6 +252,11 @@ class ToolRunner:
             result = spec.handler(self.context(), principal, parsed)
         except Problem as problem:
             return ToolOutcome(_problem_payload(problem), is_error=True)
+        except Exception:
+            # An unexpected failure is logged here; the caller only learns the
+            # stable `internal_error` code, never the exception text.
+            logger.exception("mcp tool %s failed unexpectedly", name)
+            return ToolOutcome(_internal_error_payload(), is_error=True)
         return ToolOutcome(wrap_untrusted(result))
 
     def _mutate(self, spec: ToolSpec, principal: Principal, parsed: BaseModel) -> ToolOutcome:
@@ -255,9 +276,8 @@ class ToolRunner:
                     "is still running",
                 )
         try:
-            if spec.creates_post:
-                with self.database.session() as session:
-                    enforce_daily_post_cap(session, principal, self.settings.api_key_daily_post_cap)
+            # The daily post cap is enforced inside the create transaction
+            # (runway.posts.service), not pre-checked here on audit rows.
             result = spec.handler(self.context(), principal, parsed)
             if principal.kind == "agent":
                 target_type, target_id = _result_target(result)
@@ -308,7 +328,16 @@ def build_mcp_server(runner: ToolRunner) -> Server[Any]:
         return types.ListToolsResult(tools=tools)
 
     async def on_call_tool(_ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
-        outcome = await anyio.to_thread.run_sync(runner.call, params.name, params.arguments)
+        try:
+            outcome = await anyio.to_thread.run_sync(runner.call, params.name, params.arguments)
+        except MCPError:
+            # Protocol-level errors (e.g. unknown tool) keep their own code.
+            raise
+        except Exception:
+            # Anything unexpected becomes the generic internal_error; the
+            # exception text never reaches the caller.
+            logger.exception("mcp call %s failed unexpectedly", params.name)
+            outcome = ToolOutcome(_internal_error_payload(), is_error=True)
         return _call_result(outcome)
 
     server: Server[Any] = Server(
