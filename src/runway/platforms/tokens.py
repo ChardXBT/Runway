@@ -128,6 +128,10 @@ class TokenStore(Protocol):
     def new_token_ref(self) -> str: ...
     def store(self, token_ref: str, token: TokenSet) -> None: ...
     def load(self, token_ref: str) -> TokenSet | None: ...
+    def load_readonly(self, token_ref: str) -> TokenSet | None:
+        """`load` that never creates key material or files (diagnostics)."""
+        ...
+
     def delete(self, token_ref: str) -> None: ...
     def ensure_writable(self) -> None: ...
     def refresh_lock(
@@ -472,6 +476,10 @@ class DatabaseTokenStore:
                 if not attempt:
                     raise
         return
+
+    def load_readonly(self, token_ref: str) -> TokenSet | None:
+        # A database read creates no files and generates no key.
+        return self.load(token_ref)
 
     def load(self, token_ref: str) -> TokenSet | None:
         with self.database.system_session() as session:

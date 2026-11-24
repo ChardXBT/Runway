@@ -38,7 +38,7 @@ from runway.platforms.publish_capability import (
     INSTAGRAM_PUBLISH_SCOPE,
     YOUTUBE_UPLOAD_SCOPE,
 )
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 
 NOW = datetime(2026, 11, 23, 12, 0, 0, tzinfo=UTC)
 IMPLEMENTED = frozenset(
@@ -119,7 +119,7 @@ def _connect(
 
 
 def _store_token(settings: Settings, token_ref: str, token: TokenSet) -> None:
-    TokenStore(settings.token_store_dir).store(token_ref, token)
+    FileTokenStore(settings.token_store_dir).store(token_ref, token)
 
 
 def _platform(report: object, name: str) -> dict[str, object]:
@@ -591,7 +591,7 @@ def test_an_undecryptable_store_reports_unreadable_with_reason(tmp_path: Path) -
         "ref-youtube",
         TokenSet(access_token="a", scopes=[YOUTUBE_READONLY_SCOPE]),
     )
-    store = TokenStore(settings.token_store_dir)
+    store = FileTokenStore(settings.token_store_dir)
     store.key_path.write_bytes(Fernet.generate_key() + b"\n")  # rotate the key away
 
     youtube = _platform(_doctor(database, settings).run(), "youtube")

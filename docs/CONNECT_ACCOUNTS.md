@@ -40,13 +40,16 @@ trust the wording — these pages change.
    equivalent works the same way. **[You]** For example, with the API on port 8000:
 
    ```powershell
-   tailscale serve --bg --set-path=/hooks http://127.0.0.1:8000/hooks
-   tailscale serve --bg --set-path=/api/platforms http://127.0.0.1:8000/api/platforms
-   tailscale funnel on
-   tailscale serve status
+   tailscale funnel --bg --set-path=/hooks http://127.0.0.1:8000/hooks
+   tailscale funnel --bg --set-path=/api/platforms http://127.0.0.1:8000/api/platforms
+   tailscale funnel status
    ```
 
-   Each target URL repeats the mount path because Serve strips the `--set-path`
+   (Tailscale 1.52 and later: `tailscale funnel` takes the same arguments as
+   `tailscale serve` but publishes to the internet; `serve` alone stays inside your
+   tailnet. Turn a mount off by repeating its command with `off` at the end.)
+
+   Each target URL repeats the mount path because Funnel/Serve strips the `--set-path`
    prefix before proxying and appends what is left to the target URL — the prefix
    has to live on the target for the request to reach the real route. One
    `/api/platforms` mount is enough: Runway's edge guard still serves edge traffic
@@ -346,4 +349,4 @@ with the owner, and record the date, the result and what you looked at in
   layer you meant.
 - **Edge check fails (`--check-edge`).** `https://<edge>/hooks/health` must answer `200`
   with `{"ok": true}`. A failure means the Funnel/serve mount is missing, stopped, or
-  path-limited wrong — check `tailscale serve status` that `/hooks` mounts to the API.
+  path-limited wrong — check `tailscale funnel status` that `/hooks` mounts to the API.
