@@ -75,6 +75,9 @@ INACTIVITY_THRESHOLD = timedelta(days=14)
 INACTIVITY_FLOOR = timedelta(hours=24)
 BACKOFF_CAP = timedelta(hours=24)
 BACKOFF_JITTER = 0.2
+# A skipped scope (CapabilityUnsupported) retries tomorrow, not on the
+# scope's normal cadence - the capability is not about to appear.
+SKIPPED_RESCHEDULE = timedelta(hours=24)
 
 
 def _aware(moment: datetime | None) -> datetime | None:
@@ -243,10 +246,13 @@ def record_scope_run(
 ) -> None:
     """Record one scope outcome and schedule its next run.
 
-    A failure backs off exponentially (see `failure_delay`); anything else
-    resumes the effective cadence. `source` stays `push` while the boost
-    window the last run served is still open, else `poll`. Pass a `Session`
-    to write inside the caller's transaction (spec 04 section 4 events).
+    A failure backs off exponentially (see `failure_delay`); a `skipped`
+    outcome (CapabilityUnsupported) waits a day - polling a capability the
+    provider does not have on the normal cadence is wasted quota; anything
+    else resumes the effective cadence. `source` stays `push` while the
+    boost window the last run served is still open, else `poll`. Pass a
+    `Session` to write inside the caller's transaction (spec 04 section 4
+    events).
     """
     if scope not in SCOPES:
         raise ValueError(f"unknown sync scope {scope!r}")
@@ -270,6 +276,9 @@ def record_scope_run(
             workspace = session.get(Workspace, int(account.workspace_id))
             if workspace_inactive(workspace.last_seen_at if workspace else None, moment):
                 delay = max(delay, INACTIVITY_FLOOR)
+        elif status == "skipped":
+            state.consecutive_failures = 0
+            delay = SKIPPED_RESCHEDULE
         else:
             state.consecutive_failures = 0
             workspace = session.get(Workspace, int(account.workspace_id))

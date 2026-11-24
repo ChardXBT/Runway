@@ -520,6 +520,46 @@ def test_failure_delay_helper_covers_jitter_and_cap() -> None:
     assert failure_delay(normal, 3, retry_after=42.0) == timedelta(seconds=42)
 
 
+def test_a_skipped_scope_reschedules_a_day_out_not_the_normal_cadence(
+    database: Database,
+) -> None:
+    """A capability the provider lacks does not retry every few minutes."""
+    account_id = _account(database)
+    _active_workspace(database)
+
+    record_scope_run(
+        database, account_id, "comments", status="completed", now=START
+    )
+    record_scope_run(
+        database,
+        account_id,
+        "comments",
+        status="skipped",
+        error="TikTok comments require the Business Account API",
+        now=START,
+    )
+
+    state = _states(database, account_id)["comments"]
+    assert state.last_status == "skipped"
+    assert state.consecutive_failures == 0
+    # comments' normal cadence is 15 minutes; a skip waits a full day.
+    assert _aware(state.next_run_at) == START + timedelta(hours=24)
+
+
+def test_a_capability_skip_through_a_scoped_run_waits_a_day(sync_env) -> None:
+    """The CapabilityUnsupported path reaches the 24 h rule end to end."""
+    _settings, database, _registry, service = sync_env
+    account_id = _mock_account(database, "tiktok")
+    # An active workspace, so the inactivity floor cannot mask the cadence.
+    _active_workspace(database, seen=utcnow())
+
+    service.run(account_id, scopes=["comments"])
+
+    state = _states(database, account_id)["comments"]
+    assert state.last_status == "skipped"
+    assert _aware(state.next_run_at) >= utcnow() + timedelta(hours=23)
+
+
 # ----------------------------------------------------------------- inactivity
 
 
