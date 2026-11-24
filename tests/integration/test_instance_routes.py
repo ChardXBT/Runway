@@ -55,9 +55,7 @@ def _hold(settings: Settings, holder: str) -> None:
     )
     # The lease changed "remotely": record the new remote confirmation fresh,
     # as the heartbeat thread or a syncing command would have left it.
-    instance_lease.record_remote_check(
-        settings.resolved_instance_dir, holder, datetime.now(UTC)
-    )
+    instance_lease.record_remote_check(settings.resolved_instance_dir, holder, datetime.now(UTC))
 
 
 def test_standby_disconnect_is_refused_before_revoking(
