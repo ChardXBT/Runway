@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -241,9 +241,40 @@ def test_realtime_seam_is_a_callable_no_op_without_a_database() -> None:
         )
         is False
     )
-    # `boost` exists so adapters can ask for faster sync; it is a no-op until
-    # the realtime work lands.
-    assert realtime_seam.boost(account_id=1, scope="videos", minutes=30) is None
+    # `boost` asks the realtime sync to hurry; with no database wired it is a
+    # no-op even for a scope the scheduler does not know.
+    assert realtime_seam.boost(None, account_id=1, scope="videos", minutes=30) is None
+
+
+def test_realtime_seam_boost_drives_the_sync_schedule(database: Database) -> None:
+    from runway.db.models import AccountSyncState
+    from runway.platforms import realtime_seam
+
+    with database.session() as session:
+        account = ConnectedAccount(
+            platform="tiktok",
+            external_account_id="openid-boost",
+            status="connected",
+            granted_scopes_json="[]",
+        )
+        session.add(account)
+        session.flush()
+        account_id = int(account.id)
+
+    realtime_seam.boost(database, account_id, "inventory", 30)
+
+    with database.session() as session:
+        state = session.scalar(
+            select(AccountSyncState).where(
+                AccountSyncState.account_id == account_id,
+                AccountSyncState.scope == "inventory",
+            )
+        )
+        assert state is not None
+        assert state.next_run_at is not None and state.boosted_until is not None
+        # `next_run_at` was pulled to the boost moment; the window runs 30 min.
+        assert state.boosted_until - state.next_run_at == timedelta(minutes=30)
+        assert state.source == "push"
 
 
 def test_realtime_seam_nudges_the_named_target(database: Database) -> None:

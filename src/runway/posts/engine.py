@@ -92,6 +92,7 @@ from runway.posts.snapshot import (
 )
 from runway.posts.states import current_state, set_target_state
 from runway.posts.types import AttemptKind, AttemptOutcome, ReleaseState
+from runway.realtime import schedule
 
 logger = logging.getLogger(__name__)
 
@@ -694,6 +695,30 @@ class PublishingEngine:
             target.published_url = permalink
         target.published_at = now
         set_target_state(session, target, _T.PUBLISHED, post=post)
+        # A publish is also a push hint for the publish-adjacent sync scopes
+        # (spec 04 section 3): inventory for 30 min, recent metrics for 2 h.
+        # A boost failure is a missed nudge only; it must never fail a publish.
+        if target.account_id is not None:
+            try:
+                schedule.boost(
+                    session,
+                    int(target.account_id),
+                    "inventory",
+                    schedule.INVENTORY_BOOST_MINUTES,
+                )
+                schedule.boost(
+                    session,
+                    int(target.account_id),
+                    "content_metrics_recent",
+                    schedule.RECENT_METRICS_BOOST_MINUTES,
+                )
+            except Exception:  # noqa: BLE001 - a nudge must never propagate
+                logger.warning(
+                    "could not boost sync scopes after publish (account_id=%s target_id=%s)",
+                    target.account_id,
+                    target.id,
+                    exc_info=True,
+                )
         enqueue_in(
             session,
             VERIFY_JOB,

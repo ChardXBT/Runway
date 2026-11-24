@@ -516,6 +516,59 @@ def test_a_tiktok_publish_event_records_progress_without_a_target_lookup(
     assert _jobs(database, "sync_account") == []
 
 
+def test_a_verified_publish_webhook_enqueues_a_poll_for_the_matching_target(
+    client: TestClient, hook_app: tuple[FastAPI, Database, Settings]
+) -> None:
+    """A `post.publish.*` hint for a known `publish_id` queues an immediate poll."""
+    database = hook_app[1]
+    account_id = _account(database, "tiktok", "openid-pub")
+    with database.session() as session:
+        draft = models.ContentDraft(title="Clip", body="", status="draft")
+        session.add(draft)
+        session.flush()
+        target = models.DraftTarget(
+            draft_id=draft.id,
+            platform="tiktok",
+            account_id=account_id,
+            status="pending",
+            state="processing",
+            external_id="pub-123",
+        )
+        session.add(target)
+        session.flush()
+        target_id = target.id
+    body = json.dumps(
+        {
+            "event": "post.publish.complete",
+            "user_openid": "openid-pub",
+            "content": json.dumps({"publish_id": "pub-123"}),
+        }
+    ).encode()
+    response = client.post(
+        "/hooks/tiktok",
+        content=body,
+        headers={"TikTok-Signature": _tiktok_signature(body)},
+    )
+    assert response.status_code == 200
+
+    _run_one_process_webhook(database, hook_app[2])
+
+    poll_jobs = _jobs(database, "poll_processing")
+    assert len(poll_jobs) == 1
+    assert poll_jobs[0].target_id == target_id
+    assert json.loads(poll_jobs[0].payload_json) == {
+        "via": "webhook",
+        "event": "post.publish.complete",
+    }
+    # A matched hint queues the poll; it does not also record account progress.
+    with database.session() as session:
+        assert (
+            session.scalars(select(EventRecord).where(EventRecord.type == "target.progress")).all()
+            == []
+        )
+    assert _jobs(database, "sync_account") == []
+
+
 def test_an_unparsable_body_is_recorded_and_dropped(
     client: TestClient, hook_app: tuple[FastAPI, Database, Settings]
 ) -> None:
