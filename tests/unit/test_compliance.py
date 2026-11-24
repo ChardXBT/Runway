@@ -9,7 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -20,6 +20,8 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.db.bootstrap import initialize_database
 from runway.db.models import (
+    AccountToken,
+    ApiKey,
     AuditLogEntry,
     CandidateImage,
     CaptionCandidateRecord,
@@ -28,10 +30,13 @@ from runway.db.models import (
     ConnectedAccount,
     GenerationRun,
     MediaAsset,
+    OAuthState,
+    PlatformSubscription,
     Proposal,
     ProposalEvent,
     SearchRun,
     User,
+    WebhookEndpoint,
     Workspace,
     WorkspaceMember,
 )
@@ -131,6 +136,115 @@ def test_export_includes_every_workspace_table(tmp_path: Path) -> None:
     accounts = document["tables"]["connected_accounts"]
     assert [row["external_account_id"] for row in accounts] == ["ext-1"]
     assert document["tables"]["users"][0]["email"] == "a@x.test"
+    database.engine.dispose()
+
+
+def test_export_carries_no_secret_column_values(tmp_path: Path) -> None:
+    """The per-table dump applies a denylist to every table, not just tokens.
+
+    A GDPR export must never hand out grant ciphertext, signing secrets,
+    callback tokens or key hashes - the columns below each hold a sentinel
+    that must not appear anywhere in the document.
+    """
+    database = _database(tmp_path)
+    sentinels = {
+        "token_ref": "s3ntinel-token-ref",
+        "ciphertext": "s3ntinel-grant-bytes",
+        "nonce": "s3ntinel-nonce-bytes",
+        "code_verifier": "s3ntinel-verifier",
+        "token_ciphertext": "s3ntinel-parked",
+        "secret_encrypted": "s3ntinel-hook-secret",
+        "key_hash": "s3ntinel-key-hash",
+        "hub_secret": "s3ntinel-hub",
+        "callback_token": "s3ntinel-callback",
+    }
+    with database.session() as session:
+        workspace = _workspace(session)
+        _member(session, workspace, "exp@x.test", "owner")
+        account = ConnectedAccount(
+            workspace_id=workspace.id,
+            platform="instagram",
+            external_account_id="ext-9",
+            status="connected",
+            token_ref=sentinels["token_ref"],
+        )
+        session.add(account)
+        session.flush()
+        session.add(
+            AccountToken(
+                workspace_id=workspace.id,
+                account_id=account.id,
+                key_version="v1",
+                ciphertext=sentinels["ciphertext"].encode("utf-8"),
+                nonce=sentinels["nonce"].encode("utf-8"),
+            )
+        )
+        session.add(
+            OAuthState(
+                workspace_id=workspace.id,
+                platform="instagram",
+                state="state-1",
+                code_verifier=sentinels["code_verifier"],
+                token_ciphertext=sentinels["token_ciphertext"],
+                redirect_uri="https://edge.test/cb",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+        )
+        session.add(
+            WebhookEndpoint(
+                workspace_id=workspace.id,
+                url="https://hooks.test/endpoint",
+                secret_encrypted=sentinels["secret_encrypted"],
+            )
+        )
+        session.add(
+            ApiKey(
+                workspace_id=workspace.id,
+                name="agent",
+                prefix="rwy_abcd",
+                key_hash=sentinels["key_hash"],
+            )
+        )
+        session.add(
+            PlatformSubscription(
+                workspace_id=workspace.id,
+                account_id=account.id,
+                provider="youtube",
+                topic="topic-1",
+                hub_secret=sentinels["hub_secret"],
+                callback_token=sentinels["callback_token"],
+            )
+        )
+        session.flush()
+        document = export_workspace_data(session, workspace.id)
+    rendered = json.dumps(document, default=str)
+    for column, value in sentinels.items():
+        assert value not in rendered, column
+        # Byte columns serialize as base64 when they leak.
+        assert base64.b64encode(value.encode("utf-8")).decode("ascii") not in rendered
+    denied = {
+        "token_ref",
+        "ciphertext",
+        "nonce",
+        "code_verifier",
+        "token_ciphertext",
+        "secret_encrypted",
+        "key_hash",
+        "hub_secret",
+        "callback_token",
+    }
+    for name in (
+        "account_tokens",
+        "oauth_states",
+        "webhook_endpoints",
+        "api_keys",
+        "connected_accounts",
+        "platform_subscriptions",
+    ):
+        rows = document["tables"][name]
+        assert rows, name  # the fixture wrote a row; an empty table proves nothing
+        for row in rows:
+            assert not (denied & row.keys()), name
     database.engine.dispose()
 
 

@@ -243,20 +243,48 @@ def _json_value(value: Any) -> Any:
     return str(value)
 
 
+# Columns an export never carries, checked on EVERY dumped table: a name that
+# can hold a grant, a secret or a hash of one must not reach the artifact.
+# Exact names cover what the patterns do not (`*_token` would be too broad -
+# `token_ref` and `callback_token` are named outright instead).
+_EXPORT_DENIED_COLUMNS = frozenset(
+    {
+        "callback_token",
+        "code_verifier",
+        "hub_secret",
+        "key_hash",
+        "nonce",
+        "token_ref",
+    }
+)
+
+
+def _exportable_column(name: str) -> bool:
+    """False when the column name marks a secret (the export's denylist)."""
+    return (
+        name not in _EXPORT_DENIED_COLUMNS
+        and not name.startswith("token")
+        and not name.startswith("secret")
+        and not name.endswith("_secret")
+        and "ciphertext" not in name
+    )
+
+
 def _row_dict(row: Any) -> dict[str, Any]:
     mapper = inspect(type(row))
     return {
         column.key: _json_value(getattr(row, column.key))
         for column in mapper.columns
-        if column.key != "token_ciphertext"
+        if _exportable_column(column.key)
     }
 
 
 def export_workspace_data(session: Session, workspace_id: int) -> dict[str, Any]:
     """Every row the workspace owns, as a JSON-ready document.
 
-    Token ciphertext is never exported: a grant is the platform's, and the
-    ciphertext is useless without `RUNWAY_TOKEN_KEYS` anyway.
+    Secret-shaped columns are never exported - grants, callback tokens,
+    signing secrets and key hashes stay server-side; a denylist drops them
+    from every table, so a table added later cannot leak one by accident.
     """
     workspace = session.get(Workspace, workspace_id)
     document: dict[str, Any] = {
@@ -271,7 +299,8 @@ def export_workspace_data(session: Session, workspace_id: int) -> dict[str, Any]
             table.select().where(table.c.workspace_id == workspace_id)
         ).mappings()
         document["tables"][table.name] = [
-            {key: _json_value(value) for key, value in row.items()} for row in rows
+            {key: _json_value(value) for key, value in row.items() if _exportable_column(key)}
+            for row in rows
         ]
     user_ids = [
         row[0]
