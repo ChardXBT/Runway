@@ -460,7 +460,9 @@ def _two_account_select(
 
 
 def _held_token_ref(database: Database, select_state: str) -> str:
-    with database.session() as session:
+    # Test-side introspection is system work; a hosted-profile database would
+    # refuse a bare session() with no workspace context.
+    with database.system_session() as session:
         record = session.scalar(select(OAuthState).where(OAuthState.state == select_state))
         assert record is not None
         return str(json.loads(record.code_verifier or "{}")["token_ref"])

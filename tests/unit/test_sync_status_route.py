@@ -58,7 +58,7 @@ def _account(
     external: str = "ext-1",
     workspace_id: int = 1,
 ) -> int:
-    with database.session() as session:
+    with database.session(workspace_id=workspace_id) as session:
         account = ConnectedAccount(
             platform=platform,
             external_account_id=external,
