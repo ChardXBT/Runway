@@ -46,6 +46,11 @@ _POLICY_DONE_STATE = "runway_request_policy_done"
 # when an unversioned write route is added without a decision here.
 LEGACY_WRITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset(
     {
+        # Platform webhooks (spec 04 section 2): authenticated by the platform's
+        # signature, never by a Runway key.
+        ("POST", "/hooks/instagram"),
+        ("POST", "/hooks/tiktok"),
+        ("POST", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
         ("POST", "/api/analysis/history"),
         ("PATCH", "/api/annotations/{post_id}"),
         ("POST", "/api/candidates/{candidate_id}/block-domain"),

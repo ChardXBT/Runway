@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from runway.agent.webhooks import WebhookDispatcher
 from runway.api.app import create_app
 from runway.config import Settings
 from runway.db import initialize_database
@@ -167,18 +168,27 @@ def test_adaptive_scheduler_replaces_the_fixed_one_when_enabled(tmp_path: Path) 
         kinds = [type(producer) for producer in worker.producers]
         assert kinds == [
             RetentionPurgeScheduler,
+            WebhookDispatcher,
             SubscriptionScheduler,
             TokenUpkeepScheduler,
             AdaptiveSyncScheduler,
         ]
-        assert set(worker.handlers) == {
-            SYNC_ACCOUNT_JOB,
-            PURGE_JOB,
-            PROCESS_WEBHOOK_JOB,
-            RENEW_SUBSCRIPTION_JOB,
-            SUBSCRIBE_APPS_JOB,
-            REFRESH_TOKEN_JOB,
-        }
+        from runway.agent.webhooks import DELIVER_WEBHOOK_JOB
+        from runway.posts.jobs import PUBLISHING_JOB_KINDS
+
+        assert (
+            set(worker.handlers)
+            == {
+                SYNC_ACCOUNT_JOB,
+                PURGE_JOB,
+                PROCESS_WEBHOOK_JOB,
+                RENEW_SUBSCRIPTION_JOB,
+                SUBSCRIBE_APPS_JOB,
+                REFRESH_TOKEN_JOB,
+                DELIVER_WEBHOOK_JOB,
+            }
+            | PUBLISHING_JOB_KINDS
+        )
     finally:
         database.engine.dispose()
 
@@ -196,6 +206,7 @@ def test_adaptive_sync_disabled_keeps_the_fixed_scheduler(tmp_path: Path) -> Non
         kinds = [type(producer) for producer in worker.producers]
         assert kinds == [
             RetentionPurgeScheduler,
+            WebhookDispatcher,
             SubscriptionScheduler,
             TokenUpkeepScheduler,
             PlatformSyncScheduler,
