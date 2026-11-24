@@ -149,7 +149,28 @@ disconnect, and detection of revocations made on Google's side.
   notification as a hint to sync now, never as the record.
 - Comments and analytics: polling only. Analytics data lags by about two days.
 
-## 7. Could not determine
+## 7. Community posts (added 2026-11-22)
+
+The `posts` resource appeared after this file's 2026-11-14 read; the facts live in
+[`recheck-20261122.md`](recheck-20261122.md) §1 and are implemented by
+`src/runway/platforms/youtube_post.py` (spec 08 §2, "Community posts"):
+
+- [Official, read 2026-11-22] `posts.imageUpload`
+  (`POST https://www.googleapis.com/upload/youtube/v3/posts/image?channelId=…`) takes one
+  JPEG/PNG/GIF/WebP image ≤ 16 MB, aspect 2:5 to 5:2, and returns an `imageUploadToken`. A token
+  is used once; a retried post re-uploads every image.
+- [Official, read 2026-11-22] `posts.insert` (`part=snippet,attachments`) takes
+  `snippet.channelId`, `snippet.textDisplay` and 1–10
+  `attachments.imageAttachments[].uploadToken`, publishes immediately (no scheduling: "Scheduled
+  posts aren't supported") and costs 1 unit against a separate "Post Uploads" quota bucket.
+- [Official, read 2026-11-22] Scopes: `youtube`, `youtube.force-ssl` or `youtubepartner`
+  (`imageUpload` also accepts `youtube.upload`).
+- [Official, read 2026-11-22] Pilot only: "available only to select launch partners … broader
+  public API access planned for General Availability in 2027". Runway's
+  `youtube_posts_api_access` setting (default off) reports `needs_app_approval` until Google
+  admits the project.
+
+## 8. Could not determine
 
 - Audit duration and rejection reasons for the quota extension form.
 - Whether "In production, unverified" behaves as described in §4 in November 2026.
