@@ -36,6 +36,7 @@ from runway.realtime.subscriptions import (
     SUBSCRIBE_APPS_JOB,
     SubscriptionScheduler,
 )
+from runway.realtime.token_upkeep import REFRESH_TOKEN_JOB, TokenUpkeepScheduler
 
 START = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
@@ -416,6 +417,7 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
     assert [type(producer) for producer in worker.producers] == [
         RetentionPurgeScheduler,
         SubscriptionScheduler,
+        TokenUpkeepScheduler,
     ]
     assert set(worker.handlers) == {
         SYNC_ACCOUNT_JOB,
@@ -423,6 +425,7 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
         PROCESS_WEBHOOK_JOB,
         RENEW_SUBSCRIPTION_JOB,
         SUBSCRIBE_APPS_JOB,
+        REFRESH_TOKEN_JOB,
     }
 
 

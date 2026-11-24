@@ -200,14 +200,16 @@ class InstagramProvider(PlatformProvider):
         if not isinstance(access_token, str) or not access_token:
             raise ProviderError("Instagram long-lived exchange returned no token")
         expires_in = _int_or_none(data.get("expires_in"))
+        minted_at = datetime.now(UTC)
         return token.model_copy(
             update={
                 "access_token": access_token,
                 "expires_at": (
-                    datetime.now(UTC) + timedelta(seconds=expires_in)
-                    if expires_in is not None
-                    else None
+                    minted_at + timedelta(seconds=expires_in) if expires_in is not None else None
                 ),
+                # The day-50 refresh job keys on the stored issue time
+                # (spec 04 section 2).
+                "extra": {**token.extra, "issued_at": minted_at.isoformat()},
             }
         )
 
@@ -229,14 +231,14 @@ class InstagramProvider(PlatformProvider):
             # revoked grant; the current token stays usable until it expires.
             raise ProviderError("Instagram refresh returned no token", retryable=True)
         expires_in = _int_or_none(data.get("expires_in"))
+        minted_at = datetime.now(UTC)
         return token.model_copy(
             update={
                 "access_token": access_token,
                 "expires_at": (
-                    datetime.now(UTC) + timedelta(seconds=expires_in)
-                    if expires_in is not None
-                    else None
+                    minted_at + timedelta(seconds=expires_in) if expires_in is not None else None
                 ),
+                "extra": {**token.extra, "issued_at": minted_at.isoformat()},
             }
         )
 
