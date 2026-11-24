@@ -283,7 +283,10 @@ def test_boost_pulls_next_run_forward_and_marks_push(database: Database) -> None
 def test_a_verified_webhook_hint_boosts_inventory(settings: Settings, database: Database) -> None:
     account_id = _account(database, platform="tiktok", external="openid-1")
     queue = JobQueue(database)
-    with database.session() as session:
+    # The inbox row is stored before its workspace is known (workspace_id stays
+    # NULL until process_webhook resolves the account), so the seed runs as a
+    # system session just like the hooks route's raw-delivery insert.
+    with database.system_session() as session:
         event = WebhookEvent(
             provider="tiktok",
             received_at=utcnow(),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -28,7 +29,13 @@ def _configure_data_dir(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
 def test_database_doctor_json_and_schema_verify_exit_cleanly(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    request: pytest.FixtureRequest,
 ) -> None:
+    if request.config.getoption("--postgres-dsn") or os.environ.get("RUNWAY_TEST_DATABASE_URL"):
+        pytest.skip(
+            "schema-verify and the doctor compare against the committed SQLite "
+            "schema snapshot via settings.database_path; there is no Postgres contract"
+        )
     _configure_data_dir(monkeypatch, tmp_path / "doctor")
     initialize_database(get_settings())
     runner = CliRunner()
