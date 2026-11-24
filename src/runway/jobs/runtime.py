@@ -73,7 +73,9 @@ def build_worker(settings: Settings, database: Database) -> Worker:
         WebhookDispatcher(webhooks, queue),
         # WebSub leases are renewed at 80% and resubscribed after expiry.
         SubscriptionScheduler(database, queue),
-        # Instagram's 60-day tokens get their day-50 refresh job.
+        # Instagram long-lived tokens die at day 60 when nothing syncs;
+        # upkeep enqueues their day-50 refresh job instead (spec 04
+        # section 2, spec 08 section 3).
         TokenUpkeepScheduler(database, registry, queue),
     ]
     if settings.adaptive_sync_enabled:

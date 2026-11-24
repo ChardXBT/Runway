@@ -212,7 +212,13 @@ class TokenUpkeepScheduler:
                 token = self.registry.token_store.load(token_ref)
                 if token is None:
                     continue
-                if platform == Platform.instagram.value:
+                if (
+                    platform == Platform.instagram.value
+                    # Unified Login tokens are Meta user tokens, not ig_*
+                    # long-lived tokens: ig_refresh_token does not apply
+                    # (spec 08 section 3).
+                    and token.extra.get("login") != "unified"
+                ):
                     due = instagram_refresh_due(token)
                     if due is not None:
                         self.queue.enqueue_pending_job(

@@ -23,7 +23,15 @@ from runway.platforms.publisher import Publisher, adapter_kind
 # `build_publisher_registry` when a real adapter is added; a test compares
 # them, and docs/PLATFORM_CAPABILITIES.md is generated from this set.
 LIVE_PUBLISHER_NAMES: frozenset[str] = frozenset(
-    {"assisted", "youtube_direct", "youtube_post", "tiktok_direct", "tiktok_inbox"}
+    {
+        "assisted",
+        "youtube_direct",
+        "youtube_post",
+        "tiktok_direct",
+        "tiktok_inbox",
+        "instagram_direct",
+        "instagram_unified",
+    }
 )
 
 
@@ -86,10 +94,15 @@ def build_publisher_registry(
         for publisher in mock_publishers(settings, clock=clock):
             registry.register(publisher)
         return registry
-    # Live direct adapters register here as they are built (instagram_direct
-    # still pending). The TikTok pair is always registered: the capability
-    # layer, not the registry, decides whether they are offered for an account
-    # (`tiktok_direct` only when audited).
+    # Live direct adapters register here as they are built. The TikTok pair
+    # is always registered: the capability layer, not the registry, decides
+    # whether they are offered for an account (`tiktok_direct` only when
+    # audited). Both Instagram adapters register; `instagram_unified` serves
+    # the accounts Unified Login connected (spec 08 section 3).
+    from runway.platforms.instagram_publisher import (
+        InstagramDirectPublisher,
+        InstagramUnifiedPublisher,
+    )
     from runway.platforms.tiktok import TikTokProvider
     from runway.platforms.tiktok_publisher import (
         TikTokDirectPublisher,
@@ -103,4 +116,6 @@ def build_publisher_registry(
     provider = TikTokProvider(settings)
     registry.register(TikTokInboxPublisher(settings, provider=provider, clock=clock))
     registry.register(TikTokDirectPublisher(settings, provider=provider, clock=clock))
+    registry.register(InstagramDirectPublisher(settings, database))
+    registry.register(InstagramUnifiedPublisher(settings, database))
     return registry

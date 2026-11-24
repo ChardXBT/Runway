@@ -206,12 +206,15 @@ def test_enable_publishing_is_a_no_op_when_everything_is_granted(
     assert "authorization_url" not in body
 
 
-def test_enable_publishing_refuses_other_platforms(client: TestClient, database: Database) -> None:
-    # YouTube and TikTok have their own branches; anything else is refused.
+def test_enable_publishing_dispatches_to_the_accounts_platform(
+    client: TestClient, database: Database
+) -> None:
+    # Every platform has a branch: an Instagram account reaches Instagram's
+    # and fails its "OAuth configured" gate (no Meta credentials are set).
     account_id = _account(database, platform="instagram")
     response = client.post(f"/api/v1/accounts/{account_id}/publishing/enable")
-    assert response.status_code == 422
-    assert response.json()["code"] == "validation_failed"
+    assert response.status_code == 409
+    assert response.json()["code"] == "capability_not_ready"
 
 
 def test_enable_publishing_needs_accounts_manage(

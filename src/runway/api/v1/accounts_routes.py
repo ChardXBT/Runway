@@ -1,4 +1,4 @@
-"""`/api/v1/accounts/{id}`: incremental publishing consent (spec 08 section 1).
+"""`/api/v1/accounts/{id}`: incremental publishing consent (spec 08).
 
 `POST /api/v1/accounts/{id}/publishing/enable` starts an incremental OAuth
 flow that adds the publishing scopes an account does not yet have, dispatched
@@ -7,6 +7,9 @@ per platform:
 - YouTube: the upload scope (and the posts scope when the pilot flag is on).
 - TikTok: `video.upload`, and `video.publish` only for an audited app
   (spec 08 section 4).
+- Instagram: the base scopes plus `instagram_business_content_publish`
+  (spec 08 section 3). Unified Login grants the same permission under the
+  `instagram_content_publish` name; either counts.
 
 The issued OAuth state row is bound to the account, so the shared
 `/api/platforms/{platform}/oauth/callback` refuses to attach a token whose
@@ -48,13 +51,17 @@ from runway.platforms.base import (
     safe_error_summary,
 )
 from runway.platforms.capabilities import (
+    INSTAGRAM_SCOPES,
     TIKTOK_SCOPES,
     YOUTUBE_ENGAGE_SCOPE,
     Platform,
+    equivalent_scopes,
 )
+from runway.platforms.instagram import InstagramProvider
 from runway.platforms.oauth import OAuthStateService
 from runway.platforms.post_settings import TikTokVideoSettings, release_notice
 from runway.platforms.publish_capability import (
+    INSTAGRAM_PUBLISH_SCOPE,
     YOUTUBE_UPLOAD_SCOPE,
     AccountFacts,
     AppStatus,
@@ -106,19 +113,26 @@ def _granted_scopes(account: ConnectedAccount) -> list[str]:
     return [str(scope) for scope in value] if isinstance(value, list) else []
 
 
+def instagram_publish_scopes() -> list[str]:
+    """The scope list an Instagram publishing-enable consent asks for, in order."""
+    return [*INSTAGRAM_SCOPES, INSTAGRAM_PUBLISH_SCOPE]
+
+
 def build_accounts_router(
     database: Database,
     settings: Settings,
     *,
     registry: ProviderRegistry | None = None,
     publishers: PublisherRegistry | None = None,
+    oauth_states: OAuthStateService | None = None,
 ) -> APIRouter:
     router = build_v1_router(tags=["accounts"], prefix="/accounts")
     if registry is None:
         registry = ProviderRegistry(database, settings)
     if publishers is None:
         publishers = build_publisher_registry(settings, database)
-    oauth_states = OAuthStateService(database)
+    if oauth_states is None:
+        oauth_states = OAuthStateService(database)
 
     def _enable_tiktok_publishing(
         account: ConnectedAccount, principal: Principal
@@ -213,6 +227,56 @@ def build_accounts_router(
             "requested_scopes": extra,
         }
 
+    def _enable_instagram_publishing(
+        account: ConnectedAccount, principal: Principal
+    ) -> dict[str, object]:
+        if settings.platform_provider == "mock":
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "mock provider mode has no OAuth; its accounts publish in mock mode",
+            )
+        provider = registry.provider(Platform.instagram)
+        if not isinstance(provider, InstagramProvider) or not provider.configured():
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "Instagram OAuth is not configured; set the client credentials",
+            )
+        wanted = instagram_publish_scopes()
+        granted = _granted_scopes(account)
+        # Unified Login's `instagram_content_publish` counts as the same
+        # permission (spec 08 section 3).
+        if account.status == "connected" and INSTAGRAM_PUBLISH_SCOPE in equivalent_scopes(granted):
+            return {
+                "status": "already_enabled",
+                "account_id": account.id,
+                "requested_scopes": wanted,
+            }
+        redirect_uri = registry.redirect_uri(Platform.instagram)
+        issued = oauth_states.issue(
+            Platform.instagram,
+            redirect_uri=redirect_uri,
+            use_pkce=False,
+            # The consent screen shows exactly `wanted`; the callback passes
+            # this list to the exchange because Meta may omit `permissions`
+            # in its response.
+            payload=json.dumps({"scopes": wanted}),
+            purpose="enable_publishing",
+            account_id=account.id,
+            workspace_id=principal.workspace_id,
+        )
+        return {
+            "status": "authorization_required",
+            "account_id": account.id,
+            "requested_scopes": wanted,
+            "authorization_url": provider.authorization_url(
+                state=issued.state,
+                redirect_uri=redirect_uri,
+                code_challenge=None,
+                scopes=wanted,
+            ),
+            "state": issued.state,
+        }
+
     @router.post("/{account_id}/publishing/enable")
     def enable_publishing(
         account_id: int, principal: Principal = Depends(get_principal)
@@ -222,6 +286,8 @@ def build_accounts_router(
         with database.session() as session:
             account = _account(session, principal, account_id)
         platform = Platform(account.platform)
+        if platform is Platform.instagram:
+            return _enable_instagram_publishing(account, principal)
         if platform is Platform.tiktok:
             return _enable_tiktok_publishing(account, principal)
         if platform is Platform.youtube:

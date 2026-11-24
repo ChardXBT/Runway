@@ -75,7 +75,7 @@ def run_process_webhook_job(
             return
         event.account_id = account.id
         event.workspace_id = account.workspace_id
-        _process(session, queue, event, account, parsed)
+        _process(session, queue, event, account, parsed, database)
         event.processed_at = utcnow()
 
 
@@ -151,9 +151,10 @@ def _process(
     event: WebhookEvent,
     account: ConnectedAccount,
     parsed: object,
+    database: Database,
 ) -> None:
     if event.provider == "tiktok" and isinstance(parsed, dict):
-        _process_tiktok(session, queue, event, account, parsed)
+        _process_tiktok(session, queue, event, account, parsed, database)
         return
     # youtube (Atom entry, e.g. yt:videoId) and instagram (changes[].field)
     # both mean "this account changed": fetch it, trusting nothing else.
@@ -166,6 +167,7 @@ def _process_tiktok(
     event: WebhookEvent,
     account: ConnectedAccount,
     parsed: dict[str, Any],
+    database: Database,
 ) -> None:
     name = parsed.get("event")
     if name == "authorization.removed":
@@ -183,7 +185,7 @@ def _process_tiktok(
         )
         return
     if isinstance(name, str) and name.startswith("post.publish."):
-        hooks.on_publish_event(session, account.id, _publish_id(parsed), name)
+        hooks.on_publish_event(session, database, account.id, _publish_id(parsed), name)
         # A publish is also a push hint for the publish-adjacent scopes
         # (spec 04 section 3): inventory for 30 min, recent metrics for 2 h.
         boost(session, account.id, "inventory", INVENTORY_BOOST_MINUTES)

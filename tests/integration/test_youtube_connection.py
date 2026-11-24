@@ -382,8 +382,11 @@ def test_enable_publishing_is_refused_for_other_platforms_and_unknown_accounts(
     patched_provider(monkeypatch, settings, httpx.MockTransport(make_google_handler()))
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
         response = web.post(f"/api/v1/accounts/{instagram_id}/publishing/enable")
-        assert response.status_code == 422
-        assert response.json()["code"] == "validation_failed"
+        # Every platform has a branch now: this Instagram account reaches
+        # Instagram's and fails its "OAuth configured" gate (no Meta
+        # credentials are set in this environment).
+        assert response.status_code == 409
+        assert response.json()["code"] == "capability_not_ready"
         missing = web.post("/api/v1/accounts/9999/publishing/enable")
         assert missing.status_code == 404
 
