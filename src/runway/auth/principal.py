@@ -154,6 +154,11 @@ def _record_workspace_seen(request: Request, principal: Principal) -> None:
     """
     if principal.kind != "user":
         return
+    if getattr(request.state, "runway_edge", False):
+        # Marked by LocalRequestGuard: public edge traffic is never a human
+        # heartbeat - a forged funnel request must not fake activity (the
+        # inactivity rule would keep syncing an abandoned install).
+        return
     database = getattr(request.app.state, "database", None)
     if not isinstance(database, Database):
         return

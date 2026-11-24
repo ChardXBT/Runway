@@ -28,6 +28,7 @@ from runway.api.app import create_app
 from runway.api.security import LocalRequestGuard
 from runway.config import Settings
 from runway.db import initialize_database
+from runway.db.models import Workspace
 
 EDGE_HOST = "edge.runway.example"
 EDGE_URL = f"https://{EDGE_HOST}"
@@ -266,6 +267,45 @@ def test_edge_requests_are_marked_in_the_scope_state(tmp_path: Path) -> None:
     }
     asyncio.run(guard(scope, receive, send))
     assert marked == [None]
+
+
+def test_edge_requests_never_refresh_the_workspace_seen_at(tmp_path: Path) -> None:
+    """``workspaces.last_seen_at`` is the "a human was here" heartbeat; an
+    edge request is never one.
+
+    The OAuth callback is the one principal-bearing route the allow-list
+    reaches, so it is where a forged edge request could fake human
+    activity. It must not move ``last_seen_at`` whether it arrives on the
+    edge hostname or on a loopback Host with funnel markers.
+    """
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="mock",
+        public_edge_url=EDGE_URL,
+    )
+    database = initialize_database(settings)
+    application = create_app(settings)
+    callback = "/api/platforms/youtube/oauth/callback"
+    try:
+        edge = TestClient(application, base_url=f"https://{EDGE_HOST}")
+        assert edge.get(callback, follow_redirects=False).status_code == 303
+
+        local = TestClient(application, base_url="http://127.0.0.1:8000")
+        funnel = {"Tailscale-Funnel-Request": "?1", "X-Forwarded-For": "203.0.113.7"}
+        assert local.get(callback, headers=funnel, follow_redirects=False).status_code == 303
+
+        with database.session() as session:
+            workspace = session.get(Workspace, 1)
+            assert workspace is not None and workspace.last_seen_at is None
+
+        # A plain local request to the same route still refreshes it.
+        assert local.get(callback, follow_redirects=False).status_code == 303
+        with database.session() as session:
+            workspace = session.get(Workspace, 1)
+            assert workspace is not None and workspace.last_seen_at is not None
+    finally:
+        database.engine.dispose()
+        application.state.database.engine.dispose()
 
 
 def test_loopback_behaviour_is_unchanged(tmp_path: Path) -> None:
