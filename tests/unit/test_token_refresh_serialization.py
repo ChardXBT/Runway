@@ -22,7 +22,7 @@ from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.sync import SyncService
 from runway.platforms.tiktok import TikTokProvider
-from runway.platforms.tokens import TokenRefreshBusy, TokenStore
+from runway.platforms.tokens import FileTokenStore, TokenRefreshBusy
 from runway.platforms.youtube import YouTubeProvider
 
 
@@ -285,8 +285,8 @@ def test_concurrent_refreshes_of_a_rotating_token_make_one_call(live) -> None:
 HOLD_LOCK = r"""
 import sys, time
 from pathlib import Path
-from runway.platforms.tokens import TokenStore
-store = TokenStore(Path(sys.argv[1]))
+from runway.platforms.tokens import FileTokenStore
+store = FileTokenStore(Path(sys.argv[1]))
 with store.refresh_lock(sys.argv[2]):
     Path(sys.argv[3]).write_text("held")
     time.sleep(1.5)
@@ -305,7 +305,7 @@ def test_refresh_lock_excludes_another_process(tmp_path: Path) -> None:
             assert child.poll() is None, "lock holder exited early"
             assert time.monotonic() < deadline, "lock holder never acquired the lock"
             time.sleep(0.05)
-        store = TokenStore(secrets_dir)
+        store = FileTokenStore(secrets_dir)
         with pytest.raises(TokenRefreshBusy), store.refresh_lock("abc123", timeout=0.2):
             pass
         # Other accounts are not blocked by this account's refresh.
@@ -320,7 +320,7 @@ def test_refresh_lock_excludes_another_process(tmp_path: Path) -> None:
 
 
 def test_refresh_lock_rejects_unsafe_token_refs(tmp_path: Path) -> None:
-    store = TokenStore(tmp_path / "secrets")
+    store = FileTokenStore(tmp_path / "secrets")
     with pytest.raises(Exception, match="safe lock name"), store.refresh_lock("../escape"):
         pass
 

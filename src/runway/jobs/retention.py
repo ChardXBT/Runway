@@ -41,7 +41,7 @@ from runway.events.log import purge_expired_events
 from runway.jobs.queue import RECONCILE, SEND, Job, JobQueue, JobState
 from runway.locks import LockTimeout, exclusive_file_lock
 from runway.platforms.sync import sync_lock_path
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import TokenStore, token_store_from_settings
 from runway.realtime import standby
 
 logger = logging.getLogger(__name__)
@@ -316,7 +316,7 @@ def run_purge_job(database: Database, settings: Settings, _job: Job) -> None:
     # Imported here: runway.api.v1 is an API package, the worker only needs its store.
     from runway.api.v1.idempotency import IdempotencyStore
 
-    token_store = TokenStore(settings.resolved_data_dir / "secrets")
+    token_store = token_store_from_settings(settings, database)
     with database.session() as session:
         duties: list[tuple[str, Callable[[], int]]] = [
             ("idempotency keys", lambda: IdempotencyStore(database).purge_expired(session)),

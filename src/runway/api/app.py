@@ -171,6 +171,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Web-origin CORS and origin guard, rate limits, security headers and
         # the identity provider (spec 05 sections 2 and 6).
         configure_hosted(application, active_settings)
+        # The database token store is the only store hosted runs: refuse to
+        # boot without a parseable RUNWAY_TOKEN_KEYS ring (spec 05 section 3).
+        from runway.platforms.tokens import TokenStoreError, token_store_from_settings
+
+        try:
+            token_store_from_settings(active_settings, database)
+        except TokenStoreError as exc:
+            raise ValueError(f"RUNWAY_PROFILE=hosted requires {exc}") from exc
     else:
         web_origins = loopback_origins(active_settings.web_port)
         # Innermost: one audit row per successful mutation an API key makes (spec 06 section 5).

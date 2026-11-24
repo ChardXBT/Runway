@@ -31,7 +31,7 @@ from runway.operations.instance_lease import (
 from runway.platforms.base import ProviderError, TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore, TokenStoreError
+from runway.platforms.tokens import FileTokenStore, TokenStoreError
 
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
@@ -160,7 +160,7 @@ def test_instance_token_store_uses_the_secret_key_and_never_writes_a_key_file(
     settings = _settings(tmp_path, "machine-a", key=key)
     assert settings.resolved_instance_dir is not None
     _lease_and_check(settings, "machine-a")
-    store = TokenStore.from_settings(settings)
+    store = FileTokenStore.from_settings(settings)
     store.store("ref", TokenSet(access_token="access-value"))
 
     assert store.store_path == settings.resolved_instance_dir / "tokens" / "platform-tokens.json"
@@ -168,7 +168,7 @@ def test_instance_token_store_uses_the_secret_key_and_never_writes_a_key_file(
     assert loaded is not None and loaded.access_token == "access-value"
     assert not list(tmp_path.rglob("*.key"))
 
-    without_key = TokenStore.from_settings(_settings(tmp_path, "machine-a"))
+    without_key = FileTokenStore.from_settings(_settings(tmp_path, "machine-a"))
     with pytest.raises(TokenStoreError, match="RUNWAY_TOKEN_KEY"):
         without_key.load("ref")
 
@@ -193,7 +193,7 @@ def test_a_machine_without_the_lease_cannot_refresh_or_write_tokens(tmp_path: Pa
         refresh_token="rotating-refresh",
         expires_at=datetime.now(UTC) + timedelta(minutes=1),
     )
-    TokenStore.from_settings(active).store("ref", expiring)
+    FileTokenStore.from_settings(active).store("ref", expiring)
 
     standby_registry = ProviderRegistry(initialize_database(standby), standby)
     standby_provider = _CountingProvider()
@@ -362,7 +362,7 @@ def test_unexpired_tokens_for_platform_writes_are_refused_in_standby(tmp_path: P
     standby = _settings(tmp_path, "machine-b", key=key)
     assert active.resolved_instance_dir is not None
     _lease_and_check(active, "machine-a")
-    TokenStore.from_settings(active).store("ref", TokenSet(access_token="long-lived"))
+    FileTokenStore.from_settings(active).store("ref", TokenSet(access_token="long-lived"))
 
     standby_registry = ProviderRegistry(cast(Database, None), standby)
     # Reads (sync) still work in standby; writes do not.

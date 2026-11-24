@@ -12,12 +12,17 @@ from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 from identity_support import WEBHOOK_SECRET
+from pydantic import SecretStr
 from starlette.routing import Mount, Route
 
 from runway.api.app import create_app
 from runway.api.v1.router import V1Route
 from runway.auth.principal import get_principal
 from runway.config import Settings
+
+# hosted resolves the database token store (spec 05 section 3): the API and
+# worker validate the keyring at startup.
+_TOKEN_KEYRING = "v1:" + "a" * 43 + "="
 
 # The only routes that may be served without a principal. Each is listed
 # explicitly; anything else without the dependency fails this test.
@@ -111,6 +116,7 @@ def test_the_walk_detects_a_route_without_the_dependency(local_app: FastAPI) -> 
 
 def test_hosted_requests_to_api_routes_are_401_but_health_answers(tmp_path: Path) -> None:
     hosted = Settings(data_dir=tmp_path / "data").model_copy(update={"profile": "hosted"})
+    hosted.token_keys = SecretStr(_TOKEN_KEYRING)
     application = create_app(hosted)
     # Without the context manager the lifespan (database check) does not run;
     # authentication must refuse before any handler touches the database.
@@ -135,6 +141,7 @@ def test_hosted_clerk_app_exempts_only_its_signed_webhook(tmp_path: Path) -> Non
         web_origins="https://app.runway.test",
         clerk_webhook_secret=WEBHOOK_SECRET,
     ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    hosted.token_keys = SecretStr(_TOKEN_KEYRING)
     application = create_app(hosted)
     paths = {context.path for context in iter_route_contexts(application.routes)}
     assert paths >= EXEMPT_SIGNATURE_ROUTES
@@ -167,6 +174,7 @@ def test_hosted_serves_exactly_the_listed_routes(tmp_path: Path) -> None:
         web_origins="https://app.runway.test",
         clerk_webhook_secret=WEBHOOK_SECRET,
     ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    hosted.token_keys = SecretStr(_TOKEN_KEYRING)
     application = create_app(hosted)
     served = {
         (method, context.path)

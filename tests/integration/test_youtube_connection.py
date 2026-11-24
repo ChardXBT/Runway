@@ -38,7 +38,7 @@ from runway.platforms.publish_capability import (
     publishing_capability,
 )
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 from runway.platforms.youtube import YouTubeProvider
 
 READ_SCOPES = [YOUTUBE_READONLY_SCOPE, YOUTUBE_ANALYTICS_SCOPE]
@@ -244,7 +244,7 @@ def test_enable_callback_stores_the_granted_scopes_and_the_capability_flips(
     )
     assert capability.state == "ready"
     # The new token (with the upload grant) is stored under the account's ref.
-    token = TokenStore(settings.resolved_data_dir / "secrets").load(str(account.token_ref))
+    token = FileTokenStore(settings.resolved_data_dir / "secrets").load(str(account.token_ref))
     assert token is not None and UPLOAD_SCOPE in token.scopes
 
 
@@ -274,7 +274,7 @@ def test_enable_callback_refuses_a_different_channel(
     account = account_row(database, account_id)
     # The scope set and stored token of the other channel were never attached.
     assert set(json.loads(account.granted_scopes_json)) == set(READ_SCOPES)
-    token = TokenStore(settings.resolved_data_dir / "secrets").load(str(account.token_ref))
+    token = FileTokenStore(settings.resolved_data_dir / "secrets").load(str(account.token_ref))
     assert token is None or UPLOAD_SCOPE not in token.scopes
 
 
@@ -323,7 +323,7 @@ def test_a_refresh_stores_the_scopes_the_response_reports(
     settings = live_settings(tmp_path)
     database = Database(settings)
     account_id = add_youtube_account(database)
-    store = TokenStore(settings.resolved_data_dir / "secrets")
+    store = FileTokenStore(settings.resolved_data_dir / "secrets")
     store.store(
         "tok-1",
         TokenSet(

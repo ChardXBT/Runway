@@ -52,7 +52,7 @@ from runway.operations.runtime_files import api_lock_path, worker_lock_path
 from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 
 PRIVATE_REPO = "owner/runway-instance"
 PUBLIC_REPO = "owner/public-showcase"
@@ -376,7 +376,7 @@ def _seed_runway(settings: Settings) -> tuple[str, TokenSet]:
         refresh_token="fixture-refresh-token",
         expires_at=datetime.now(UTC) + timedelta(days=30),
     )
-    store = TokenStore.from_settings(settings)
+    store = FileTokenStore.from_settings(settings)
     token_ref = store.new_token_ref()
     store.store(token_ref, token)
     with database.session() as session:
@@ -465,7 +465,7 @@ def test_init_creates_the_layout_and_migrates_the_plain_key_into_encrypted_secre
     tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     machine = _machine(tmp_path, "machine-a", fake_github, clock)
-    legacy = TokenStore(machine.root / "data" / "secrets")
+    legacy = FileTokenStore(machine.root / "data" / "secrets")
     legacy.store("legacy-ref", TokenSet(access_token="legacy-access"))
     legacy_key = legacy.key_path.read_text().strip()
     fixture_secret = "fixture-client-secret-value-0123"
@@ -503,7 +503,7 @@ def test_init_creates_the_layout_and_migrates_the_plain_key_into_encrypted_secre
     assert settings.token_key is not None
     assert settings.token_key.get_secret_value() == legacy_key
     assert settings.youtube_client_secret == fixture_secret
-    token = TokenStore.from_settings(settings).load("legacy-ref")
+    token = FileTokenStore.from_settings(settings).load("legacy-ref")
     assert token is not None and token.access_token == "legacy-access"
     # The only plain key file is the pre-existing legacy one, which init leaves for the owner.
     assert [path for path in tmp_path.rglob("*.key")] == [legacy.key_path]
@@ -564,7 +564,7 @@ def test_push_then_pull_on_a_clean_machine_yields_a_working_instance(
             assert account.token_ref == token_ref
     finally:
         database.engine.dispose()
-    restored = TokenStore.from_settings(settings_b).load(token_ref)
+    restored = FileTokenStore.from_settings(settings_b).load(token_ref)
     assert restored == token
     # Runway starts against the restored instance (migrations are already at head).
     initialize_database(settings_b).engine.dispose()
@@ -576,7 +576,7 @@ def test_push_then_pull_on_a_clean_machine_yields_a_working_instance(
     with pytest.raises(StandbyError):
         registry_a.token_store.store(token_ref, expiring)
     assert settings_a.token_key is not None
-    unguarded = TokenStore(
+    unguarded = FileTokenStore(
         settings_a.token_store_dir,
         key=settings_a.token_key.get_secret_value().encode(),
         key_file=False,
@@ -728,7 +728,7 @@ def test_status_reports_lease_snapshot_and_drift(
     assert report["lease"]["holder"] == "machine-a"
     assert report["last_snapshot"]["machine"] == "machine-a"
 
-    TokenStore.from_settings(machine.settings()).store(token_ref, token)
+    FileTokenStore.from_settings(machine.settings()).store(token_ref, token)
     report = ops.status(machine.context(monkeypatch))
     assert "the token store changed since the snapshot" in report["drift"]
 
@@ -999,7 +999,7 @@ def test_a_holder_whose_stale_lease_was_taken_drops_to_standby(
     settings_a = machine_a.settings()
     assert not instance_is_active(settings_a)
     with pytest.raises(StandbyError, match="private repository says machine-b"):
-        TokenStore.from_settings(settings_a).store(token_ref, TokenSet(access_token="x"))
+        FileTokenStore.from_settings(settings_a).store(token_ref, TokenSet(access_token="x"))
 
 
 def test_pull_verifies_before_taking_the_lease(

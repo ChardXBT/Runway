@@ -25,7 +25,7 @@ from runway.operations import instance_lease
 from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 from runway.platforms.youtube import YouTubeProvider
 
 
@@ -275,7 +275,7 @@ def test_disconnect_deletes_token_and_keeps_content(
         )
         assert response.status_code == 200
 
-        store = TokenStore(mock_settings.resolved_data_dir / "secrets")
+        store = FileTokenStore(mock_settings.resolved_data_dir / "secrets")
         assert store.load(token_ref) is None
         with database.session() as session:
             record = session.get(ConnectedAccount, account["id"])

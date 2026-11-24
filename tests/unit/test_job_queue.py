@@ -640,7 +640,7 @@ def test_purge_removes_only_unreferenced_unheld_lock_files(
     from runway.jobs.retention import run_purge_job
     from runway.locks import exclusive_file_lock
     from runway.platforms.sync import sync_lock_path
-    from runway.platforms.tokens import TokenStore
+    from runway.platforms.tokens import FileTokenStore
 
     with database.session() as session:
         account = ConnectedAccount(
@@ -653,7 +653,7 @@ def test_purge_removes_only_unreferenced_unheld_lock_files(
         session.add(account)
         session.flush()
         live_id = account.id
-    refresh_dir = TokenStore(settings.resolved_data_dir / "secrets").refresh_lock_dir
+    refresh_dir = FileTokenStore(settings.resolved_data_dir / "secrets").refresh_lock_dir
     refresh_dir.mkdir(parents=True)
     for name in ("liveref", "goneref", "heldref"):
         (refresh_dir / f"{name}.lock").write_bytes(b"\0")

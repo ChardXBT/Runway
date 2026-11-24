@@ -39,7 +39,7 @@ from runway.platforms.instagram import InstagramProvider
 from runway.platforms.oauth import OAuthStateService
 from runway.platforms.publish_capability import INSTAGRAM_PUBLISH_SCOPE
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 from runway.realtime.token_upkeep import (
     REFRESH_TOKEN_JOB,
     TokenUpkeepScheduler,
@@ -290,7 +290,7 @@ def test_upkeep_schedules_a_refresh_job_at_day_50(
     due = _account(database, scopes=[], external_id="ig1")
     future = _account(database, scopes=[], external_id="ig2")
     unknown = _account(database, scopes=[], external_id="ig3")
-    store = TokenStore(settings.resolved_data_dir / "secrets")
+    store = FileTokenStore(settings.resolved_data_dir / "secrets")
     # Day 50 already passed: the job is due immediately.
     store.store("tok-due", _due_token(5, issued_days_ago=55))
     # Day 50 is still ahead: the job waits for its instant.
@@ -346,7 +346,7 @@ def test_refresh_job_renews_the_stored_token(
     tmp_path: Path, database: Database, settings: Settings
 ) -> None:
     account = _account(database, scopes=[], external_id="ig1")
-    store = TokenStore(settings.resolved_data_dir / "secrets")
+    store = FileTokenStore(settings.resolved_data_dir / "secrets")
     store.store("tok-due", _due_token(10))
     with database.session() as session:
         row = session.get(ConnectedAccount, account.id)
@@ -372,7 +372,7 @@ def test_refresh_job_marks_a_revoked_account_needs_reauth(
     tmp_path: Path, database: Database, settings: Settings
 ) -> None:
     account = _account(database, scopes=[], external_id="ig1")
-    store = TokenStore(settings.resolved_data_dir / "secrets")
+    store = FileTokenStore(settings.resolved_data_dir / "secrets")
     store.store("tok-due", _due_token(10))
     with database.session() as session:
         row = session.get(ConnectedAccount, account.id)
@@ -393,7 +393,7 @@ def test_refresh_job_skips_unified_tokens(
     """Unified Login tokens are Meta user tokens, not ig_* long-lived tokens:
     the scheduler never enqueues ig_refresh_token upkeep for them."""
     account = _account(database, scopes=[], external_id="ig1")
-    store = TokenStore(settings.resolved_data_dir / "secrets")
+    store = FileTokenStore(settings.resolved_data_dir / "secrets")
     token = _due_token(10)
     token.extra["login"] = "unified"
     store.store("tok-due", token)

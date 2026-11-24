@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Literal
 
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -31,7 +32,9 @@ from runway.platforms.account_views import account_view as _account_view
 from runway.platforms.base import (
     ProviderError,
     TokenSet,
+    deserialize_token,
     iso_utc,
+    serialize_token,
 )
 from runway.platforms.capabilities import (
     Platform,
@@ -531,19 +534,24 @@ def build_platform_router(
                 url=f"{web_base}/accounts?connected=instagram",
                 status_code=303,
             )
-        # Several accounts are assigned: hold the token under a temporary
-        # ref and let the owner pick through the select endpoints.
-        token_ref = registry.token_store.new_token_ref()
-        registry.token_store.store(token_ref, token)
+        # Several accounts are assigned: park the token on the state row,
+        # encrypted under the token-store cipher, and let the owner pick
+        # through the select endpoints. `account_tokens` cannot hold it: it
+        # is keyed by account, and none exists until the pick persists.
+        parked = (
+            registry.token_store.cipher()
+            .encrypt(json.dumps(serialize_token(token)).encode("utf-8"))
+            .decode("ascii")
+        )
         issued = oauth_states.issue(
             Platform.instagram,
             redirect_uri=record.redirect_uri,
             use_pkce=False,
+            token_ciphertext=parked,
             payload=json.dumps(
                 {
                     "adapter": "instagram_unified",
                     "select": True,
-                    "token_ref": token_ref,
                     "accounts": candidates,
                 }
             ),
@@ -553,21 +561,21 @@ def build_platform_router(
             status_code=303,
         )
 
-    def _select_meta(state: str) -> dict[str, object] | None:
+    def _select_record(state: str) -> OAuthState | None:
         record = oauth_states.peek(Platform.instagram, state=state)
         if record is None:
             return None
         meta = _state_meta(record)
         if meta.get("adapter") != "instagram_unified" or not meta.get("select"):
             return None
-        return meta
+        return record
 
     @router.get("/platforms/instagram/unified/select")
     def unified_select_list(state: str = Query(min_length=1)) -> dict[str, object]:
-        meta = _select_meta(state)
-        if meta is None:
+        record = _select_record(state)
+        if record is None:
             raise HTTPException(status_code=404, detail="no pending Instagram account pick")
-        return {"state": state, "accounts": meta.get("accounts") or []}
+        return {"state": state, "accounts": _state_meta(record).get("accounts") or []}
 
     @router.post("/platforms/instagram/unified/select")
     def unified_select(
@@ -583,10 +591,12 @@ def build_platform_router(
             )
 
         # Peek first: a pick the state never offered is rejected without
-        # consuming it, so the owner can still choose a valid account.
-        meta = _select_meta(payload.state)
-        if meta is None:
+        # consuming it, so the owner can still choose a valid account. The
+        # parked ciphertext rides the peeked record; consuming clears it.
+        record = _select_record(payload.state)
+        if record is None:
             raise HTTPException(status_code=404, detail="no pending Instagram account pick")
+        meta = _state_meta(record)
         candidates = meta.get("accounts")
         accounts = (
             [a for a in candidates if isinstance(a, dict)] if isinstance(candidates, list) else []
@@ -597,12 +607,18 @@ def build_platform_router(
                 status_code=400,
                 detail="that Instagram account is not among the assigned ones",
             )
+        parked = record.token_ciphertext
         try:
             oauth_states.consume(Platform.instagram, state=payload.state)
         except OAuthStateError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        token_ref = str(meta.get("token_ref") or "")
-        token = registry.token_store.load(token_ref) if token_ref else None
+        token: TokenSet | None = None
+        if parked:
+            try:
+                plaintext = registry.token_store.cipher().decrypt(parked.encode("ascii"))
+                token = deserialize_token(json.loads(plaintext.decode("utf-8")))
+            except (InvalidToken, ValueError, TypeError):
+                token = None
         if token is None:
             raise HTTPException(status_code=410, detail="the held token is gone; connect again")
         token.extra["user_id"] = chosen["id"]
@@ -617,11 +633,6 @@ def build_platform_router(
             return fail(exc.code)
         except ProviderError:
             return fail("exchange_failed")
-        finally:
-            # The held ref was a temporary parking spot for the pick; the
-            # persisted connection stores its own token.
-            if token_ref:
-                registry.token_store.delete(token_ref)
         return JSONResponse(
             jsonable_encoder(
                 {"status": "connected", "account": _account_view(database, settings, account)}
