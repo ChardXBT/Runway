@@ -20,7 +20,7 @@ import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -158,7 +158,10 @@ def record_units(
                 "updated_at": moment,
             },
         )
-        return session.execute(statement.returning(QuotaUsage)).scalar_one()
+        return cast(
+            QuotaUsage,
+            session.execute(statement.returning(QuotaUsage)).scalar_one(),
+        )
     # Dialects without an upsert keep the read-modify-write form.
     row = session.scalar(
         select(QuotaUsage).where(
