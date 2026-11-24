@@ -462,6 +462,106 @@
           }
         ]
       },
+      "account_tokens": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "ciphertext",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BLOB"
+          },
+          {
+            "default": null,
+            "name": "expires_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "key_version",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "nonce",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BLOB"
+          },
+          {
+            "default": null,
+            "name": "refresh_expires_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "scopes_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": "CASCADE",
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_account_tokens_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
       "active_learning_batches": {
         "check_constraints": [],
         "columns": [
@@ -8449,6 +8549,13 @@
             "type": "VARCHAR(128)"
           },
           {
+            "default": null,
+            "name": "token_ciphertext",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
             "default": "1",
             "name": "workspace_id",
             "nullable": false,
@@ -14340,7 +14447,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "78b796a11f56b14043f93fa44af863550e5589257621539f2e7647f1981f82a6",
-  "migration": "0020_youtube_publishing",
-  "table_count": 91
+  "fingerprint": "0b669c2d74bdc93f3c53cb67a7664dfcb99691568a2fc2b09bc60e33d4e7b68e",
+  "migration": "0022_account_tokens",
+  "table_count": 92
 }

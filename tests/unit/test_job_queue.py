@@ -440,6 +440,7 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
     worker = build_worker(settings.model_copy(update={"adaptive_sync_enabled": False}), database)
     from runway.agent.webhooks import DELIVER_WEBHOOK_JOB, WebhookDispatcher
     from runway.posts.jobs import PUBLISHING_JOB_KINDS
+    from runway.workspaces.lifecycle import DELETE_WORKSPACE_JOB, EXPORT_WORKSPACE_JOB
 
     # Retention purge always runs; token upkeep renews Instagram long-lived
     # tokens whether or not scheduled sync is on (spec 04 section 2).
@@ -459,6 +460,8 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
             RENEW_SUBSCRIPTION_JOB,
             SUBSCRIBE_APPS_JOB,
             REFRESH_TOKEN_JOB,
+            EXPORT_WORKSPACE_JOB,
+            DELETE_WORKSPACE_JOB,
         }
         | PUBLISHING_JOB_KINDS
     )

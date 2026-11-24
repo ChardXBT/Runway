@@ -369,6 +369,8 @@ def test_the_hosted_api_refuses_to_start_without_a_webhook_secret(tmp_path: Path
     hosted = Settings(
         data_dir=tmp_path / "data", clerk_issuer=ISSUER, web_origins=WEB_ORIGIN
     ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    # hosted also requires the database token store's keyring to start.
+    hosted.token_keys = SecretStr("v1:" + "a" * 43 + "=")
     with pytest.raises(ValueError, match="RUNWAY_CLERK_WEBHOOK_SECRET"):
         create_app(hosted)
     create_app(hosted.model_copy(update={"clerk_webhook_secret": SecretStr(WEBHOOK_SECRET)}))
