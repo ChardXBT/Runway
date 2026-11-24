@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -378,3 +381,97 @@ def test_a_transfer_marker_makes_the_machine_standby(tmp_path: Path) -> None:
         assert not instance_is_active(settings)
 
     assert instance_is_active(settings)
+
+
+def _transfer_marker_with(settings: Settings, **fields: object) -> Path:
+    """A marker file written by hand, as a crashed command would leave it."""
+    marker = instance_lease.instance_transfer_marker(settings)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "operation": "push",
+        "pid": os.getpid(),
+        "started_at": datetime.now(UTC).isoformat(),
+    }
+    payload.update(fields)
+    marker.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    return marker
+
+
+def _lease_and_check(settings: Settings, holder: str) -> None:
+    """The local lease plus its last remote confirmation, fresh."""
+    assert settings.resolved_instance_dir is not None
+    write_lease(
+        settings.resolved_instance_dir,
+        Lease(holder=holder, holder_since=NOW, heartbeat_at=NOW),
+    )
+    instance_lease.record_remote_check(
+        settings.resolved_instance_dir, holder, datetime.now(UTC)
+    )
+
+
+def test_a_transfer_marker_naming_a_dead_pid_is_ignored_and_deleted(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    _lease_and_check(settings, "machine-a")
+    assert instance_is_active(settings)
+
+    # A finished child leaves a pid nobody owns any more.
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead_pid = process.pid
+    process.wait(timeout=30)
+    marker = _transfer_marker_with(settings, pid=dead_pid)
+
+    assert not instance_lease.instance_transfer_in_progress(settings)
+    assert instance_is_active(settings)
+    assert not marker.exists()
+
+
+def test_a_transfer_marker_with_a_live_pid_stays_a_transfer(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    _lease_and_check(settings, "machine-a")
+    marker = _transfer_marker_with(settings, pid=os.getpid())
+
+    assert instance_lease.instance_transfer_in_progress(settings)
+    assert not instance_is_active(settings)
+    assert marker.is_file()
+
+
+def test_a_transfer_marker_older_than_six_hours_is_ignored_and_deleted(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    _lease_and_check(settings, "machine-a")
+    started = datetime.now(UTC) - instance_lease.TRANSFER_MARKER_MAX_AGE - timedelta(seconds=1)
+    # Even a live pid cannot hold a machine hostage past the marker's max age.
+    marker = _transfer_marker_with(settings, pid=os.getpid(), started_at=started.isoformat())
+
+    assert not instance_lease.instance_transfer_in_progress(settings)
+    assert instance_is_active(settings)
+    assert not marker.exists()
+
+
+def test_an_unreadable_transfer_marker_is_judged_by_its_file_age(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    _lease_and_check(settings, "machine-a")
+    marker = instance_lease.instance_transfer_marker(settings)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_bytes(b"{partial-write-from-a-crash")
+    assert instance_lease.instance_transfer_in_progress(settings)  # fresh debris: standby
+
+    ancient = (datetime.now(UTC) - instance_lease.TRANSFER_MARKER_MAX_AGE).timestamp() - 1
+    os.utime(marker, (ancient, ancient))
+    assert not instance_lease.instance_transfer_in_progress(settings)
+    assert not marker.exists()
+
+
+def test_clear_stale_instance_transfer_only_drops_stale_markers(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    assert not instance_lease.clear_stale_instance_transfer(settings)
+
+    live = _transfer_marker_with(settings, pid=os.getpid())
+    assert not instance_lease.clear_stale_instance_transfer(settings)
+    assert live.is_file()
+
+    started = datetime.now(UTC) - instance_lease.TRANSFER_MARKER_MAX_AGE - timedelta(seconds=1)
+    live.write_text(json.dumps({"pid": os.getpid(), "started_at": started.isoformat()}))
+    assert instance_lease.clear_stale_instance_transfer(settings)
+    assert not live.exists()

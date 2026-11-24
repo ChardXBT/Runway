@@ -23,7 +23,7 @@ from runway.db import initialize_database
 from runway.db.base import Database
 from runway.locks import FileLockTimeout, exclusive_file_lock
 from runway.logging import configure_logging
-from runway.operations.instance_lease import StandbyError
+from runway.operations.instance_lease import StandbyError, clear_stale_instance_transfer
 from runway.operations.runtime_files import api_lock_path
 from runway.platforms.sync import PlatformSyncScheduler, SyncService
 
@@ -75,6 +75,12 @@ def _lifespan(
             sync_service.mark_stale_runs_failed()
         except Exception:  # noqa: BLE001
             logger.exception("stale sync-run cleanup failed during startup")
+        try:
+            # A crashed push or handover leaves its transfer marker behind;
+            # drop it before the first request would read it as standby.
+            clear_stale_instance_transfer(settings)
+        except Exception:  # noqa: BLE001
+            logger.exception("stale instance-transfer cleanup failed during startup")
         scheduler: PlatformSyncScheduler | None = None
         if settings.platform_sync_interval_minutes > 0:
             scheduler = PlatformSyncScheduler(sync_service, settings.platform_sync_interval_minutes)

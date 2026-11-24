@@ -51,6 +51,9 @@ WORKER_BUSY_DIR = Path("runtime") / "busy"
 # treated as standby, so no new job or platform write starts between the idle
 # wait and the lease release.
 TRANSFER_MARKER = Path("runtime") / "instance-transfer"
+# A marker counts only while its writer plausibly lives: past this age it is
+# crash debris, deleted on sight instead of holding the machine in standby.
+TRANSFER_MARKER_MAX_AGE = timedelta(hours=6)
 MACHINE_ID_FILE_ENV = "RUNWAY_MACHINE_ID_FILE"
 
 WorkerBusyCheck = Callable[[Settings], bool]
@@ -409,9 +412,91 @@ def instance_transfer_marker(settings: Settings) -> Path:
     return settings.resolved_data_dir / TRANSFER_MARKER
 
 
+def _pid_alive(pid: int) -> bool:
+    """Whether ``pid`` currently names a running process on this machine."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        synchronize = 0x00100000
+        wait_object_0 = 0x00000000
+        error_access_denied = 5
+        handle = kernel32.OpenProcess(synchronize, False, pid)
+        if not handle:
+            # Access denied: the process exists but is not ours to signal.
+            return bool(ctypes.get_last_error() == error_access_denied)
+        try:
+            # A signaled process object is terminated, not a live writer.
+            return bool(kernel32.WaitForSingleObject(handle, 0) != wait_object_0)
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _transfer_marker_is_stale(marker: Path, now: datetime) -> bool:
+    """Whether ``marker`` is crash debris: a dead writer or older than the cap."""
+    try:
+        raw = marker.read_text(encoding="utf-8")
+        modified = datetime.fromtimestamp(marker.stat().st_mtime, UTC)
+    except OSError:
+        return False  # an unreadable marker cannot be proven stale
+    started: datetime | None = None
+    pid: int | None = None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        raw_pid = payload.get("pid")
+        if isinstance(raw_pid, int) and not isinstance(raw_pid, bool):
+            pid = raw_pid
+        try:
+            started = _parse(payload.get("started_at"))
+        except LeaseError:
+            started = None
+    # The recorded timestamp is authoritative; the file's mtime is the fallback
+    # for debris a crashed writer left before the payload was flushed.
+    age = now - (started if started is not None else modified)
+    if age > TRANSFER_MARKER_MAX_AGE:
+        return True
+    return pid is not None and not _pid_alive(pid)
+
+
+def clear_stale_instance_transfer(settings: Settings) -> bool:
+    """Remove a stale transfer marker left by a crashed push or handover.
+
+    Returns True when a marker was removed. Called once at API startup and at
+    the start of ``runway instance pull``; ``instance_transfer_in_progress``
+    makes the same check on every read.
+    """
+    marker = instance_transfer_marker(settings)
+    if not marker.is_file() or not _transfer_marker_is_stale(marker, datetime.now(UTC)):
+        return False
+    logger.warning("removing a stale instance-transfer marker at %s", marker)
+    clear_instance_transfer(marker)
+    return True
+
+
 def instance_transfer_in_progress(settings: Settings) -> bool:
-    """Whether a push or handover on this machine is moving the lease."""
-    return instance_transfer_marker(settings).is_file()
+    """Whether a push or handover on this machine is moving the lease.
+
+    A stale marker — dead recorded pid, or older than
+    ``TRANSFER_MARKER_MAX_AGE`` — is deleted on sight and ignored, so a crashed
+    push or handover never leaves this machine in standby forever.
+    """
+    if not instance_transfer_marker(settings).is_file():
+        return False
+    return not clear_stale_instance_transfer(settings)
 
 
 def mark_instance_transfer(settings: Settings, operation: str) -> Path:

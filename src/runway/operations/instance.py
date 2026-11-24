@@ -73,6 +73,7 @@ from runway.operations.instance_lease import (
     StandbyError,
     WorkerBusyCheck,
     acquire,
+    clear_stale_instance_transfer,
     describe_lease,
     ensure_active,
     ensure_active_or_raise,
@@ -1745,6 +1746,9 @@ def pull(
     wait_seconds: float = DEFAULT_WORKER_WAIT_SECONDS,
 ) -> dict[str, Any]:
     """Download and verify the latest snapshot, take the lease, then install it."""
+    # A crashed push or handover can leave its transfer marker behind; a stale
+    # one is dropped before anything reads it as a transfer in progress.
+    clear_stale_instance_transfer(ctx.settings)
     with _instance_operation(_require_instance_dir(ctx.settings)):
         return _pull(
             ctx,
