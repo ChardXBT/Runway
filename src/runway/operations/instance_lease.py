@@ -6,10 +6,11 @@ standby. Lease changes reach other machines through the private repository,
 whose fast-forward-only ``git push`` acts as the compare-and-swap.
 
 A local ``lease.json`` naming this machine is not enough to be active: the
-remote copy is re-read when the last confirmation is older than
-``REMOTE_CHECK_INTERVAL``, so a machine whose stale lease was taken over drops
-to standby within minutes. When the remote cannot be read, the machine stays in
-standby (fail closed).
+last remote confirmation (``.lease-check.json``, recorded by the API's
+heartbeat thread and by commands that sync the clone) must name it and be
+fresh. Request paths read only that local record — never the network or the
+clone's lock — and when it is missing or older than ``LEASE_CHECK_MAX_AGE``
+the machine stays in standby (fail closed).
 """
 
 from __future__ import annotations
@@ -41,7 +42,11 @@ LEASE_FILE_NAME = "lease.json"
 LEASE_CHECK_FILE_NAME = ".lease-check.json"
 LEASE_FORMAT_VERSION = 1
 LEASE_STALE_AFTER = timedelta(hours=24)
-REMOTE_CHECK_INTERVAL = timedelta(minutes=10)
+# The API's LeaseHeartbeat thread confirms the remote lease once per interval.
+HEARTBEAT_INTERVAL = timedelta(hours=1)
+# A remote confirmation older than three heartbeat intervals means the thread
+# (or the whole API) stopped refreshing it: untrusted, so fail closed.
+LEASE_CHECK_MAX_AGE = 3 * HEARTBEAT_INTERVAL
 # The active machine renews its heartbeat once it is this old, so a running
 # instance never goes more than about six hours without a remote heartbeat.
 HEARTBEAT_RENEW_AFTER = timedelta(hours=5)
@@ -274,7 +279,9 @@ def _default_remote_reader(settings: Settings) -> Lease | None:
     return read_remote_lease(settings)
 
 
-# Tests replace this; production reads lease.json from the private repository.
+# No request-path caller remains: gated checks read only the cached remote
+# confirmation. Tests replace this to prove that path never fetches; the
+# heartbeat thread and CLI commands fetch through instance.py instead.
 remote_lease_reader: RemoteLeaseReader = _default_remote_reader
 
 
@@ -283,8 +290,8 @@ def record_remote_check(instance_dir: Path, holder: str | None, checked_at: date
     _atomic_write(instance_dir, LEASE_CHECK_FILE_NAME, json.dumps(payload) + "\n")
 
 
-def _recent_remote_holder(instance_dir: Path, now: datetime) -> tuple[bool, str | None]:
-    """(fresh, holder) from the last remote confirmation."""
+def _cached_remote_holder(instance_dir: Path, now: datetime) -> tuple[bool, str | None]:
+    """(fresh, holder) from the last recorded remote confirmation."""
     path = instance_dir / LEASE_CHECK_FILE_NAME
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -292,16 +299,35 @@ def _recent_remote_holder(instance_dir: Path, now: datetime) -> tuple[bool, str 
     except (OSError, ValueError, KeyError, TypeError):
         return False, None
     age = now - checked_at
-    fresh = timedelta(0) <= age < REMOTE_CHECK_INTERVAL
+    fresh = timedelta(0) <= age < LEASE_CHECK_MAX_AGE
     holder = payload.get("holder")
     return fresh, str(holder) if holder else None
+
+
+# Instance directories whose stale lease check already logged a warning: one
+# log each, not one per gated request.
+_logged_stale_lease_checks: set[Path] = set()
+
+
+def _warn_stale_lease_check_once(instance_dir: Path) -> None:
+    if instance_dir in _logged_stale_lease_checks:
+        return
+    _logged_stale_lease_checks.add(instance_dir)
+    logger.warning(
+        "the instance lease has no remote confirmation newer than %s; standby "
+        "until the heartbeat or 'runway instance status --refresh' records one",
+        LEASE_CHECK_MAX_AGE,
+    )
 
 
 def instance_is_active(settings: Settings) -> bool:
     """True when this machine may refresh tokens, write to platforms and run the worker.
 
-    Without ``RUNWAY_INSTANCE_DIR`` there is no lease and the machine is always
-    active, exactly as before private instances existed.
+    Called on request paths and by the worker, so it never touches the network
+    or the instance clone's lock: the answer comes from the local lease and
+    the remote confirmation the heartbeat thread or the last syncing command
+    recorded. Without ``RUNWAY_INSTANCE_DIR`` there is no lease and the
+    machine is always active, exactly as before private instances existed.
     """
     instance_dir = settings.resolved_instance_dir
     if instance_dir is None:
@@ -315,18 +341,13 @@ def instance_is_active(settings: Settings) -> bool:
         return False
     if local is None or local.holder != me:
         return False
-    now = datetime.now(UTC)
-    fresh, holder = _recent_remote_holder(instance_dir, now)
-    if fresh:
-        return holder == me
-    try:
-        remote = remote_lease_reader(settings)
-    except (RuntimeError, OSError) as exc:
-        logger.warning("instance lease could not be confirmed remotely; standby: %s", exc)
+    fresh, holder = _cached_remote_holder(instance_dir, datetime.now(UTC))
+    if not fresh:
+        _warn_stale_lease_check_once(instance_dir)
         return False
-    remote_holder = remote.holder if remote is not None else None
-    record_remote_check(instance_dir, remote_holder, now)
-    return remote_holder == me
+    # A fresh check again: let the next staleness log once more.
+    _logged_stale_lease_checks.discard(instance_dir)
+    return holder == me
 
 
 def ensure_active_or_raise(settings: Settings) -> None:
@@ -349,11 +370,11 @@ def ensure_active_or_raise(settings: Settings) -> None:
     except LeaseError:
         held = f"{LEASE_FILE_NAME} is unreadable"
     if instance_dir is not None and lease is not None and lease.holder == machine_id(settings):
-        fresh, remote_holder = _recent_remote_holder(instance_dir, datetime.now(UTC))
+        fresh, remote_holder = _cached_remote_holder(instance_dir, datetime.now(UTC))
         held = (
             f"the private repository says {remote_holder or 'nobody'} holds the lease"
             if fresh
-            else "the lease could not be confirmed with the private repository"
+            else "the lease could not be confirmed with the private repository recently"
         )
     raise StandbyError(
         f"this machine ({machine_id(settings)}) is in standby: {held}. "

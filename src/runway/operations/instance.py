@@ -65,6 +65,7 @@ from runway.operations.database_release import (
     verify_release,
 )
 from runway.operations.instance_lease import (
+    HEARTBEAT_INTERVAL,
     HEARTBEAT_RENEW_AFTER,
     LEASE_FILE_NAME,
     LEASE_STALE_AFTER,
@@ -124,7 +125,7 @@ TOKENS_FILE = f"{TOKENS_DIR_NAME}/platform-tokens.json"
 ASSET_NAMES = (DATABASE_ARCHIVE_NAME, MEDIA_ARCHIVE_NAME, MANIFEST_NAME)
 WORKER_POLL_SECONDS = 5.0
 DEFAULT_WORKER_WAIT_SECONDS = 300
-HEARTBEAT_THREAD_INTERVAL_SECONDS = 3600.0
+HEARTBEAT_THREAD_INTERVAL_SECONDS = HEARTBEAT_INTERVAL.total_seconds()
 # A private ref prefix, so concurrent commands never race on FETCH_HEAD; each
 # fetch uses its own ``refs/runway/remote-<uuid4hex>`` ref, deleted in finally.
 REMOTE_REF = "refs/runway/remote"
@@ -627,6 +628,15 @@ def _fetch(ctx: InstanceContext, instance_dir: Path, repository: str, remote_ref
     raise InstanceError(f"could not fetch {repository} ({_failure(['git', 'fetch'], result)})")
 
 
+def _record_remote_lease(instance_dir: Path) -> None:
+    """Refresh the lease-check cache: the synced clone's lease is the remote's."""
+    try:
+        lease = read_lease(instance_dir)
+    except LeaseError:
+        return  # nothing confirmed; the previous record ages out on its own
+    record_remote_check(instance_dir, lease.holder if lease else None, datetime.now(UTC))
+
+
 def _git_sync(ctx: InstanceContext, instance_dir: Path, repository: str) -> None:
     remote_ref = _remote_ref()
     try:
@@ -635,6 +645,8 @@ def _git_sync(ctx: InstanceContext, instance_dir: Path, repository: str) -> None
                 raise InstanceError(
                     f"{repository} has no branch {_current_branch(ctx, instance_dir)}"
                 )
+            # An empty remote confirms there is no lease to compare against.
+            record_remote_check(instance_dir, None, datetime.now(UTC))
             return
         result = ctx.git(instance_dir, "merge", "--ff-only", "--quiet", remote_ref, check=False)
         if result.returncode != 0:
@@ -642,6 +654,7 @@ def _git_sync(ctx: InstanceContext, instance_dir: Path, repository: str) -> None
                 "could not fast-forward the instance clone from its remote "
                 f"({_failure(['git', 'merge'], result)}); resolve it with git in {instance_dir}"
             )
+        _record_remote_lease(instance_dir)
     finally:
         ctx.git(instance_dir, "update-ref", "-d", remote_ref, check=False)
 
@@ -664,14 +677,18 @@ def read_remote_lease(settings: Settings, runner: CommandRunner | None = None) -
         remote_ref = _remote_ref()
         try:
             if not _fetch(ctx, instance_dir, repository, remote_ref):
+                record_remote_check(instance_dir, None, datetime.now(UTC))
                 return None
             exists = ctx.git(
                 instance_dir, "cat-file", "-e", f"{remote_ref}:{LEASE_FILE_NAME}", check=False
             )
             if exists.returncode != 0:
+                record_remote_check(instance_dir, None, datetime.now(UTC))
                 return None
             shown = ctx.git(instance_dir, "show", f"{remote_ref}:{LEASE_FILE_NAME}")
-            return Lease.from_text(shown.stdout)
+            lease = Lease.from_text(shown.stdout)
+            record_remote_check(instance_dir, lease.holder, datetime.now(UTC))
+            return lease
         finally:
             ctx.git(instance_dir, "update-ref", "-d", remote_ref, check=False)
 
@@ -1524,7 +1541,6 @@ def heartbeat(
         _git_sync(ctx, instance_dir, repository)
         me = ctx.machine
         lease = read_lease(instance_dir)
-        record_remote_check(instance_dir, lease.holder if lease else None, datetime.now(UTC))
         if lease is None or lease.holder != me:
             return {"status": "standby", "lease": describe_lease(lease)}
         now = ctx.now()

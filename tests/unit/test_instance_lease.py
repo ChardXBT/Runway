@@ -120,6 +120,18 @@ def test_without_an_instance_every_machine_is_active(tmp_path: Path) -> None:
     ensure_active(settings)
 
 
+def _lease_and_check(settings: Settings, holder: str, *, checked_at: datetime | None = None) -> None:
+    """The local lease plus a fresh remote confirmation naming ``holder``."""
+    assert settings.resolved_instance_dir is not None
+    write_lease(
+        settings.resolved_instance_dir,
+        Lease(holder=holder, holder_since=NOW, heartbeat_at=NOW),
+    )
+    instance_lease.record_remote_check(
+        settings.resolved_instance_dir, holder, checked_at or datetime.now(UTC)
+    )
+
+
 def test_only_the_lease_holder_is_active(tmp_path: Path) -> None:
     holder = _settings(tmp_path, "machine-a")
     other = _settings(tmp_path, "machine-b")
@@ -127,10 +139,7 @@ def test_only_the_lease_holder_is_active(tmp_path: Path) -> None:
     # No lease yet: nobody is active.
     assert not instance_is_active(holder)
 
-    write_lease(
-        holder.resolved_instance_dir,
-        Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
-    )
+    _lease_and_check(holder, "machine-a")
     assert instance_is_active(holder)
     assert not instance_is_active(other)
     with pytest.raises(StandbyError, match="machine-a holds the lease") as caught:
@@ -148,10 +157,7 @@ def test_instance_token_store_uses_the_secret_key_and_never_writes_a_key_file(
     key = Fernet.generate_key().decode("ascii")
     settings = _settings(tmp_path, "machine-a", key=key)
     assert settings.resolved_instance_dir is not None
-    write_lease(
-        settings.resolved_instance_dir,
-        Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
-    )
+    _lease_and_check(settings, "machine-a")
     store = TokenStore.from_settings(settings)
     store.store("ref", TokenSet(access_token="access-value"))
 
@@ -179,10 +185,7 @@ def test_a_machine_without_the_lease_cannot_refresh_or_write_tokens(tmp_path: Pa
     active = _settings(tmp_path, "machine-a", key=key)
     standby = _settings(tmp_path, "machine-b", key=key)
     assert active.resolved_instance_dir is not None
-    write_lease(
-        active.resolved_instance_dir,
-        Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
-    )
+    _lease_and_check(active, "machine-a")
     expiring = TokenSet(
         access_token="old-access",
         refresh_token="rotating-refresh",
@@ -250,39 +253,87 @@ def test_a_holder_whose_lease_was_taken_remotely_drops_to_standby(
     assert settings.resolved_instance_dir is not None
     instance_dir = settings.resolved_instance_dir
     write_lease(instance_dir, Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW))
-    remote.mirror_local = False
-    remote.lease = Lease(holder="machine-b", holder_since=NOW, heartbeat_at=NOW)
 
+    # The last remote confirmation still names this machine: active.
+    instance_lease.record_remote_check(instance_dir, "machine-a", datetime.now(UTC))
+    assert instance_is_active(settings)
+
+    # The next confirmation the heartbeat or a command records says another
+    # machine holds the lease: standby from the cache alone, no remote read.
+    instance_lease.record_remote_check(instance_dir, "machine-b", datetime.now(UTC))
     assert not instance_is_active(settings)
     with pytest.raises(StandbyError, match="private repository says machine-b"):
         ensure_active(settings)
-    assert remote.reads == 1  # the second check used the fresh confirmation
+    assert remote.reads == 0
 
-    # Back to machine A remotely, but the confirmation is recent: no re-read yet.
-    remote.lease = Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW)
-    assert not instance_is_active(settings)
-    assert remote.reads == 1
-    # Once the confirmation is older than the interval, the remote is read again.
-    aged = datetime.now(UTC) - instance_lease.REMOTE_CHECK_INTERVAL - timedelta(seconds=1)
-    instance_lease.record_remote_check(instance_dir, "machine-b", aged)
+    # Back to machine A remotely: the fresh confirmation activates it again.
+    instance_lease.record_remote_check(instance_dir, "machine-a", datetime.now(UTC))
     assert instance_is_active(settings)
-    assert remote.reads == 2
+    assert remote.reads == 0
 
 
-def test_an_unreachable_remote_means_standby(tmp_path: Path, remote: RemoteLease) -> None:
+def test_a_missing_remote_check_means_standby(tmp_path: Path, remote: RemoteLease) -> None:
     settings = _settings(tmp_path, "machine-a")
     assert settings.resolved_instance_dir is not None
     write_lease(
         settings.resolved_instance_dir,
         Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
     )
-    remote.error = RuntimeError("could not fetch owner/runway-instance")
 
+    # Nothing confirmed yet: fail closed instead of asking the remote.
     assert not instance_is_active(settings)
     with pytest.raises(StandbyError, match="could not be confirmed"):
         ensure_active(settings)
-    # Nothing was recorded, so the next check tries the remote again.
-    remote.error = None
+    assert remote.reads == 0
+
+    instance_lease.record_remote_check(
+        settings.resolved_instance_dir, "machine-a", datetime.now(UTC)
+    )
+    assert instance_is_active(settings)
+    assert remote.reads == 0
+
+
+def test_a_gated_check_never_waits_on_the_remote(
+    tmp_path: Path, remote: RemoteLease, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    _lease_and_check(settings, "machine-a")
+    calls: list[Settings] = []
+
+    def sleepy_reader(value: Settings) -> Lease | None:
+        calls.append(value)
+        time.sleep(5)  # a hung network fetch must never block a request path
+        return None
+
+    monkeypatch.setattr(instance_lease, "remote_lease_reader", sleepy_reader)
+
+    started = time.monotonic()
+    assert instance_is_active(settings)
+    assert time.monotonic() - started < 0.5
+    assert calls == []
+
+
+def test_a_stale_remote_check_means_standby_and_logs_once(
+    tmp_path: Path, remote: RemoteLease, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = _settings(tmp_path, "machine-a")
+    assert settings.resolved_instance_dir is not None
+    instance_dir = settings.resolved_instance_dir
+    write_lease(instance_dir, Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW))
+    aged = datetime.now(UTC) - instance_lease.LEASE_CHECK_MAX_AGE - timedelta(seconds=1)
+    instance_lease.record_remote_check(instance_dir, "machine-a", aged)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING, instance_lease.__name__):
+        assert not instance_is_active(settings)
+        assert not instance_is_active(settings)  # the warning fires once
+    warnings = [r for r in caplog.records if "remote confirmation" in r.message]
+    assert len(warnings) == 1
+    assert remote.reads == 0
+
+    # A fresh confirmation clears the warning state and activates again.
+    instance_lease.record_remote_check(instance_dir, "machine-a", datetime.now(UTC))
     assert instance_is_active(settings)
 
 
@@ -308,10 +359,7 @@ def test_unexpired_tokens_for_platform_writes_are_refused_in_standby(tmp_path: P
     active = _settings(tmp_path, "machine-a", key=key)
     standby = _settings(tmp_path, "machine-b", key=key)
     assert active.resolved_instance_dir is not None
-    write_lease(
-        active.resolved_instance_dir,
-        Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
-    )
+    _lease_and_check(active, "machine-a")
     TokenStore.from_settings(active).store("ref", TokenSet(access_token="long-lived"))
 
     standby_registry = ProviderRegistry(cast(Database, None), standby)
@@ -364,11 +412,7 @@ def test_local_machine_id_never_overwrites_an_existing_id(tmp_path: Path) -> Non
 
 def test_a_transfer_marker_makes_the_machine_standby(tmp_path: Path) -> None:
     settings = _settings(tmp_path, "machine-a")
-    assert settings.resolved_instance_dir is not None
-    write_lease(
-        settings.resolved_instance_dir,
-        Lease(holder="machine-a", holder_since=NOW, heartbeat_at=NOW),
-    )
+    _lease_and_check(settings, "machine-a")
     assert instance_is_active(settings)
 
     with instance_lease.instance_transfer(settings, "push"):
@@ -395,18 +439,6 @@ def _transfer_marker_with(settings: Settings, **fields: object) -> Path:
     payload.update(fields)
     marker.write_text(json.dumps(payload) + "\n", encoding="utf-8")
     return marker
-
-
-def _lease_and_check(settings: Settings, holder: str) -> None:
-    """The local lease plus its last remote confirmation, fresh."""
-    assert settings.resolved_instance_dir is not None
-    write_lease(
-        settings.resolved_instance_dir,
-        Lease(holder=holder, holder_since=NOW, heartbeat_at=NOW),
-    )
-    instance_lease.record_remote_check(
-        settings.resolved_instance_dir, holder, datetime.now(UTC)
-    )
 
 
 def test_a_transfer_marker_naming_a_dead_pid_is_ignored_and_deleted(tmp_path: Path) -> None:

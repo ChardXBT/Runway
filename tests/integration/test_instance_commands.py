@@ -992,9 +992,10 @@ def test_a_holder_whose_stale_lease_was_taken_drops_to_standby(
     # A comes back. Its own clone still says A holds the lease...
     local = read_lease(machine_a.instance_dir)
     assert local is not None and local.holder == "machine-a"
-    # ...but its last remote confirmation is old, so it re-reads the remote.
-    aged = datetime.now(UTC) - instance_lease.REMOTE_CHECK_INTERVAL - timedelta(minutes=1)
-    instance_lease.record_remote_check(machine_a.instance_dir, "machine-a", aged)
+    # ...but a remote read records the takeover in the lease-check cache, and
+    # the gated path trusts that fresh record without fetching again.
+    remote_lease = ops.read_remote_lease(machine_a.settings())
+    assert remote_lease is not None and remote_lease.holder == "machine-b"
     settings_a = machine_a.settings()
     assert not instance_is_active(settings_a)
     with pytest.raises(StandbyError, match="private repository says machine-b"):

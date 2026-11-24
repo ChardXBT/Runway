@@ -17,7 +17,6 @@ from runway.operations.instance_lease import (
     Lease,
     StandbyError,
     ensure_active_or_raise,
-    read_lease,
     worker_is_busy,
     write_lease,
 )
@@ -28,20 +27,22 @@ NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
-def remote_is_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def no_remote_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Request paths never fetch: any remote read here fails the test."""
     monkeypatch.setenv("RUNWAY_MACHINE_ID_FILE", str(tmp_path / "profile" / "machine-id"))
 
-    def read_local(settings: Settings) -> Lease | None:
-        assert settings.resolved_instance_dir is not None
-        return read_lease(settings.resolved_instance_dir)
+    def forbidden(settings: Settings) -> Lease:
+        raise AssertionError("instance_is_active must never fetch on a request path")
 
-    monkeypatch.setattr(instance_lease, "remote_lease_reader", read_local)
+    monkeypatch.setattr(instance_lease, "remote_lease_reader", forbidden)
 
 
 def _settings(tmp_path: Path, holder: str, **overrides: Any) -> Settings:
     instance_dir = tmp_path / "instance"
     instance_dir.mkdir(parents=True, exist_ok=True)
     write_lease(instance_dir, Lease(holder=holder, holder_since=NOW, heartbeat_at=NOW))
+    # The remote confirmed this lease just now, as a heartbeat would record it.
+    instance_lease.record_remote_check(instance_dir, holder, datetime.now(UTC))
     return Settings(
         data_dir=tmp_path / "data",
         instance_dir=instance_dir,

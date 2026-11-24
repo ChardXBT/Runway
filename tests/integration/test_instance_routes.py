@@ -16,7 +16,7 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import CommentRecord, ConnectedAccount, PlatformAction
 from runway.operations import instance_lease
-from runway.operations.instance_lease import Lease, read_lease, write_lease
+from runway.operations.instance_lease import Lease, write_lease
 from runway.platforms.base import TokenSet
 from runway.platforms.mock import MockPlatformProvider
 from runway.platforms.tokens import TokenStore
@@ -25,15 +25,14 @@ NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
-def remote_is_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The private repository's lease equals the local one; no git or gh runs."""
+def no_remote_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Request paths never fetch: any remote read here fails the test."""
     monkeypatch.setenv("RUNWAY_MACHINE_ID_FILE", str(tmp_path / "profile" / "machine-id"))
 
-    def read_local(settings: Settings) -> Lease | None:
-        assert settings.resolved_instance_dir is not None
-        return read_lease(settings.resolved_instance_dir)
+    def forbidden(settings: Settings) -> Lease:
+        raise AssertionError("instance_is_active must never fetch on a request path")
 
-    monkeypatch.setattr(instance_lease, "remote_lease_reader", read_local)
+    monkeypatch.setattr(instance_lease, "remote_lease_reader", forbidden)
 
 
 def _instance_settings(tmp_path: Path, **overrides: object) -> Settings:
@@ -54,8 +53,11 @@ def _hold(settings: Settings, holder: str) -> None:
         settings.resolved_instance_dir,
         Lease(holder=holder, holder_since=NOW, heartbeat_at=NOW),
     )
-    # The lease changed "remotely": drop the cached confirmation.
-    (settings.resolved_instance_dir / instance_lease.LEASE_CHECK_FILE_NAME).unlink(missing_ok=True)
+    # The lease changed "remotely": record the new remote confirmation fresh,
+    # as the heartbeat thread or a syncing command would have left it.
+    instance_lease.record_remote_check(
+        settings.resolved_instance_dir, holder, datetime.now(UTC)
+    )
 
 
 def test_standby_disconnect_is_refused_before_revoking(
