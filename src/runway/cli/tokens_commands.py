@@ -38,9 +38,15 @@ def _fail(message: str, code: int = EXIT_REFUSED) -> typer.Exit:
     return typer.Exit(code=code)
 
 
-def _settings_for_database_store() -> Settings:
+def _settings_for_database_store(*, hosted_ok: bool = False) -> Settings:
+    """Settings for a command that needs the database token store.
+
+    `migrate-file-to-db` stays a local-owner command (hosted has no file
+    store to migrate from); `rewrap` runs in hosted too, where the database
+    store is the only one and the ring this rotates is the configured one.
+    """
     settings = get_settings()
-    if settings.profile == "hosted":
+    if settings.profile == "hosted" and not hosted_ok:
         raise _fail("runway tokens is for a local owner; hosted manages its own keyring")
     if settings.resolved_token_store != "database":
         raise _fail(
@@ -57,7 +63,7 @@ def tokens_rewrap() -> None:
     Committed in batches: a crash leaves the rest on an older key, which is
     still in the ring, so a rerun simply finishes the job.
     """
-    settings = _settings_for_database_store()
+    settings = _settings_for_database_store(hosted_ok=True)
     try:
         require_database_at_head(settings)
     except DatabaseNotCurrent as exc:

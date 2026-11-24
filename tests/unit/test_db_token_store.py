@@ -358,6 +358,52 @@ def test_tokens_rewrap_cli_reencrypts_every_row(
     database.engine.dispose()
 
 
+def test_tokens_rewrap_cli_runs_in_the_hosted_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hosted is where the database store lives: rewrap must not refuse it."""
+    from typer.testing import CliRunner
+
+    import runway.cli.tokens_commands as tokens_cli
+    from runway.cli.tokens_commands import tokens_app
+
+    settings = _settings(tmp_path).model_copy(update={"profile": "hosted"})
+    database = initialize_database(settings)
+    store = token_store_from_settings(settings, database)
+    assert isinstance(store, DatabaseTokenStore)
+    token_ref = store.new_token_ref()
+    account_id = _account(database, token_ref)
+    store.store(token_ref, _token())
+    database.engine.dispose()
+
+    rotated = settings.model_copy(update={"token_keys": SecretStr(RING_2_1)})
+    monkeypatch.setattr(tokens_cli, "get_settings", lambda: rotated)
+    result = CliRunner().invoke(tokens_app, ["rewrap"])
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report == {"checked": 1, "rewrapped": 1, "undecryptable": 0}
+    database = Database(rotated)
+    assert _row(database, account_id).key_version == "v2"
+    database.engine.dispose()
+
+
+def test_tokens_migrate_file_to_db_still_refuses_the_hosted_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only rewrap opens to hosted; the file-store migration is a local opt-in."""
+    from typer.testing import CliRunner
+
+    import runway.cli.tokens_commands as tokens_cli
+    from runway.cli.tokens_commands import tokens_app
+
+    hosted = _settings(tmp_path).model_copy(update={"profile": "hosted"})
+    initialize_database(hosted).engine.dispose()
+    monkeypatch.setattr(tokens_cli, "get_settings", lambda: hosted)
+    result = CliRunner().invoke(tokens_app, ["migrate-file-to-db"])
+    assert result.exit_code == 2, result.output
+    assert "hosted" in result.output
+
+
 def test_tokens_migrate_file_to_db_copies_bound_refs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
