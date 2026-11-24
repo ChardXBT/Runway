@@ -94,7 +94,8 @@ class _Credential:
     env_name: str
     label: str
     # Which connect path uses it: "" for the platform's own OAuth app,
-    # "instagram" for Instagram Login, "instagram_unified" for Unified Login.
+    # "instagram" for Instagram Login, "instagram_unified" for Unified Login;
+    # "webhooks" is reported set/unset only and never gates "configured".
     adapter: str = ""
 
 
@@ -123,6 +124,12 @@ _PLATFORM_CREDENTIALS: dict[Platform, tuple[_Credential, ...]] = {
             "RUNWAY_INSTAGRAM_UNIFIED_CONFIG_ID",
             "config id",
             "instagram_unified",
+        ),
+        _Credential(
+            "instagram_webhook_verify_token",
+            "RUNWAY_INSTAGRAM_WEBHOOK_VERIFY_TOKEN",
+            "webhook verify token",
+            "webhooks",
         ),
     ),
     Platform.tiktok: (
@@ -156,6 +163,7 @@ class TokenView(BaseModel):
 
     present: bool
     state: str  # missing | unreadable | valid | refreshable | expired | refresh_expired
+    reason: str | None = None  # why the token is unreadable (key missing, corrupt blob)
     expires_at: str | None
     expired: bool
     refresh_token: bool
@@ -261,6 +269,11 @@ class PlatformsDoctorReport(BaseModel):
                     if self.publishing.youtube_automation_authorized
                     else ""
                 )
+                + ("; inbox replies " + ("on" if self.publishing.inbox_replies_enabled else "off"))
+                + (
+                    "; R2 media host "
+                    + ("configured" if self.publishing.r2_configured else "not configured")
+                )
             ),
             (
                 "App status: "
@@ -318,6 +331,7 @@ class PlatformsDoctorReport(BaseModel):
                     if not token.present
                     else (
                         f"token {token.state}"
+                        + (f" ({token.reason})" if token.reason else "")
                         + (f" until {token.expires_at}" if token.expires_at else "")
                         + ("; refresh token held" if token.refresh_token else "")
                     )
@@ -451,11 +465,14 @@ def _parse_instant(value: str | None) -> datetime | None:
         return None
 
 
-def _token_view(token: TokenSet | None, now: datetime, *, unreadable: bool = False) -> TokenView:
-    if unreadable:
+def _token_view(
+    token: TokenSet | None, now: datetime, *, unreadable_reason: str | None = None
+) -> TokenView:
+    if unreadable_reason is not None:
         return TokenView(
             present=True,
             state="unreadable",
+            reason=unreadable_reason,
             expires_at=None,
             expired=True,
             refresh_token=False,
@@ -823,13 +840,15 @@ class PlatformsDoctor:
             connection = str(metadata.get("connection") or platform.value)
             scopes_source = metadata.get("scopes_source")
             expanded = equivalent_scopes(granted)
-            unreadable = False
+            unreadable_reason: str | None = None
             token: TokenSet | None = None
             if account.token_ref:
                 try:
-                    token = store.load(account.token_ref)
-                except TokenStoreError:
-                    unreadable = True
+                    # Read-only: the doctor must never create token.key or the
+                    # secrets directory; a missing key means "unreadable".
+                    token = store.load_readonly(account.token_ref)
+                except TokenStoreError as exc:
+                    unreadable_reason = str(exc) or "the stored token cannot be read"
             app = AppStatus.from_settings(self.settings)
             publishing = [
                 item.as_dict()
@@ -861,7 +880,7 @@ class PlatformsDoctor:
                     missing_publishing_scopes=[
                         scope for scope in publishing_scopes if scope not in expanded
                     ],
-                    token=_token_view(token, now, unreadable=unreadable),
+                    token=_token_view(token, now, unreadable_reason=unreadable_reason),
                     publishing=publishing,
                 )
             )
@@ -883,13 +902,13 @@ class PlatformsDoctor:
                 if account.token.present and account.token.state in {"valid", "refreshable"}:
                     usable = True
                 else:
-                    state = (
-                        "unreadable (the token key changed?)"
-                        if account.token.state == "unreadable"
-                        else "missing"
-                        if not account.token.present
-                        else account.token.state.replace("_", " ")
-                    )
+                    if account.token.state == "unreadable":
+                        reason = account.token.reason or "the token key changed?"
+                        state = f"unreadable ({reason})"
+                    elif not account.token.present:
+                        state = "missing"
+                    else:
+                        state = account.token.state.replace("_", " ")
                     missing.append(
                         f"{platform.value}: reconnect {label} - its stored token is {state}"
                     )
@@ -918,8 +937,9 @@ class PlatformsDoctor:
             if app_status_value == "unverified":
                 notes.append(
                     "Google OAuth consent 'In production' without verification: the "
-                    "consent screen shows an 'unverified app' warning and the app is "
-                    "capped at 100 users - fine for the owner's own account"
+                    "consent screen shows an 'unverified app' warning and Google "
+                    "documents a 100-user cap for unverified apps - verify the "
+                    "behaviour in live acceptance test Y-1"
                 )
             if not settings.youtube_posts_api_access:
                 notes.append(

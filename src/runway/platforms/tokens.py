@@ -119,6 +119,14 @@ class TokenStore:
         with self._locked():
             return Fernet(self._load_key())
 
+    def _read_key_file(self) -> bytes | None:
+        """The key in ``token.key`` when the file exists and is non-empty."""
+        if self.key_path.is_file():
+            key = self.key_path.read_bytes().strip()
+            if key:
+                return key
+        return None
+
     def _load_key(self) -> bytes:
         if self._key is not None:
             return self._key
@@ -127,10 +135,9 @@ class TokenStore:
                 "the platform token key is not configured: add RUNWAY_TOKEN_KEY to the "
                 "instance's secrets.enc.env ('runway instance init' creates one)"
             )
-        if self.key_path.is_file():
-            key = self.key_path.read_bytes().strip()
-            if key:
-                return key
+        key = self._read_key_file()
+        if key is not None:
+            return key
         if self.store_path.is_file() and self.store_path.stat().st_size > 0:
             raise TokenStoreError(
                 "platform token key file is missing while an encrypted token "
@@ -148,6 +155,25 @@ class TokenStore:
             raise
         if sys.platform != "win32":
             os.chmod(self.key_path, 0o600)
+        return key
+
+    def _load_key_readonly(self) -> bytes:
+        """The key for a read-only load: identical sources, but a missing
+        ``token.key`` raises instead of being generated on disk."""
+        if self._key is not None:
+            return self._key
+        if not self._key_file:
+            raise TokenStoreError(
+                "the platform token key is not configured: add RUNWAY_TOKEN_KEY to the "
+                "instance's secrets.enc.env ('runway instance init' creates one)"
+            )
+        key = self._read_key_file()
+        if key is None:
+            raise TokenStoreError(
+                "platform token key file is missing; the token state cannot "
+                "be read without it (token.key is only generated on a real "
+                "connect, never by a read)"
+            )
         return key
 
     def _read_store(self, fernet: Fernet) -> dict[str, Any]:
@@ -193,8 +219,7 @@ class TokenStore:
             payload[token_ref] = serialize_token(token)
             self._write_store(fernet, payload)
 
-    def load(self, token_ref: str) -> TokenSet | None:
-        fernet = Fernet(self._load_key())
+    def _load_entry(self, fernet: Fernet, token_ref: str) -> TokenSet | None:
         payload = self._read_store(fernet)
         entry = payload.get(token_ref)
         if entry is None:
@@ -202,6 +227,18 @@ class TokenStore:
         if not isinstance(entry, dict):
             raise TokenStoreError(f"token entry {token_ref!r} is malformed")
         return deserialize_token(entry)
+
+    def load(self, token_ref: str) -> TokenSet | None:
+        return self._load_entry(Fernet(self._load_key()), token_ref)
+
+    def load_readonly(self, token_ref: str) -> TokenSet | None:
+        """``load`` for diagnostics: same answer, but a missing ``token.key``
+        raises ``TokenStoreError`` instead of being generated on disk, so a
+        read-only caller can never create files under the secrets dir. When
+        no store blob exists at all the entry is simply absent."""
+        if not (self.store_path.is_file() and self.store_path.stat().st_size > 0):
+            return None
+        return self._load_entry(Fernet(self._load_key_readonly()), token_ref)
 
     def delete(self, token_ref: str) -> None:
         self.ensure_writable()

@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 from typer.testing import CliRunner
 
 import runway.config.instance as instance_config
@@ -247,6 +248,54 @@ def test_a_secret_value_never_appears_in_the_report(tmp_path: Path) -> None:
     assert "hidden-secret-456" not in rendered
 
 
+def test_the_webhook_verify_token_is_a_reported_credential(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    instagram = _platform(_doctor(database, settings).run(), "instagram")
+    by_name = {item["name"]: item for item in instagram["credentials"]}
+
+    view = by_name["RUNWAY_INSTAGRAM_WEBHOOK_VERIFY_TOKEN"]
+    assert view["set"] is False
+    assert view["adapter"] == "webhooks"
+
+    monkeypatch.setenv("RUNWAY_INSTAGRAM_WEBHOOK_VERIFY_TOKEN", "chosen-value")
+    settings = _settings(tmp_path / "other")
+    database = initialize_database(settings)
+    instagram = _platform(_doctor(database, settings).run(), "instagram")
+    by_name = {item["name"]: item for item in instagram["credentials"]}
+
+    view = by_name["RUNWAY_INSTAGRAM_WEBHOOK_VERIFY_TOKEN"]
+    assert view["set"] is True
+    assert view["source"] == "environment"
+    # Set/unset only: it never counts as OAuth configuration.
+    assert instagram["configured"] is False
+
+
+def test_human_output_lists_the_publishing_detail_flags(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, inbox_replies_enabled=True)
+    database = initialize_database(settings)
+    report = _doctor(database, settings).run()
+
+    text = report.human_text()
+    assert "inbox replies on" in text
+    assert "R2 media host not configured" in text
+
+    settings = _settings(
+        tmp_path / "r2",
+        r2_account_id="acct",
+        r2_bucket="media",
+        r2_access_key_id="key",
+        r2_secret_access_key="secret",
+    )
+    database = initialize_database(settings)
+    report = _doctor(database, settings).run()
+
+    assert "inbox replies off" in report.human_text()
+    assert "R2 media host configured" in report.human_text()
+
+
 # ---------------------------------------------------------------- redirect URIs
 
 
@@ -464,6 +513,95 @@ def test_an_account_without_a_stored_token_needs_reconnect(tmp_path: Path) -> No
     assert any("reconnect" in item.lower() for item in youtube["missing"])
 
 
+def _files_under(directory: Path) -> set[Path]:
+    return {path.relative_to(directory) for path in directory.rglob("*") if path.is_file()}
+
+
+def test_the_doctor_writes_no_file_under_data(tmp_path: Path) -> None:
+    """The doctor is read-only: no token.key, no secrets dir, no new files."""
+    settings = _configured_all(tmp_path)
+    database = initialize_database(settings)
+    _connect_all(database, settings)
+    data_dir = settings.resolved_data_dir
+    before = _files_under(data_dir)
+
+    # The default constructor path (real publisher registry included).
+    report = PlatformsDoctor(database, settings, clock=lambda: NOW).run()
+
+    assert _files_under(data_dir) == before
+    assert report.ready is True
+
+
+def test_a_fresh_install_reports_missing_without_creating_the_secrets_dir(
+    tmp_path: Path,
+) -> None:
+    """No token.key and no store: the token is missing - and still nothing is written."""
+    settings = _configured_all(tmp_path)
+    database = initialize_database(settings)
+    _connect(database, "youtube", token_ref="ref-youtube")
+
+    report = _doctor(database, settings).run()
+
+    token = _platform(report, "youtube")["accounts"][0]["token"]
+    assert token["state"] == "missing"
+    assert not settings.token_store_dir.exists()
+
+
+def test_a_missing_token_key_reports_unreadable_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """A store blob but no token.key: unreadable with the reason - no rewrite."""
+    settings = _configured_all(tmp_path)
+    database = initialize_database(settings)
+    _connect(
+        database,
+        "youtube",
+        scopes=[YOUTUBE_READONLY_SCOPE],
+        token_ref="ref-youtube",
+    )
+    _store_token(
+        settings,
+        "ref-youtube",
+        TokenSet(access_token="a", scopes=[YOUTUBE_READONLY_SCOPE]),
+    )
+    (settings.token_store_dir / "token.key").unlink()  # the key is gone, the blob stays
+    data_dir = settings.resolved_data_dir
+    before = _files_under(data_dir)
+
+    report = _doctor(database, settings).run()
+
+    assert _files_under(data_dir) == before
+    token = _platform(report, "youtube")["accounts"][0]["token"]
+    assert token["state"] == "unreadable"
+    assert "token.key" in token["reason"]
+    assert any("unreadable" in item for item in report.missing)
+
+
+def test_an_undecryptable_store_reports_unreadable_with_reason(tmp_path: Path) -> None:
+    settings = _configured_all(tmp_path)
+    database = initialize_database(settings)
+    _connect(
+        database,
+        "youtube",
+        scopes=[YOUTUBE_READONLY_SCOPE],
+        token_ref="ref-youtube",
+    )
+    _store_token(
+        settings,
+        "ref-youtube",
+        TokenSet(access_token="a", scopes=[YOUTUBE_READONLY_SCOPE]),
+    )
+    store = TokenStore(settings.token_store_dir)
+    store.key_path.write_bytes(Fernet.generate_key() + b"\n")  # rotate the key away
+
+    youtube = _platform(_doctor(database, settings).run(), "youtube")
+
+    token = youtube["accounts"][0]["token"]
+    assert token["state"] == "unreadable"
+    assert token["reason"]
+    assert "token unreadable" in _doctor(database, settings).run().human_text()
+
+
 # --------------------------------------------------------------------- scopes
 
 
@@ -637,6 +775,24 @@ def test_doctor_group_keeps_the_environment_check_and_adds_platforms() -> None:
     assert result.exit_code == 0
     # The bare `runway doctor` environment check lives in the group's callback.
     assert "platforms" in result.stdout
+
+
+def test_bare_doctor_still_runs_the_environment_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import runway.cli.main as cli_main
+
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    monkeypatch.setattr(cli_main, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli_main, "initialize_database", lambda _s: database)
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    # Whatever the individual verdicts are, the environment check itself ran:
+    # it prints one OK/WARN/FAIL line per probe.
+    for probe in ("Python", "Node", "npm", "Database migration", "API port"):
+        assert probe in result.stdout
 
 
 def test_v1_doctor_route_returns_the_report(tmp_path: Path) -> None:
