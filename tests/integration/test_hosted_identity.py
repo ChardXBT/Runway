@@ -494,9 +494,7 @@ def test_workspace_delete_requires_typing_the_slug_or_name(hosted: Hosted) -> No
 
     for json_body in (None, {"confirm": "not-the-workspace"}, {"confirm": ""}):
         kwargs: dict[str, Any] = {} if json_body is None else {"json": json_body}
-        response = hosted.client.request(
-            "DELETE", "/api/v1/workspace", headers=owner, **kwargs
-        )
+        response = hosted.client.request("DELETE", "/api/v1/workspace", headers=owner, **kwargs)
         _problem(response, 422, "validation_failed")
         with hosted.database.session() as session:
             workspace = session.get(Workspace, workspace_id)

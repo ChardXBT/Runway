@@ -394,9 +394,7 @@ def test_workspace_delete_route_refuses_the_local_profiles_workspace(
                 response = client.request("DELETE", "/api/v1/workspace", **kwargs)
                 assert response.status_code == 422, response.text
                 assert response.json()["code"] == "validation_failed"
-            refused = client.request(
-                "DELETE", "/api/v1/workspace", json={"confirm": slug}
-            )
+            refused = client.request("DELETE", "/api/v1/workspace", json={"confirm": slug})
             assert refused.status_code == 409, refused.text
             assert refused.json()["code"] == "invalid_state"
         with database.session() as session:
