@@ -217,6 +217,16 @@ class MediaStore(Protocol):
         """
         ...
 
+    def put_object(
+        self, key: str, data: bytes, *, workspace_id: str | int, content_type: str
+    ) -> None:
+        """Write a small server-made object directly at ``key`` (a poster frame).
+
+        Uploads from clients go through :meth:`begin_upload`/`complete_upload`;
+        this is for bytes the server produced itself, so no plan exists.
+        """
+        ...
+
     def signed_get_url(self, key: str, ttl_seconds: int, *, workspace_id: str | int) -> str | None:
         """Plain signed URL for a platform to fetch (Instagram). ``None`` when unavailable."""
         ...

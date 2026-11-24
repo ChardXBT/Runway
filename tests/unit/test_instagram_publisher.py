@@ -205,6 +205,9 @@ class FakeR2:
         self.signed.append(key)
         return f"https://r2.test/get/{key}?sig"
 
+    def put_object(self, key, data, *, workspace_id, content_type):
+        pass
+
     def delete(self, key, *, workspace_id):
         self.deleted.append(key)
 

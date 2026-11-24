@@ -180,6 +180,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             token_store_from_settings(active_settings, database)
         except TokenStoreError as exc:
             raise ValueError(f"RUNWAY_PROFILE=hosted requires {exc}") from exc
+        # Direct-to-storage uploads (spec 02 section 4): POST /api/v1/media
+        # returns presigned R2 part URLs so media bytes never pass through the
+        # API, and the poster preview is a redirect to a signed URL. Without
+        # R2 settings the service fails closed (capability_not_ready).
+        from runway.posts.runtime import build_media_service
+
+        media_service = build_media_service(active_settings, database)
+        application.state.media_service = media_service
+        application.include_router(build_media_router(media_service))
     else:
         web_origins = loopback_origins(active_settings.web_port)
         # Innermost: one audit row per successful mutation an API key makes (spec 06 section 5).

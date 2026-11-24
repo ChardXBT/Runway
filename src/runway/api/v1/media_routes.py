@@ -1,14 +1,14 @@
 """`/api/v1/media`: resumable uploads and probed assets for posts (spec 02 section 4).
 
-Uploaded bytes never leave through a static mount: the poster preview is a
-guarded route (local profile only), and stored objects are only read by the
-worker for delivery to a platform.
+Uploaded bytes never leave through a static mount or the API process: in
+`local` the poster preview is a guarded file route, and in `hosted` the same
+route answers with a redirect to a short-lived signed URL on the object store.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from runway.api.v1.idempotency import idempotent
@@ -83,10 +83,19 @@ def build_media_router(service: MediaService) -> APIRouter:
     @router.get(
         "/{asset_id}/poster",
         response_class=FileResponse,
+        response_model=None,
         responses={200: {"content": {"image/jpeg": {}}}},
     )
-    def get_poster(asset_id: int, principal: Principal = Depends(get_principal)) -> FileResponse:
-        """The preview frame Runway extracted (local profile; never the uploaded file)."""
+    def get_poster(
+        asset_id: int, principal: Principal = Depends(get_principal)
+    ) -> FileResponse | RedirectResponse:
+        """The preview frame Runway extracted (never the uploaded file).
+
+        Local serves the poster file; hosted answers 307 to a short-lived
+        signed URL, so no preview bytes are served from the API origin.
+        """
+        if service.settings.profile != "local":
+            return RedirectResponse(service.poster_url(principal, asset_id))
         path = service.poster_path(principal, asset_id)
         return FileResponse(
             path,

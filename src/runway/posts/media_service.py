@@ -4,9 +4,11 @@ Upload modes:
 
 - `api` (LocalDiskStore, the `local` default): the client sends chunks to
   `PUT /api/v1/media/{id}/parts/{n}`; the store appends them under the data
-  directory, outside any static mount.
-- `direct` (R2Store, when the R2 settings are configured): the client uploads
-  parts straight to signed part URLs; no media bytes pass through the API.
+  directory, outside any static mount. `local` keeps this mode even when the
+  R2 settings are configured.
+- `direct` (R2Store, the `hosted` mode): the client uploads parts straight to
+  signed part URLs; no media bytes pass through the API. Without R2 settings
+  `create` fails closed (`capability_not_ready`), never back to `api`.
 
 Completion verifies size and SHA-256 (the local store recomputes it; R2 is
 checked when the probe job copies the object), moves the asset to
@@ -16,6 +18,7 @@ bytes, never from the filename or the client's content type.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -77,6 +80,9 @@ logger = logging.getLogger(__name__)
 
 HOSTED_DEFAULT_QUOTA_BYTES = 5 * 1000**3
 UPLOAD_LIFETIME = timedelta(days=2)
+# Hosted previews are short-lived signed URLs on the object store's domain;
+# the API never serves media or poster bytes (spec 02 section 4).
+PREVIEW_URL_TTL_SECONDS = 300
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -189,6 +195,14 @@ def poster_root(settings: Settings) -> Path:
     return settings.resolved_data_dir / "mediastore-posters"
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 @dataclass
 class MediaService:
     database: Database
@@ -298,7 +312,10 @@ class MediaService:
                 ProblemCode.VALIDATION_FAILED,
                 f"files are limited to {self.settings.media_max_upload_bytes} bytes",
             )
-        storage = "r2" if "r2" in self.stores else "local"
+        # Hosted uploads always go direct to object storage; without the r2
+        # store `_store` raises capability_not_ready instead of streaming the
+        # bytes through the API. `local` keeps the api mode (invariant 8).
+        storage = "r2" if self.settings.profile == "hosted" else "local"
         store = self._store(storage)
         with self.database.session() as session:
             quota = self._quota()
@@ -508,13 +525,77 @@ class MediaService:
             raise _problem(ProblemCode.NOT_FOUND, "this media item has no preview")
         return path
 
+    def poster_url(self, principal: Principal, asset_id: int) -> str:
+        """Hosted preview: a short-lived signed URL for the poster object.
+
+        The poster frame lives in the same object store as the media in
+        `hosted`, so the API only ever hands out a signed URL to it.
+        """
+        require(principal, POSTS_READ)
+        if self.settings.profile == "local":
+            raise _problem(ProblemCode.NOT_FOUND, "previews are files in this profile")
+        with self.database.session() as session:
+            asset = self._load(session, principal, asset_id)
+            poster_key = asset.poster_key
+            if poster_key is None or asset.status == "deleted":
+                raise _problem(ProblemCode.NOT_FOUND, "this media item has no preview")
+            storage, workspace_id = asset.storage, asset.workspace_id
+        url = self._store(storage).signed_preview_url(
+            poster_key,
+            PREVIEW_URL_TTL_SECONDS,
+            workspace_id=workspace_id,
+            content_type="image/jpeg",
+        )
+        if url is None:
+            raise _problem(ProblemCode.NOT_FOUND, "this media item has no preview")
+        return url
+
     # ------------------------------------------------------------ probing
 
     def _poster_file(self, workspace_id: int, asset_id: int) -> Path:
         return poster_root(self.settings) / f"w{int(workspace_id)}" / f"{int(asset_id)}.jpg"
 
     def _remove_poster(self, asset: MediaAssetV2) -> None:
+        if asset.storage != "local" and asset.poster_key is not None:
+            # Object-store poster: the key names a stored object, not a file.
+            store = self.stores.get(asset.storage)
+            try:
+                if store is not None:
+                    store.delete(asset.poster_key, workspace_id=asset.workspace_id)
+            except MediaStoreError:
+                logger.warning("media %s: poster object was already gone", asset.id)
+            return
         self._poster_file(asset.workspace_id, asset.id).unlink(missing_ok=True)
+
+    def _store_poster(
+        self,
+        store: MediaStore,
+        *,
+        asset_id: int,
+        workspace_id: int,
+        storage: str,
+        poster: Path,
+    ) -> str:
+        """Persist the extracted frame; return the `poster_key` to record.
+
+        An R2 asset gets an object under the same ``w/{workspace}/{asset}``
+        tree; a local asset keeps the poster as a file under the private
+        poster root with the historical ``poster:{id}`` marker.
+        """
+        if storage != "local":
+            digest = _file_sha256(poster)
+            key = make_media_key(workspace_id, f"{asset_id}-poster", digest, "jpg")
+            store.put_object(
+                key,
+                poster.read_bytes(),
+                workspace_id=workspace_id,
+                content_type="image/jpeg",
+            )
+            return key
+        final = self._poster_file(workspace_id, asset_id)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(poster), final)
+        return f"poster:{asset_id}"
 
     def _scratch(self, store: MediaStore) -> Path:
         scratch = getattr(store, "scratch_dir", None)
@@ -541,7 +622,7 @@ class MediaService:
         poster_tmp = Path(tempfile.mkdtemp(prefix="poster-", dir=self._scratch(store)))
         probe: ProbeResult | None = None
         reason: str | None = None
-        poster_written = False
+        poster_key: str | None = None
         try:
             try:
                 store.copy_to_path(
@@ -568,10 +649,15 @@ class MediaService:
                     self.prober.extract_poster(
                         destination, poster, at_ms=default_poster_time_ms(probe)
                     )
-                    final = self._poster_file(workspace_id, asset_id)
-                    final.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(poster), final)
-                    poster_written = True
+                    # A store failure propagates so the job retries instead of
+                    # marking the asset ready without a preview.
+                    poster_key = self._store_poster(
+                        store,
+                        asset_id=asset_id,
+                        workspace_id=workspace_id,
+                        storage=storage,
+                        poster=poster,
+                    )
                 except (ProbeError, OSError) as exc:
                     logger.info("media %s: no poster (%s)", asset_id, type(exc).__name__)
         finally:
@@ -591,7 +677,7 @@ class MediaService:
                 asset.content_type = content_type_for(probe) or asset.content_type
                 asset.probe_json = json.dumps(probe.to_dict(), sort_keys=True)
                 asset.ready_at = now
-                asset.poster_key = f"poster:{asset.id}" if poster_written else None
+                asset.poster_key = poster_key
             session.flush()
             record_event(
                 session,
@@ -642,8 +728,6 @@ class MediaService:
 
         The asset goes through the same probe as an upload; nothing trusts its name.
         """
-        import hashlib
-
         digest = hashlib.sha256()
         with source.open("rb") as handle:
             for block in iter(lambda: handle.read(1024 * 1024), b""):

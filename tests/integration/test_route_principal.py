@@ -184,6 +184,16 @@ HOSTED_ROUTES = {
     ("GET", "/api/v1/workspace/exports/{export_id}"),
     ("DELETE", "/api/v1/users/me"),
     ("GET", "/api/v1/audit"),
+    # Media uploads (spec 02 section 4): every query is filtered by
+    # principal.workspace_id, uploads are direct-to-R2 (the API never carries
+    # the bytes), and the poster is a redirect to a short-lived signed URL.
+    ("POST", "/api/v1/media"),
+    ("PUT", "/api/v1/media/{asset_id}/parts/{part_number}"),
+    ("GET", "/api/v1/media/{asset_id}/upload"),
+    ("POST", "/api/v1/media/{asset_id}/complete"),
+    ("GET", "/api/v1/media/{asset_id}"),
+    ("DELETE", "/api/v1/media/{asset_id}"),
+    ("GET", "/api/v1/media/{asset_id}/poster"),
     # Clerk webhook: authenticated by the Svix signature, not by a principal.
     ("POST", "/hooks/identity/clerk"),
     # Meta compliance callbacks: authenticated by the signed_request HMAC.
