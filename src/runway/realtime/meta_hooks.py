@@ -21,6 +21,8 @@ import hashlib
 import hmac
 import json
 import logging
+import re
+from html import escape
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Request
@@ -40,6 +42,8 @@ META_DATA_DELETION_PATH = "/hooks/meta/data-deletion"
 META_DATA_DELETION_STATUS_PATH = "/hooks/meta/data-deletion/{code}"
 META_DEAUTHORIZE_PROVIDER = "meta-deauthorize"
 META_DATA_DELETION_PROVIDER = "meta-data-deletion"
+# The confirmation code is the SHA-256 of the signed body - 64 lowercase hex.
+_CONFIRMATION_CODE_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def _app_secrets(settings: Settings) -> list[str]:
@@ -104,10 +108,12 @@ def _status_page(code: str, event: WebhookEvent | None) -> HTMLResponse:
         title = "Data deletion completed"
         body = "Your data associated with this app has been deleted."
         status = 200
+    # `code` is HTML-escaped before it is reflected; an empty code (a path
+    # that failed the hex check) is not reflected at all.
+    code_line = f"<p>Confirmation code: {escape(code)}</p>" if code else ""
     page = (
         "<!doctype html><html><head><title>Runway data deletion</title></head>"
-        f"<body><h1>{title}</h1><p>{body}</p>"
-        f"<p>Confirmation code: {code}</p></body></html>"
+        f"<body><h1>{title}</h1><p>{body}</p>{code_line}</body></html>"
     )
     return HTMLResponse(page, status_code=status)
 
@@ -185,6 +191,10 @@ def build_meta_hooks_router(database: Database, settings: Settings) -> APIRouter
 
     @router.get(META_DATA_DELETION_STATUS_PATH)
     def data_deletion_status(code: str) -> HTMLResponse:
+        # Only an issued-shape code may name a stored request; anything else
+        # is answered like an unknown code and never reflected into the page.
+        if _CONFIRMATION_CODE_RE.fullmatch(code) is None:
+            return _status_page("", None)
         with database.session() as session:
             event = session.scalar(
                 select(WebhookEvent).where(

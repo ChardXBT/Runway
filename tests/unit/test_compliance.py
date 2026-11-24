@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from r2_support import Clock, FakeR2, fake_r2_store
 from sqlalchemy import func, select
@@ -44,13 +45,18 @@ from runway.db.models import (
     SearchRun,
     User,
     WebhookEndpoint,
+    WebhookEvent,
     Workspace,
     WorkspaceMember,
 )
 from runway.mediastore.keys import make_media_key
 from runway.mediastore.local import LocalDiskStore
 from runway.posts.media_service import poster_root
-from runway.realtime.meta_hooks import _signed_request_field, verify_signed_request
+from runway.realtime.meta_hooks import (
+    _signed_request_field,
+    build_meta_hooks_router,
+    verify_signed_request,
+)
 from runway.workspaces.lifecycle import (
     DELETE_WORKSPACE_JOB,
     EXPORT_WORKSPACE_JOB,
@@ -117,6 +123,49 @@ def test_signed_request_field_reads_form_body() -> None:
     body = f"signed_request={quote(value, safe='')}".encode()
     assert _signed_request_field(body) == value
     assert _signed_request_field(b"other=1") is None
+
+
+def test_data_deletion_status_page_requires_a_hex_confirmation_code(
+    tmp_path: Path,
+) -> None:
+    """The status page answers 404 to any code that is not 64 lowercase hex.
+
+    The code is reflected into the HTML on a page reachable without a
+    principal (Meta links users to it), so a path carrying markup must not
+    come back in the body - and can never name a stored request anyway.
+    """
+    settings = Settings(data_dir=tmp_path / "data")
+    database = initialize_database(settings)
+    application = FastAPI()
+    application.include_router(build_meta_hooks_router(database, settings))
+    try:
+        with TestClient(application, base_url="http://127.0.0.1:8000") as client:
+            code = hashlib.sha256(b"signed-body").hexdigest()
+            unknown = client.get(f"/hooks/meta/data-deletion/{code}")
+            assert unknown.status_code == 404
+            with database.session() as session:
+                session.add(
+                    WebhookEvent(
+                        provider="meta-data-deletion",
+                        signature_ok=True,
+                        dedupe_key=f"meta-data-deletion:{code}",
+                        body=b"signed-body",
+                    )
+                )
+            page = client.get(f"/hooks/meta/data-deletion/{code}")
+            assert page.status_code == 200
+            assert code in page.text
+            for bad in (
+                "<script>alert(1)</script>",
+                code[:-1],  # 63 chars
+                code.upper(),  # uppercase hex is not the issued form
+                "x" * 64,  # right length, not hex
+            ):
+                response = client.get(f"/hooks/meta/data-deletion/{bad}")
+                assert response.status_code == 404, (bad, response.status_code)
+                assert bad not in response.text
+    finally:
+        database.engine.dispose()
 
 
 # ------------------------------------------------------------------- export
