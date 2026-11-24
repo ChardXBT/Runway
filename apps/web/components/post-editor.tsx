@@ -161,7 +161,7 @@ function TargetCard({
     } catch (err) {
       if (err instanceof V1ApiError && err.status === 409) {
         setError(
-          "This post changed elsewhere — the latest is shown and your unsaved edits were kept.",
+          "This post changed elsewhere — the latest is shown; any unsaved edits were kept.",
         );
         onChanged(await V1.posts.get(post.id));
       } else {
