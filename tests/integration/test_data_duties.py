@@ -42,6 +42,7 @@ from runway.db.models import (
     PlatformSubscription,
     PublishJob,
     ReplyDraft,
+    WebhookEvent,
     utcnow,
 )
 from runway.jobs.queue import Job
@@ -426,6 +427,70 @@ def test_a_revoked_account_gets_the_same_deletion_path(tmp_path: Path) -> None:
         with database.session() as session:
             assert _count(session, PlatformContent) == 0
         assert removed == 1
+    finally:
+        database.engine.dispose()
+
+
+def test_a_dead_accounts_webhook_events_die_with_its_subscriptions(tmp_path: Path) -> None:
+    """The dead-account purge also removes the account's webhook inbox rows -
+    by account_id, and by the subscription ids collected before the
+    subscriptions themselves are deleted (a raw delivery whose account was
+    never resolved keeps only its subscription link)."""
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    try:
+        dead = _account(
+            database,
+            status="disconnected",
+            token_ref=None,
+            updated_at=NOW - DEAD_ACCOUNT_DATA_DELAY - timedelta(days=1),
+        )
+        live = _account(database, external_id="live-1", token_ref="ref-2")
+        with database.session() as session:
+            dead_sub = PlatformSubscription(
+                account_id=dead, provider="youtube", topic="t-dead", state="unsubscribed"
+            )
+            live_sub = PlatformSubscription(
+                account_id=live, provider="youtube", topic="t-live", state="active"
+            )
+            session.add_all([dead_sub, live_sub])
+            session.flush()
+            session.add_all(
+                [
+                    # Found by account_id.
+                    WebhookEvent(
+                        provider="youtube",
+                        signature_ok=True,
+                        body=b"by-account",
+                        account_id=dead,
+                    ),
+                    # Account never resolved: only the subscription links it.
+                    WebhookEvent(
+                        provider="youtube",
+                        signature_ok=False,
+                        body=b"by-subscription",
+                        subscription_id=int(dead_sub.id),
+                    ),
+                    # The live account's event must survive.
+                    WebhookEvent(
+                        provider="youtube",
+                        signature_ok=True,
+                        body=b"live",
+                        account_id=live,
+                        subscription_id=int(live_sub.id),
+                    ),
+                ]
+            )
+            session.flush()
+
+            purge_dead_account_data(
+                session,
+                TokenStore(settings.resolved_data_dir / "secrets"),
+                now=NOW,
+            )
+
+            assert _count(session, WebhookEvent) == 1
+            assert _count(session, PlatformSubscription) == 1
     finally:
         database.engine.dispose()
 

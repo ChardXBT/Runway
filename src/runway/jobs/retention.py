@@ -233,7 +233,8 @@ def purge_dead_account_data(session: Session, token_store: TokenStore, *, now: d
     section 5) once ``updated_at`` is more than 7 days old. A surviving
     token ref is deleted through the token store. The account row itself
     stays (it is the reconnect and audit record), and Runway-authored rows
-    - drafts, targets, proposals - are never touched.
+    - drafts, targets, proposals - are never touched. The webhook inbox
+    dies too: an account that no longer exists keeps no deliveries.
     """
     cutoff = now - DEAD_ACCOUNT_DATA_DELAY
     rows = session.execute(
@@ -247,6 +248,11 @@ def purge_dead_account_data(session: Session, token_store: TokenStore, *, now: d
         return 0
     removed = 0
     content_ids = select(PlatformContent.id).where(PlatformContent.account_id.in_(account_ids))
+    # Collected before the subscriptions are deleted: a raw delivery whose
+    # account was never resolved is reachable only through this link.
+    subscription_ids = select(PlatformSubscription.id).where(
+        PlatformSubscription.account_id.in_(account_ids)
+    )
     removed += _rowcount(
         session.execute(
             delete(ContentMetricSnapshot).where(ContentMetricSnapshot.content_id.in_(content_ids))
@@ -279,6 +285,18 @@ def purge_dead_account_data(session: Session, token_store: TokenStore, *, now: d
     removed += _rowcount(
         session.execute(
             delete(AccountMetricSnapshot).where(AccountMetricSnapshot.account_id.in_(account_ids))
+        )
+    )
+    # The webhook inbox dies with the account - before the subscriptions
+    # go, so subscription-linked deliveries are still found.
+    removed += _rowcount(
+        session.execute(
+            delete(WebhookEvent).where(
+                or_(
+                    WebhookEvent.account_id.in_(account_ids),
+                    WebhookEvent.subscription_id.in_(subscription_ids),
+                )
+            )
         )
     )
     removed += _rowcount(
