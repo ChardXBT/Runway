@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -21,8 +21,10 @@ from runway.api.security import LocalRequestGuard, loopback_origins
 from runway.config import Settings, get_settings
 from runway.db import initialize_database
 from runway.db.base import Database
+from runway.locks import FileLockTimeout, exclusive_file_lock
 from runway.logging import configure_logging
 from runway.operations.instance_lease import StandbyError
+from runway.operations.runtime_files import worker_lock_path
 from runway.platforms.sync import PlatformSyncScheduler, SyncService
 
 logger = logging.getLogger(__name__)
@@ -84,14 +86,26 @@ def _lifespan(
 
             lease_heartbeat = LeaseHeartbeat(settings)
             lease_heartbeat.start()
-        try:
-            yield
-        finally:
-            if lease_heartbeat is not None:
-                lease_heartbeat.stop()
-            if scheduler is not None:
-                scheduler.stop()
-            logger.info("runway api stop", extra={"event_type": "api_stop"})
+        with ExitStack() as locks:
+            try:
+                # A running Runway holds this lock for its lifetime: 'runway
+                # instance pull' checks it and refuses before replacing the
+                # database under a live process.
+                locks.enter_context(exclusive_file_lock(worker_lock_path(settings), timeout=0))
+            except FileLockTimeout:
+                logger.warning(
+                    "another Runway process already holds %s; "
+                    "'runway instance pull' will refuse while it runs",
+                    worker_lock_path(settings),
+                )
+            try:
+                yield
+            finally:
+                if lease_heartbeat is not None:
+                    lease_heartbeat.stop()
+                if scheduler is not None:
+                    scheduler.stop()
+                logger.info("runway api stop", extra={"event_type": "api_stop"})
 
     return lifespan
 

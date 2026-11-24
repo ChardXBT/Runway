@@ -48,6 +48,7 @@ from runway.operations.instance_lease import (
     instance_is_active,
     read_lease,
 )
+from runway.operations.runtime_files import worker_lock_path
 from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
@@ -1273,3 +1274,102 @@ def test_the_heartbeat_thread_skips_a_beat_while_the_lock_is_held(
 
     beater.beat()
     assert beater.last_result is not None and beater.last_result["status"] == "renewed"
+
+
+# --- pull refuses while Runway is running; a failed install rolls back ----------
+
+
+def _two_machines_with_a_released_lease(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Machine, Machine]:
+    machine_a = _machine(tmp_path, "machine-a", fake_github, clock)
+    machine_b = _machine(tmp_path, "machine-b", fake_github, clock)
+    ops.init(machine_a.context(monkeypatch), PRIVATE_REPO)
+    _seed_runway(machine_a.settings())
+    ops.handover(machine_a.context(monkeypatch))
+    ops.init(machine_b.context(monkeypatch), PRIVATE_REPO)
+    return machine_a, machine_b
+
+
+def test_pull_refuses_while_runway_holds_the_worker_lock(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _machine_a, machine_b = _two_machines_with_a_released_lease(
+        tmp_path, fake_github, clock, monkeypatch
+    )
+    remote_head = _remote_head(fake_github, PRIVATE_REPO)
+
+    # The API process holds the worker lock for its whole lifetime; here the
+    # test itself stands in for it.
+    with (
+        exclusive_file_lock(worker_lock_path(machine_b.settings()), timeout=0),
+        pytest.raises(InstanceError, match="stop Runway"),
+    ):
+        ops.pull(machine_b.context(monkeypatch))
+
+    # Refused before any lease commit or download: the remote is untouched.
+    assert _remote_head(fake_github, PRIVATE_REPO) == remote_head
+    assert json.loads(_remote_file(fake_github, "lease.json"))["holder"] is None
+    assert not any(call[:3] == ["gh", "release", "download"] for call in fake_github.calls)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="only Windows refuses to rename an open SQLite file",
+)
+def test_pull_refuses_while_the_local_database_is_open(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _machine_a, machine_b = _two_machines_with_a_released_lease(
+        tmp_path, fake_github, clock, monkeypatch
+    )
+    remote_head = _remote_head(fake_github, PRIVATE_REPO)
+    database = machine_b.root / "data" / "runway.db"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    live = sqlite3.connect(database)
+    live.execute("create table standby_state(x)")
+    live.commit()  # B's Runway is running against this database
+    try:
+        with pytest.raises(InstanceError, match="stop Runway"):
+            ops.pull(machine_b.context(monkeypatch))
+    finally:
+        live.close()
+
+    assert _remote_head(fake_github, PRIVATE_REPO) == remote_head
+    assert json.loads(_remote_file(fake_github, "lease.json"))["holder"] is None
+    probe = sqlite3.connect(database)
+    try:
+        assert probe.execute("select name from sqlite_master").fetchall() == [("standby_state",)]
+    finally:
+        probe.close()
+
+
+def test_a_failed_install_releases_the_lease_and_restores_the_database(
+    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _machine_a, machine_b = _two_machines_with_a_released_lease(
+        tmp_path, fake_github, clock, monkeypatch
+    )
+    database = machine_b.root / "data" / "runway.db"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    database.write_bytes(b"b standby database")
+
+    def fail_mid_install(data_dir: Path, staging: Path, stamp: str) -> Path | None:
+        # The same partial state _install_restored leaves when an os.replace
+        # fails after the live database was already moved to the backup.
+        backup = data_dir / "backups" / f"pre-instance-pull-{stamp}"
+        backup.mkdir(parents=True)
+        os.replace(data_dir / "runway.db", backup / "runway.db")
+        raise OSError("simulated install failure")
+
+    monkeypatch.setattr(ops, "_install_restored", fail_mid_install)
+
+    with pytest.raises(InstanceError, match="could not be installed"):
+        ops.pull(machine_b.context(monkeypatch))
+
+    # The lease take was rolled back, locally and on the remote.
+    assert json.loads(_remote_file(fake_github, "lease.json"))["holder"] is None
+    local = read_lease(machine_b.instance_dir)
+    assert local is not None and local.holder is None
+    # And the previous local database is back in place.
+    assert database.read_bytes() == b"b standby database"

@@ -30,7 +30,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -84,6 +84,7 @@ from runway.operations.instance_lease import (
     worker_is_busy,
     write_lease,
 )
+from runway.operations.runtime_files import worker_lock_path
 
 __all__ = [
     "CODE_REPOSITORY",
@@ -1587,9 +1588,89 @@ def _download_snapshot(
             )
 
 
+def _database_can_be_replaced(database: Path) -> bool:
+    """True when no process holds ``database`` open (Windows refuses the rename)."""
+    if not database.is_file():
+        return True
+    probe = database.with_name(f"{database.name}.pull-check")
+    try:
+        os.replace(database, probe)
+        os.replace(probe, database)
+    except OSError:
+        # Best effort: never leave the database at the probe path.
+        if probe.is_file() and not database.exists():
+            with suppress(OSError):
+                os.replace(probe, database)
+        return False
+    return True
+
+
+def _refuse_while_runway_is_running(settings: Settings) -> None:
+    """Refuse a pull while this machine's Runway is running.
+
+    The API holds ``runtime/worker.lock`` for its whole lifetime, and on
+    Windows an open SQLite file cannot even be renamed. Both probes run before
+    the lease is taken: otherwise a failed install would leave this machine
+    holding the lease on the stale standby database.
+    """
+    try:
+        with exclusive_file_lock(worker_lock_path(settings), timeout=0):
+            pass
+    except FileLockTimeout as exc:
+        raise InstanceError(
+            "stop Runway (API and worker) before pulling: it is running on this "
+            f"machine and holds {worker_lock_path(settings)}"
+        ) from exc
+    database = settings.database_path
+    if not _database_can_be_replaced(database):
+        raise InstanceError(
+            "stop Runway (API and worker) before pulling: the local database "
+            f"{database} is open, so the snapshot cannot be installed"
+        )
+
+
+def _install_backup_dir(data_dir: Path, stamp: str) -> Path:
+    return data_dir / "backups" / f"pre-instance-pull-{stamp}"
+
+
+def _restore_install_backup(backup_dir: Path, data_dir: Path) -> None:
+    """Move every file a partial install backed up back where it came from."""
+    if not backup_dir.is_dir():
+        return
+    for source in sorted(backup_dir.rglob("*")):
+        if not source.is_file():
+            continue
+        destination = data_dir / source.relative_to(backup_dir)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(source, destination)
+        except OSError:
+            logger.warning("could not restore %s after the failed install", destination)
+    shutil.rmtree(backup_dir, ignore_errors=True)
+
+
+def _release_taken_lease(
+    ctx: InstanceContext, instance_dir: Path, repository: str, me: str
+) -> bool:
+    """Best effort: undo a just-published lease take after a failed install."""
+    try:
+        released = release(read_lease(instance_dir), me, ctx.now())
+        _publish_lease(
+            ctx,
+            instance_dir,
+            repository,
+            released,
+            f"Release the lease on {me} after a failed install",
+        )
+    except (InstanceError, InstanceConfigError, LeaseError, OSError) as exc:
+        logger.warning("could not release the lease after the failed install: %s", exc)
+        return False
+    return True
+
+
 def _install_restored(data_dir: Path, staging: Path, stamp: str) -> Path | None:
     """Move the verified restore into the data directory, backing up what it replaces."""
-    backup_dir = data_dir / "backups" / f"pre-instance-pull-{stamp}"
+    backup_dir = _install_backup_dir(data_dir, stamp)
     moved_any = False
 
     def back_up(path: Path, relative: Path) -> None:
@@ -1660,6 +1741,7 @@ def _pull(
             "work. Run 'runway instance push' to keep it, or 'runway instance pull --force' to "
             "replace it (the local database is backed up under data/backups first)."
         )
+    _refuse_while_runway_is_running(settings)
     wait_for_idle_worker(ctx, wait_seconds)
 
     warnings: list[str] = []
@@ -1683,7 +1765,26 @@ def _pull(
             raise InstanceError("the snapshot's database revision does not match manifest.json")
         # Only a verified snapshot is worth the lease; the push arbitrates between machines.
         _publish_lease(ctx, instance_dir, repository, new_lease, f"Take the lease on {me}")
-        backup = _install_restored(data_dir, Path(staging), now.strftime("%Y%m%dT%H%M%SZ"))
+        stamp = now.strftime("%Y%m%dT%H%M%SZ")
+        try:
+            backup = _install_restored(data_dir, Path(staging), stamp)
+        except OSError as exc:
+            # A half-installed snapshot must not leave this machine holding the
+            # lease on its old database: put back what the install moved and
+            # release the lease it just took.
+            _restore_install_backup(_install_backup_dir(data_dir, stamp), data_dir)
+            if _release_taken_lease(ctx, instance_dir, repository, me):
+                state = "the lease was released, so this machine stays in standby"
+            else:
+                state = (
+                    "the lease could not be released; another machine can still "
+                    "take it with --take once it is stale"
+                )
+            raise InstanceError(
+                f"the snapshot could not be installed: {exc}. The previous "
+                f"local database was restored and {state}. Stop Runway (API "
+                "and worker), then run 'runway instance pull' again."
+            ) from exc
     return {
         "status": "pulled",
         "repository": repository,
