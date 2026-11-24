@@ -103,6 +103,9 @@ jobs:
           CREATE ROLE runway_app LOGIN PASSWORD 'apppw'
               NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
           GRANT CONNECT, TEMPORARY ON DATABASE runway_test TO runway_owner, runway_app;
+          # The suite gives every test its own schema (tests/conftest.py), and
+          # each test connects as the app role - which therefore needs CREATE.
+          GRANT CREATE ON DATABASE runway_test TO runway_app;
           ALTER SCHEMA public OWNER TO runway_owner;
           GRANT USAGE ON SCHEMA public TO runway_app;
           ALTER DEFAULT PRIVILEGES FOR ROLE runway_owner IN SCHEMA public
