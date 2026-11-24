@@ -435,7 +435,9 @@ def build_disconnect_router(
 
     @router.post("/{account_id}/disconnect")
     @idempotent
-    def disconnect(account_id: int, principal: Principal = Depends(get_principal)):
+    def disconnect(
+        account_id: int, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
         """Detach the grant: revoke, drop the stored token, cancel pending sends."""
         require(principal, ACCOUNTS_MANAGE)
         # A standby machine may not revoke or delete tokens (spec 07 section 4).
