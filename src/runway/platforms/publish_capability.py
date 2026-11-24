@@ -98,6 +98,9 @@ class AccountFacts:
 
     status: str
     granted_scopes: tuple[str, ...]
+    # The connection adapter that created the account ("instagram_unified" for
+    # Unified Login); it decides which direct adapter the account defaults to.
+    connection: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +177,21 @@ def _app_gate(
     return None
 
 
+def _direct_adapter(kind: TargetPostType, account: AccountFacts | None) -> str:
+    """The account's own direct adapter when its connection has a dedicated one.
+
+    An account connected through Unified Login publishes through
+    `instagram_unified`, not `instagram_direct` (spec 08 section 3).
+    """
+    if (
+        platform_of(kind) is Platform.instagram
+        and account is not None
+        and account.connection == "instagram_unified"
+    ):
+        return "instagram_unified"
+    return DIRECT_ADAPTERS[kind]
+
+
 def publishing_capability(
     post_type: TargetPostType | str,
     *,
@@ -186,7 +204,7 @@ def publishing_capability(
 ) -> PublishCapability:
     """The publishing state of one post type for one account (spec 08 section 5)."""
     kind = TargetPostType(post_type)
-    direct = DIRECT_ADAPTERS[kind]
+    direct = _direct_adapter(kind, account)
     draft_only = kind is TargetPostType.TIKTOK_DRAFT
 
     def result(
@@ -225,7 +243,13 @@ def publishing_capability(
             f"turn on publishing for this account to grant {wanted[0]}",
             missing=(wanted[0],),
         )
-    if platform_of(kind) is Platform.instagram and not media_host_available:
+    if (
+        platform_of(kind) is Platform.instagram
+        and not media_host_available
+        # Unified Login uploads Reels from disk via rupload.facebook.com, so a
+        # Reel needs no public URL; images still do (spec 08 section 3).
+        and not (direct == "instagram_unified" and kind is TargetPostType.INSTAGRAM_REEL)
+    ):
         return result(
             "needs_media_host",
             "Instagram fetches media from a public URL; configure R2 (RUNWAY_R2_*) or use "

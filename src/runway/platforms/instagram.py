@@ -33,6 +33,10 @@ API_VERSION = "v25.0"
 AUTH_URL = "https://www.instagram.com/oauth/authorize"
 TOKEN_URL = "https://api.instagram.com/oauth/access_token"
 GRAPH_BASE = f"https://graph.instagram.com/{API_VERSION}"
+# Unified Login reads and publishes against the Facebook Graph host; the
+# account's stored token marks itself with `extra["login"] == "unified"`
+# (spec 08 section 3, "Unified Login adapter").
+FACEBOOK_GRAPH = f"https://graph.facebook.com/{API_VERSION}"
 LONG_LIVED_URL = "https://graph.instagram.com/access_token"
 REFRESH_URL = "https://graph.instagram.com/refresh_access_token"
 
@@ -273,21 +277,40 @@ class InstagramProvider(PlatformProvider):
             self.client,
             "Instagram",
             "GET",
-            f"{GRAPH_BASE}/{path.lstrip('/')}",
+            f"{self._graph_base(token)}/{path.lstrip('/')}",
             params=params,
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
         return self._json_or_raise(response)
 
+    @staticmethod
+    def _is_unified(token: TokenSet) -> bool:
+        return token.extra.get("login") == "unified"
+
+    def _graph_base(self, token: TokenSet) -> str:
+        """Unified Login tokens live on graph.facebook.com (spec 08 section 3)."""
+        return FACEBOOK_GRAPH if self._is_unified(token) else GRAPH_BASE
+
+    def _node(self, token: TokenSet) -> str:
+        """The graph node `me` stands in for on Instagram Login.
+
+        A Unified Login `me` is the system user, not the Instagram account —
+        the connected account id stored in `extra["user_id"]` names it there.
+        """
+        if self._is_unified(token) and token.extra.get("user_id"):
+            return str(token.extra["user_id"])
+        return "me"
+
     # --------------------------------------------------------------- identity
 
     def fetch_identity(self, token: TokenSet) -> AccountIdentity:
+        id_field = "id" if self._is_unified(token) else "user_id"
         data = self._graph_get(
             token,
-            "me",
+            self._node(token),
             {
                 "fields": (
-                    "user_id,username,name,account_type,profile_picture_url,"
+                    f"{id_field},username,name,account_type,profile_picture_url,"
                     "followers_count,follows_count,media_count"
                 )
             },
@@ -315,7 +338,7 @@ class InstagramProvider(PlatformProvider):
         """Total-value insights for the account snapshot; failures are warnings."""
         data = self._graph_get(
             token,
-            "me/insights",
+            f"{self._node(token)}/insights",
             {
                 "metric": _TOTAL_VALUE_METRICS,
                 "period": "day",
@@ -352,7 +375,7 @@ class InstagramProvider(PlatformProvider):
         }
         if cursor and cursor.get("after"):
             params["after"] = str(cursor["after"])
-        data = self._graph_get(token, "me/media", params)
+        data = self._graph_get(token, f"{self._node(token)}/media", params)
         items: list[ContentItem] = []
         entries = data.get("data")
         for entry in entries if isinstance(entries, list) else []:
@@ -458,7 +481,7 @@ class InstagramProvider(PlatformProvider):
         )
         data = self._graph_get(
             token,
-            "me/insights",
+            f"{self._node(token)}/insights",
             {
                 "metric": _DAILY_METRICS,
                 "period": "day",

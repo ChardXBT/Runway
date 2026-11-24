@@ -97,6 +97,26 @@ class OAuthStateService:
             session.expunge(record)
             return record
 
+    def peek(self, platform: Platform, *, state: str) -> OAuthState | None:
+        """Read a live, unconsumed state without consuming it.
+
+        Used by two-step flows (Unified Login's account pick) that list the
+        stored payload first and consume the state only on the final POST.
+        """
+        now = utcnow()
+        with self.database.session() as session:
+            record = session.scalar(
+                select(OAuthState).where(
+                    OAuthState.state == state,
+                    OAuthState.platform == platform.value,
+                    OAuthState.consumed_at.is_(None),
+                    OAuthState.expires_at > now,
+                )
+            )
+            if record is not None:
+                session.expunge(record)
+            return record
+
 
 def read_state_storage(record: OAuthState) -> tuple[str | None, str | None]:
     """Split a consumed state's stored text into (code_verifier, payload).

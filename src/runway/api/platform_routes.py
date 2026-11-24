@@ -41,6 +41,7 @@ from runway.platforms.content import ContentService
 from runway.platforms.drafts import DraftService, DuplicateDraftTarget
 from runway.platforms.inbox import InboxReplyForbidden, InboxService
 from runway.platforms.instagram import InstagramProvider
+from runway.platforms.instagram_unified import InstagramUnifiedProvider
 from runway.platforms.oauth import OAuthStateError, OAuthStateService, read_state_storage
 from runway.platforms.overview import OverviewService, account_freshness, metric_window_start
 from runway.platforms.registry import ProviderRegistry, parse_platform
@@ -70,6 +71,17 @@ INSTAGRAM_KNOWN_SCOPES = (
     "instagram_business_manage_messages",
     "instagram_business_content_publish",
 )
+
+
+class ConnectRequest(BaseModel):
+    """Optional connect body; `adapter` picks a non-default connection flow."""
+
+    adapter: Literal["instagram_unified"] | None = None
+
+
+class UnifiedSelectRequest(BaseModel):
+    state: str = Field(min_length=8, max_length=200)
+    external_account_id: str = Field(min_length=1, max_length=200)
 
 
 class ImportTokenRequest(BaseModel):
@@ -282,16 +294,21 @@ def _enrich_token(
     return token.model_copy(update={"extra": extra})
 
 
-def _state_requested_scopes(record: OAuthState) -> list[str] | None:
-    """The scope list an incremental-consent state stored, when it has one."""
+def _state_meta(record: OAuthState) -> dict[str, object]:
+    """The JSON payload a non-PKCE state stored (adapter choice, scopes)."""
     _verifier, payload = read_state_storage(record)
     if payload is None:
-        return None
+        return {}
     try:
         meta = json.loads(payload)
     except json.JSONDecodeError:
-        return None
-    scopes = meta.get("scopes") if isinstance(meta, dict) else None
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _state_requested_scopes(record: OAuthState) -> list[str] | None:
+    """The scope list an incremental-consent state stored, when it has one."""
+    scopes = _state_meta(record).get("scopes")
     if not isinstance(scopes, list):
         return None
     return [str(scope) for scope in scopes]
@@ -303,6 +320,7 @@ def build_platform_router(
     *,
     registry: ProviderRegistry | None = None,
     oauth_states: OAuthStateService | None = None,
+    unified_provider: InstagramUnifiedProvider | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["platforms"], dependencies=[Depends(get_principal)])
     registry = registry or ProviderRegistry(database, settings)
@@ -356,7 +374,17 @@ def build_platform_router(
             account.last_verified_at = now
             account.last_error = None
             account.metadata_json = json.dumps(
-                {"raw": identity.raw, "scopes_source": scopes_source}
+                {
+                    "raw": identity.raw,
+                    "scopes_source": scopes_source,
+                    # The connection adapter decides the account's direct
+                    # publisher (instagram_direct vs instagram_unified).
+                    "connection": (
+                        "instagram_unified"
+                        if token.extra.get("login") == "unified"
+                        else platform.value
+                    ),
+                }
             )
             session.flush()
             token_ref = str(account.token_ref)
@@ -429,18 +457,179 @@ def build_platform_router(
         )
         return {"authorization_url": authorization_url, "state": issued.state}
 
+    def _unified() -> InstagramUnifiedProvider:
+        return unified_provider or InstagramUnifiedProvider(settings)
+
+    def _issue_unified_connect() -> dict[str, object]:
+        if settings.platform_provider == "mock":
+            raise HTTPException(
+                status_code=400,
+                detail="OAuth connect is unavailable in mock provider mode",
+            )
+        provider = _unified()
+        if not provider.configured():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "instagram_unified OAuth is not configured "
+                    "(RUNWAY_META_APP_ID, RUNWAY_META_APP_SECRET, "
+                    "RUNWAY_INSTAGRAM_UNIFIED_CONFIG_ID)"
+                ),
+            )
+        redirect_uri = registry.redirect_uri(Platform.instagram)
+        issued = oauth_states.issue(
+            Platform.instagram,
+            redirect_uri=redirect_uri,
+            use_pkce=False,
+            payload=json.dumps({"adapter": "instagram_unified"}),
+        )
+        return {
+            "authorization_url": provider.authorization_url(
+                state=issued.state,
+                redirect_uri=redirect_uri,
+                code_challenge=None,
+            ),
+            "state": issued.state,
+        }
+
     def _require_slot(principal: Principal) -> None:
         with database.session() as session:
             require_connected_account_slot(session, settings, principal.workspace_id)
 
     @router.post("/platforms/{platform}/connect")
-    def connect(platform: str, principal: Principal = Depends(get_principal)) -> dict[str, object]:
+    def connect(
+        platform: str,
+        payload: ConnectRequest | None = None,
+        principal: Principal = Depends(get_principal),
+    ) -> dict[str, object]:
         try:
             parsed = parse_platform(platform)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         _require_slot(principal)
+        adapter = payload.adapter if payload is not None else None
+        if adapter == "instagram_unified":
+            if parsed is not Platform.instagram:
+                raise HTTPException(
+                    status_code=400,
+                    detail="instagram_unified is an Instagram connection adapter",
+                )
+            return _issue_unified_connect()
         return _issue_connect(parsed)
+
+    def _unified_callback(
+        code: str,
+        record: OAuthState,
+        principal: Principal,
+        fail,
+    ) -> Response:
+        """Unified Login callback (spec 08 section 3): exchange the code, list
+        assigned accounts, persist the only one or defer to the owner pick."""
+        web_base = settings.resolved_web_base_url
+        provider = _unified()
+        try:
+            token = provider.exchange_code(
+                code=code, redirect_uri=record.redirect_uri, code_verifier=None
+            )
+            token = provider.attach_business_id(token)
+            candidates = provider.assigned_accounts(token)
+        except ProviderError as exc:
+            logger.warning("unified oauth callback failed: %s", exc.detail)
+            return fail("exchange_failed")
+        except Exception:  # noqa: BLE001
+            logger.exception("unified oauth callback failed")
+            return fail("exchange_failed")
+        if not candidates:
+            return fail("no_instagram_accounts")
+        if len(candidates) == 1:
+            token.extra["user_id"] = candidates[0]["id"]
+            try:
+                _persist_connection(
+                    Platform.instagram,
+                    token,
+                    token.scopes,
+                    workspace_id=principal.workspace_id,
+                )
+            except Problem as exc:
+                return fail(exc.code)
+            except ProviderError:
+                return fail("exchange_failed")
+            return RedirectResponse(
+                url=f"{web_base}/accounts?connected=instagram",
+                status_code=303,
+            )
+        # Several accounts are assigned: hold the token under a temporary
+        # ref and let the owner pick through the select endpoints.
+        token_ref = registry.token_store.new_token_ref()
+        registry.token_store.store(token_ref, token)
+        issued = oauth_states.issue(
+            Platform.instagram,
+            redirect_uri=record.redirect_uri,
+            use_pkce=False,
+            payload=json.dumps(
+                {
+                    "adapter": "instagram_unified",
+                    "select": True,
+                    "token_ref": token_ref,
+                    "accounts": candidates,
+                }
+            ),
+        )
+        return RedirectResponse(
+            url=f"{web_base}/accounts?select_instagram={issued.state}",
+            status_code=303,
+        )
+
+    def _select_meta(state: str) -> dict[str, object] | None:
+        record = oauth_states.peek(Platform.instagram, state=state)
+        if record is None:
+            return None
+        meta = _state_meta(record)
+        if meta.get("adapter") != "instagram_unified" or not meta.get("select"):
+            return None
+        return meta
+
+    @router.get("/platforms/instagram/unified/select")
+    def unified_select_list(state: str = Query(min_length=1)) -> dict[str, object]:
+        meta = _select_meta(state)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="no pending Instagram account pick")
+        return {"state": state, "accounts": meta.get("accounts") or []}
+
+    @router.post("/platforms/instagram/unified/select")
+    def unified_select(
+        payload: UnifiedSelectRequest,
+        principal: Principal = Depends(get_principal),
+    ) -> dict[str, object]:
+        try:
+            record = oauth_states.consume(Platform.instagram, state=payload.state)
+        except OAuthStateError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        meta = _state_meta(record)
+        if meta.get("adapter") != "instagram_unified" or not meta.get("select"):
+            raise HTTPException(status_code=404, detail="no pending Instagram account pick")
+        candidates = meta.get("accounts")
+        accounts = (
+            [a for a in candidates if isinstance(a, dict)] if isinstance(candidates, list) else []
+        )
+        chosen = next((a for a in accounts if a.get("id") == payload.external_account_id), None)
+        if chosen is None:
+            raise HTTPException(
+                status_code=400,
+                detail="that Instagram account is not among the assigned ones",
+            )
+        token_ref = str(meta.get("token_ref") or "")
+        token = registry.token_store.load(token_ref) if token_ref else None
+        if token is None:
+            raise HTTPException(status_code=410, detail="the held token is gone; connect again")
+        token.extra["user_id"] = chosen["id"]
+        account = _persist_connection(
+            Platform.instagram,
+            token,
+            token.scopes,
+            workspace_id=principal.workspace_id,
+        )
+        return {"status": "connected", "account": _account_view(database, settings, account)}
 
     @router.get("/platforms/{platform}/oauth/callback")
     def oauth_callback(
@@ -470,6 +659,11 @@ def build_platform_router(
             record = oauth_states.consume(parsed, state=state)
         except OAuthStateError as exc:
             return fail(str(exc))
+        if (
+            parsed is Platform.instagram
+            and _state_meta(record).get("adapter") == "instagram_unified"
+        ):
+            return _unified_callback(code, record, principal, fail)
         provider = registry.provider(parsed)
         verifier, _payload = read_state_storage(record)
         requested_scopes = _state_requested_scopes(record)

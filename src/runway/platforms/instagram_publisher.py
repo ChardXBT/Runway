@@ -92,6 +92,7 @@ _SIGNED_TTL_SECONDS = int(INSTAGRAM_POLLING.signed_url_ttl.total_seconds())
 _QUOTA_RETRY_AFTER = timedelta(hours=1)
 
 _GRAPH = f"https://graph.instagram.com/{API_VERSION}"
+_FACEBOOK_GRAPH = f"https://graph.facebook.com/{API_VERSION}"
 
 
 def instagram_publish_guards() -> tuple[RateGuard, ...]:
@@ -129,6 +130,10 @@ class InstagramDirectPublisher:
     platform = Platform.instagram
     prepare_lead = PREPARE_LEAD
     rate_guards = instagram_publish_guards()
+    # `graph.instagram.com` for Instagram Login tokens (`login` extra unset);
+    # `instagram_unified` overrides these two for graph.facebook.com.
+    graph_base = _GRAPH
+    _login = ""
 
     def __init__(
         self,
@@ -233,19 +238,20 @@ class InstagramDirectPublisher:
                     field="granted_scopes",
                 )
             )
-        if self.r2 is None:
-            for media in ctx.media:
-                if ctx.signed_media_url(media, _SIGNED_TTL_SECONDS) is None:
-                    issues.append(
-                        Issue(
-                            "error",
-                            "media_host",
-                            "Instagram fetches media from a public URL; this "
-                            "locally stored media needs R2 (RUNWAY_R2_*) configured",
-                            item=media.position,
-                            field="media",
-                        )
+        for media in ctx.media:
+            if not self._media_needs_host(media):
+                continue
+            if self.r2 is None and ctx.signed_media_url(media, _SIGNED_TTL_SECONDS) is None:
+                issues.append(
+                    Issue(
+                        "error",
+                        "media_host",
+                        "Instagram fetches media from a public URL; this "
+                        "locally stored media needs R2 (RUNWAY_R2_*) configured",
+                        item=media.position,
+                        field="media",
                     )
+                )
         return issues
 
     def prepare(self, ctx: PublishContext) -> Mapping[str, Any]:
@@ -275,7 +281,7 @@ class InstagramDirectPublisher:
         self._check_quota(token, ig_id)
         state = self._new_state(ctx, ctx.resumable)
         if not state["containers"]:
-            self._create_containers(ctx, token, ig_id, state)
+            self._create_containers(ctx, token, ig_id, state, progress)
             ctx.save_resumable(state)
         parent = self._parent(state)
         status = self._container_status(token, parent["id"])
@@ -414,9 +420,22 @@ class InstagramDirectPublisher:
         if ctx.account is None:
             raise PublishRefused("account_required", "choose a connected account")
         try:
-            return ctx.access_token()
+            token = ctx.access_token()
         except AuthorizationExpired as exc:
             raise PublishAuthRevoked(exc.detail) from exc
+        # Instagram Login and Unified Login tokens are not interchangeable:
+        # each only authenticates its own graph host.
+        if (token.extra.get("login") == "unified") != (self._login == "unified"):
+            raise PublishRefused(
+                "account_wrong_adapter",
+                "this account was connected through "
+                + (
+                    "Unified Login; target it at instagram_unified"
+                    if token.extra.get("login") == "unified"
+                    else "Instagram Login; target it at instagram_direct"
+                ),
+            )
+        return token
 
     def _check_identity(self, ctx: PublishContext, token: TokenSet) -> str:
         """The token's Instagram user must be the target account (spec 08 §3)."""
@@ -527,6 +546,14 @@ class InstagramDirectPublisher:
         state["r2_keys"].append(key)
         return key
 
+    def _media_needs_host(self, media: MediaRef) -> bool:
+        """Whether this adapter must put `media` on a public URL.
+
+        `instagram_direct` needs one for every item; `instagram_unified`
+        uploads videos to rupload.facebook.com instead.
+        """
+        return True
+
     def _cover_url(self, ctx: PublishContext, state: dict[str, Any]) -> str | None:
         cover_asset_id = ctx.settings.get("cover_asset_id")
         if not isinstance(cover_asset_id, int):
@@ -559,7 +586,7 @@ class InstagramDirectPublisher:
         self,
         ctx: PublishContext,
         media: MediaRef | None,
-        url: str,
+        url: str | None,
         state: dict[str, Any],
         *,
         child: bool,
@@ -570,15 +597,17 @@ class InstagramDirectPublisher:
         if child:
             params["is_carousel_item"] = "true"
             if media is not None and media.kind == "video":
-                params["video_url"] = url
-            else:
+                if url:
+                    params["video_url"] = url
+            elif url:
                 params["image_url"] = url
             return params
         if kind is TargetPostType.INSTAGRAM_STORY:
             params["media_type"] = "STORIES"
             if media is not None and media.kind == "video":
-                params["video_url"] = url
-            else:
+                if url:
+                    params["video_url"] = url
+            elif url:
                 params["image_url"] = url
             return params
         if kind is TargetPostType.INSTAGRAM_CAROUSEL:
@@ -587,8 +616,9 @@ class InstagramDirectPublisher:
             pass
         elif kind is TargetPostType.INSTAGRAM_REEL:
             params["media_type"] = "REELS"
-            params["video_url"] = url
-        else:
+            if url:
+                params["video_url"] = url
+        elif url:
             params["image_url"] = url
         if ctx.caption:
             params["caption"] = ctx.caption
@@ -625,28 +655,48 @@ class InstagramDirectPublisher:
                 params["is_ai_generated"] = _bool(settings["is_ai_generated"])
         return params
 
+    def _media_container_params(
+        self,
+        ctx: PublishContext,
+        media: MediaRef,
+        state: dict[str, Any],
+        *,
+        child: bool,
+    ) -> dict[str, str]:
+        """The `/{ig}/media` params for one media container."""
+        url = self._media_url(ctx, media, state, f"p{media.position}")
+        return self._container_params(ctx, media, url, state, child=child)
+
+    def _upload_to_container(
+        self,
+        ctx: PublishContext,
+        token: TokenSet,
+        container_id: str,
+        media: MediaRef,
+        progress: Progress | None,
+    ) -> None:
+        """Send the media bytes to a freshly created container, if the adapter
+        needs to (instagram_unified's resumable video upload)."""
+
     def _create_containers(
         self,
         ctx: PublishContext,
         token: TokenSet,
         ig_id: str,
         state: dict[str, Any],
+        progress: Progress | None = None,
     ) -> None:
         kind = TargetPostType(ctx.post_type)
         is_carousel = kind is TargetPostType.INSTAGRAM_CAROUSEL
         containers: list[dict[str, Any]] = []
-        urls = {
-            media.position: self._media_url(ctx, media, state, f"p{media.position}")
-            for media in ctx.media
-        }
         for media in ctx.media:
-            params = self._container_params(
-                ctx, media, urls[media.position], state, child=is_carousel
-            )
+            params = self._media_container_params(ctx, media, state, child=is_carousel)
             data = self._post(token, f"{ig_id}/media", params)
+            container_id = str(data.get("id"))
+            self._upload_to_container(ctx, token, container_id, media, progress)
             containers.append(
                 {
-                    "id": str(data.get("id")),
+                    "id": container_id,
                     "position": media.position,
                     "role": "child" if is_carousel else "main",
                 }
@@ -683,10 +733,11 @@ class InstagramDirectPublisher:
             ctx.save_resumable(state)
             return new_parent
         media = next((m for m in ctx.media if m.position == parent.get("position")), ctx.media[0])
-        url = self._media_url(ctx, media, state, f"p{media.position}")
-        params = self._container_params(ctx, media, url, state, child=False)
+        params = self._media_container_params(ctx, media, state, child=False)
         data = self._post(token, f"{ig_id}/media", params)
-        new_main = {"id": str(data.get("id")), "position": media.position, "role": "main"}
+        new_id = str(data.get("id"))
+        self._upload_to_container(ctx, token, new_id, media, None)
+        new_main = {"id": new_id, "position": media.position, "role": "main"}
         state["containers"] = [c for c in state["containers"] if c["id"] != parent["id"]] + [
             new_main
         ]
@@ -700,7 +751,7 @@ class InstagramDirectPublisher:
             self.client,
             "Instagram",
             "GET",
-            f"{_GRAPH}/{path.lstrip('/')}",
+            f"{self.graph_base}/{path.lstrip('/')}",
             params={k: v for k, v in params.items() if v is not None},
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
@@ -711,7 +762,7 @@ class InstagramDirectPublisher:
             self.client,
             "Instagram",
             "POST",
-            f"{_GRAPH}/{path.lstrip('/')}",
+            f"{self.graph_base}/{path.lstrip('/')}",
             data={k: v for k, v in params.items() if v is not None},
         )
         return self._result(response)
@@ -844,3 +895,93 @@ class InstagramDirectPublisher:
                 remaining.append(key)
         state["r2_keys"] = remaining
         ctx.save_resumable(state)
+
+
+_RUPLOAD_BASE = "https://rupload.facebook.com/ig-api-upload"
+# Bounded resumable-upload recovery: Meta answers a dropped upload with the
+# byte offset it already has; resume from there at most this many times.
+_MAX_RESUMES = 4
+
+
+class InstagramUnifiedPublisher(InstagramDirectPublisher):
+    """`instagram_unified` (spec 08 section 3, "Unified Login adapter").
+
+    Same container/publish flow as `instagram_direct` on
+    `graph.facebook.com`, except videos: the container is created with
+    `upload_type=resumable` and the bytes go from disk to
+    `rupload.facebook.com/ig-api-upload/<container-id>` — no public URL and
+    no R2 copy. Images still need a public `image_url`.
+    """
+
+    name = "instagram_unified"
+    graph_base = _FACEBOOK_GRAPH
+    _login = "unified"
+
+    def _media_needs_host(self, media: MediaRef) -> bool:
+        # Videos upload from disk; only images still need a public URL.
+        return media.kind != "video"
+
+    def _media_container_params(
+        self,
+        ctx: PublishContext,
+        media: MediaRef,
+        state: dict[str, Any],
+        *,
+        child: bool,
+    ) -> dict[str, str]:
+        if media.kind == "video":
+            params = self._container_params(ctx, media, None, state, child=child)
+            params["upload_type"] = "resumable"
+            return params
+        return super()._media_container_params(ctx, media, state, child=child)
+
+    def _upload_to_container(
+        self,
+        ctx: PublishContext,
+        token: TokenSet,
+        container_id: str,
+        media: MediaRef,
+        progress: Progress | None,
+    ) -> None:
+        if media is None or media.kind != "video":
+            return
+        size = media.size_bytes
+        offset = 0
+        resumes = 0
+        with ctx.open_media(media) as handle:
+            while offset < size:
+                handle.seek(offset)
+                body = handle.read(size - offset)
+                response = provider_request(
+                    self.upload_client,
+                    "Instagram",
+                    "POST",
+                    f"{_RUPLOAD_BASE}/{container_id}",
+                    headers={
+                        "Authorization": f"OAuth {token.access_token}",
+                        "offset": str(offset),
+                        "file_size": str(size),
+                    },
+                    content=body,
+                )
+                if response.status_code < 300:
+                    if progress is not None:
+                        progress.report(size, size, stage="upload")
+                    return
+                resume_at = response.headers.get("offset")
+                resumes += 1
+                if resume_at is not None and resumes <= _MAX_RESUMES:
+                    try:
+                        resumed = int(resume_at)
+                    except ValueError:
+                        resumed = -1
+                    if offset < resumed < size:
+                        offset = resumed
+                        if progress is not None:
+                            progress.report(offset, size, stage="upload")
+                        continue
+                raise ProviderError(
+                    f"the resumable upload failed with HTTP {response.status_code}",
+                    retryable=response.status_code >= 500,
+                    status=response.status_code,
+                )

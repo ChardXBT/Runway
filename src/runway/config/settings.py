@@ -134,6 +134,11 @@ class Settings(BaseSettings):
     youtube_engage_scopes: bool = False
     instagram_app_id: str | None = None
     instagram_app_secret: str | None = None
+    # Unified Login (spec 08 section 3): the Meta app behind the Facebook Login
+    # for Business flow and its configuration id (not a secret).
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+    instagram_unified_config_id: str | None = None
     tiktok_client_key: str | None = None
     tiktok_client_secret: str | None = None
     inbox_replies_enabled: bool = False
@@ -198,6 +203,9 @@ class Settings(BaseSettings):
         "youtube_client_secret",
         "instagram_app_id",
         "instagram_app_secret",
+        "meta_app_id",
+        "meta_app_secret",
+        "instagram_unified_config_id",
         "tiktok_client_key",
         "tiktok_client_secret",
         "r2_account_id",
@@ -409,6 +417,10 @@ class Settings(BaseSettings):
     @property
     def instagram_oauth_configured(self) -> bool:
         return bool(self.instagram_app_id and self.instagram_app_secret)
+
+    @property
+    def instagram_unified_oauth_configured(self) -> bool:
+        return bool(self.meta_app_id and self.meta_app_secret and self.instagram_unified_config_id)
 
     @property
     def tiktok_oauth_configured(self) -> bool:
