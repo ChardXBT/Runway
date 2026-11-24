@@ -26,7 +26,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -181,8 +181,20 @@ def local_machine_id() -> str:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
                 handle.write(_new_machine_id() + "\n")
             # Another process may have created the id first; read theirs.
-            with suppress(FileExistsError):
+            try:
                 os.link(temp_name, path)
+            except FileExistsError:
+                pass
+            except OSError:
+                # Filesystems without hard links (FAT32, some network shares):
+                # an exclusive create keeps the same atomic winner/loser rule.
+                try:
+                    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    pass
+                else:
+                    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                        handle.write(_new_machine_id() + "\n")
         finally:
             Path(temp_name).unlink(missing_ok=True)
     # A still-empty file may be a just-created one mid-install elsewhere; give

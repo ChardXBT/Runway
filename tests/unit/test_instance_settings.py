@@ -502,3 +502,35 @@ def test_nested_repo_with_an_unrelated_remote_is_allowed(
 
     settings = Settings(data_dir=tmp_path / "data", instance_dir=inner)
     assert settings.resolved_instance_dir == inner.resolve()
+
+
+def test_env_injected_git_config_cannot_plant_a_code_remote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GIT_CONFIG_* env must not reach the probe: it could plant a remote."""
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    outer = _repo(tmp_path / "workspace", "https://github.com/owner/notes.git")
+    inner = _repo(outer / "runway-instance")
+    # A parent process injects a fake code-repository remote into every
+    # `git config` read. The isolated probe must not see it.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "remote.injected.url")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/ChardXBT/Runway.git")
+
+    settings = Settings(data_dir=tmp_path / "data", instance_dir=inner)
+    assert settings.resolved_instance_dir == inner.resolve()
+
+
+def test_ambient_git_dir_cannot_hide_the_code_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GIT_DIR/GIT_WORK_TREE override -C: the probe must drop them."""
+    monkeypatch.setattr(instance_config, "sops_runner", FakeSops(""))
+    outer = _repo(tmp_path / "code-checkout", "https://github.com/ChardXBT/Runway.git")
+    inner = _repo(outer / "runway-instance")
+    decoy = _repo(tmp_path / "decoy")  # unrelated, no code remote
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+
+    with pytest.raises(InstanceConfigError, match="checkout of the public code repository"):
+        Settings(data_dir=tmp_path / "data", instance_dir=inner)

@@ -140,3 +140,29 @@ def test_the_active_queue_worker_marks_itself_busy(tmp_path: Path) -> None:
     while queue.status()["running"] and datetime.now(UTC).timestamp() < deadline:
         threading.Event().wait(0.05)
     assert not worker_is_busy(publisher.settings)
+
+
+def test_the_worker_marks_busy_before_checking_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transfer checking worker_is_busy must never see a gap between the
+    worker's active check and its busy marker."""
+    settings = _settings(tmp_path, "this-machine")
+    publisher = _StubPublisher(settings)
+    queue = _StubQueue(cast(YouTubeBrowserPublisher, publisher))
+    busy_at_check: list[bool] = []
+    real = instance_lease.instance_is_active
+
+    def spy(value: Settings) -> bool:
+        # Only the worker thread's loop check counts; _start_if_ready asks first.
+        if threading.current_thread().name == "runway-youtube-publisher":
+            busy_at_check.append(worker_is_busy(value))
+        return real(value)
+
+    monkeypatch.setattr("runway.publishing.queue.instance_is_active", spy)
+
+    queue.start()
+
+    assert publisher.done.wait(10)
+    assert publisher.processed == [1]
+    assert busy_at_check == [True]

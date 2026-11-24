@@ -232,7 +232,18 @@ def decrypt_dotenv(path: Path, runner: SopsRunner | None = None) -> dict[str, st
 
 
 def _git_probe(git: str, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "LC_ALL": "C", "LANGUAGE": "C", "GIT_TERMINAL_PROMPT": "0"}
+    # Deferred: operations.instance imports this module at the top level.
+    from runway.operations.instance import _isolated_env
+
+    # Share the push/fetch isolation: injected GIT_CONFIG_* could plant a fake
+    # code-repository remote here, and ambient GIT_DIR/GIT_WORK_TREE would
+    # point the probe at an unrelated repository despite the -C argument.
+    env = {
+        name: value
+        for name, value in _isolated_env().items()
+        if name not in ("GIT_DIR", "GIT_WORK_TREE")
+    }
+    env.update({"LC_ALL": "C", "LANGUAGE": "C"})
     try:
         return subprocess.run(
             [git, *args],

@@ -120,7 +120,9 @@ def test_without_an_instance_every_machine_is_active(tmp_path: Path) -> None:
     ensure_active(settings)
 
 
-def _lease_and_check(settings: Settings, holder: str, *, checked_at: datetime | None = None) -> None:
+def _lease_and_check(
+    settings: Settings, holder: str, *, checked_at: datetime | None = None
+) -> None:
     """The local lease plus a fresh remote confirmation naming ``holder``."""
     assert settings.resolved_instance_dir is not None
     write_lease(
@@ -408,6 +410,24 @@ def test_local_machine_id_never_overwrites_an_existing_id(tmp_path: Path) -> Non
 
     assert instance_lease.local_machine_id() == "machine-first"
     assert path.read_text(encoding="utf-8") == "machine-first\n"
+
+
+def test_local_machine_id_falls_back_when_hard_links_are_unsupported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAT32 and some network shares cannot hard-link: O_EXCL creates instead."""
+    path = instance_lease.machine_id_file()
+
+    def no_hard_links(source: str, destination: str) -> None:
+        raise OSError("hard links are not supported on this filesystem")
+
+    monkeypatch.setattr(instance_lease.os, "link", no_hard_links)
+
+    created = instance_lease.local_machine_id()
+    assert created
+    assert path.read_text(encoding="utf-8").strip() == created
+    # Second call reads the file the fallback created: same id, no retry.
+    assert instance_lease.local_machine_id() == created
 
 
 def test_a_transfer_marker_makes_the_machine_standby(tmp_path: Path) -> None:
