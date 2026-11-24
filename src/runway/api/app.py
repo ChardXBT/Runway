@@ -247,6 +247,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.include_router(build_platform_router(database, active_settings))
         # The cross-post proposal bridge joins the local-only intelligence
         # surfaces (the Lineup workflow is local-only).
+        # `GET /api/v1/doctor/platforms`: the CLI doctor's API twin. Owner
+        # only, read-only; local profile only.
+        from runway.api.v1.doctor_routes import build_doctor_router
+
+        application.include_router(build_doctor_router(database, active_settings))
         application.include_router(
             build_cross_post_router(ProposalBridge(post_service, media_service))
         )

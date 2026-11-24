@@ -14,7 +14,11 @@ export const metadata: Metadata = {
 export default async function AccountsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ connected?: string; error?: string }>;
+  searchParams: Promise<{
+    connected?: string;
+    error?: string;
+    select_instagram?: string;
+  }>;
 }) {
   const params = await searchParams;
   const data = await apiGetRequired<PlatformsResponse>(
@@ -26,6 +30,7 @@ export default async function AccountsPage({
       data={data}
       connected={params.connected ?? null}
       errorCode={params.error ?? null}
+      selectInstagram={params.select_instagram ?? null}
     />
   );
 }

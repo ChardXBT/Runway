@@ -62,6 +62,13 @@ const baseData: PlatformsResponse = {
   ],
 };
 
+const instagramConfigured: PlatformsResponse = {
+  ...baseData,
+  platforms: baseData.platforms.map((entry) =>
+    entry.platform === "instagram" ? { ...entry, configured: true } : entry,
+  ),
+};
+
 function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -132,6 +139,135 @@ describe("AccountsManager", () => {
     const button = screen.getByRole("button", { name: "Connect TikTok" });
     fireEvent.click(button);
     expect(button).toBeDisabled();
+  });
+
+  it("posts the instagram_unified adapter for the Unified connect button", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({
+      ...window.location,
+      assign,
+    } as Location);
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        authorization_url: "https://www.facebook.com/dialog/oauth",
+        state: "st-unified",
+      }),
+    );
+    render(
+      <AccountsManager
+        data={instagramConfigured}
+        connected={null}
+        errorCode={null}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Connect with Facebook Login (Unified)",
+      }),
+    );
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith(
+        "https://www.facebook.com/dialog/oauth",
+      ),
+    );
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:8000/api/platforms/instagram/connect");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      adapter: "instagram_unified",
+    });
+  });
+
+  it("does not offer the Unified button for other platforms", () => {
+    render(<AccountsManager data={baseData} connected={null} errorCode={null} />);
+    expect(
+      screen.queryByRole("button", {
+        name: "Connect with Facebook Login (Unified)",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lists the assigned instagram accounts and posts the pick", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          state: "st-1",
+          accounts: [
+            { id: "1784", username: "atelier" },
+            { id: "9", username: "other" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: "connected", account: {} }))
+      .mockResolvedValueOnce(jsonResponse(instagramConfigured));
+    render(
+      <AccountsManager
+        data={instagramConfigured}
+        connected={null}
+        errorCode={null}
+        selectInstagram="st-1"
+      />,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/platforms/instagram/unified/select?state=st-1",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    const button = await screen.findByRole("button", {
+      name: "Connect @atelier",
+    });
+    fireEvent.click(button);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(url).toBe(
+      "http://127.0.0.1:8000/api/platforms/instagram/unified/select",
+    );
+    expect(JSON.parse(init.body as string)).toEqual({
+      state: "st-1",
+      external_account_id: "1784",
+    });
+    await screen.findByText(/Instagram account connected/);
+  });
+
+  it("shows the API error when the pending pick cannot be loaded", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: "no pending Instagram account pick" }, 404),
+    );
+    render(
+      <AccountsManager
+        data={instagramConfigured}
+        connected={null}
+        errorCode={null}
+        selectInstagram="st-gone"
+      />,
+    );
+    await screen.findByText(/no pending Instagram account pick/);
+  });
+
+  it("maps a refused pick to the oauth error copy", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        state: "st-1",
+        accounts: [{ id: "1", username: "atelier" }],
+      }),
+    );
+    const refused = jsonResponse({});
+    Object.defineProperty(refused, "redirected", { value: true });
+    Object.defineProperty(refused, "url", {
+      value: "http://127.0.0.1:3000/accounts?error=denied",
+    });
+    fetchMock.mockResolvedValueOnce(refused);
+    render(
+      <AccountsManager
+        data={instagramConfigured}
+        connected={null}
+        errorCode={null}
+        selectInstagram="st-1"
+      />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Connect @atelier" }),
+    );
+    await screen.findByText(/Access was declined/);
   });
 
   it("syncs and polls the run until completion", async () => {
