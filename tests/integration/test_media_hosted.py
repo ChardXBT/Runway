@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -24,8 +26,8 @@ from runway.api.app import create_app
 from runway.auth.principal import ALL_SCOPES, Principal, get_principal
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import MediaAssetV2, MediaUpload
-from runway.jobs.queue import JobQueue
+from runway.db.models import MediaAssetV2, MediaUpload, PublishJob
+from runway.jobs.queue import JobQueue, JobState
 from runway.jobs.worker import Worker
 from runway.mediastore import ProbeResult, parse_ffprobe
 from runway.posts.jobs import PROBE_MEDIA_JOB
@@ -264,3 +266,81 @@ def test_local_profile_keeps_the_api_upload_mode(
         assert body["upload"]["part_path"] == f"/api/v1/media/{body['id']}/parts/{{n}}"
         assert body["upload"]["part_urls"] is None
     database.engine.dispose()
+
+
+# -------------------------------------------------------- workspace exports
+#
+# Hosted API and worker share no disk: the export job puts the artifact in
+# object storage, so the download keeps working after `purge_finished_jobs`
+# retires the tracking row (the job row is only a progress hint).
+
+
+def test_export_download_survives_the_tracking_jobs_retention_purge(
+    hosted_app: tuple[object, TestClient, MediaService],
+    hosted_settings: Settings,
+    hosted_db: Database,
+    fake: FakeR2,
+    clock: Clock,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from runway.jobs.retention import purge_finished_jobs
+    from runway.workspaces.lifecycle import export_key, run_export_workspace_job
+
+    _app, client, _service = hosted_app
+    requested = client.post("/api/v1/workspace/export")
+    assert requested.status_code == 202, requested.text
+    export_id = requested.json()["export_id"]
+    # The id doubles as the artifact key's digest component (16 lowercase hex).
+    assert re.fullmatch(r"[0-9a-f]{16}", export_id)
+
+    # The worker ran on another machine: the file landed on ITS data dir and
+    # the artifact went to the object store the API shares.
+    worker_settings = hosted_settings.model_copy(update={"data_dir": tmp_path / "worker-data"})
+    job = SimpleNamespace(payload={"workspace_id": 1, "export_id": export_id})
+    run_export_workspace_job(
+        hosted_db, worker_settings, job, stores={"r2": fake_r2_store(fake, clock)}
+    )
+    key = export_key(1, export_id)
+    assert key in fake.objects
+
+    # The export job finished and aged past the 14-day finished-job retention.
+    with hosted_db.session() as session:
+        row = session.scalar(
+            select(PublishJob).where(PublishJob.idempotency_key == f"export:{export_id}")
+        )
+        assert row is not None
+        row.state = JobState.COMPLETED.value
+        row.updated_at = clock.now - timedelta(days=30)
+        session.flush()
+        purge_finished_jobs(session, now=clock.now)
+        session.flush()
+        assert (
+            session.scalar(
+                select(PublishJob).where(PublishJob.idempotency_key == f"export:{export_id}")
+            )
+            is None
+        )
+
+    download = client.get(f"/api/v1/workspace/exports/{export_id}", follow_redirects=False)
+    assert download.status_code == 307, download.text
+    location = download.headers["location"]
+    assert location.startswith("https://") and "r2.cloudflarestorage.com" in location
+    fetched = fake_r2_browser(fake).get(location)
+    assert fetched.status_code == 200
+    document = json.loads(fetched.content)
+    assert document["format"] == "runway-workspace-export"
+    assert fetched.headers["content-disposition"].startswith("attachment")
+
+
+def test_export_download_is_409_while_the_job_is_pending(
+    hosted_app: tuple[object, TestClient, MediaService],
+) -> None:
+    _app, client, _service = hosted_app
+    requested = client.post("/api/v1/workspace/export")
+    assert requested.status_code == 202, requested.text
+    export_id = requested.json()["export_id"]
+    # No artifact anywhere and the job is still queued: keep polling.
+    download = client.get(f"/api/v1/workspace/exports/{export_id}", follow_redirects=False)
+    assert download.status_code == 409

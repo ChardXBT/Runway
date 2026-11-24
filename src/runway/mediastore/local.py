@@ -313,7 +313,21 @@ class LocalDiskStore:
             temporary.unlink(missing_ok=True)
             raise
 
+    def object_size(self, key: str, *, workspace_id: str | int) -> int | None:
+        """The stored object's size in bytes, ``None`` when no such object exists."""
+        path = self._object_path(key, workspace_id)
+        try:
+            return path.stat().st_size
+        except OSError:
+            return None
+
     def signed_get_url(self, key: str, ttl_seconds: int, *, workspace_id: str | int) -> str | None:
+        self._object_path(key, workspace_id)
+        return None
+
+    def signed_download_url(
+        self, key: str, ttl_seconds: int, *, workspace_id: str | int, filename: str
+    ) -> str | None:
         self._object_path(key, workspace_id)
         return None
 

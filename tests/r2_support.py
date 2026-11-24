@@ -16,12 +16,12 @@ import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode
+from urllib.parse import parse_qsl, unquote
 
 import httpx
 
 from runway.mediastore import R2Config, R2Store, make_media_key
-from runway.mediastore.sigv4 import presign_url, sha256_hex, sign_headers
+from runway.mediastore.sigv4 import presign_url, sha256_hex, sign_headers, uri_encode
 from runway.platforms.limits import MiB
 
 ACCOUNT = "0123456789abcdef0123456789abcdef"
@@ -108,7 +108,11 @@ class FakeR2:
         plain = [(k, v) for k, v in query if not k.startswith("X-Amz-")]
         base = f"https://{HOST}{request.url.path}"
         if plain:
-            base += "?" + urlencode(plain)
+            # Rebuild the query the way the client sent it (SigV4 encoding,
+            # so a space is %20 - `urlencode`'s `+` would not round-trip).
+            base += "?" + "&".join(
+                f"{uri_encode(name)}={uri_encode(value)}" for name, value in plain
+            )
         expected = presign_url(
             request.method,
             base,

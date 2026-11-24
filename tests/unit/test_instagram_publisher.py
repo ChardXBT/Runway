@@ -208,6 +208,12 @@ class FakeR2:
     def put_object(self, key, data, *, workspace_id, content_type):
         pass
 
+    def object_size(self, key, *, workspace_id):
+        return None
+
+    def signed_download_url(self, key, ttl_seconds, *, workspace_id, filename):
+        return None
+
     def delete(self, key, *, workspace_id):
         self.deleted.append(key)
 

@@ -366,21 +366,55 @@ DELETE_WORKSPACE_JOB = "delete_workspace"
 
 
 def export_path(settings: Any, workspace_id: int, export_id: str) -> Any:
-    """Where an export artifact lives: data dir, per workspace, never shared."""
+    """Where an export artifact lives on this machine: data dir, per workspace."""
     return settings.resolved_data_dir / "exports" / f"ws{workspace_id}" / f"{export_id}.json"
 
 
-def run_export_workspace_job(database: Any, settings: Any, job: Any) -> None:
-    """Write the workspace's export document to its artifact path."""
+def export_key(workspace_id: int, export_id: str) -> str:
+    """The artifact's object key in hosted (valid under `parse_media_key`).
+
+    `export_id` is generated as 16 lowercase hex chars, which lands in the
+    key's digest slot - the download route rebuilds the key from the URL's
+    export id alone, so the artifact is found even after its tracking job
+    row has been retention-purged.
+    """
+    return f"w/{workspace_id}/export/{export_id}.bin"
+
+
+def run_export_workspace_job(database: Any, settings: Any, job: Any, *, stores: Any = None) -> None:
+    """Write the workspace's export document to its artifact path.
+
+    In `hosted` the artifact is also put in object storage: API and worker
+    share no disk there, so the signed-URL download must reach the object
+    even after the publish_jobs row has been retention-purged.
+    """
     workspace_id = int(job.payload["workspace_id"])
     export_id = str(job.payload["export_id"])
     with database.session() as session:
         document = export_workspace_data(session, workspace_id)
+    payload = json.dumps(document, indent=2, sort_keys=True).encode("utf-8")
     path = export_path(settings, workspace_id, export_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".partial")
-    temp.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
+    temp.write_bytes(payload)
     temp.replace(path)
+    if settings.profile == "hosted":
+        if stores is None:
+            from runway.posts.media import default_media_stores
+
+            stores = dict(default_media_stores(settings))
+        store = stores.get("r2")
+        if store is None:
+            raise Problem.of(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "hosted exports require the R2 object store",
+            )
+        store.put_object(
+            export_key(workspace_id, export_id),
+            payload,
+            workspace_id=workspace_id,
+            content_type="application/json",
+        )
 
 
 def run_delete_workspace_job(database: Any, settings: Any, job: Any) -> None:

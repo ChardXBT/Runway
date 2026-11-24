@@ -20,8 +20,8 @@ import json
 import secrets
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -40,10 +40,12 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import AuditLogEntry, PublishJob, utcnow
 from runway.jobs.queue import JobQueue, JobState
+from runway.mediastore.errors import InvalidMediaKey, MediaStoreError
 from runway.workspaces.lifecycle import (
     DELETE_WORKSPACE_JOB,
     EXPORT_WORKSPACE_JOB,
     delete_user,
+    export_key,
     export_path,
 )
 from runway.workspaces.service import current_workspace
@@ -110,7 +112,7 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
         return AuditPage(items=[_audit_view(row) for row in rows], next_cursor=next_cursor)
 
     @router.delete("/workspace", status_code=202)
-    def delete_workspace(principal: Principal = Depends(get_principal)):
+    def delete_workspace(principal: Principal = Depends(get_principal)) -> dict[str, object]:
         """Soft-delete the workspace; the purge job erases the rows."""
         require_person(principal, "delete this workspace")
         require(principal, WORKSPACE_ADMIN)
@@ -121,6 +123,8 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
         with database.session() as session:
             workspace = current_workspace(session, principal)
             row = session.get(Workspace, workspace.id)
+            if row is None:
+                raise _problem(ProblemCode.NOT_FOUND, "no such workspace")
             row.deleted_at = utcnow()
             record_audit(
                 session,
@@ -140,11 +144,14 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
         return {"status": "deleting", "workspace_id": workspace.id}
 
     @router.post("/workspace/export", status_code=202)
-    def request_export(principal: Principal = Depends(get_principal)):
+    def request_export(principal: Principal = Depends(get_principal)) -> dict[str, object]:
         """Enqueue a full workspace export; poll the download path for the file."""
         require_person(principal, "export this workspace")
         require(principal, WORKSPACE_ADMIN)
-        export_id = secrets.token_urlsafe(12)
+        # 16 lowercase hex chars: the export id doubles as the artifact key's
+        # digest component, so the download finds the object without the
+        # tracking job row (retention purges those after 14 days).
+        export_id = secrets.token_hex(8)
         with database.session() as session:
             current_workspace(session, principal)
             queue.enqueue_pending_job(
@@ -167,11 +174,19 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
             )
         return {"export_id": export_id, "status": "pending"}
 
-    @router.get("/workspace/exports/{export_id}")
+    @router.get("/workspace/exports/{export_id}", response_model=None)
     def download_export(
-        export_id: str, principal: Principal = Depends(get_principal)
-    ) -> FileResponse:
-        """The finished export artifact; 409 while the job is still pending."""
+        export_id: str,
+        request: Request,
+        principal: Principal = Depends(get_principal),
+    ) -> FileResponse | RedirectResponse:
+        """The finished export artifact; 409 while the job is still pending.
+
+        The artifact is the durable record, not the publish_jobs row: in
+        `hosted` it lives in object storage (API and worker share no disk),
+        so a short-lived signed URL is handed out - this keeps working after
+        the finished export job is retention-purged.
+        """
         require(principal, WORKSPACE_ADMIN)
         path = export_path(settings, principal.workspace_id, export_id)
         if path.is_file():
@@ -180,6 +195,26 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
                 media_type="application/json",
                 filename=f"runway-workspace-{principal.workspace_id}-export.json",
             )
+        if settings.profile == "hosted":
+            media_service = getattr(request.app.state, "media_service", None)
+            store = media_service.stores.get("r2") if media_service is not None else None
+            if store is not None:
+                key = export_key(principal.workspace_id, export_id)
+                try:
+                    exists = store.object_size(key, workspace_id=principal.workspace_id)
+                except InvalidMediaKey:
+                    exists = None  # a URL id that cannot name an object
+                except MediaStoreError as exc:
+                    raise _problem(ProblemCode.CAPABILITY_NOT_READY, str(exc)) from exc
+                if exists is not None:
+                    url = store.signed_download_url(
+                        key,
+                        300,
+                        workspace_id=principal.workspace_id,
+                        filename=f"runway-workspace-{principal.workspace_id}-export.json",
+                    )
+                    if url is not None:
+                        return RedirectResponse(url)
         with database.session() as session:
             job = session.scalar(
                 select(PublishJob).where(
@@ -195,7 +230,7 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
         raise _problem(ProblemCode.NOT_FOUND, "no such export")
 
     @router.delete("/users/me")
-    def delete_me(principal: Principal = Depends(get_principal)):
+    def delete_me(principal: Principal = Depends(get_principal)) -> dict[str, object]:
         """Remove the caller's own rows in every workspace they belong to."""
         require_person(principal, "delete your account")
         try:

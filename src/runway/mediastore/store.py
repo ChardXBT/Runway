@@ -220,15 +220,29 @@ class MediaStore(Protocol):
     def put_object(
         self, key: str, data: bytes, *, workspace_id: str | int, content_type: str
     ) -> None:
-        """Write a small server-made object directly at ``key`` (a poster frame).
-
-        Uploads from clients go through :meth:`begin_upload`/`complete_upload`;
-        this is for bytes the server produced itself, so no plan exists.
+        """Write a small server-made object directly at ``key`` (a poster frame,
+        a workspace export). Uploads from clients go through
+        :meth:`begin_upload`/`complete_upload`; ``content_type`` is recorded
+        verbatim - it is server-chosen, not upload-validated.
         """
+        ...
+
+    def object_size(self, key: str, *, workspace_id: str | int) -> int | None:
+        """The stored object's size in bytes, ``None`` when no such object exists."""
         ...
 
     def signed_get_url(self, key: str, ttl_seconds: int, *, workspace_id: str | int) -> str | None:
         """Plain signed URL for a platform to fetch (Instagram). ``None`` when unavailable."""
+        ...
+
+    def signed_download_url(
+        self, key: str, ttl_seconds: int, *, workspace_id: str | int, filename: str
+    ) -> str | None:
+        """Signed URL that downloads as ``filename`` (Content-Disposition: attachment).
+
+        For server-made artifacts like workspace exports: the stored content
+        type is kept, only the download filename is forced.
+        """
         ...
 
     def signed_preview_url(
