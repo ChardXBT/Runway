@@ -39,9 +39,11 @@ REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 API_BASE = "https://www.googleapis.com/youtube/v3"
 ANALYTICS_BASE = "https://youtubeanalytics.googleapis.com/v2"
 
+# Every component is optional (YouTube sends "PT1M" for a one-minute video),
+# but at least one must be present and "T" must be followed by a time part.
 _DURATION_PATTERN = re.compile(
-    r"^P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?"
-    r"(?P<seconds>\d+(?:\.\d+)?)S)?$"
+    r"^P(?!$)(?:(?P<days>\d+)D)?(?:T(?=\d)(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?"
+    r"(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?$"
 )
 SHORT_MAX_SECONDS = 180
 
