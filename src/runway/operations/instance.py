@@ -86,7 +86,7 @@ from runway.operations.instance_lease import (
     worker_is_busy,
     write_lease,
 )
-from runway.operations.runtime_files import worker_lock_path
+from runway.operations.runtime_files import api_lock_path, worker_lock_path
 
 __all__ = [
     "CODE_REPOSITORY",
@@ -1637,19 +1637,21 @@ def _database_can_be_replaced(database: Path) -> bool:
 def _refuse_while_runway_is_running(settings: Settings) -> None:
     """Refuse a pull while this machine's Runway is running.
 
-    The API holds ``runtime/worker.lock`` for its whole lifetime, and on
-    Windows an open SQLite file cannot even be renamed. Both probes run before
-    the lease is taken: otherwise a failed install would leave this machine
-    holding the lease on the stale standby database.
+    The API holds ``runtime/api.lock`` and the worker ``runtime/worker.lock``
+    for their whole lifetimes, and on Windows an open SQLite file cannot even
+    be renamed. All probes run before the lease is taken: otherwise a failed
+    install would leave this machine holding the lease on the stale standby
+    database.
     """
-    try:
-        with exclusive_file_lock(worker_lock_path(settings), timeout=0):
-            pass
-    except FileLockTimeout as exc:
-        raise InstanceError(
-            "stop Runway (API and worker) before pulling: it is running on this "
-            f"machine and holds {worker_lock_path(settings)}"
-        ) from exc
+    for lock in (api_lock_path(settings), worker_lock_path(settings)):
+        try:
+            with exclusive_file_lock(lock, timeout=0):
+                pass
+        except FileLockTimeout as exc:
+            raise InstanceError(
+                "stop Runway (API and worker) before pulling: it is running on this "
+                f"machine and holds {lock}"
+            ) from exc
     database = settings.database_path
     if not _database_can_be_replaced(database):
         raise InstanceError(

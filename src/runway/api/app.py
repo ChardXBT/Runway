@@ -24,7 +24,7 @@ from runway.db.base import Database
 from runway.locks import FileLockTimeout, exclusive_file_lock
 from runway.logging import configure_logging
 from runway.operations.instance_lease import StandbyError
-from runway.operations.runtime_files import worker_lock_path
+from runway.operations.runtime_files import api_lock_path
 from runway.platforms.sync import PlatformSyncScheduler, SyncService
 
 logger = logging.getLogger(__name__)
@@ -91,12 +91,12 @@ def _lifespan(
                 # A running Runway holds this lock for its lifetime: 'runway
                 # instance pull' checks it and refuses before replacing the
                 # database under a live process.
-                locks.enter_context(exclusive_file_lock(worker_lock_path(settings), timeout=0))
+                locks.enter_context(exclusive_file_lock(api_lock_path(settings), timeout=0))
             except FileLockTimeout:
                 logger.warning(
                     "another Runway process already holds %s; "
                     "'runway instance pull' will refuse while it runs",
-                    worker_lock_path(settings),
+                    api_lock_path(settings),
                 )
             try:
                 yield

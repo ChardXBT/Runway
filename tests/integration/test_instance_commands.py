@@ -21,7 +21,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,7 +38,7 @@ from runway.cli.main import app
 from runway.config import Settings
 from runway.db import Database, initialize_database
 from runway.db.models import ConnectedAccount, MediaAsset
-from runway.locks import exclusive_file_lock
+from runway.locks import FileLockTimeout, exclusive_file_lock
 from runway.operations import instance as ops
 from runway.operations import instance_lease
 from runway.operations.instance import InstanceContext, InstanceError
@@ -48,7 +48,7 @@ from runway.operations.instance_lease import (
     instance_is_active,
     read_lease,
 )
-from runway.operations.runtime_files import worker_lock_path
+from runway.operations.runtime_files import api_lock_path, worker_lock_path
 from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
@@ -1351,18 +1351,23 @@ def _two_machines_with_a_released_lease(
     return machine_a, machine_b
 
 
+@pytest.mark.parametrize("lock_path", [api_lock_path, worker_lock_path], ids=["api", "worker"])
 def test_pull_refuses_while_runway_holds_the_worker_lock(
-    tmp_path: Path, fake_github: FakeGitHub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    fake_github: FakeGitHub,
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    lock_path: Callable[[Settings], Path],
 ) -> None:
     _machine_a, machine_b = _two_machines_with_a_released_lease(
         tmp_path, fake_github, clock, monkeypatch
     )
     remote_head = _remote_head(fake_github, PRIVATE_REPO)
 
-    # The API process holds the worker lock for its whole lifetime; here the
-    # test itself stands in for it.
+    # The API holds api.lock and the worker worker.lock for their lifetimes;
+    # here the test itself stands in for either.
     with (
-        exclusive_file_lock(worker_lock_path(machine_b.settings()), timeout=0),
+        exclusive_file_lock(lock_path(machine_b.settings()), timeout=0),
         pytest.raises(InstanceError, match="stop Runway"),
     ):
         ops.pull(machine_b.context(monkeypatch))
@@ -1500,3 +1505,22 @@ def test_handover_keeps_the_transfer_marker_until_the_lease_is_released(
     assert seen["marker_on_release"] is True
     assert not marker.is_file()
     assert not instance_is_active(settings)
+
+
+def test_a_running_api_holds_its_own_lock_and_never_the_workers(tmp_path: Path) -> None:
+    # `runway worker` needs worker.lock to start; the API must not take it.
+    from fastapi.testclient import TestClient
+
+    from runway.api.app import create_app
+    from runway.db import initialize_database
+
+    settings = Settings(data_dir=tmp_path / "data")
+    initialize_database(settings).engine.dispose()
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000"):
+        with exclusive_file_lock(worker_lock_path(settings), timeout=0):
+            pass
+        with (
+            pytest.raises(FileLockTimeout),
+            exclusive_file_lock(api_lock_path(settings), timeout=0),
+        ):
+            pass
