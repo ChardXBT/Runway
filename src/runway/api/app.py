@@ -17,6 +17,7 @@ from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
+from runway.api.v1.accounts_routes import build_accounts_router
 from runway.api.v1.errors import install_problem_handlers
 from runway.api.v1.events_routes import build_events_router
 from runway.auth.principal import get_principal
@@ -151,6 +152,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(build_hooks_router(database, active_settings))
     # Versioned surface (spec 06): every router comes from build_v1_router.
     application.include_router(build_events_router(database))
+    application.include_router(build_accounts_router(database, active_settings))
 
     @application.get("/health", tags=["system"])
     def health() -> dict[str, object]:

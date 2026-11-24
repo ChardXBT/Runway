@@ -46,6 +46,8 @@ from runway.platforms.capabilities import Platform
 from runway.platforms.drafts import external_id_candidates
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.registry import ProviderRegistry
+from runway.events.log import record_event
+from runway.events.types import SYNC_FINISHED, SYNC_STARTED
 from runway.realtime import quota as sync_quota
 from runway.realtime import schedule as sync_schedule
 
@@ -314,6 +316,8 @@ class SyncService:
                 else self._full_steps(provider, account_id, token)
             )
             for name, step in steps_to_run:
+                step_scopes = self._scopes_for_step(name, scopes)
+                self._emit_scope_events(account_id, run_id, step_scopes, SYNC_STARTED)
                 record: dict[str, Any] = {
                     "step": name,
                     "status": "completed",
@@ -335,7 +339,7 @@ class SyncService:
                     error_summary = record["error"]
                     failure = exc
                     steps.append(record)
-                    self._record_step_outcome(account_id, name, record, failure, scopes)
+                    self._record_step_outcome(account_id, run_id, name, record, failure, scopes)
                     self._finish_account_needs_reauth(account_id, record["error"])
                     break
                 except CapabilityUnsupported as exc:
@@ -360,7 +364,7 @@ class SyncService:
                     final_status = "partial"
                     error_summary = record["error"]
                 steps.append(record)
-                self._record_step_outcome(account_id, name, record, failure, scopes)
+                self._record_step_outcome(account_id, run_id, name, record, failure, scopes)
                 if isinstance(provider, InstagramProvider):
                     # Meta's usage headers at >= 80% defer the account's other
                     # scopes by an hour (spec 04 section 3).
@@ -441,22 +445,70 @@ class SyncService:
     def _record_step_outcome(
         self,
         account_id: int,
+        run_id: int,
         name: str,
         record: dict[str, Any],
         failure: ProviderError | None,
         scopes: list[str] | None,
     ) -> None:
-        """Persist the step's outcome on `account_sync_state`, one row per scope."""
+        """Persist the step's outcome on `account_sync_state`, one row per scope.
+
+        The `sync.finished` event lands in the same transaction as the state
+        write it describes (spec 04 section 4).
+        """
         retry_after = failure.retry_after if isinstance(failure, RateLimited) else None
-        for scope in self._scopes_for_step(name, scopes):
-            sync_schedule.record_scope_run(
-                self.database,
-                account_id,
-                scope,
-                status=str(record["status"]),
-                error=record["error"] if record["status"] != "completed" else None,
-                retry_after=retry_after,
-            )
+        step_scopes = self._scopes_for_step(name, scopes)
+        if not step_scopes:
+            return
+        with self.database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            workspace_id = int(account.workspace_id) if account is not None else 1
+            for scope in step_scopes:
+                sync_schedule.record_scope_run(
+                    session,
+                    account_id,
+                    scope,
+                    status=str(record["status"]),
+                    error=record["error"] if record["status"] != "completed" else None,
+                    retry_after=retry_after,
+                )
+                record_event(
+                    session,
+                    workspace_id,
+                    SYNC_FINISHED,
+                    "account",
+                    account_id,
+                    {
+                        "run_id": run_id,
+                        "scope": scope,
+                        "status": str(record["status"]),
+                        "items": int(record["items"]),
+                    },
+                )
+
+    def _emit_scope_events(
+        self,
+        account_id: int,
+        run_id: int,
+        scopes: list[str],
+        event_type: str,
+    ) -> None:
+        """One event per scope about to run (`sync.started`)."""
+        if not scopes:
+            return
+        with self.database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            if account is None:
+                return
+            for scope in scopes:
+                record_event(
+                    session,
+                    int(account.workspace_id),
+                    event_type,
+                    "account",
+                    account_id,
+                    {"run_id": run_id, "scope": scope},
+                )
 
     def _record_scopes_failed(
         self,

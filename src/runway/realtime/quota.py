@@ -257,6 +257,24 @@ def call_allowed(
     return not youtube_sync_share_spent(source, settings, account_id, now=now or utcnow())
 
 
+def provider_quota_summary(
+    source: Session | Database, provider: str, settings: Settings, *, now: datetime | None = None
+) -> dict[str, int | None]:
+    """Today's quota view for the sync-status route.
+
+    `units_used` is the provider's `default` bucket spend on the current
+    Pacific day. `budget`/`reserve` exist only for YouTube, the one provider
+    with a unit budget; other providers report them as null.
+    """
+    day = pacific_day(now or utcnow())
+    used = used_units(source, provider, "default", day=day)
+    if provider == "youtube":
+        total = YOUTUBE_BUCKET_DAILY["default"]
+        reserve = total * settings.youtube_quota_publish_reserve_percent // 100
+        return {"units_used": used, "budget": total, "reserve": reserve}
+    return {"units_used": used, "budget": None, "reserve": None}
+
+
 def _quota_low_emitted_today(session: Session, account: ConnectedAccount, now: datetime) -> bool:
     return (
         session.scalar(

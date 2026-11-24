@@ -226,7 +226,7 @@ def defer_account_scopes(
 
 
 def record_scope_run(
-    database: Database,
+    source: Session | Database,
     account_id: int,
     scope: str,
     *,
@@ -240,12 +240,13 @@ def record_scope_run(
 
     A failure backs off exponentially (see `failure_delay`); anything else
     resumes the effective cadence. `source` stays `push` while the boost
-    window the last run served is still open, else `poll`.
+    window the last run served is still open, else `poll`. Pass a `Session`
+    to write inside the caller's transaction (spec 04 section 4 events).
     """
     if scope not in SCOPES:
         raise ValueError(f"unknown sync scope {scope!r}")
     moment = now or utcnow()
-    with database.session() as session:
+    with _sessions(source) as session:
         account = session.get(ConnectedAccount, account_id)
         if account is None:
             return
