@@ -108,7 +108,9 @@ class InboxService:
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        workspace_id: int | None = None,
     ) -> dict[str, object]:
+        """Top-level comments; `workspace_id` limits them to one workspace (agent tools)."""
         with self.database.session() as session:
             statement = select(CommentRecord).where(CommentRecord.parent_external_id.is_(None))
             count_statement = (
@@ -116,6 +118,9 @@ class InboxService:
                 .select_from(CommentRecord)
                 .where(CommentRecord.parent_external_id.is_(None))
             )
+            if workspace_id is not None:
+                statement = statement.where(CommentRecord.workspace_id == workspace_id)
+                count_statement = count_statement.where(CommentRecord.workspace_id == workspace_id)
             if platform:
                 statement = statement.where(CommentRecord.platform == platform)
                 count_statement = count_statement.where(CommentRecord.platform == platform)
@@ -207,10 +212,14 @@ class InboxService:
             "handoff_url": handoff,
         }
 
-    def get_comment(self, comment_id: int) -> dict[str, object] | None:
+    def get_comment(
+        self, comment_id: int, *, workspace_id: int | None = None
+    ) -> dict[str, object] | None:
         with self.database.session() as session:
             comment = session.get(CommentRecord, comment_id)
             if comment is None:
+                return None
+            if workspace_id is not None and comment.workspace_id != workspace_id:
                 return None
             account = session.get(ConnectedAccount, comment.account_id)
             platform = Platform(comment.platform)
@@ -260,9 +269,14 @@ class InboxService:
             session.flush()
             return comment_view(comment)
 
-    def set_draft(self, comment_id: int, text: str) -> dict[str, object]:
+    def set_draft(
+        self, comment_id: int, text: str, *, workspace_id: int | None = None
+    ) -> dict[str, object]:
         with self.database.session() as session:
-            if session.get(CommentRecord, comment_id) is None:
+            comment = session.get(CommentRecord, comment_id)
+            if comment is None or (
+                workspace_id is not None and comment.workspace_id != workspace_id
+            ):
                 raise LookupError("comment not found")
             draft = session.scalar(select(ReplyDraft).where(ReplyDraft.comment_id == comment_id))
             if draft is None:

@@ -987,6 +987,107 @@
           }
         ]
       },
+      "api_key_release_grants": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "daily_cap",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "key_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "platform",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "key_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "api_keys"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "key_id"
+            ],
+            "name": "ix_api_key_release_grants_key_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_api_key_release_grants_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "key_id",
+              "platform"
+            ],
+            "name": "uq_api_key_release_grant"
+          }
+        ]
+      },
       "api_keys": {
         "check_constraints": [],
         "columns": [
@@ -13050,6 +13151,310 @@
           }
         ]
       },
+      "webhook_deliveries": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "attempts",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "delivered_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "endpoint_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "event_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "event_type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          },
+          {
+            "default": null,
+            "name": "last_status_code",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "next_attempt_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "state",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "endpoint_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "webhook_endpoints"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "endpoint_id"
+            ],
+            "name": "ix_webhook_deliveries_endpoint_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "state",
+              "next_attempt_at"
+            ],
+            "name": "ix_webhook_deliveries_state_next",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_webhook_deliveries_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "endpoint_id",
+              "event_id"
+            ],
+            "name": "uq_webhook_delivery_event"
+          }
+        ]
+      },
+      "webhook_endpoints": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "consecutive_failures",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "creator_scopes",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "cursor_event_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "description",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "disabled_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "disabled_reason",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          },
+          {
+            "default": null,
+            "name": "event_types_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "failing_since",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          },
+          {
+            "default": null,
+            "name": "last_failure_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "last_success_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "secret_encrypted",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "state",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "url",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_webhook_endpoints_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
       "workspace_identity_links": {
         "check_constraints": [],
         "columns": [
@@ -13301,6 +13706,53 @@
           }
         ]
       },
+      "workspace_policies": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "agent_release",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "updated_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [],
+        "unique_constraints": []
+      },
       "workspaces": {
         "check_constraints": [],
         "columns": [
@@ -13361,7 +13813,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "80b8f207ca8b0fec426d2359faa6836648656ae0384c475c20ccc6a74d44647c",
-  "migration": "0017_publishing_engine",
-  "table_count": 83
+  "fingerprint": "553189356814abe4b44bbaea6882b0626c6878ca47966f7d92c67d2346100980",
+  "migration": "0019_agent_interface",
+  "table_count": 87
 }

@@ -65,13 +65,18 @@ class ContentService:
         order: Literal["asc", "desc"] = "desc",
         limit: int = 50,
         offset: int = 0,
+        workspace_id: int | None = None,
     ) -> dict[str, object]:
+        """Content items; `workspace_id` limits them to one workspace (the agent tools pass it)."""
+
         def filters(
             *,
             include_platform: bool = True,
             include_type: bool = True,
         ) -> list[ColumnElement[bool]]:
             clauses: list[ColumnElement[bool]] = []
+            if workspace_id is not None:
+                clauses.append(PlatformContent.workspace_id == workspace_id)
             if include_platform and platform:
                 clauses.append(PlatformContent.platform == platform)
             if account_id is not None:
@@ -120,10 +125,14 @@ class ContentService:
                 "counts": {"by_platform": by_platform, "by_type": by_type},
             }
 
-    def get_item(self, content_id: int) -> dict[str, object] | None:
+    def get_item(
+        self, content_id: int, *, workspace_id: int | None = None
+    ) -> dict[str, object] | None:
         with self.database.session() as session:
             content = session.get(PlatformContent, content_id)
             if content is None:
+                return None
+            if workspace_id is not None and content.workspace_id != workspace_id:
                 return None
             view = content_view(content)
             snapshots = session.scalars(

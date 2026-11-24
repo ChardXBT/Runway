@@ -23,6 +23,13 @@ __all__ = ["build_worker", "worker_lock_path"]
 def build_worker(settings: Settings, database: Database) -> Worker:
     # Publishing (spec 03): send/poll_processing/verify/reconcile handlers, and
     # the expired-send rule (re-run only before the request-sent marker).
+    # Outbound webhooks (spec 06 section 8): fan-out producer and delivery handler.
+    from runway.agent.webhooks import (
+        DELIVER_WEBHOOK_JOB,
+        WebhookDispatcher,
+        WebhookService,
+        run_deliver_webhook_job,
+    )
     from runway.posts.engine import build_publishing_engine
     from runway.posts.jobs import PROBE_MEDIA_JOB
     from runway.posts.runtime import build_media_service
@@ -31,13 +38,18 @@ def build_worker(settings: Settings, database: Database) -> Worker:
     media = build_media_service(settings, database, registry=publishing.registry)
     queue = JobQueue(database, expired_send_handler=publishing.handle_expired_send)
     sync_service = SyncService(database, settings)
+    webhooks = WebhookService(database, settings)
     handlers: dict[str, Handler] = {
         SYNC_ACCOUNT_JOB: partial(run_sync_account_job, sync_service),
         PURGE_JOB: partial(run_purge_job, database, settings),
         **publishing.handlers(),
         PROBE_MEDIA_JOB: media.run_probe_job,
+        DELIVER_WEBHOOK_JOB: partial(run_deliver_webhook_job, webhooks),
     }
-    producers: list[JobProducer] = [RetentionPurgeScheduler(queue)]
+    producers: list[JobProducer] = [
+        RetentionPurgeScheduler(queue),
+        WebhookDispatcher(webhooks, queue),
+    ]
     if settings.platform_sync_interval_minutes > 0:
         producers.append(
             PlatformSyncScheduler(database, queue, settings.platform_sync_interval_minutes)

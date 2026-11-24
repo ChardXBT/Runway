@@ -101,8 +101,13 @@ async def event_stream(
     is_disconnected: Callable[[], Awaitable[bool]],
     heartbeat_seconds: float = HEARTBEAT_SECONDS,
     clock: Callable[[], float] = time.monotonic,
+    visible: Callable[[str], bool] | None = None,
 ) -> AsyncIterator[str]:
-    """Yield SSE frames for one workspace until the client disconnects."""
+    """Yield SSE frames for one workspace until the client disconnects.
+
+    `visible(type)` filters events by type (an API key sees only what its
+    scopes may read); a filtered event still advances the position.
+    """
 
     def start() -> StreamStart:
         with database.session() as session:
@@ -124,7 +129,8 @@ async def event_stream(
         batch = await anyio.to_thread.run_sync(fetch, cursor)
         for event in batch:
             cursor = event.id
-            yield format_event(event)
+            if visible is None or visible(event.type):
+                yield format_event(event)
         if batch:
             last_write = clock()
             if len(batch) == BATCH_LIMIT:

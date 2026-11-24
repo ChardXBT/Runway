@@ -28,6 +28,9 @@ class ProblemCode(StrEnum):
     # Raised by get_principal (spec 01 section 3).
     AUTHENTICATION_REQUIRED = "authentication_required"
     API_KEY_UNSUPPORTED = "api_key_unsupported"
+    # The only code an unexpected failure may ever surface as (e.g. to MCP
+    # callers): the detail stays generic, the traceback stays in the log.
+    INTERNAL_ERROR = "internal_error"
 
 
 _DEFAULTS: dict[ProblemCode, tuple[int, str]] = {
@@ -42,6 +45,7 @@ _DEFAULTS: dict[ProblemCode, tuple[int, str]] = {
     ProblemCode.INVALID_STATE: (409, "Not allowed in this state"),
     ProblemCode.AUTHENTICATION_REQUIRED: (401, "Authentication required"),
     ProblemCode.API_KEY_UNSUPPORTED: (401, "API keys are not available yet"),
+    ProblemCode.INTERNAL_ERROR: (500, "Internal error"),
 }
 
 

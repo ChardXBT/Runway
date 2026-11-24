@@ -114,6 +114,11 @@ class TokenStore:
         except LockTimeout as exc:
             raise TokenRefreshBusy(str(exc)) from exc
 
+    def cipher(self) -> Fernet:
+        """The store's Fernet key, for other small secrets (webhook signing secrets)."""
+        with self._locked():
+            return Fernet(self._load_key())
+
     def _load_key(self) -> bytes:
         if self._key is not None:
             return self._key

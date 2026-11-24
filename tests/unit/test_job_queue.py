@@ -425,11 +425,19 @@ def test_the_worker_runs_scheduled_sync_with_the_existing_sync_code(tmp_path, cl
 
 def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database: Database) -> None:
     worker = build_worker(settings, database)
-    assert [type(producer) for producer in worker.producers] == [RetentionPurgeScheduler]
-    # Publishing: send, poll_processing, verify, reconcile and probe_media.
+    from runway.agent.webhooks import DELIVER_WEBHOOK_JOB, WebhookDispatcher
+
+    assert [type(producer) for producer in worker.producers] == [
+        RetentionPurgeScheduler,
+        WebhookDispatcher,
+    ]
+    # Publishing: send, poll_processing, verify, reconcile and probe_media; webhooks.
     from runway.posts.jobs import PUBLISHING_JOB_KINDS
 
-    assert set(worker.handlers) == {SYNC_ACCOUNT_JOB, PURGE_JOB} | PUBLISHING_JOB_KINDS
+    assert (
+        set(worker.handlers)
+        == {SYNC_ACCOUNT_JOB, PURGE_JOB, DELIVER_WEBHOOK_JOB} | PUBLISHING_JOB_KINDS
+    )
 
 
 def test_hourly_purge_removes_only_expired_keys_and_events(

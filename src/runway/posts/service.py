@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from runway.api.v1.concurrency import bump_version, require_version
 from runway.api.v1.pagination import CursorParams, paginate
+from runway.auth.key_limits import acquire_cap_lock, enforce_daily_post_cap
 from runway.auth.principal import (
     POSTS_READ,
     POSTS_RELEASE,
@@ -38,8 +39,10 @@ from runway.auth.principal import (
     POSTS_WRITE,
     Principal,
     require,
+    require_person,
 )
 from runway.auth.problems import Problem, ProblemCode
+from runway.auth.release_policy import authorize_release
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -724,9 +727,18 @@ class PostService:
         source: PostSource | None = None,
         source_ref: str | None = None,
     ) -> ContentDraft:
-        """Create a post in the caller's transaction (the proposal bridge uses this)."""
+        """Create a post in the caller's transaction (the proposal bridge uses this).
+
+        The key's daily post cap is enforced here, inside the transaction that
+        writes the post (`acquire_cap_lock` serialises it), so every create
+        path — `/api/v1/posts`, cross-post, the MCP tool — is counted.
+        """
         require(principal, POSTS_WRITE)
         agent = principal.kind == "agent"
+        if agent:
+            enforce_daily_post_cap(
+                session, principal, self.settings.api_key_daily_post_cap, now=self.clock()
+            )
         post = ContentDraft(
             workspace_id=principal.workspace_id,
             title=data.title,
@@ -894,8 +906,15 @@ class PostService:
         """Approve this exact payload and queue its one send job (spec 03 sections 2, 4)."""
         require(principal, POSTS_RELEASE)
         with self.database.session() as session:
+            if principal.kind == "agent":
+                # Lock before the policy/grant/cap reads so two releases by the
+                # same key cannot both pass the daily cap (check-then-act).
+                acquire_cap_lock(session, principal)
             post = load_post(session, principal, post_id)
             target = load_target(session, post, target_id)
+            # The request-policy guard checks release routes too; the grant and
+            # daily-cap count must also happen inside this transaction.
+            authorize_release(session, principal, platform=target.platform)
             if target.platform == Platform.tiktok.value and (principal.kind != "user" or batch):
                 raise _problem(
                     ProblemCode.HUMAN_REQUIRED,
@@ -1007,6 +1026,10 @@ class PostService:
         with self.database.session() as session:
             post = load_post(session, principal, post_id)
             target = load_target(session, post, target_id)
+            if principal.kind == "agent":
+                # Reconciling decides what reached a platform: release-adjacent,
+                # so a key needs the same grant as a release (invariant 16).
+                authorize_release(session, principal, platform=target.platform)
             state = current_state(target)
             if state is not _T.UNCERTAIN:
                 raise _problem(
@@ -1063,6 +1086,9 @@ class PostService:
     ) -> PostOut:
         """The assisted adapter's "mark as published", and manual resolution."""
         require(principal, POSTS_RELEASE)
+        # Attesting "this reached the platform" is a person's statement; a key
+        # can never make it (invariant 16).
+        require_person(principal, "mark a post as published")
         if urlsplit(data.published_url).scheme not in {"http", "https"}:
             raise _problem(ProblemCode.VALIDATION_FAILED, "published_url must use http or https")
         with self.database.session() as session:

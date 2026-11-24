@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from runway import __version__
+from runway.agent.webhooks import WebhookService
 from runway.api.catalog_routes import build_catalog_router
 from runway.api.discovery_routes import build_discovery_router
 from runway.api.identity_hook_routes import build_identity_hook_router
@@ -18,11 +19,15 @@ from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
+from runway.api.v1.approvals_routes import build_approvals_router
 from runway.api.v1.errors import install_problem_handlers
 from runway.api.v1.events_routes import build_events_router
+from runway.api.v1.keys_routes import build_keys_router
 from runway.api.v1.media_routes import build_media_router
 from runway.api.v1.posts_routes import build_cross_post_router, build_posts_router
+from runway.api.v1.webhooks_routes import build_webhooks_router
 from runway.api.workspace_routes import build_workspace_router
+from runway.auth.audit import AgentAuditMiddleware
 from runway.auth.principal import get_principal
 from runway.config import Settings, get_settings
 from runway.db.base import Database
@@ -166,6 +171,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         configure_hosted(application, active_settings)
     else:
         web_origins = loopback_origins(active_settings.web_port)
+        # Innermost: one audit row per successful mutation an API key makes (spec 06 section 5).
+        application.add_middleware(AgentAuditMiddleware, database=database)
         application.add_middleware(
             CORSMiddleware,
             allow_origins=web_origins,
@@ -195,6 +202,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Hosted serves none of it (404) until the workspace-tenancy work
         # scopes every query by principal.workspace_id and calls require().
         application.include_router(build_platform_router(database, active_settings))
+        # Agent interface (spec 06): keys, approvals and outbound webhooks; local
+        # only until tenancy proves these routes isolated on Postgres too.
+        application.include_router(build_keys_router(database, active_settings))
+        application.include_router(build_approvals_router(database, active_settings))
+        application.include_router(build_webhooks_router(WebhookService(database, active_settings)))
         # Spec 03 section 8. Nothing here publishes: a release only queues a job
         # for the separate `runway worker` process. Local only until the tenancy
         # work proves workspace isolation on Postgres for these routes too.

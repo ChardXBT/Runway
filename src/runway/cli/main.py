@@ -27,6 +27,8 @@ from runway.catalog.service import CatalogService
 from runway.cli.db_commands import db_app
 from runway.cli.hosted_commands import hosted_app
 from runway.cli.instance import instance_app
+from runway.cli.keys_commands import keys_app
+from runway.cli.mcp_commands import mcp_command
 from runway.cli.worker_commands import worker_command
 from runway.config import get_settings
 from runway.db import initialize_database
@@ -114,9 +116,11 @@ intelligence_app.add_typer(neural_app, name="neural")
 intelligence_app.add_typer(composed_app, name="composed-retrieval")
 app.add_typer(platforms_app, name="platforms")
 app.add_typer(db_app, name="db")
+app.add_typer(keys_app, name="keys")
 app.command("worker")(worker_command)
 app.add_typer(hosted_app, name="hosted")
 app.add_typer(instance_app, name="instance")
+app.command("mcp")(mcp_command)
 
 
 @app.callback()
