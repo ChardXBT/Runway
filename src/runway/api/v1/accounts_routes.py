@@ -67,10 +67,10 @@ def build_accounts_router(
         registry = ProviderRegistry(database, settings)
     oauth_states = OAuthStateService(database)
 
-    def _account_or_404(account_id: int) -> ConnectedAccount:
+    def _account_or_404(account_id: int, workspace_id: int) -> ConnectedAccount:
         with database.session() as session:
             account = session.get(ConnectedAccount, account_id)
-            if account is None:
+            if account is None or account.workspace_id != workspace_id:
                 raise _problem(ProblemCode.NOT_FOUND, "account not found")
             session.expunge(account)
             return account
@@ -92,7 +92,7 @@ def build_accounts_router(
         `already_enabled` when the account already holds every scope it needs.
         """
         require(principal, ACCOUNTS_MANAGE)
-        account = _account_or_404(account_id)
+        account = _account_or_404(account_id, principal.workspace_id)
         if account.platform != Platform.tiktok.value:
             raise _problem(
                 ProblemCode.VALIDATION_FAILED,
@@ -152,7 +152,7 @@ def build_accounts_router(
         strings the screen must show.
         """
         require(principal, ACCOUNTS_READ)
-        account = _account_or_404(account_id)
+        account = _account_or_404(account_id, principal.workspace_id)
         if account.platform != Platform.tiktok.value:
             raise _problem(ProblemCode.NOT_FOUND, "not a TikTok account")
         if settings.platform_provider == "mock":

@@ -22,7 +22,7 @@ from runway.api.v1.errors import install_problem_handlers
 from runway.auth.principal import Principal, get_principal
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import ConnectedAccount
+from runway.db.models import ConnectedAccount, Workspace
 from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import TIKTOK_SCOPES, Platform
 from runway.platforms.registry import ProviderRegistry
@@ -336,6 +336,32 @@ def test_creator_info_is_tiktok_only_and_scoped(
     assert missing.status_code == 422
     assert missing.json()["code"] == "validation_failed"
     assert "token" not in json.dumps(missing.json()).lower() or "reconnect" in missing.text
+
+
+def test_an_account_in_another_workspace_is_not_found(
+    client: TestClient, database: Database
+) -> None:
+    """A workspace's accounts are invisible to another workspace's owner (404)."""
+    with database.session() as session:
+        other = Workspace(slug="other", name="Other workspace")
+        session.add(other)
+        session.flush()
+        account = ConnectedAccount(
+            workspace_id=other.id,
+            platform="tiktok",
+            external_account_id="open-2",
+            handle="@other",
+            status="connected",
+            granted_scopes_json="[]",
+            metadata_json="{}",
+        )
+        session.add(account)
+        session.flush()
+        account_id = account.id
+    enable = client.post(f"/api/v1/accounts/{account_id}/publishing/enable")
+    info = client.get(f"/api/v1/accounts/{account_id}/tiktok/creator-info")
+    assert enable.status_code == 404
+    assert info.status_code == 404
 
 
 def test_enable_publishing_is_refused_in_mock_mode(database: Database, settings: Settings) -> None:
