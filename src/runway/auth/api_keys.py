@@ -76,7 +76,12 @@ DEFAULT_AGENT_SCOPES: frozenset[str] = frozenset(
         POSTS_SCHEDULE,
     }
 )
+# Never in the default set; `posts:release` and `inbox:reply` are still
+# grantable by a person under the rules in spec 06 sections 3-4.
 NEVER_DEFAULT_SCOPES = frozenset({POSTS_RELEASE, INBOX_REPLY, ACCOUNTS_MANAGE})
+# Never grantable to a key at all: holding it would let an agent administer
+# credentials — mint, widen and revoke keys (invariant 16).
+NEVER_GRANTABLE_SCOPES = frozenset({WORKSPACE_ADMIN})
 
 KeyEnv = Literal["local", "live"]
 _ENV_FOR_PROFILE: dict[str, KeyEnv] = {"local": "local", "hosted": "live"}
@@ -240,6 +245,13 @@ class ApiKeyService:
         if unknown:
             raise Problem.of(
                 ProblemCode.VALIDATION_FAILED, f"unknown scopes: {', '.join(sorted(unknown))}"
+            )
+        never = scopes & NEVER_GRANTABLE_SCOPES
+        if never:
+            # A key holding these could administer credentials itself.
+            raise Problem.of(
+                ProblemCode.VALIDATION_FAILED,
+                f"a key can never hold: {', '.join(sorted(never))}",
             )
         lacking = scopes - creator.scopes
         if lacking:

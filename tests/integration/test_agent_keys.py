@@ -22,7 +22,7 @@ from runway.cli import keys_commands
 from runway.cli.main import app as cli_app
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import ApiKey, AuditLogEntry
+from runway.db.models import ApiKey, AuditLogEntry, Channel, ContentDraft, Proposal
 
 KEY_PATTERN = re.compile(r"^rwy_local_[0-9a-f]{8}_[A-Za-z0-9_-]{32,}$")
 BASE_URL = "http://127.0.0.1:8000"
@@ -93,22 +93,54 @@ def test_default_agent_scopes_are_exactly_the_spec_list(client: TestClient) -> N
         "posts:schedule",
     }
     assert set(key["scopes"]) == DEFAULT_AGENT_SCOPES
-    assert not {"posts:release", "inbox:reply", "accounts:manage"} & set(key["scopes"])
+    assert not {"posts:release", "inbox:reply", "accounts:manage", "workspace:admin"} & set(
+        key["scopes"]
+    )
 
 
-def test_a_key_never_receives_a_scope_its_creator_lacks(client: TestClient) -> None:
-    admin = str(_create(client, scopes=["workspace:admin", "posts:read"])["secret"])
+def test_a_key_can_never_hold_workspace_admin(client: TestClient) -> None:
+    """A key holding workspace:admin could administer credentials itself."""
     refused = client.post(
-        "/api/v1/keys",
-        json={"name": "wider", "scopes": ["posts:read", "posts:write"]},
-        headers=_bearer(admin),
+        "/api/v1/keys", json={"name": "admin", "scopes": ["workspace:admin"]}
     )
-    assert refused.status_code == 403
-    assert refused.json()["code"] == "scope_missing"
-    allowed = client.post(
-        "/api/v1/keys", json={"name": "narrower", "scopes": ["posts:read"]}, headers=_bearer(admin)
+    assert refused.status_code == 422
+    assert refused.json()["code"] == "validation_failed"
+    mixed = client.post(
+        "/api/v1/keys", json={"name": "mix", "scopes": ["workspace:admin", "posts:read"]}
     )
-    assert allowed.status_code == 201
+    assert mixed.status_code == 422
+    assert mixed.json()["code"] == "validation_failed"
+
+
+def test_key_administration_is_for_people_only(client: TestClient) -> None:
+    """A key can never list, inspect, mint, widen or revoke credentials (invariant 16).
+
+    workspace:admin is never grantable, so the refusal is `scope_missing`
+    before the human check is even reached.
+    """
+    agent = str(_create(client)["secret"])
+    victim = _create(client)["key"]
+    assert isinstance(victim, dict)
+    for method, url, body in (
+        ("post", "/api/v1/keys", {"name": "spawned"}),
+        ("get", "/api/v1/keys", None),
+        ("get", f"/api/v1/keys/{victim['id']}", None),
+        ("delete", f"/api/v1/keys/{victim['id']}", None),
+        (
+            "put",
+            f"/api/v1/keys/{victim['id']}/release-grants",
+            {"grants": [{"platform": "youtube"}]},
+        ),
+    ):
+        response = client.request(
+            method, url, json=body, headers=_bearer(agent)
+        )
+        assert response.status_code == 403, (method, url, response.text)
+        assert response.json()["code"] == "scope_missing"
+    # The same calls by the owner keep working.
+    assert client.get("/api/v1/keys").status_code == 200
+    assert client.get(f"/api/v1/keys/{victim['id']}").status_code == 200
+    assert client.delete(f"/api/v1/keys/{victim['id']}").status_code == 200
 
 
 def test_creating_a_key_needs_workspace_admin(client: TestClient) -> None:
@@ -132,9 +164,9 @@ def test_unknown_scopes_and_past_expiry_are_refused(client: TestClient) -> None:
 def test_a_key_resolves_to_an_agent_principal_and_records_last_use(
     client: TestClient, database: Database
 ) -> None:
-    created = _create(client, scopes=["posts:read", "workspace:admin"])
+    created = _create(client, scopes=["posts:read"])
     secret = str(created["secret"])
-    response = client.get("/api/v1/keys", headers=_bearer(secret))
+    response = client.get("/api/v1/approvals", headers=_bearer(secret))
     assert response.status_code == 200
     with database.session() as session:
         row = session.scalars(select(ApiKey)).one()
@@ -164,24 +196,24 @@ def test_a_tampered_secret_with_a_real_prefix_is_refused(client: TestClient) -> 
 
 
 def test_revoked_and_expired_keys_stop_working(client: TestClient, database: Database) -> None:
-    created = _create(client, scopes=["workspace:admin"])
+    created = _create(client, scopes=["posts:read"])
     secret = str(created["secret"])
     key = created["key"]
     assert isinstance(key, dict)
-    assert client.get("/api/v1/keys", headers=_bearer(secret)).status_code == 200
+    assert client.get("/api/v1/approvals", headers=_bearer(secret)).status_code == 200
     revoked = client.delete(f"/api/v1/keys/{key['id']}")
     assert revoked.status_code == 200
     assert revoked.json()["state"] == "revoked"
-    assert client.get("/api/v1/keys", headers=_bearer(secret)).status_code == 401
+    assert client.get("/api/v1/approvals", headers=_bearer(secret)).status_code == 401
 
-    other = _create(client, scopes=["workspace:admin"])
+    other = _create(client, scopes=["posts:read"])
     other_key = other["key"]
     assert isinstance(other_key, dict)
     with database.session() as session:
         row = session.get(ApiKey, other_key["id"])
         assert row is not None
         row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    expired = client.get("/api/v1/keys", headers=_bearer(str(other["secret"])))
+    expired = client.get("/api/v1/approvals", headers=_bearer(str(other["secret"])))
     assert expired.status_code == 401
     assert "expired" in expired.json()["detail"]
 
@@ -205,15 +237,15 @@ def test_the_per_key_rate_limit_answers_429_with_retry_after(
 ) -> None:
     limited = settings.model_copy(update={"api_key_rate_limit_per_minute": 2})
     for client in _client(limited):
-        secret = str(_create(client, scopes=["workspace:admin"])["secret"])
-        assert client.get("/api/v1/keys", headers=_bearer(secret)).status_code == 200
-        assert client.get("/api/v1/keys", headers=_bearer(secret)).status_code == 200
-        third = client.get("/api/v1/keys", headers=_bearer(secret))
+        secret = str(_create(client, scopes=["posts:read"])["secret"])
+        assert client.get("/api/v1/approvals", headers=_bearer(secret)).status_code == 200
+        assert client.get("/api/v1/approvals", headers=_bearer(secret)).status_code == 200
+        third = client.get("/api/v1/approvals", headers=_bearer(secret))
         assert third.status_code == 429
         assert third.json()["code"] == "rate_limited"
         assert int(third.headers["retry-after"]) >= 1
         # Other principals are not affected.
-        assert client.get("/api/v1/keys").status_code == 200
+        assert client.get("/api/v1/approvals").status_code == 200
 
 
 # --------------------------------------------------------------------- audit
@@ -222,28 +254,28 @@ def test_the_per_key_rate_limit_answers_429_with_retry_after(
 def test_every_mutation_by_a_key_writes_an_audit_row_with_key_id_and_name(
     client: TestClient, database: Database
 ) -> None:
-    admin = _create(client, name="Muse admin", scopes=["workspace:admin", "posts:read"])
+    admin = _create(client, name="Muse writer", scopes=["posts:write"])
     admin_key = admin["key"]
     assert isinstance(admin_key, dict)
-    victim = _create(client, name="old")["key"]
-    assert isinstance(victim, dict)
     before = len(_audit_rows(database))
-    response = client.delete(f"/api/v1/keys/{victim['id']}", headers=_bearer(str(admin["secret"])))
-    assert response.status_code == 200
+    response = client.post(
+        "/api/v1/posts",
+        json={"title": "By a key", "body": "text", "targets": []},
+        headers=_bearer(str(admin["secret"])),
+    )
+    assert response.status_code == 201, response.text
     rows = _audit_rows(database)[before:]
-    http_rows = [row for row in rows if row.action == "DELETE /api/v1/keys/{key_id}"]
+    http_rows = [row for row in rows if row.action == "POST /api/v1/posts"]
     assert len(http_rows) == 1
     detail = json.loads(http_rows[0].detail_json)
     assert http_rows[0].actor_kind == "agent"
     assert http_rows[0].actor_id == str(admin_key["id"])
     assert detail["key_id"] == str(admin_key["id"])
-    assert detail["key_name"] == "Muse admin"
-    service_rows = [row for row in rows if row.action == "api_key.revoke"]
-    assert service_rows and json.loads(service_rows[0].detail_json)["key_name"] == "Muse admin"
+    assert detail["key_name"] == "Muse writer"
     # A failed mutation and a read write nothing.
     count = len(_audit_rows(database))
-    client.delete("/api/v1/keys/99999", headers=_bearer(str(admin["secret"])))
-    client.get("/api/v1/keys", headers=_bearer(str(admin["secret"])))
+    client.post("/api/v1/posts", json={"title": ""}, headers=_bearer(str(admin["secret"])))
+    client.get("/api/v1/approvals", headers=_bearer(str(admin["secret"])))
     assert len(_audit_rows(database)) == count
 
 
@@ -251,21 +283,23 @@ def test_every_mutation_by_a_key_writes_an_audit_row_with_key_id_and_name(
 
 
 def test_policy_and_release_grants_are_for_people_only(client: TestClient) -> None:
-    admin = str(_create(client, scopes=["workspace:admin", "posts:read"])["secret"])
+    # No key can hold workspace:admin, so the refusal is scope_missing before
+    # the person check; the routes refuse keys twice over.
+    agent = str(_create(client)["secret"])
     response = client.put(
-        "/api/v1/policy", json={"agent_release": "per_key"}, headers=_bearer(admin)
+        "/api/v1/policy", json={"agent_release": "per_key"}, headers=_bearer(agent)
     )
     assert response.status_code == 403
-    assert response.json()["code"] == "human_required"
+    assert response.json()["code"] == "scope_missing"
     key = _create(client)["key"]
     assert isinstance(key, dict)
     grants = client.put(
         f"/api/v1/keys/{key['id']}/release-grants",
         json={"grants": [{"platform": "youtube"}]},
-        headers=_bearer(admin),
+        headers=_bearer(agent),
     )
     assert grants.status_code == 403
-    assert grants.json()["code"] == "human_required"
+    assert grants.json()["code"] == "scope_missing"
 
 
 def test_posts_release_needs_the_per_key_policy_and_never_covers_tiktok(
@@ -327,24 +361,111 @@ def test_idempotent_replay_returns_the_first_result_and_a_new_body_conflicts(
 # ------------------------------------------------------------ daily post cap
 
 
-def test_the_daily_post_cap_counts_a_keys_created_posts(
+def test_the_daily_post_cap_counts_posts_the_key_created(
     settings: Settings, database: Database
 ) -> None:
+    """The cap reads `content_drafts` rows by this key today — not audit rows,
+    so a create path that writes no audit row is still counted."""
     service = ApiKeyService(database, settings)
     created = service.create(local_owner(), name="capped", scopes=["posts:write"])
     principal = service.authenticate(created.secret)
-    from runway.auth.audit import record_audit
-
     with database.session() as session:
-        enforce_daily_post_cap(session, principal, 2)
         for _ in range(2):
-            record_audit(session, principal, "mcp:create_post", target_type="post", target_id=1)
+            session.add(
+                ContentDraft(
+                    workspace_id=principal.workspace_id,
+                    title="t",
+                    body="b",
+                    created_by=f"agent:{principal.id}",
+                )
+            )
+        session.flush()
     with database.session() as session, pytest.raises(Problem) as raised:
         enforce_daily_post_cap(session, principal, 2)
     assert raised.value.code == "rate_limited"
+    # A bigger cap still passes, and posts by someone else do not count.
+    with database.session() as session:
+        enforce_daily_post_cap(session, principal, 3)
+        session.add(
+            ContentDraft(
+                workspace_id=principal.workspace_id,
+                title="other",
+                body="b",
+                created_by="user:local-owner",
+            )
+        )
+        session.flush()
+        enforce_daily_post_cap(session, principal, 3)
     # People are never capped.
     with database.session() as session:
         enforce_daily_post_cap(session, local_owner(), 0)
+
+
+def test_the_daily_post_cap_covers_the_rest_and_cross_post_paths(
+    settings: Settings, database: Database
+) -> None:
+    """Cap 1: the second create by one key is refused however it arrives —
+    REST, cross-post from a proposal, or a second REST call."""
+    capped = settings.model_copy(update={"api_key_daily_post_cap": 1})
+    for client in _client(capped):
+        service = ApiKeyService(database, capped)
+        secret = service.create(local_owner(), name="capped", scopes=["posts:write"]).secret
+        headers = _bearer(secret)
+        first = client.post(
+            "/api/v1/posts",
+            json={"title": "one", "body": "b", "targets": []},
+            headers=headers,
+        )
+        assert first.status_code == 201, first.text
+        again = client.post(
+            "/api/v1/posts",
+            json={"title": "two", "body": "b", "targets": []},
+            headers=headers,
+        )
+        assert again.status_code == 429
+        assert again.json()["code"] == "rate_limited"
+        # A cross-post counts the same domain rows: even though its audit
+        # action differs, the second create by this key is refused.
+        with database.session() as session:
+            session.connection().exec_driver_sql("PRAGMA foreign_keys=OFF")
+            channel_id = session.scalar(select(Channel.id).limit(1))
+            proposal = Proposal(
+                generation_run_id=1,
+                channel_id=channel_id,
+                candidate_image_id=1,
+                planned_publish_at="2026-12-01T09:00:00",
+                recommended_caption="cap",
+                alternative_captions_json="[]",
+                final_caption="cap",
+                status="approved",
+                selection_reason="r",
+                style_score=1.0,
+                novelty_score=1.0,
+                quality_score=1.0,
+            )
+            session.add(proposal)
+            session.flush()
+            proposal_id = proposal.id
+        crossed = client.post(
+            f"/api/v1/proposals/{proposal_id}/cross-post",
+            json={
+                "targets": [
+                    {
+                        "platform": "instagram",
+                        "account_id": 1,
+                        "post_type": "instagram_image",
+                    }
+                ]
+            },
+            headers=headers,
+        )
+        assert crossed.status_code == 429
+        assert crossed.json()["code"] == "rate_limited"
+        # And the owner is unaffected by the key's cap.
+        by_owner = client.post(
+            "/api/v1/posts", json={"title": "owner", "body": "b", "targets": []}
+        )
+        assert by_owner.status_code == 201, by_owner.text
 
 
 # ----------------------------------------------------------------------- CLI

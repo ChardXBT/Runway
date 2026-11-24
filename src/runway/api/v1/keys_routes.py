@@ -29,8 +29,13 @@ from runway.auth.api_keys import (
     ApiKeyView,
     CreatedApiKey,
 )
-from runway.auth.principal import WORKSPACE_ADMIN, Principal, get_principal, require
-from runway.auth.problems import Problem, ProblemCode
+from runway.auth.principal import (
+    WORKSPACE_ADMIN,
+    Principal,
+    get_principal,
+    require,
+    require_person,
+)
 from runway.auth.release_policy import (
     HUMAN_ONLY_PLATFORMS,
     ReleaseGrantInput,
@@ -65,12 +70,6 @@ class PolicyResponse(BaseModel):
     default_agent_scopes: list[str]
 
 
-def require_person(principal: Principal, action: str) -> None:
-    """Some decisions belong to a person, never to an API key."""
-    if principal.kind == "agent":
-        raise Problem.of(ProblemCode.HUMAN_REQUIRED, f"only a person can {action}")
-
-
 def _policy_response(database: Database, workspace_id: int) -> PolicyResponse:
     with database.session() as session:
         view = policy_view(session, workspace_id)
@@ -94,6 +93,7 @@ def build_keys_router(database: Database, settings: Settings) -> APIRouter:
     ) -> CursorPage[ApiKeyView]:
         """The workspace's keys, newest first. Secrets are never shown again."""
         require(principal, WORKSPACE_ADMIN)
+        require_person(principal, "list API keys")
         return service.list(principal.workspace_id, params)
 
     @router.post("/keys", status_code=status.HTTP_201_CREATED, response_model=CreatedApiKey)
@@ -101,8 +101,8 @@ def build_keys_router(database: Database, settings: Settings) -> APIRouter:
         payload: CreateKeyRequest, principal: Principal = Depends(get_principal)
     ) -> CreatedApiKey:
         """Create a key. `secret` is in this response only; store it now."""
-        if payload.release_grants:
-            require_person(principal, "grant posts:release to a key")
+        require(principal, WORKSPACE_ADMIN)
+        require_person(principal, "create API keys")
         return service.create(
             principal,
             name=payload.name,
@@ -114,12 +114,15 @@ def build_keys_router(database: Database, settings: Settings) -> APIRouter:
     @router.get("/keys/{key_id}", response_model=ApiKeyView)
     def get_key(key_id: int, principal: Principal = Depends(get_principal)) -> ApiKeyView:
         require(principal, WORKSPACE_ADMIN)
+        require_person(principal, "inspect API keys")
         return service.get(principal.workspace_id, key_id)
 
     @router.delete("/keys/{key_id}", response_model=ApiKeyView)
     @idempotent
     def revoke_key(key_id: int, principal: Principal = Depends(get_principal)) -> ApiKeyView:
         """Revoke a key at once. Revoking twice is harmless."""
+        require(principal, WORKSPACE_ADMIN)
+        require_person(principal, "revoke API keys")
         return service.revoke(principal, key_id)
 
     @router.put("/keys/{key_id}/release-grants", response_model=ApiKeyView)
