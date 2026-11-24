@@ -13239,6 +13239,13 @@
           },
           {
             "default": null,
+            "name": "creator_scopes",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
             "name": "cursor_event_id",
             "nullable": false,
             "primary_key": 0,
@@ -13553,7 +13560,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "7d25efe35bd8ffdda73c429281398ba81e43d398320e5281ef56cfd8dba6544a",
+  "fingerprint": "555cbdd2525adc32d29409353d50d049a4222794b2d1020e1eadd338ec9c0b4f",
   "migration": "0019_agent_interface",
   "table_count": 84
 }
