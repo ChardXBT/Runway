@@ -181,6 +181,7 @@ HOSTED_ROUTES = {
     ("GET", "/api/v1/accounts/{account_id}/tiktok/creator-info"),
     ("GET", "/api/v1/accounts/{account_id}/youtube/categories"),
     ("POST", "/api/v1/accounts/{account_id}/publishing/enable"),
+    ("GET", "/api/v1/accounts/{account_id}/publishing/capability"),
     # Media (spec 06 section 6): workspace-scoped assets and uploads.
     ("GET", "/api/v1/media/{asset_id}"),
     ("DELETE", "/api/v1/media/{asset_id}"),

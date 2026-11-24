@@ -32,7 +32,7 @@ from identity_support import (
 from sqlalchemy import func, select
 
 from runway.api.app import create_app
-from runway.api.platform_routes import build_platform_router
+from runway.api.platform_routes import build_oauth_router, build_platform_router
 from runway.config import Settings
 from runway.db import Database, initialize_database
 from runway.db.hosted_models import IdentityWebhookDelivery, WorkspaceIdentityLink
@@ -72,13 +72,13 @@ class Hosted:
         return self.client.post(HOOK, content=body, headers=headers)
 
     def user_id(self, external_id: str) -> int:
-        with self.database.session() as session:
+        with self.database.system_session() as session:
             user = session.scalar(select(User).where(User.external_id == external_id))
             assert user is not None
             return user.id
 
     def count(self, model: Any, *where: Any) -> int:
-        with self.database.session() as session:
+        with self.database.system_session() as session:
             return int(session.scalar(select(func.count()).select_from(model).where(*where)) or 0)
 
 
@@ -233,7 +233,7 @@ def test_a_valid_token_for_org_a_cannot_read_workspace_b(hosted: Hosted) -> None
             "/api/v1/workspace", headers=hosted.auth("user_a", "org_b", role=role)
         )
         _problem(response, 403, "membership_unknown")
-    with hosted.database.session() as session:
+    with hosted.database.system_session() as session:
         role_b = session.scalar(
             select(WorkspaceMember.role).where(WorkspaceMember.user_id == user_b)
         )
@@ -313,13 +313,13 @@ def test_a_removed_member_cannot_reclaim_an_open_workspace_as_owner(hosted: Host
 
 def test_the_first_owner_claim_closes_once_the_workspace_has_an_owner(hosted: Hosted) -> None:
     hosted.hook(membership_event("created", "org_c", "user_c"), "msg_c1")
-    with hosted.database.session() as session:
+    with hosted.database.system_session() as session:
         member = session.scalar(select(WorkspaceMember))
         assert member is not None
         member.role = "owner"  # an owner exists while the claim was never taken
     response = hosted.client.get("/api/v1/workspace", headers=hosted.auth("user_y", "org_c"))
     _problem(response, 403, "membership_unknown")
-    with hosted.database.session() as session:
+    with hosted.database.system_session() as session:
         link = session.scalar(
             select(WorkspaceIdentityLink).where(WorkspaceIdentityLink.external_org_id == "org_c")
         )
@@ -388,7 +388,7 @@ def test_oversized_user_email_and_name_are_cut_to_the_column_sizes(hosted: Hoste
         },
         "msg_long",
     )
-    with hosted.database.session() as session:
+    with hosted.database.system_session() as session:
         user = session.scalar(select(User).where(User.external_id == "user_a"))
         assert user is not None
         assert user.email is not None and len(user.email) == 320
@@ -456,7 +456,7 @@ def test_membership_removal_revokes_access_but_keeps_the_workspace(hosted: Hoste
     _problem(hosted.client.get("/api/v1/workspace", headers=member), 403, "membership_unknown")
     # Signing in again does not resurrect the membership.
     _problem(hosted.client.get("/api/v1/workspace", headers=member), 403, "membership_unknown")
-    with hosted.database.session() as session:
+    with hosted.database.system_session() as session:
         assert session.get(Workspace, workspace_id) is not None
     assert hosted.client.get("/api/v1/workspace", headers=owner).status_code == 200
 
@@ -477,7 +477,7 @@ def test_organization_and_user_deletion_revoke_memberships(hosted: Hosted) -> No
     deleted_org = {"type": "organization.deleted", "data": {"id": "org_a", "deleted": True}}
     assert hosted.hook(deleted_org, "msg_org").json()["outcome"] == "applied"
     _problem(hosted.client.get("/api/v1/workspace", headers=owner), 403, "workspace_unavailable")
-    with hosted.database.session() as session:
+    with hosted.database.system_session() as session:
         workspace = session.get(Workspace, workspace_id)
         assert workspace is not None and workspace.deleted_at is None
     deleted_user = {"type": "user.deleted", "data": {"id": "user_b", "deleted": True}}
@@ -532,7 +532,7 @@ def test_rate_limits_return_429_problem_json(tmp_path: Path) -> None:
     with hosted_app(tmp_path / "workspace") as running:
         headers = running.auth("user_a", "org_a")
         workspace_id = running.client.get("/api/v1/workspace", headers=headers).json()["id"]
-        with running.database.session() as session:
+        with running.database.system_session() as session:
             set_quota_overrides(session, workspace_id, updated_by="test", api_requests_per_minute=1)
         running.app.state.rate_limiter._buckets.clear()
         assert running.client.get("/api/v1/workspace", headers=headers).status_code == 200
@@ -638,12 +638,15 @@ def test_hosted_hides_the_local_only_routes(hosted: Hosted) -> None:
     assert not {"data_dir", "connector_account_email", "publisher_channel_id"} & set(view.json())
 
 
-def _platform_route_requests(settings: Settings, database: Database) -> list[tuple[str, str]]:
-    """Every (method, concrete path) the legacy platform router serves."""
+def _platform_route_requests(
+    settings: Settings, database: Database, *, oauth_only: bool = False
+) -> list[tuple[str, str]]:
+    """Every (method, concrete path) the platform router family serves."""
     filled = {"platform": "youtube", "account_id": "1", "run_id": "1", "content_id": "1"}
     filled |= {"comment_id": "1", "draft_id": "1", "target_id": "1"}
+    builder = build_oauth_router if oauth_only else build_platform_router
     requests: list[tuple[str, str]] = []
-    for route in build_platform_router(database, settings).routes:
+    for route in builder(database, settings).routes:
         assert isinstance(route, APIRoute)
         path = route.path
         for name, value in filled.items():
@@ -656,8 +659,10 @@ def _platform_route_requests(settings: Settings, database: Database) -> list[tup
 def test_hosted_does_not_serve_the_unscoped_platform_routes(hosted: Hosted) -> None:
     # The platform router reads and writes the global tables with no workspace
     # filter and no scope checks: a viewer of workspace B could disconnect
-    # workspace A's account. Hosted must not serve any of it until tenancy lands.
-    with hosted.database.session() as session:
+    # workspace A's account. Hosted serves only the OAuth connect + callback
+    # routes, which bind the principal's workspace on the state row; the rest
+    # must not be served until tenancy lands.
+    with hosted.database.system_session() as session:
         session.add(
             ConnectedAccount(platform="youtube", external_account_id="UC_a", status="connected")
         )
@@ -669,14 +674,28 @@ def test_hosted_does_not_serve_the_unscoped_platform_routes(hosted: Hosted) -> N
     assert viewer.json()["your_role"] == "viewer"
 
     requests = _platform_route_requests(hosted.settings, hosted.database)
+    oauth = _platform_route_requests(hosted.settings, hosted.database, oauth_only=True)
+    assert set(oauth) <= set(requests)
     assert len(requests) > 25
     for headers in (owner_a, viewer_b):
         for method, path in requests:
+            if (method, path) in set(oauth):
+                continue
             body = {"confirmed": True} if method != "GET" else None
             response = hosted.client.request(method, path, headers=headers, json=body)
             assert response.status_code == 404, (method, path, response.text)
 
-    with hosted.database.session() as session:
+    # The workspace-scoped OAuth routes stay served: connect reaches the
+    # provider check (no OAuth credentials are configured in tests) and the
+    # callback redirects instead of 404ing.
+    connect = hosted.client.post("/api/platforms/youtube/connect", headers=owner_a)
+    assert connect.status_code == 409, connect.text
+    callback = hosted.client.get(
+        "/api/platforms/youtube/oauth/callback", headers=owner_a, follow_redirects=False
+    )
+    assert callback.status_code == 303, callback.text
+
+    with hosted.database.system_session() as session:
         account = session.scalar(select(ConnectedAccount))
         assert account is not None and account.status == "connected"
         assert session.scalar(select(func.count()).select_from(ContentDraft)) == 0
