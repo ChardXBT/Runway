@@ -19,7 +19,7 @@ from runway.db.models import AccountMetricDay, ConnectedAccount
 from runway.platforms.capabilities import Platform
 from runway.platforms.overview import metric_window_start
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 from runway.platforms.youtube import YouTubeProvider
 
 API = "http://127.0.0.1:8000"
@@ -107,7 +107,7 @@ def test_reconnect_after_disconnect_stores_a_usable_token(
             assert account.token_ref is not None
             assert account.token_ref != "None"
             token_ref = account.token_ref
-    token = TokenStore(settings.resolved_data_dir / "secrets").load(token_ref)
+    token = FileTokenStore(settings.resolved_data_dir / "secrets").load(token_ref)
     assert token is not None and token.access_token == "yt-access"
 
 

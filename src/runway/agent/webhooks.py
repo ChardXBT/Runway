@@ -53,7 +53,7 @@ from runway.events.log import Event
 from runway.events.types import EVENT_TYPES
 from runway.events.visibility import event_visible
 from runway.jobs.queue import Job, JobQueue
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import token_store_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +339,9 @@ class WebhookService:
         self.clock = clock
 
     def _cipher(self) -> Any:
-        return TokenStore(self.settings.resolved_data_dir / "secrets").cipher()
+        # Shares the token store's key material; the database store returns a
+        # MultiFernet so these secrets rotate with RUNWAY_TOKEN_KEYS too.
+        return token_store_from_settings(self.settings, self.database).cipher()
 
     # ------------------------------------------------------------ management
 

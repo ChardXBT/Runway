@@ -83,10 +83,14 @@ def test_each_compose_service_gets_only_its_secrets() -> None:
         "RUNWAY_YOUTUBE_CLIENT_SECRET",
         "RUNWAY_INSTAGRAM_APP_SECRET",
         "RUNWAY_TIKTOK_CLIENT_SECRET",
+        "RUNWAY_META_APP_SECRET",
     }
     webhook = {"RUNWAY_CLERK_WEBHOOK_SECRET"}
     api, worker, migrate = (_environment(compose, name) for name in ("api", "worker", "migrate"))
-    assert webhook <= api and not platform & api
+    # The api verifies Meta hook signatures and writes/deletes grants for the
+    # OAuth callback and data-deletion paths, so it shares the platform
+    # secrets; only it receives Clerk webhooks.
+    assert platform <= api and webhook <= api
     assert platform <= worker and not webhook & worker
     assert not (platform | webhook) & migrate
     assert "RUNWAY_DB_OWNER_PASSWORD" not in "".join(

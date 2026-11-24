@@ -17,7 +17,7 @@ from runway.platforms.capabilities import (
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.mock import MockPlatformProvider, mock_token
 from runway.platforms.tiktok import TikTokProvider
-from runway.platforms.tokens import TokenRefreshBusy, TokenStore
+from runway.platforms.tokens import TokenRefreshBusy, token_store_from_settings
 from runway.platforms.youtube import YouTubeProvider
 from runway.realtime.quota import QuotaRecorder
 
@@ -65,7 +65,7 @@ class ProviderRegistry:
     def __init__(self, database: Database, settings: Settings) -> None:
         self.database = database
         self.settings = settings
-        self.token_store = TokenStore.from_settings(settings)
+        self.token_store = token_store_from_settings(settings, database)
         self._providers: dict[Platform, PlatformProvider] = {}
 
     @property

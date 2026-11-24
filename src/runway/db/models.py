@@ -1530,6 +1530,35 @@ class ConnectedAccount(Base, WorkspaceScoped, TimestampMixin):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class AccountToken(Base, WorkspaceScoped):
+    """One encrypted platform grant per connected account (spec 05 section 3).
+
+    The database token store keeps at most one row per account, so account
+    deletion or a disconnected-account purge needs no second sweep. The
+    ``token_ref`` on the account row is the lookup handle; the ciphertext is
+    AES-256-GCM under the newest ``RUNWAY_TOKEN_KEYS`` version, with
+    ``<workspace>:<account>:<key_version>`` as additional authenticated data
+    so a transplanted row fails the tag check.
+    """
+
+    __tablename__ = "account_tokens"
+
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("connected_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    key_version: Mapped[str] = mapped_column(String(20))
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refresh_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Migration 0022 declares the same server default for the upgrade path;
+    # fresh databases get their DDL from `create_all`, so both must agree.
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]", server_default=sql_text("'[]'"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class OAuthState(Base, WorkspaceScoped):
     __tablename__ = "oauth_states"
 
@@ -1537,6 +1566,10 @@ class OAuthState(Base, WorkspaceScoped):
     platform: Mapped[str] = mapped_column(String(20))
     state: Mapped[str] = mapped_column(String(128), unique=True)
     code_verifier: Mapped[str | None] = mapped_column(Text)
+    # A token parked mid-flow (Instagram unified login: the user picks the
+    # account in a second request). Encrypted under the token-store cipher,
+    # never plaintext; consumed and cleared by the select endpoint.
+    token_ciphertext: Mapped[str | None] = mapped_column(Text)
     redirect_uri: Mapped[str] = mapped_column(Text)
     # Why this flow was started: "connect" (a new or unbound account),
     # "reconnect" (re-attach an existing account), "enable_publishing"

@@ -36,19 +36,26 @@ x-runway-env: &runway-env
   # containers are on the same network but are NOT trusted.
   RUNWAY_FORWARDED_ALLOW_IPS: ${RUNWAY_FORWARDED_ALLOW_IPS:-172.30.0.1}
 
-# The worker refreshes platform tokens and publishes, so it alone decrypts
-# tokens and holds the platform app secrets. When the platform routes are
-# served in hosted (OAuth connect runs in the API), the api service gains the
-# client credentials and the token keys needed to store a new connection.
+# The worker refreshes platform tokens and publishes. The API serves the
+# Meta hooks (deauthorize/data-deletion verify the app secret and drop the
+# grant) and the OAuth callback that stores a new connection, so both read
+# the token keyring and the platform app secrets; the web service never does.
 x-platform-secrets: &platform-secrets
-  # Read once the database token store lands (spec 05 section 3): "v2:<key>,v1:<key>".
+  # RUNWAY_TOKEN_KEYS: "v2:<key>,v1:<key>" — first encrypts, all decrypt
+  # (spec 05 section 3). Required in hosted: the database token store is
+  # the only store this profile runs.
   RUNWAY_TOKEN_KEYS: ${RUNWAY_TOKEN_KEYS:-}
+  RUNWAY_TOKEN_STORE: database
   RUNWAY_YOUTUBE_CLIENT_ID: ${RUNWAY_YOUTUBE_CLIENT_ID:-}
   RUNWAY_YOUTUBE_CLIENT_SECRET: ${RUNWAY_YOUTUBE_CLIENT_SECRET:-}
   RUNWAY_INSTAGRAM_APP_ID: ${RUNWAY_INSTAGRAM_APP_ID:-}
   RUNWAY_INSTAGRAM_APP_SECRET: ${RUNWAY_INSTAGRAM_APP_SECRET:-}
   RUNWAY_TIKTOK_CLIENT_KEY: ${RUNWAY_TIKTOK_CLIENT_KEY:-}
   RUNWAY_TIKTOK_CLIENT_SECRET: ${RUNWAY_TIKTOK_CLIENT_SECRET:-}
+  # Meta app for unified login and the /hooks/meta/* compliance callbacks.
+  RUNWAY_META_APP_ID: ${RUNWAY_META_APP_ID:-}
+  RUNWAY_META_APP_SECRET: ${RUNWAY_META_APP_SECRET:-}
+  RUNWAY_INSTAGRAM_UNIFIED_CONFIG_ID: ${RUNWAY_INSTAGRAM_UNIFIED_CONFIG_ID:-}
 
 services:
   postgres:
@@ -96,7 +103,7 @@ services:
     command: ["serve"]
     restart: unless-stopped
     environment:
-      <<: *runway-env
+      <<: [*runway-env, *platform-secrets]
       # Only the API receives Clerk webhooks.
       RUNWAY_CLERK_WEBHOOK_SECRET: ${RUNWAY_CLERK_WEBHOOK_SECRET:?whsec_ secret of the Clerk webhook endpoint}
       # The app role: no ownership, no BYPASSRLS, so row-level security holds.

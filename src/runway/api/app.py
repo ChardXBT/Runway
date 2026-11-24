@@ -42,6 +42,7 @@ from runway.operations.revision import checkout_revision
 from runway.operations.runtime_files import api_lock_path
 from runway.platforms.sync import SyncService
 from runway.realtime.hooks_routes import build_hooks_router
+from runway.realtime.meta_hooks import build_meta_hooks_router
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Web-origin CORS and origin guard, rate limits, security headers and
         # the identity provider (spec 05 sections 2 and 6).
         configure_hosted(application, active_settings)
+        # The database token store is the only store hosted runs: refuse to
+        # boot without a parseable RUNWAY_TOKEN_KEYS ring (spec 05 section 3).
+        from runway.platforms.tokens import TokenStoreError, token_store_from_settings
+
+        try:
+            token_store_from_settings(active_settings, database)
+        except TokenStoreError as exc:
+            raise ValueError(f"RUNWAY_PROFILE=hosted requires {exc}") from exc
+        # Direct-to-storage uploads (spec 02 section 4): POST /api/v1/media
+        # (mounted below in both profiles) returns presigned R2 part URLs so
+        # media bytes never pass through the API, and the poster preview is a
+        # redirect to a signed URL. Without R2 settings the service fails
+        # closed (capability_not_ready).
         # Only the OAuth connect + callback routes of the legacy platform
         # surface: state rows carry the principal's workspace and the callback
         # persists into it. The rest stays unmounted until it is scoped (404).
@@ -251,8 +265,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # workspace, so /hooks/* mounts in hosted too.
     application.include_router(build_hooks_router(database, active_settings))
     application.include_router(build_workspace_router(database, active_settings))
+    # Meta compliance callbacks (spec 05 section 4) arrive signed-request form
+    # posts on the public edge in every profile.
+    application.include_router(build_meta_hooks_router(database, active_settings))
     # Versioned surface (spec 06): every router comes from build_v1_router.
     application.include_router(build_events_router(database))
+    # Account disconnect is compliance surface too, so hosted serves it even
+    # though the rest of the accounts router stays local-only for now.
+    from runway.api.v1.accounts_routes import build_disconnect_router
+    from runway.api.v1.compliance_routes import build_compliance_router
+
+    application.include_router(build_disconnect_router(database, active_settings))
+    # Delete/export/audit (spec 05 sections 4-5) apply in every profile.
+    application.include_router(build_compliance_router(database, active_settings))
     if hosted and active_settings.identity_provider.strip() == "clerk":
         if not active_settings.clerk_webhook_secrets:
             # The API receives the membership webhooks; without the secret it

@@ -175,6 +175,7 @@ def test_adaptive_scheduler_replaces_the_fixed_one_when_enabled(tmp_path: Path) 
         ]
         from runway.agent.webhooks import DELIVER_WEBHOOK_JOB
         from runway.posts.jobs import PUBLISHING_JOB_KINDS
+        from runway.workspaces.lifecycle import DELETE_WORKSPACE_JOB, EXPORT_WORKSPACE_JOB
 
         assert (
             set(worker.handlers)
@@ -186,6 +187,8 @@ def test_adaptive_scheduler_replaces_the_fixed_one_when_enabled(tmp_path: Path) 
                 SUBSCRIBE_APPS_JOB,
                 REFRESH_TOKEN_JOB,
                 DELIVER_WEBHOOK_JOB,
+                EXPORT_WORKSPACE_JOB,
+                DELETE_WORKSPACE_JOB,
             }
             | PUBLISHING_JOB_KINDS
         )

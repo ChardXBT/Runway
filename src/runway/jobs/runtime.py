@@ -31,6 +31,12 @@ from runway.realtime.token_upkeep import (
     TokenUpkeepScheduler,
     run_refresh_token_job,
 )
+from runway.workspaces.lifecycle import (
+    DELETE_WORKSPACE_JOB,
+    EXPORT_WORKSPACE_JOB,
+    run_delete_workspace_job,
+    run_export_workspace_job,
+)
 
 __all__ = ["build_worker", "worker_lock_path"]
 
@@ -67,6 +73,10 @@ def build_worker(settings: Settings, database: Database) -> Worker:
         # Live with Advanced Access (spec 04 section 2).
         SUBSCRIBE_APPS_JOB: partial(run_subscribe_apps_job, registry),
         REFRESH_TOKEN_JOB: partial(run_refresh_token_job, registry),
+        # Workspace data duties (spec 05 sections 4-5): the export artifact and
+        # the purge after a workspace delete.
+        EXPORT_WORKSPACE_JOB: partial(run_export_workspace_job, database, settings),
+        DELETE_WORKSPACE_JOB: partial(run_delete_workspace_job, database, settings),
     }
     producers: list[JobProducer] = [
         RetentionPurgeScheduler(queue),

@@ -309,10 +309,33 @@ class R2Store:
                 response.iter_bytes(_READ_BUFFER_BYTES), destination, sha256=sha256, size=size
             )
 
+    def put_object(
+        self, key: str, data: bytes, *, workspace_id: str | int, content_type: str
+    ) -> None:
+        """Write a small server-made object (the poster frame, an export) at ``key``."""
+        check_workspace(key, workspace_id)
+        self._send(
+            "PUT",
+            self._object_url(key),
+            operation="put object",
+            headers={"content-type": content_type.strip().lower() or "application/octet-stream"},
+            body=data,
+        )
+
     def signed_get_url(self, key: str, ttl_seconds: int, *, workspace_id: str | int) -> str | None:
         """Plain presigned GET, for a platform to fetch (the Instagram container URL)."""
         check_workspace(key, workspace_id)
         return self._presign_get(key, ttl_seconds, [])
+
+    def signed_download_url(
+        self, key: str, ttl_seconds: int, *, workspace_id: str | int, filename: str
+    ) -> str | None:
+        """Presigned GET that downloads as ``filename`` (workspace exports)."""
+        check_workspace(key, workspace_id)
+        safe = filename.replace('"', "").replace("\\", "_") or "download.bin"
+        return self._presign_get(
+            key, ttl_seconds, [("response-content-disposition", f'attachment; filename="{safe}"')]
+        )
 
     def signed_preview_url(
         self, key: str, ttl_seconds: int, *, workspace_id: str | int, content_type: str

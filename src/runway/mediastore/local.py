@@ -299,7 +299,35 @@ class LocalDiskStore:
             raise
         return destination
 
+    def put_object(
+        self, key: str, data: bytes, *, workspace_id: str | int, content_type: str
+    ) -> None:
+        """Write a small server-made object (a poster frame) at ``key``."""
+        path = self._object_path(key, workspace_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.{secrets.token_hex(8)}.tmp")
+        try:
+            temporary.write_bytes(data)
+            replace_with_retry(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    def object_size(self, key: str, *, workspace_id: str | int) -> int | None:
+        """The stored object's size in bytes, ``None`` when no such object exists."""
+        path = self._object_path(key, workspace_id)
+        try:
+            return path.stat().st_size
+        except OSError:
+            return None
+
     def signed_get_url(self, key: str, ttl_seconds: int, *, workspace_id: str | int) -> str | None:
+        self._object_path(key, workspace_id)
+        return None
+
+    def signed_download_url(
+        self, key: str, ttl_seconds: int, *, workspace_id: str | int, filename: str
+    ) -> str | None:
         self._object_path(key, workspace_id)
         return None
 

@@ -40,6 +40,7 @@ class OAuthStateService:
         purpose: str = "connect",
         account_id: int | None = None,
         workspace_id: int = 1,
+        token_ciphertext: str | None = None,
     ) -> IssuedState:
         """A single-use state row for one OAuth flow.
 
@@ -70,6 +71,7 @@ class OAuthStateService:
                     purpose=purpose,
                     account_id=account_id,
                     workspace_id=workspace_id,
+                    token_ciphertext=token_ciphertext,
                     created_at=now,
                     expires_at=now + STATE_TTL,
                 )
@@ -95,7 +97,9 @@ class OAuthStateService:
                         OAuthState.consumed_at.is_(None),
                         OAuthState.expires_at > now,
                     )
-                    .values(consumed_at=now)
+                    # The parked-token ciphertext is one-use too: the caller
+                    # must read it from the peeked record before consuming.
+                    .values(consumed_at=now, token_ciphertext=None)
                 ),
             )
             record = session.scalar(select(OAuthState).where(OAuthState.state == state))

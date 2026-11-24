@@ -11,6 +11,7 @@ resumable`); images still need a public `image_url`.
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from runway.api.platform_routes import build_platform_router
@@ -146,7 +148,7 @@ class FakeFacebook:
                     }
                 },
             )
-        if path == "me" and query.get("fields") == ["client_business_id"]:
+        if path == "me" and "client_business_id" in (query.get("fields") or [""])[0]:
             return httpx.Response(
                 200, json={"id": "sys-1", "client_business_id": self.client_business_id}
             )
@@ -208,6 +210,10 @@ def test_client_business_id_and_assigned_accounts(tmp_path: Path) -> None:
     )
     token = provider.attach_business_id(token)
     assert token.extra["client_business_id"] == "biz-9"
+    # The /me `id` is the app-scoped Meta user id: Meta's compliance
+    # callbacks name it, so it is kept for the deauthorize/data-deletion
+    # account lookup.
+    assert token.extra["meta_user_id"] == "sys-1"
     assert provider.assigned_accounts(token) == [{"id": IG, "username": "northwindstudio"}]
 
 
@@ -379,6 +385,9 @@ def test_unified_callback_connects_the_only_assigned_account(
         assert account.handle == "northwindstudio"
         meta = json.loads(account.metadata_json or "{}")
         assert meta["connection"] == "instagram_unified"
+        # The app-scoped Meta user id rides the account so a data-deletion
+        # or deauthorize delivery naming it can find the account.
+        assert meta["meta_user_id"] == "sys-1"
         token_ref = account.token_ref
     assert token_ref is not None
     token = registry.token_store.load(token_ref)
@@ -459,13 +468,13 @@ def _two_account_select(
     return database, client, registry, select_state
 
 
-def _held_token_ref(database: Database, select_state: str) -> str:
+def _held_ciphertext(database: Database, select_state: str) -> str | None:
     # Test-side introspection is system work; a hosted-profile database would
     # refuse a bare session() with no workspace context.
     with database.system_session() as session:
         record = session.scalar(select(OAuthState).where(OAuthState.state == select_state))
         assert record is not None
-        return str(json.loads(record.code_verifier or "{}")["token_ref"])
+        return record.token_ciphertext
 
 
 def test_unified_select_rejects_a_bad_pick_without_consuming_the_state(
@@ -490,14 +499,22 @@ def test_unified_select_rejects_a_bad_pick_without_consuming_the_state(
 
 def test_unified_select_deletes_the_held_token(tmp_path: Path) -> None:
     database, client, registry, select_state = _two_account_select(tmp_path, FakeFacebook())
-    held_ref = _held_token_ref(database, select_state)
-    assert registry.token_store.load(held_ref) is not None
+    held = _held_ciphertext(database, select_state)
+    assert held is not None
+    # The parked ciphertext carries the serialized grant under the store cipher.
+    import json as _json
+
+    from runway.platforms.base import deserialize_token
+
+    plaintext = registry.token_store.cipher().decrypt(held.encode("ascii"))
+    assert deserialize_token(_json.loads(plaintext.decode("utf-8"))).access_token
     picked = client.post(
         "/api/platforms/instagram/unified/select",
         json={"state": select_state, "external_account_id": IG2},
     )
     assert picked.status_code == 200
-    assert registry.token_store.load(held_ref) is None
+    # Consuming the state cleared the parked ciphertext.
+    assert _held_ciphertext(database, select_state) is None
 
 
 def test_unified_select_maps_a_persist_failure_to_the_fail_redirect(
@@ -511,7 +528,7 @@ def test_unified_select_maps_a_persist_failure_to_the_fail_redirect(
         graph,
         extra_assigned=[{"id": "17841400923819", "username": "thirdig"}],
     )
-    held_ref = _held_token_ref(database, select_state)
+    assert _held_ciphertext(database, select_state) is not None
     picked = client.post(
         "/api/platforms/instagram/unified/select",
         json={"state": select_state, "external_account_id": "17841400923819"},
@@ -519,7 +536,7 @@ def test_unified_select_maps_a_persist_failure_to_the_fail_redirect(
     )
     assert picked.status_code == 303
     assert "error=exchange_failed" in picked.headers["location"]
-    assert registry.token_store.load(held_ref) is None
+    assert _held_ciphertext(database, select_state) is None
     with database.session() as session:
         assert session.scalar(select(ConnectedAccount)) is None
 
@@ -535,12 +552,14 @@ def test_unified_select_maps_a_quota_problem_to_the_fail_redirect(
             meta_app_id=META_APP,
             meta_app_secret=META_SECRET,
             instagram_unified_config_id=CONFIG_ID,
+            # hosted resolves the database token store, which needs a keyring.
+            token_keys=SecretStr("v1:" + base64.urlsafe_b64encode(b"k" * 32).decode("ascii")),
         ).model_copy(update={"profile": "hosted", "quota_connected_accounts": 0})
     )
     database, client, registry, select_state = _two_account_select(
         tmp_path, FakeFacebook(), settings
     )
-    held_ref = _held_token_ref(database, select_state)
+    assert _held_ciphertext(database, select_state) is not None
     picked = client.post(
         "/api/platforms/instagram/unified/select",
         json={"state": select_state, "external_account_id": IG2},
@@ -548,7 +567,7 @@ def test_unified_select_maps_a_quota_problem_to_the_fail_redirect(
     )
     assert picked.status_code == 303
     assert "error=quota_exceeded" in picked.headers["location"]
-    assert registry.token_store.load(held_ref) is None
+    assert _held_ciphertext(database, select_state) is None
 
 
 def test_unified_callback_without_assigned_accounts_fails(tmp_path: Path) -> None:

@@ -1004,9 +1004,9 @@ def _patched_provider(
 
 
 def _store_token(settings: Settings, token_ref: str = "tok-1") -> None:
-    from runway.platforms.tokens import TokenStore
+    from runway.platforms.tokens import FileTokenStore
 
-    TokenStore(settings.resolved_data_dir / "secrets").store(
+    FileTokenStore(settings.resolved_data_dir / "secrets").store(
         token_ref,
         TokenSet(
             access_token="yt-access",

@@ -7,6 +7,26 @@
  */
 
 export interface paths {
+    "/api/v1/accounts/{account_id}/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disconnect
+         * @description Detach the grant: revoke, drop the stored token, cancel pending sends.
+         */
+        post: operations["disconnect_api_v1_accounts__account_id__disconnect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{account_id}/publishing/capability": {
         parameters: {
             query?: never;
@@ -151,6 +171,30 @@ export interface paths {
          * @description Reject a target with a reason; the agent learns it from `target.rejected`.
          */
         post: operations["reject_api_v1_approvals__target_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Audit
+         * @description The workspace's audit log, newest first; owners and approvers.
+         *
+         *     The approver role has no workspace-admin scope (its grants stop at
+         *     release and reply), so the read is gated on role; the admin scope
+         *     stays sufficient so API keys keep the access they had.
+         */
+        get: operations["list_audit_api_v1_audit_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -342,7 +386,10 @@ export interface paths {
         };
         /**
          * Get Poster
-         * @description The preview frame Runway extracted (local profile; never the uploaded file).
+         * @description The preview frame Runway extracted (never the uploaded file).
+         *
+         *     Local serves the poster file; hosted answers 307 to a short-lived
+         *     signed URL, so no preview bytes are served from the API origin.
          */
         get: operations["get_poster_api_v1_media__asset_id__poster_get"];
         put?: never;
@@ -626,6 +673,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Me
+         * @description Remove the caller's own rows in every workspace they belong to.
+         */
+        delete: operations["delete_me_api_v1_users_me_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/webhooks": {
         parameters: {
             query?: never;
@@ -701,6 +768,60 @@ export interface paths {
         };
         /** Workspace */
         get: operations["workspace_api_v1_workspace_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Workspace
+         * @description Soft-delete the workspace; the purge job erases the rows.
+         *
+         *     The caller types the workspace's slug or name back: deleting erases
+         *     everything the workspace owns, so a bare click can never be enough.
+         *     The local profile's only workspace cannot go at all - the install
+         *     would be left with no workspace.
+         */
+        delete: operations["delete_workspace_api_v1_workspace_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspace/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Export
+         * @description Enqueue a full workspace export; poll the download path for the file.
+         */
+        post: operations["request_export_api_v1_workspace_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspace/exports/{export_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Export
+         * @description The finished export artifact; 409 while the job is still pending.
+         *
+         *     The artifact is the durable record, not the publish_jobs row: in
+         *     `hosted` it lives in object storage (API and worker share no disk),
+         *     so a short-lived signed URL is handed out - this keeps working after
+         *     the finished export job is retention-purged.
+         */
+        get: operations["download_export_api_v1_workspace_exports__export_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -873,6 +994,37 @@ export interface components {
             started_at: string;
             /** Target Id */
             target_id: number;
+        };
+        /** AuditEntryView */
+        AuditEntryView: {
+            /** Action */
+            action: string;
+            /** Actor Id */
+            actor_id: string;
+            /** Actor Kind */
+            actor_kind: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: number;
+            /** Target Id */
+            target_id: string | null;
+            /** Target Type */
+            target_type: string | null;
+        };
+        /** AuditPage */
+        AuditPage: {
+            /** Items */
+            items: components["schemas"]["AuditEntryView"][];
+            /** Next Cursor */
+            next_cursor: string | null;
         };
         /** BrowserCheckpointRequest */
         BrowserCheckpointRequest: {
@@ -1068,6 +1220,14 @@ export interface components {
             items: components["schemas"]["WebhookView"][];
             /** Next Cursor */
             next_cursor: string | null;
+        };
+        /**
+         * DeleteWorkspaceRequest
+         * @description The destructive-action echo: the workspace's slug or name, typed back.
+         */
+        DeleteWorkspaceRequest: {
+            /** Confirm */
+            confirm: string;
         };
         /** DeliveryView */
         DeliveryView: {
@@ -1968,6 +2128,93 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    disconnect_api_v1_accounts__account_id__disconnect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     publishing_capability_view_api_v1_accounts__account_id__publishing_capability_get: {
         parameters: {
             query?: never;
@@ -2515,6 +2762,92 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_audit_api_v1_audit_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
                 };
             };
             /** @description An application/problem+json error with a stable `code` */
@@ -5028,6 +5361,91 @@ export interface operations {
             };
         };
     };
+    delete_me_api_v1_users_me_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     list_webhooks_api_v1_webhooks_get: {
         parameters: {
             query?: {
@@ -5562,6 +5980,265 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceView"];
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_workspace_api_v1_workspace_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    request_export_api_v1_workspace_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description An application/problem+json error with a stable `code` */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    download_export_api_v1_workspace_exports__export_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description An application/problem+json error with a stable `code` */

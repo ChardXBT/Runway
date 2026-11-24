@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from runway.api.app import create_app
@@ -395,12 +396,23 @@ class DirectStore:
         return UploadProgress.from_parts(plan, [PartReceipt(1, plan.part_length(1), "e1")])
 
 
+# hosted resolves the database token store: the API validates the keyring at startup.
+_TOKEN_KEYRING = "v1:" + "a" * 43 + "="
+
+
 def test_direct_mode_returns_part_urls_and_refuses_bytes_through_the_api(
     media_settings: Settings, media_db: Database
 ) -> None:
-    app = create_app(media_settings)
+    """Hosted profile: the upload plan is direct; the API never takes the bytes."""
+    hosted = media_settings.model_copy(update={"profile": "hosted"})
+    hosted.token_keys = SecretStr(_TOKEN_KEYRING)
+    app = create_app(hosted)
     store = DirectStore()
     _service(app).stores["r2"] = store  # type: ignore[assignment]
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        kind="user", id="1", workspace_id=1, role="owner", scopes=ALL_SCOPES,
+        display="Owner",
+    )  # fmt: skip
     with TestClient(app, base_url=BASE) as client:
         created = client.post(
             "/api/v1/media",

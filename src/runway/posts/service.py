@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from runway.api.v1.concurrency import bump_version, require_version
 from runway.api.v1.pagination import CursorParams, paginate
+from runway.auth.audit import record_audit
 from runway.auth.key_limits import acquire_cap_lock, enforce_daily_post_cap
 from runway.auth.principal import (
     POSTS_READ,
@@ -1005,6 +1006,18 @@ class PostService:
                 _T.QUEUED,
                 post=post,
                 event_payload={"job_id": job.id, "run_at": utc(job.run_at).isoformat()},  # type: ignore[union-attr]
+            )
+            record_audit(
+                session,
+                principal,
+                "post.release",
+                target_type="target",
+                target_id=target.id,
+                detail={
+                    "post_id": post.id,
+                    "platform": target.platform,
+                    "payload_hash": snap.payload_hash,
+                },
             )
             return post_view(session, sources, post)
 

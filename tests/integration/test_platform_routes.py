@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import func, select
 
 from runway.api.app import create_app
@@ -18,6 +20,7 @@ from runway.db import initialize_database
 from runway.db.base import Database
 from runway.db.models import (
     AccountMetricSnapshot,
+    AuditLogEntry,
     CommentRecord,
     ConnectedAccount,
     OAuthState,
@@ -30,8 +33,12 @@ from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.oauth import OAuthStateService
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 from runway.platforms.youtube import YouTubeProvider
+
+# A valid but throwaway keyring: hosted apps boot the database token store,
+# which refuses to start without RUNWAY_TOKEN_KEYS.
+_TOKEN_KEYRING = "v1:" + "a" * 43 + "="
 
 
 def migrated(settings: Settings) -> Settings:
@@ -120,36 +127,53 @@ def test_oauth_connect_and_callback_happy_path(
         return original(self, platform)
 
     monkeypatch.setattr(ProviderRegistry, "provider", patched)
-    with TestClient(create_app(migrated(settings)), base_url="http://127.0.0.1:8000") as web:
-        connect = web.post("/api/platforms/youtube/connect")
-        assert connect.status_code == 200
-        payload = connect.json()
-        url_query = parse_qs(urlparse(payload["authorization_url"]).query)
-        assert url_query["state"] == [payload["state"]]
-        assert url_query["code_challenge_method"] == ["S256"]
-        assert url_query["code_challenge"]
+    database = Database(settings)
+    try:
+        with TestClient(create_app(migrated(settings)), base_url="http://127.0.0.1:8000") as web:
+            connect = web.post("/api/platforms/youtube/connect")
+            assert connect.status_code == 200
+            payload = connect.json()
+            url_query = parse_qs(urlparse(payload["authorization_url"]).query)
+            assert url_query["state"] == [payload["state"]]
+            assert url_query["code_challenge_method"] == ["S256"]
+            assert url_query["code_challenge"]
 
-        bad = web.get(
-            "/api/platforms/youtube/oauth/callback",
-            params={"code": "x", "state": "unknown-state"},
-            follow_redirects=False,
-        )
-        assert bad.status_code == 303
-        assert bad.headers["location"].endswith("/accounts?error=invalid_state")
+            bad = web.get(
+                "/api/platforms/youtube/oauth/callback",
+                params={"code": "x", "state": "unknown-state"},
+                follow_redirects=False,
+            )
+            assert bad.status_code == 303
+            assert bad.headers["location"].endswith("/accounts?error=invalid_state")
 
-        good = web.get(
-            "/api/platforms/youtube/oauth/callback",
-            params={"code": "auth-code", "state": payload["state"]},
-            follow_redirects=False,
-        )
-        assert good.status_code == 303
-        assert good.headers["location"].endswith("/accounts?connected=youtube")
+            good = web.get(
+                "/api/platforms/youtube/oauth/callback",
+                params={"code": "auth-code", "state": payload["state"]},
+                follow_redirects=False,
+            )
+            assert good.status_code == 303
+            assert good.headers["location"].endswith("/accounts?connected=youtube")
 
-        accounts = web.get("/api/platforms/accounts").json()
-        assert len(accounts) == 1
-        assert accounts[0]["platform"] == "youtube"
-        assert accounts[0]["external_account_id"] == "UCtest"
-        assert accounts[0]["status"] == "connected"
+            accounts = web.get("/api/platforms/accounts").json()
+            assert len(accounts) == 1
+            assert accounts[0]["platform"] == "youtube"
+            assert accounts[0]["external_account_id"] == "UCtest"
+            assert accounts[0]["status"] == "connected"
+
+            # The OAuth callback has no caller principal; the grant itself is
+            # the actor, on the ordinary connect path as on the bound path.
+            with database.session() as session:
+                audit = session.scalar(
+                    select(AuditLogEntry).where(AuditLogEntry.action == "account.connect")
+                )
+                assert audit is not None
+                assert audit.actor_kind == "oauth"
+                assert audit.actor_id == "youtube"
+                assert audit.target_type == "account"
+                assert audit.target_id == str(accounts[0]["id"])
+                assert json.loads(audit.detail_json) == {"external_account_id": "UCtest"}
+    finally:
+        database.engine.dispose()
 
 
 def _principal(workspace_id: int) -> Principal:
@@ -174,6 +198,7 @@ def test_hosted_connect_binds_the_state_to_the_principal_workspace(tmp_path: Pat
             platform_provider="live",
             youtube_client_id="yt-client",
             youtube_client_secret="yt-secret",
+            token_keys=SecretStr(_TOKEN_KEYRING),
         ).model_copy(update={"profile": "hosted"})
     )
     app = _hosted_app(settings)
@@ -199,6 +224,7 @@ def test_hosted_callback_refuses_a_state_from_another_workspace(tmp_path: Path) 
             platform_provider="live",
             youtube_client_id="yt-client",
             youtube_client_secret="yt-secret",
+            token_keys=SecretStr(_TOKEN_KEYRING),
         ).model_copy(update={"profile": "hosted"})
     )
     app = _hosted_app(settings)
@@ -362,7 +388,7 @@ def test_disconnect_deletes_token_and_keeps_content(
         )
         assert response.status_code == 200
 
-        store = TokenStore(mock_settings.resolved_data_dir / "secrets")
+        store = FileTokenStore(mock_settings.resolved_data_dir / "secrets")
         assert store.load(token_ref) is None
         with database.session() as session:
             record = session.get(ConnectedAccount, account["id"])

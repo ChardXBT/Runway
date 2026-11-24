@@ -12,12 +12,17 @@ from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 from identity_support import WEBHOOK_SECRET
+from pydantic import SecretStr
 from starlette.routing import Mount, Route
 
 from runway.api.app import create_app
 from runway.api.v1.router import V1Route
 from runway.auth.principal import get_principal
 from runway.config import Settings
+
+# hosted resolves the database token store (spec 05 section 3): the API and
+# worker validate the keyring at startup.
+_TOKEN_KEYRING = "v1:" + "a" * 43 + "="
 
 # The only routes that may be served without a principal. Each is listed
 # explicitly; anything else without the dependency fails this test.
@@ -34,6 +39,18 @@ EXEMPT_SIGNED_WEBHOOKS = frozenset(
         "/hooks/youtube/websub/{subscription_id}/{callback_token}",
         "/hooks/instagram",
         "/hooks/tiktok",
+        # Meta compliance callbacks: verified by the signed_request HMAC, not
+        # by a principal (spec 05 section 4).
+        "/hooks/meta/deauthorize",
+        "/hooks/meta/data-deletion",
+    }
+)
+# Public pages that return no tenant data without an unguessable id.
+EXEMPT_PUBLIC_PAGES = frozenset(
+    {
+        # Meta's required data-deletion status page; the code is the SHA-256
+        # of the signed request body.
+        "/hooks/meta/data-deletion/{code}",
     }
 )
 
@@ -54,7 +71,7 @@ def _unguarded_routes(application: FastAPI) -> list[str]:
         if isinstance(route, APIRoute):
             if (
                 context.path in EXEMPT_HEALTH_ROUTES | EXEMPT_SIGNATURE_ROUTES
-                or context.path in EXEMPT_SIGNED_WEBHOOKS
+                or context.path in EXEMPT_SIGNED_WEBHOOKS | EXEMPT_PUBLIC_PAGES
             ):
                 continue
             if get_principal not in set(_calls(context.dependant)):
@@ -111,6 +128,7 @@ def test_the_walk_detects_a_route_without_the_dependency(local_app: FastAPI) -> 
 
 def test_hosted_requests_to_api_routes_are_401_but_health_answers(tmp_path: Path) -> None:
     hosted = Settings(data_dir=tmp_path / "data").model_copy(update={"profile": "hosted"})
+    hosted.token_keys = SecretStr(_TOKEN_KEYRING)
     application = create_app(hosted)
     # Without the context manager the lifespan (database check) does not run;
     # authentication must refuse before any handler touches the database.
@@ -135,6 +153,7 @@ def test_hosted_clerk_app_exempts_only_its_signed_webhook(tmp_path: Path) -> Non
         web_origins="https://app.runway.test",
         clerk_webhook_secret=WEBHOOK_SECRET,
     ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    hosted.token_keys = SecretStr(_TOKEN_KEYRING)
     application = create_app(hosted)
     paths = {context.path for context in iter_route_contexts(application.routes)}
     assert paths >= EXEMPT_SIGNATURE_ROUTES
@@ -158,6 +177,17 @@ HOSTED_ROUTES = {
     ("PATCH", "/api/v1/workspace/members/{user_id}"),
     # Event stream: every query is filtered by principal.workspace_id.
     ("GET", "/api/v1/events/stream"),
+    # Account disconnect: workspace-scoped lookup, accounts:manage; the only
+    # accounts route hosted serves (spec 05 section 4).
+    ("POST", "/api/v1/accounts/{account_id}/disconnect"),
+    # Compliance router: workspace delete/export/download are
+    # workspace:admin, the audit list admits owners and approvers, and
+    # self-delete is require_person (spec 05 sections 4-5).
+    ("DELETE", "/api/v1/workspace"),
+    ("POST", "/api/v1/workspace/export"),
+    ("GET", "/api/v1/workspace/exports/{export_id}"),
+    ("DELETE", "/api/v1/users/me"),
+    ("GET", "/api/v1/audit"),
     # Keys (spec 06 section 5): workspace-scoped CRUD and release grants.
     ("GET", "/api/v1/keys"),
     ("POST", "/api/v1/keys"),
@@ -182,7 +212,9 @@ HOSTED_ROUTES = {
     ("GET", "/api/v1/accounts/{account_id}/youtube/categories"),
     ("POST", "/api/v1/accounts/{account_id}/publishing/enable"),
     ("GET", "/api/v1/accounts/{account_id}/publishing/capability"),
-    # Media (spec 06 section 6): workspace-scoped assets and uploads.
+    # Media (spec 06 section 6, spec 02 section 4): workspace-scoped assets;
+    # uploads are direct-to-R2 (the API never carries the bytes) and the
+    # poster is a redirect to a short-lived signed URL.
     ("GET", "/api/v1/media/{asset_id}"),
     ("DELETE", "/api/v1/media/{asset_id}"),
     ("GET", "/api/v1/media/{asset_id}/poster"),
@@ -214,6 +246,12 @@ HOSTED_ROUTES = {
     ("POST", "/hooks/tiktok"),
     ("GET", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
     ("POST", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
+    # Meta compliance callbacks: authenticated by the signed_request HMAC.
+    ("POST", "/hooks/meta/deauthorize"),
+    ("POST", "/hooks/meta/data-deletion"),
+    # The data-deletion status page Meta links users to; the code in the path
+    # is the unguessable request hash.
+    ("GET", "/hooks/meta/data-deletion/{code}"),
     # Clerk webhook: authenticated by the Svix signature, not by a principal.
     ("POST", "/hooks/identity/clerk"),
     # OAuth connect + callback (spec 08): the only hosted platform routes.
@@ -231,6 +269,7 @@ def test_hosted_serves_exactly_the_listed_routes(tmp_path: Path) -> None:
         web_origins="https://app.runway.test",
         clerk_webhook_secret=WEBHOOK_SECRET,
     ).model_copy(update={"profile": "hosted", "identity_provider": "clerk"})
+    hosted.token_keys = SecretStr(_TOKEN_KEYRING)
     application = create_app(hosted)
     served = {
         (method, context.path)

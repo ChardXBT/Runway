@@ -237,6 +237,12 @@ class Settings(BaseSettings):
     machine_id: str | None = None
     token_key: SecretStr | None = None
     instance_snapshot_keep: int = Field(default=5, ge=1, le=100)
+    # Token store (spec 05 section 3). `hosted` always uses the database
+    # store; a local owner opts in with RUNWAY_TOKEN_STORE=database and a
+    # versioned RUNWAY_TOKEN_KEYS ring ("v2:<base64-32B>,v1:<base64-32B>":
+    # first encrypts, all decrypt). The file store needs neither.
+    token_store: Literal["file", "database"] | None = None
+    token_keys: SecretStr | None = None
 
     @classmethod
     def settings_customise_sources(
@@ -392,8 +398,36 @@ class Settings(BaseSettings):
                 "RUNWAY_PUBLISHING_MODE other than authorized_browser "
                 "(the browser publisher is local-only)"
             )
+        if self.token_keys is None:
+            # Spec 05 section 3: hosted grants live in `account_tokens` under a
+            # versioned keyring; without it nothing can read or write a token.
+            problems.append(
+                "a RUNWAY_TOKEN_KEYS keyring "
+                "('<version>:<base64-32-byte-key>', first encrypts, all decrypt)"
+            )
         if problems:
             raise ValueError("RUNWAY_PROFILE=hosted requires " + "; ".join(problems))
+        return self
+
+    @model_validator(mode="after")
+    def token_store_keyring_is_valid(self) -> Settings:
+        """A malformed keyring is refused at startup, not at the first token read."""
+        from runway.platforms.tokens import TokenStoreError, parse_token_keys
+
+        if self.token_keys is not None:
+            try:
+                parse_token_keys(self.token_keys.get_secret_value())
+            except TokenStoreError as exc:
+                raise ValueError(f"RUNWAY_TOKEN_KEYS: {exc}") from exc
+        if (
+            self.profile != "hosted"
+            and self.resolved_token_store == "database"
+            and self.token_keys is None
+        ):
+            raise ValueError(
+                "RUNWAY_TOKEN_STORE=database requires RUNWAY_TOKEN_KEYS "
+                "('<version>:<base64-32-byte-key>' entries)"
+            )
         return self
 
     def _clerk_problems(self) -> list[str]:
@@ -515,6 +549,13 @@ class Settings(BaseSettings):
         if instance_dir is None:
             return self.resolved_data_dir / "secrets"
         return instance_dir / TOKENS_DIR_NAME
+
+    @property
+    def resolved_token_store(self) -> str:
+        """`hosted` always uses the database store; `local` defaults to the file."""
+        if self.profile == "hosted":
+            return "database"
+        return self.token_store or "file"
 
     @property
     def browser_profile_dir(self) -> Path:

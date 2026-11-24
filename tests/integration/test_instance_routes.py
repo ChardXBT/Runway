@@ -20,7 +20,7 @@ from runway.operations import instance_lease
 from runway.operations.instance_lease import Lease, write_lease
 from runway.platforms.base import TokenSet
 from runway.platforms.mock import MockPlatformProvider
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
@@ -91,7 +91,7 @@ def test_standby_disconnect_is_refused_before_revoking(
         assert response.status_code == 409
         assert "standby" in response.json()["detail"]
         assert revoked == []
-        assert TokenStore.from_settings(settings).load(token_ref) is not None
+        assert FileTokenStore.from_settings(settings).load(token_ref) is not None
         with database.session() as session:
             record = session.get(ConnectedAccount, account["id"])
             assert record is not None and record.status == "connected"

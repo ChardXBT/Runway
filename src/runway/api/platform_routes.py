@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Literal
 
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -19,6 +20,7 @@ from runway.auth.problems import Problem
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
+    AuditLogEntry,
     ConnectedAccount,
     OAuthState,
     SyncRun,
@@ -32,7 +34,9 @@ from runway.platforms.account_views import account_view as _account_view
 from runway.platforms.base import (
     ProviderError,
     TokenSet,
+    deserialize_token,
     iso_utc,
+    serialize_token,
 )
 from runway.platforms.capabilities import (
     Platform,
@@ -48,6 +52,7 @@ from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncAccountDisconnected, SyncRunInProgress, SyncService
 from runway.platforms.tokens import pkce_challenge
 from runway.realtime import subscriptions
+from runway.realtime.lifecycle import disconnect_account
 
 logger = logging.getLogger(__name__)
 
@@ -268,18 +273,38 @@ def _persist_connection(
         account.connected_at = now
         account.last_verified_at = now
         account.last_error = None
-        account.metadata_json = json.dumps(
-            {
-                "raw": identity.raw,
-                "scopes_source": scopes_source,
-                # The connection adapter decides the account's direct
-                # publisher (instagram_direct vs instagram_unified).
-                "connection": (
-                    "instagram_unified" if token.extra.get("login") == "unified" else platform.value
-                ),
-            }
-        )
+        metadata: dict[str, object] = {
+            "raw": identity.raw,
+            "scopes_source": scopes_source,
+            # The connection adapter decides the account's direct
+            # publisher (instagram_direct vs instagram_unified).
+            "connection": (
+                "instagram_unified" if token.extra.get("login") == "unified" else platform.value
+            ),
+        }
+        # Unified Login also knows the app-scoped Meta user id; Meta's
+        # compliance callbacks name it, so it lives on the row.
+        meta_user_id = token.extra.get("meta_user_id")
+        if isinstance(meta_user_id, str) and meta_user_id:
+            metadata["meta_user_id"] = meta_user_id
+        account.metadata_json = json.dumps(metadata)
         session.flush()
+        # The OAuth callback has no caller principal; the grant itself is
+        # the actor (spec 05 section 5), same as on the bound path.
+        session.add(
+            AuditLogEntry(
+                workspace_id=account.workspace_id,
+                actor_kind="oauth",
+                actor_id=account.platform,
+                action="account.connect",
+                target_type="account",
+                target_id=str(account.id),
+                detail_json=json.dumps(
+                    {"external_account_id": identity.external_account_id},
+                    sort_keys=True,
+                ),
+            )
+        )
         # Push subscriptions join the connect transaction (spec 04
         # section 2): a YouTube WebSub row plus its subscribe job, only
         # when a public callback base exists.
@@ -346,6 +371,22 @@ def _persist_bound_connection(
         account.last_error = None
         account.metadata_json = json.dumps({"raw": identity.raw, "scopes_source": "granted"})
         session.flush()
+        # The OAuth callback has no caller principal; the grant itself is
+        # the actor (spec 05 section 5).
+        session.add(
+            AuditLogEntry(
+                workspace_id=account.workspace_id,
+                actor_kind="oauth",
+                actor_id=account.platform,
+                action="account.connect",
+                target_type="account",
+                target_id=str(account.id),
+                detail_json=json.dumps(
+                    {"external_account_id": identity.external_account_id},
+                    sort_keys=True,
+                ),
+            )
+        )
         token_ref = str(account.token_ref)
     registry.token_store.store(token_ref, token)
     return None
@@ -442,14 +483,19 @@ def _require_slot(database: Database, settings: Settings, principal: Principal) 
         require_connected_account_slot(session, settings, principal.workspace_id)
 
 
-def _select_meta(oauth_states: OAuthStateService, state: str) -> dict[str, object] | None:
+def _select_record(oauth_states: OAuthStateService, state: str) -> OAuthState | None:
     record = oauth_states.peek(Platform.instagram, state=state)
     if record is None:
         return None
     meta = _state_meta(record)
     if meta.get("adapter") != "instagram_unified" or not meta.get("select"):
         return None
-    return meta
+    return record
+
+
+def _select_meta(oauth_states: OAuthStateService, state: str) -> dict[str, object] | None:
+    record = _select_record(oauth_states, state)
+    return _state_meta(record) if record is not None else None
 
 
 def _register_oauth_routes(
@@ -547,19 +593,24 @@ def _register_oauth_routes(
                 url=f"{web_base}/accounts?connected=instagram",
                 status_code=303,
             )
-        # Several accounts are assigned: hold the token under a temporary
-        # ref and let the owner pick through the select endpoints.
-        token_ref = registry.token_store.new_token_ref()
-        registry.token_store.store(token_ref, token)
+        # Several accounts are assigned: park the token on the state row,
+        # encrypted under the token-store cipher, and let the owner pick
+        # through the select endpoints. `account_tokens` cannot hold it: it
+        # is keyed by account, and none exists until the pick persists.
+        parked = (
+            registry.token_store.cipher()
+            .encrypt(json.dumps(serialize_token(token)).encode("utf-8"))
+            .decode("ascii")
+        )
         issued = oauth_states.issue(
             Platform.instagram,
             redirect_uri=record.redirect_uri,
             use_pkce=False,
+            token_ciphertext=parked,
             payload=json.dumps(
                 {
                     "adapter": "instagram_unified",
                     "select": True,
-                    "token_ref": token_ref,
                     "accounts": candidates,
                 }
             ),
@@ -593,10 +644,12 @@ def _register_oauth_routes(
                 )
 
             # Peek first: a pick the state never offered is rejected without
-            # consuming it, so the owner can still choose a valid account.
-            meta = _select_meta(oauth_states, payload.state)
-            if meta is None:
+            # consuming it, so the owner can still choose a valid account. The
+            # parked ciphertext rides the peeked record; consuming clears it.
+            record = _select_record(oauth_states, payload.state)
+            if record is None:
                 raise HTTPException(status_code=404, detail="no pending Instagram account pick")
+            meta = _state_meta(record)
             candidates = meta.get("accounts")
             accounts = (
                 [a for a in candidates if isinstance(a, dict)]
@@ -609,12 +662,18 @@ def _register_oauth_routes(
                     status_code=400,
                     detail="that Instagram account is not among the assigned ones",
                 )
+            parked = record.token_ciphertext
             try:
-                record = oauth_states.consume(Platform.instagram, state=payload.state)
+                oauth_states.consume(Platform.instagram, state=payload.state)
             except OAuthStateError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            token_ref = str(meta.get("token_ref") or "")
-            token = registry.token_store.load(token_ref) if token_ref else None
+            token: TokenSet | None = None
+            if parked:
+                try:
+                    plaintext = registry.token_store.cipher().decrypt(parked.encode("ascii"))
+                    token = deserialize_token(json.loads(plaintext.decode("utf-8")))
+                except (InvalidToken, ValueError, TypeError):
+                    token = None
             if token is None:
                 raise HTTPException(status_code=410, detail="the held token is gone; connect again")
             token.extra["user_id"] = chosen["id"]
@@ -633,11 +692,6 @@ def _register_oauth_routes(
                 return fail(exc.code)
             except ProviderError:
                 return fail("exchange_failed")
-            finally:
-                # The held ref was a temporary parking spot for the pick; the
-                # persisted connection stores its own token.
-                if token_ref:
-                    registry.token_store.delete(token_ref)
             return JSONResponse(
                 jsonable_encoder(
                     {"status": "connected", "account": _account_view(database, settings, account)}
@@ -909,29 +963,15 @@ def build_platform_router(
         payload: ConfirmedRequest,
         principal: Principal = Depends(get_principal),
     ) -> dict[str, object]:
-        account = _account_or_404(account_id, principal.workspace_id)
+        _account_or_404(account_id, principal.workspace_id)
         _require_active_instance(registry)
-        if account.token_ref:
-            token = registry.token_store.load(account.token_ref)
-            if token is not None:
-                try:
-                    registry.provider(Platform(account.platform)).revoke(token)
-                except ProviderError as exc:
-                    logger.warning(
-                        "token revoke failed for account %s: %s",
-                        account_id,
-                        exc.detail,
-                    )
-            registry.token_store.delete(account.token_ref)
         with database.session() as session:
             record = session.get(ConnectedAccount, account_id)
             if record is not None:
-                record.status = "disconnected"
-                record.token_ref = None
-                record.last_error = None
-                # WebSub subscriptions are cancelled and an unsubscribe job is
-                # enqueued in the same transaction (spec 04 section 2).
-                subscriptions.on_account_disconnected(session, queue, record)
+                # Revoke, drop the stored token, cancel pending sends and run
+                # the subscription teardown in one transaction (spec 04
+                # section 2, spec 05 section 4).
+                disconnect_account(session, registry, queue, record)
         return {"account_id": account_id, "status": "disconnected"}
 
     @router.post("/platforms/accounts/{account_id}/reconnect")

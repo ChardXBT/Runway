@@ -444,6 +444,7 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
     worker = build_worker(settings.model_copy(update={"adaptive_sync_enabled": False}), database)
     from runway.agent.webhooks import DELIVER_WEBHOOK_JOB, WebhookDispatcher
     from runway.posts.jobs import PUBLISHING_JOB_KINDS
+    from runway.workspaces.lifecycle import DELETE_WORKSPACE_JOB, EXPORT_WORKSPACE_JOB
 
     # Retention purge always runs; token upkeep renews Instagram long-lived
     # tokens whether or not scheduled sync is on (spec 04 section 2).
@@ -463,6 +464,8 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
             RENEW_SUBSCRIPTION_JOB,
             SUBSCRIBE_APPS_JOB,
             REFRESH_TOKEN_JOB,
+            EXPORT_WORKSPACE_JOB,
+            DELETE_WORKSPACE_JOB,
         }
         | PUBLISHING_JOB_KINDS
     )
@@ -644,7 +647,7 @@ def test_purge_removes_only_unreferenced_unheld_lock_files(
     from runway.jobs.retention import run_purge_job
     from runway.locks import exclusive_file_lock
     from runway.platforms.sync import sync_lock_path
-    from runway.platforms.tokens import TokenStore
+    from runway.platforms.tokens import FileTokenStore
 
     with database.session() as session:
         account = ConnectedAccount(
@@ -657,7 +660,7 @@ def test_purge_removes_only_unreferenced_unheld_lock_files(
         session.add(account)
         session.flush()
         live_id = account.id
-    refresh_dir = TokenStore(settings.resolved_data_dir / "secrets").refresh_lock_dir
+    refresh_dir = FileTokenStore(settings.resolved_data_dir / "secrets").refresh_lock_dir
     refresh_dir.mkdir(parents=True)
     for name in ("liveref", "goneref", "heldref"):
         (refresh_dir / f"{name}.lock").write_bytes(b"\0")

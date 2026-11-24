@@ -10,7 +10,7 @@ Two deletions ride the hourly `purge` job:
   `captured_at`), so no schema change is needed.
 - **The 7-day dead-account duty**: disconnect revokes at the platform,
   then this deletes the account's stored platform data (and its token,
-  through ``TokenStore.delete``) once the account has been
+  through ``FileTokenStore.delete``) once the account has been
   ``disconnected`` or ``needs_reauth`` - the revocation state - for more
   than 7 days.
 
@@ -53,7 +53,7 @@ from runway.jobs.retention import (
     run_purge_job,
 )
 from runway.platforms.base import TokenSet
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 
 NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -363,7 +363,7 @@ def test_a_disconnected_accounts_platform_data_dies_after_7_days(tmp_path: Path)
 
             removed = purge_dead_account_data(
                 session,
-                TokenStore(settings.resolved_data_dir / "secrets"),
+                FileTokenStore(settings.resolved_data_dir / "secrets"),
                 now=NOW,
             )
 
@@ -395,7 +395,7 @@ def test_a_recent_disconnect_keeps_its_data(tmp_path: Path) -> None:
 
             removed = purge_dead_account_data(
                 session,
-                TokenStore(settings.resolved_data_dir / "secrets"),
+                FileTokenStore(settings.resolved_data_dir / "secrets"),
                 now=NOW,
             )
 
@@ -409,7 +409,7 @@ def test_a_revoked_account_gets_the_same_deletion_path(tmp_path: Path) -> None:
     """needs_reauth is what platform-side revocation becomes (spec 05 §5)."""
     settings = _settings(tmp_path)
     database = initialize_database(settings)
-    token_store = TokenStore(settings.resolved_data_dir / "secrets")
+    token_store = FileTokenStore(settings.resolved_data_dir / "secrets")
     try:
         dead = _account(
             database,
@@ -485,7 +485,7 @@ def test_a_dead_accounts_webhook_events_die_with_its_subscriptions(tmp_path: Pat
 
             purge_dead_account_data(
                 session,
-                TokenStore(settings.resolved_data_dir / "secrets"),
+                FileTokenStore(settings.resolved_data_dir / "secrets"),
                 now=NOW,
             )
 
@@ -512,7 +512,7 @@ def test_runway_drafts_survive_the_dead_account_purge(tmp_path: Path) -> None:
 
             purge_dead_account_data(
                 session,
-                TokenStore(settings.resolved_data_dir / "secrets"),
+                FileTokenStore(settings.resolved_data_dir / "secrets"),
                 now=NOW,
             )
 
@@ -622,7 +622,7 @@ def test_a_dead_accounts_published_target_survives_the_purge(tmp_path: Path) -> 
 
             purge_dead_account_data(
                 session,
-                TokenStore(settings.resolved_data_dir / "secrets"),
+                FileTokenStore(settings.resolved_data_dir / "secrets"),
                 now=NOW,
             )
 

@@ -295,16 +295,18 @@ def test_every_scoped_table_is_covered_by_the_rls_migration() -> None:
     import importlib.util
     from pathlib import Path
 
-    migration = (
-        Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0021_row_level_security.py"
-    )
-    spec = importlib.util.spec_from_file_location("rls_migration", migration)
-    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
-    rls_tables = set(module.SCOPED_TABLES)
+    # Every table created with `workspace_id` joins the RLS set in the revision
+    # that creates it; each such revision declares its own SCOPED_TABLES.
+    versions = Path(__file__).resolve().parents[2] / "alembic" / "versions"
+    rls_tables: set[str] = set()
+    for name in ("0021_row_level_security.py", "0022_account_tokens.py"):
+        spec = importlib.util.spec_from_file_location(name.removesuffix(".py"), versions / name)
+        module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        rls_tables.update(module.SCOPED_TABLES)
     scoped_tables = {model.__tablename__ for model in scoped_models()}
     assert scoped_tables <= rls_tables, (
-        f"scoped tables missing from 0021_row_level_security: {scoped_tables - rls_tables}"
+        f"scoped tables missing RLS coverage: {scoped_tables - rls_tables}"
     )
 
 
