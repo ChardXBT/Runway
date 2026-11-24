@@ -1535,7 +1535,9 @@ class AccountToken(Base, WorkspaceOwned):
     nonce: Mapped[bytes] = mapped_column(LargeBinary)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     refresh_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Migration 0022 declares the same server default for the upgrade path;
+    # fresh databases get their DDL from `create_all`, so both must agree.
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]", server_default=sql_text("'[]'"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

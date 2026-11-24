@@ -533,6 +533,32 @@ def test_workspace_delete_requires_typing_the_slug_or_name(hosted: Hosted) -> No
     assert deleted_other.status_code == 202, deleted_other.text
 
 
+def test_audit_log_is_for_owners_and_approvers(hosted: Hosted) -> None:
+    """GET /api/v1/audit: owner and approver read it; viewer and editor cannot."""
+    owner = hosted.auth("user_a", "org_a")
+    hosted.client.get("/api/v1/workspace", headers=owner)
+    hosted.hook(membership_event("created", "org_a", "user_b"), "msg_b")
+    hosted.hook(membership_event("created", "org_a", "user_c"), "msg_c")
+    viewer = hosted.auth("user_b", "org_a", role="member")
+    hosted.client.get("/api/v1/workspace", headers=viewer)
+    promoted = hosted.auth("user_c", "org_a", role="member")
+    hosted.client.get("/api/v1/workspace", headers=promoted)
+    user_c = hosted.user_id("user_c")
+
+    assert hosted.client.get("/api/v1/audit", headers=owner).status_code == 200
+    _problem(hosted.client.get("/api/v1/audit", headers=viewer), 403, "scope_missing")
+    promoted_role = hosted.client.patch(
+        f"/api/v1/workspace/members/{user_c}", json={"role": "editor"}, headers=owner
+    )
+    assert promoted_role.status_code == 200
+    _problem(hosted.client.get("/api/v1/audit", headers=promoted), 403, "scope_missing")
+    promoted_role = hosted.client.patch(
+        f"/api/v1/workspace/members/{user_c}", json={"role": "approver"}, headers=owner
+    )
+    assert promoted_role.status_code == 200
+    assert hosted.client.get("/api/v1/audit", headers=promoted).status_code == 200
+
+
 def test_organization_and_user_deletion_revoke_memberships(hosted: Hosted) -> None:
     owner = hosted.auth("user_a", "org_a")
     workspace_id = hosted.client.get("/api/v1/workspace", headers=owner).json()["id"]

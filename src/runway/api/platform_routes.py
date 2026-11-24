@@ -299,6 +299,22 @@ def build_platform_router(
                 metadata["meta_user_id"] = meta_user_id
             account.metadata_json = json.dumps(metadata)
             session.flush()
+            # The OAuth callback has no caller principal; the grant itself is
+            # the actor (spec 05 section 5), same as on the bound path.
+            session.add(
+                AuditLogEntry(
+                    workspace_id=account.workspace_id,
+                    actor_kind="oauth",
+                    actor_id=account.platform,
+                    action="account.connect",
+                    target_type="account",
+                    target_id=str(account.id),
+                    detail_json=json.dumps(
+                        {"external_account_id": identity.external_account_id},
+                        sort_keys=True,
+                    ),
+                )
+            )
             # Push subscriptions join the connect transaction (spec 04
             # section 2): a YouTube WebSub row plus its subscribe job, only
             # when a public callback base exists.

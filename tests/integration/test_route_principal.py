@@ -177,8 +177,9 @@ HOSTED_ROUTES = {
     # Account disconnect: workspace-scoped lookup, accounts:manage; the only
     # accounts route hosted serves (spec 05 section 4).
     ("POST", "/api/v1/accounts/{account_id}/disconnect"),
-    # Compliance router: workspace delete/export and the audit list are
-    # workspace:admin, self-delete is require_person (spec 05 sections 4-5).
+    # Compliance router: workspace delete/export/download are
+    # workspace:admin, the audit list admits owners and approvers, and
+    # self-delete is require_person (spec 05 sections 4-5).
     ("DELETE", "/api/v1/workspace"),
     ("POST", "/api/v1/workspace/export"),
     ("GET", "/api/v1/workspace/exports/{export_id}"),

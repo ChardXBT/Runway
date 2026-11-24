@@ -18,9 +18,10 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import InvalidToken
 from pydantic import SecretStr, ValidationError
+from sqlalchemy import create_engine, text
 
 from runway.config import Settings
-from runway.db.base import Database
+from runway.db.base import Base, Database
 from runway.db.bootstrap import initialize_database
 from runway.db.models import ConnectedAccount, OAuthState
 from runway.platforms.base import TokenSet
@@ -437,6 +438,53 @@ def test_tokens_migrate_file_to_db_copies_bound_refs(
     loaded = db_store.load(bound_ref)
     assert loaded is not None and loaded.access_token == "access-abc"
     database.engine.dispose()
+
+
+def test_account_tokens_scopes_json_has_a_server_default(tmp_path: Path) -> None:
+    """A fresh schema gives `account_tokens.scopes_json` the DDL default `'[]'`.
+
+    Migration 0001 builds `account_tokens` through `Base.metadata.create_all`,
+    so the model alone decides a fresh database's column default; migration
+    0022 declares `server_default="[]"` for the upgrade path and the two must
+    agree. Without it a raw INSERT that skips the column dies on NOT NULL -
+    or, had it been nullable, stores NULL where readers expect a JSON list.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh.db'}")
+    try:
+        Base.metadata.create_all(engine)
+        with engine.begin() as conn:
+            ddl = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE name = 'account_tokens'")
+            ).scalar()
+            assert "DEFAULT '[]'" in str(ddl)
+            conn.execute(
+                text(
+                    "INSERT INTO workspaces (id, slug, name, created_at)"
+                    " VALUES (1, 'w', 'w', '2020-01-01 00:00:00')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO connected_accounts (id, workspace_id, platform,"
+                    " external_account_id, status, granted_scopes_json, metadata_json,"
+                    " connected_at, created_at, updated_at)"
+                    " VALUES (1, 1, 'youtube', 'UCx', 'connected', '[]', '{}',"
+                    " '2020-01-01 00:00:00', '2020-01-01 00:00:00', '2020-01-01 00:00:00')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO account_tokens (account_id, workspace_id, key_version,"
+                    " ciphertext, nonce, updated_at)"
+                    " VALUES (1, 1, 'v1', X'00', X'00', '2020-01-01 00:00:00')"
+                )
+            )
+            stored = conn.execute(
+                text("SELECT scopes_json FROM account_tokens WHERE account_id = 1")
+            ).scalar()
+            assert stored == "[]"
+    finally:
+        engine.dispose()
 
 
 def _account_id(database: Database, token_ref: str) -> int:

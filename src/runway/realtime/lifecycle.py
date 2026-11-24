@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from runway.auth.audit import record_audit
-from runway.db.models import ConnectedAccount, PublishJob
+from runway.db.models import AuditLogEntry, ConnectedAccount, PublishJob, utcnow
 from runway.events.log import record_event
 from runway.events.types import ACCOUNT_UPDATED
 from runway.jobs.queue import JOB_STATE_MACHINE, JobQueue, JobState
@@ -79,12 +79,19 @@ def disconnect_account(
     account: ConnectedAccount,
     *,
     actor: Principal | None = None,
+    actor_kind: str | None = None,
 ) -> dict[str, object]:
     """Detach one account's grant; the caller's session owns the commit.
 
     `revoke` reports the provider call: "revoked", "unsupported" (the
     provider has no remote revoke), "failed" (ProviderError, logged), or
     "no_token"/"missing" when there was nothing stored to revoke.
+
+    `actor` is the requesting principal when a person or key asked; a
+    platform-initiated disconnect (Meta's compliance callbacks) has no
+    principal, so it passes `actor_kind` - a free string on the audit row,
+    like the "oauth" actor the connect side writes. `actor` wins when both
+    are given.
     """
     revoke = revoke_and_delete_token(session, registry, account)
     cancelled = cancel_pending_account_jobs(session, account.id)
@@ -100,6 +107,21 @@ def disconnect_account(
             target_type="account",
             target_id=account.id,
             detail={"platform": account.platform, "revoke": revoke},
+        )
+    elif actor_kind is not None:
+        session.add(
+            AuditLogEntry(
+                workspace_id=account.workspace_id,
+                actor_kind=actor_kind,
+                actor_id=account.platform,
+                action="account.disconnect",
+                target_type="account",
+                target_id=str(account.id),
+                detail_json=json.dumps(
+                    {"platform": account.platform, "revoke": revoke}, sort_keys=True
+                ),
+                created_at=utcnow(),
+            )
         )
     record_event(
         session,
@@ -124,6 +146,7 @@ def purge_account_data(
     account: ConnectedAccount,
     *,
     marker: str,
+    actor_kind: str | None = None,
 ) -> dict[str, object]:
     """Erase what the workspace holds about one platform identity.
 
@@ -134,7 +157,7 @@ def purge_account_data(
     unique per request - the external id column is part of a unique
     constraint, so scrubbed rows each get their own placeholder.
     """
-    result = disconnect_account(session, registry, queue, account)
+    result = disconnect_account(session, registry, queue, account, actor_kind=actor_kind)
     account.external_account_id = f"purged:{marker}"
     account.handle = None
     account.display_name = None

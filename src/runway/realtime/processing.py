@@ -266,9 +266,16 @@ def _process_meta(
         event.account_id = account.id
         event.workspace_id = account.workspace_id
         if event.provider == META_DATA_DELETION_PROVIDER:
-            purge_account_data(session, registry, queue, account, marker=f"{event.id}:{account.id}")
+            purge_account_data(
+                session,
+                registry,
+                queue,
+                account,
+                marker=f"{event.id}:{account.id}",
+                actor_kind="platform",
+            )
         else:
-            disconnect_account(session, registry, queue, account)
+            disconnect_account(session, registry, queue, account, actor_kind="platform")
 
 
 def _publish_id(parsed: dict[str, Any]) -> str | None:

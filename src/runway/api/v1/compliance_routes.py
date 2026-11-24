@@ -17,6 +17,7 @@ a workspace with other members must hand over ownership first.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from datetime import datetime
 
@@ -81,6 +82,9 @@ class DeleteWorkspaceRequest(BaseModel):
     confirm: str
 
 
+_EXPORT_ID = re.compile(r"[0-9a-f]{16}")
+
+
 def _problem(code: ProblemCode, detail: str) -> Problem:
     return Problem.of(code, detail)
 
@@ -113,8 +117,14 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
         principal: Principal = Depends(get_principal),
         params: CursorParams = Depends(cursor_params),
     ) -> AuditPage:
-        """The workspace's audit log, newest first; admins only."""
-        require(principal, WORKSPACE_ADMIN)
+        """The workspace's audit log, newest first; owners and approvers.
+
+        The approver role has no workspace-admin scope (its grants stop at
+        release and reply), so the read is gated on role; the admin scope
+        stays sufficient so API keys keep the access they had.
+        """
+        if principal.role not in {"owner", "approver"} and WORKSPACE_ADMIN not in principal.scopes:
+            raise _problem(ProblemCode.SCOPE_MISSING, "the audit log is for owners and approvers")
         with database.session() as session:
             rows, next_cursor = paginate(
                 session,
@@ -220,6 +230,11 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
         the finished export job is retention-purged.
         """
         require(principal, WORKSPACE_ADMIN)
+        # The id doubles as a file path (`local`) and an object key
+        # (`hosted`); anything outside the issued 16-hex form can name
+        # neither, so it is a 404 before `export_path` is ever built.
+        if _EXPORT_ID.fullmatch(export_id) is None:
+            raise _problem(ProblemCode.NOT_FOUND, "no such export")
         path = export_path(settings, principal.workspace_id, export_id)
         if path.is_file():
             return FileResponse(

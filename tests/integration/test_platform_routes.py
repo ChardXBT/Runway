@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from runway.db import initialize_database
 from runway.db.base import Database
 from runway.db.models import (
     AccountMetricSnapshot,
+    AuditLogEntry,
     CommentRecord,
     ConnectedAccount,
     PlatformContent,
@@ -115,36 +117,53 @@ def test_oauth_connect_and_callback_happy_path(
         return original(self, platform)
 
     monkeypatch.setattr(ProviderRegistry, "provider", patched)
-    with TestClient(create_app(migrated(settings)), base_url="http://127.0.0.1:8000") as web:
-        connect = web.post("/api/platforms/youtube/connect")
-        assert connect.status_code == 200
-        payload = connect.json()
-        url_query = parse_qs(urlparse(payload["authorization_url"]).query)
-        assert url_query["state"] == [payload["state"]]
-        assert url_query["code_challenge_method"] == ["S256"]
-        assert url_query["code_challenge"]
+    database = Database(settings)
+    try:
+        with TestClient(create_app(migrated(settings)), base_url="http://127.0.0.1:8000") as web:
+            connect = web.post("/api/platforms/youtube/connect")
+            assert connect.status_code == 200
+            payload = connect.json()
+            url_query = parse_qs(urlparse(payload["authorization_url"]).query)
+            assert url_query["state"] == [payload["state"]]
+            assert url_query["code_challenge_method"] == ["S256"]
+            assert url_query["code_challenge"]
 
-        bad = web.get(
-            "/api/platforms/youtube/oauth/callback",
-            params={"code": "x", "state": "unknown-state"},
-            follow_redirects=False,
-        )
-        assert bad.status_code == 303
-        assert bad.headers["location"].endswith("/accounts?error=invalid_state")
+            bad = web.get(
+                "/api/platforms/youtube/oauth/callback",
+                params={"code": "x", "state": "unknown-state"},
+                follow_redirects=False,
+            )
+            assert bad.status_code == 303
+            assert bad.headers["location"].endswith("/accounts?error=invalid_state")
 
-        good = web.get(
-            "/api/platforms/youtube/oauth/callback",
-            params={"code": "auth-code", "state": payload["state"]},
-            follow_redirects=False,
-        )
-        assert good.status_code == 303
-        assert good.headers["location"].endswith("/accounts?connected=youtube")
+            good = web.get(
+                "/api/platforms/youtube/oauth/callback",
+                params={"code": "auth-code", "state": payload["state"]},
+                follow_redirects=False,
+            )
+            assert good.status_code == 303
+            assert good.headers["location"].endswith("/accounts?connected=youtube")
 
-        accounts = web.get("/api/platforms/accounts").json()
-        assert len(accounts) == 1
-        assert accounts[0]["platform"] == "youtube"
-        assert accounts[0]["external_account_id"] == "UCtest"
-        assert accounts[0]["status"] == "connected"
+            accounts = web.get("/api/platforms/accounts").json()
+            assert len(accounts) == 1
+            assert accounts[0]["platform"] == "youtube"
+            assert accounts[0]["external_account_id"] == "UCtest"
+            assert accounts[0]["status"] == "connected"
+
+            # The OAuth callback has no caller principal; the grant itself is
+            # the actor, on the ordinary connect path as on the bound path.
+            with database.session() as session:
+                audit = session.scalar(
+                    select(AuditLogEntry).where(AuditLogEntry.action == "account.connect")
+                )
+                assert audit is not None
+                assert audit.actor_kind == "oauth"
+                assert audit.actor_id == "youtube"
+                assert audit.target_type == "account"
+                assert audit.target_id == str(accounts[0]["id"])
+                assert json.loads(audit.detail_json) == {"external_account_id": "UCtest"}
+    finally:
+        database.engine.dispose()
 
 
 def test_oauth_callback_gates_standby_before_exchanging_the_code(

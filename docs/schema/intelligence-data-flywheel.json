@@ -508,7 +508,7 @@
             "type": "DATETIME"
           },
           {
-            "default": null,
+            "default": "'[]'",
             "name": "scopes_json",
             "nullable": false,
             "primary_key": 0,
@@ -14447,7 +14447,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "0b669c2d74bdc93f3c53cb67a7664dfcb99691568a2fc2b09bc60e33d4e7b68e",
+  "fingerprint": "48283588580f02b7b955f056fbf53fe5092089097865386770a24c0ed12c2f27",
   "migration": "0022_account_tokens",
   "table_count": 92
 }

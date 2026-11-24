@@ -59,29 +59,28 @@ def _index_names(table: str) -> set[str]:
     return {str(index["name"]) for index in _inspector().get_indexes(table)}
 
 
-ACCOUNT_TOKENS = sa.Table(
-    "account_tokens",
-    sa.MetaData(),
-    sa.Column(
-        "account_id",
-        sa.Integer(),
-        sa.ForeignKey("connected_accounts.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    sa.Column("workspace_id", sa.Integer(), sa.ForeignKey("workspaces.id"), nullable=False),
-    sa.Column("key_version", sa.String(length=20), nullable=False),
-    sa.Column("ciphertext", sa.LargeBinary(), nullable=False),
-    sa.Column("nonce", sa.LargeBinary(), nullable=False),
-    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
-    sa.Column("refresh_expires_at", sa.DateTime(timezone=True), nullable=True),
-    sa.Column("scopes_json", sa.Text(), nullable=False, server_default="[]"),
-    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-)
-
-
 def upgrade() -> None:
     if _offline() or "account_tokens" not in _table_names():
-        ACCOUNT_TOKENS.create(op.get_bind(), checkfirst=True)
+        # `op.create_table`, not a standalone `sa.Table`: a table built against
+        # a private `MetaData` cannot resolve its foreign keys when `create`
+        # emits the DDL (the post-downgrade re-upgrade hits exactly that).
+        op.create_table(
+            "account_tokens",
+            sa.Column("account_id", sa.Integer(), primary_key=True),
+            # `WorkspaceOwned` gives the model `server_default=text("1")`; the
+            # created table must carry the same bare-integer default or a
+            # re-upgraded schema drifts.
+            sa.Column("workspace_id", sa.Integer(), nullable=False, server_default=sa.text("1")),
+            sa.Column("key_version", sa.String(length=20), nullable=False),
+            sa.Column("ciphertext", sa.LargeBinary(), nullable=False),
+            sa.Column("nonce", sa.LargeBinary(), nullable=False),
+            sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("refresh_expires_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("scopes_json", sa.Text(), nullable=False, server_default="[]"),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+            sa.ForeignKeyConstraint(["account_id"], ["connected_accounts.id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"]),
+        )
     if _offline() or "ix_account_tokens_workspace_id" not in _index_names("account_tokens"):
         op.create_index("ix_account_tokens_workspace_id", "account_tokens", ["workspace_id"])
     if _offline() or "token_ciphertext" not in _column_names("oauth_states"):

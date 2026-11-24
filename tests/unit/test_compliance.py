@@ -233,6 +233,38 @@ def test_meta_deletion_matches_ig_id_or_the_app_scoped_meta_user_id(
             assert unknown.account_id is None
             assert unknown.error is None
             assert unknown.processed_at is not None
+
+            # The deauthorize path disconnects without the column scrub.
+            revived = ConnectedAccount(
+                workspace_id=1,
+                platform="instagram",
+                external_account_id="ig-revived",
+                status="connected",
+                metadata_json="{}",
+            )
+            session.add(revived)
+            session.flush()
+            deauth = _meta_event(session, "meta-deauthorize", "ig-revived")
+            _process_meta(session, database, settings, queue, deauth)
+            session.flush()
+            assert deauth.account_id == revived.id
+            assert revived.status == "disconnected"
+            assert revived.external_account_id == "ig-revived"
+
+            # Every Meta-initiated detach is audited: no caller principal
+            # exists on a compliance callback, so the platform is the actor.
+            rows = session.scalars(
+                select(AuditLogEntry).where(AuditLogEntry.action == "account.disconnect")
+            ).all()
+            assert len(rows) == 3
+            assert all(row.actor_kind == "platform" for row in rows)
+            assert all(row.actor_id == "instagram" for row in rows)
+            assert {row.target_id for row in rows} == {
+                str(direct.id),
+                str(unified.id),
+                str(revived.id),
+            }
+            assert all(json.loads(row.detail_json)["platform"] == "instagram" for row in rows)
     finally:
         database.engine.dispose()
 
@@ -524,6 +556,41 @@ def test_workspace_delete_route_refuses_the_local_profiles_workspace(
                 .where(PublishJob.kind == DELETE_WORKSPACE_JOB)
             )
             assert scheduled == 0
+    finally:
+        database.engine.dispose()
+
+
+def test_download_export_refuses_a_malformed_export_id(tmp_path: Path) -> None:
+    r"""An id outside the generated hex form is a 404 before any path is built.
+
+    The export id becomes a file path on `local` and an object key on
+    `hosted`; anything that is not the issued 16-lowercase-hex form can name
+    neither, so it must never reach either store. On Windows a backslash in
+    the id is a path separator - a `..\` segment climbs out of the workspace's
+    export directory - which the hex gate rejects before `export_path` is built.
+    """
+    settings = Settings(data_dir=tmp_path / "data")
+    database = initialize_database(settings)
+    # A file one directory up from ws1's exports: reachable as `..\escape`
+    # while the route builds paths by plain join.
+    escaped = settings.resolved_data_dir / "exports" / "escape.json"
+    escaped.parent.mkdir(parents=True, exist_ok=True)
+    escaped.write_text("{}", encoding="utf-8")
+    try:
+        with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
+            for bad in (
+                "not-hex",
+                "A" * 16,
+                "1" * 15,
+                "0" * 17,
+                "..%5Cescape",  # Windows traversal out of ws1's export dir
+                "escape%5C..%5C..%5Cescape",
+            ):
+                response = client.get(f"/api/v1/workspace/exports/{bad}")
+                assert response.status_code == 404, (bad, response.status_code, response.text)
+            # A well-formed but never-issued id is still a plain 404.
+            missing = client.get("/api/v1/workspace/exports/" + "0" * 16)
+            assert missing.status_code == 404
     finally:
         database.engine.dispose()
 
