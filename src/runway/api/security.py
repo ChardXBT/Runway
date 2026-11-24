@@ -18,11 +18,12 @@ that host gets the same refusal as every foreign host.
 The Host header is never proof that a request is local (recheck-20261123.md
 section 4): Tailscale Funnel preserves whatever Host the public client sent,
 which can be a loopback name. Edge traffic is therefore recognized by what a
-forwarder must add - ``Tailscale-Funnel-Request``, ``X-Forwarded-For``,
-``X-Forwarded-Host``, ``X-Forwarded-Proto``, ``Forwarded`` or ``X-Real-IP`` -
-or by the configured edge hostname itself, and it is served only on the
-allow-listed paths (with cookies and Authorization refused). Without
-``public_edge_url`` such traffic is refused entirely.
+forwarder must add - any ``X-Forwarded-*`` header, ``Forwarded``, ``Via``,
+``X-Real-IP``, ``True-Client-IP``, ``CF-Connecting-IP`` or
+``Tailscale-Funnel-Request`` - or by the configured edge hostname itself,
+and it is served only on the allow-listed paths (with cookies and
+Authorization refused). Without ``public_edge_url`` such traffic is refused
+entirely.
 """
 
 from __future__ import annotations
@@ -45,20 +46,22 @@ EDGE_OAUTH_CALLBACK = re.compile(r"^/api/platforms/[^/]+/oauth/callback$")
 # percent sign - banning "%" outright also kills multiply-encoded forms
 # like %252e that a single decode would re-arm.
 _EDGE_RAW_BANNED = (b"..", b"//", b"%")
-# A request carrying any of these arrived through a forwarder: it is edge
-# traffic no matter what Host it claims (recheck-20261123.md section 4 -
-# Tailscale Funnel preserves the client Host, marks the request with
+# A request carrying any of these - or any header starting with
+# EDGE_MARKER_PREFIX - arrived through a forwarder: it is edge traffic no
+# matter what Host it claims (recheck-20261123.md section 4 - Tailscale
+# Funnel preserves the client Host, marks the request with
 # Tailscale-Funnel-Request and overwrites X-Forwarded-For).
 EDGE_MARKER_HEADERS: frozenset[str] = frozenset(
     {
         "tailscale-funnel-request",
-        "x-forwarded-for",
-        "x-forwarded-host",
-        "x-forwarded-proto",
         "forwarded",
+        "via",
         "x-real-ip",
+        "true-client-ip",
+        "cf-connecting-ip",
     }
 )
+EDGE_MARKER_PREFIX = "x-forwarded-"
 
 
 def loopback_origins(port: int) -> list[str]:
@@ -80,10 +83,12 @@ def cross_site_refusal(headers: Headers, allowed_origins: frozenset[str]) -> str
 
 
 def _hostname(host_header: str) -> str:
+    """The Host name, normalized; a trailing dot is the same DNS name."""
     host = host_header.strip().casefold()
     if host.startswith("["):
         return host.split("]", 1)[0] + "]"
-    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    return name.rstrip(".")
 
 
 def _host_port(host_header: str) -> tuple[str, int | None]:
@@ -98,8 +103,8 @@ def _host_port(host_header: str) -> tuple[str, int | None]:
         return name + "]", int(port) if port.isdigit() else None
     if host.count(":") == 1:
         name, _, port = host.partition(":")
-        return name, int(port) if port.isdigit() else None
-    return host, None
+        return name.rstrip("."), int(port) if port.isdigit() else None
+    return host.rstrip("."), None
 
 
 def host_is_edge(host_header: str, edge_host: str | None, edge_port: int | None = None) -> bool:
@@ -167,11 +172,15 @@ class LocalRequestGuard:
         """True when the request is public edge traffic, whatever Host claims.
 
         The client controls Host (the funnel preserves it), so the edge is
-        recognized by the forwarding markers a reverse proxy adds - or by
+        recognized by the forwarding markers a reverse proxy adds - any
+        ``X-Forwarded-*`` name or one of the other proxy headers - or by
         the configured edge hostname itself, which covers a hypothetical
         marker-less forwarder.
         """
-        if any(marker in headers for marker in EDGE_MARKER_HEADERS):
+        names = {str(name).lower() for name in headers}
+        if any(
+            name.startswith(EDGE_MARKER_PREFIX) or name in EDGE_MARKER_HEADERS for name in names
+        ):
             return True
         return host_is_edge(headers.get("host", ""), self.edge_host, self.edge_port)
 

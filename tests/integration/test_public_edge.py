@@ -9,10 +9,11 @@ Authorization header are refused outright.
 
 The Host header is never proof of a local caller (recheck-20261123.md
 section 4): Tailscale Funnel preserves whatever Host the public client sent,
-which can be ``127.0.0.1``. Any forwarding marker - ``Tailscale-Funnel-Request``,
-``X-Forwarded-For``, ``X-Forwarded-Host``, ``X-Forwarded-Proto``, ``Forwarded``
-or ``X-Real-IP`` - makes the request edge traffic, restricted to the
-allow-list even when it arrives on a loopback Host.
+which can be ``127.0.0.1``. Any forwarding marker - every ``X-Forwarded-*``
+header, ``Forwarded``, ``Via``, ``X-Real-IP``, ``True-Client-IP``,
+``CF-Connecting-IP`` or ``Tailscale-Funnel-Request`` - makes the request
+edge traffic, restricted to the allow-list even when it arrives on a
+loopback Host.
 """
 
 from __future__ import annotations
@@ -232,12 +233,18 @@ def test_forwarding_markers_make_a_loopback_request_edge_traffic(
     assert (
         client.get("/api/settings", headers={"X-Forwarded-For": "203.0.113.7"}).status_code == 421
     )
-    # Every forwarding marker marks edge traffic, whatever its value.
+    # Every forwarding marker marks edge traffic, whatever its value -
+    # including every X-Forwarded-* name and the other proxy headers.
     for header in (
         "X-Forwarded-Host",
         "X-Forwarded-Proto",
+        "X-Forwarded-Port",
+        "X-Forwarded-Server",
         "Forwarded",
+        "Via",
         "X-Real-IP",
+        "True-Client-IP",
+        "CF-Connecting-IP",
     ):
         assert client.get("/api/settings", headers={header: "x"}).status_code == 421, header
 
@@ -367,3 +374,15 @@ def test_loopback_behaviour_is_unchanged(tmp_path: Path) -> None:
     # Loopback requests may still carry credentials - the refusal applies to
     # the edge host only.
     assert client.get("/api/settings", headers={"Authorization": "Bearer x"}).status_code == 200
+
+
+def test_a_fqdn_loopback_host_with_a_trailing_dot_is_still_loopback(tmp_path: Path) -> None:
+    """``localhost.`` is the absolute-DNS spelling of ``localhost`` - some
+    clients send it - so the loopback comparison strips a trailing dot."""
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="mock",
+    )
+    client = TestClient(create_app(settings), base_url="http://localhost:8000")
+    assert client.get("/health", headers={"Host": "localhost."}).status_code == 200
+    assert client.get("/api/settings", headers={"Host": "localhost."}).status_code == 200

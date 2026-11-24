@@ -14,11 +14,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from runway.config import Settings
@@ -29,9 +29,11 @@ from runway.db.models import (
     CommentRecord,
     ConnectedAccount,
     ContentMetricSnapshot,
+    DraftTarget,
     PlatformContent,
     PlatformSubscription,
     PublishJob,
+    ReplyDraft,
     WebhookEvent,
     utcnow,
 )
@@ -155,14 +157,19 @@ def purge_youtube_api_data(session: Session, *, now: datetime) -> int:
     """
     cutoff = now - YOUTUBE_DATA_RETENTION
     removed = 0
-    # Comments first: a stale comment dies by its own refresh instant.
+    # Comments first: a stale comment dies by its own refresh instant. A
+    # reply draft to it can never be sent once the comment is gone, so it
+    # dies first - reply_drafts.comment_id has no ON DELETE rule and the
+    # delete would otherwise fail on the FK.
+    doomed_comments = select(CommentRecord.id).where(
+        CommentRecord.platform == "youtube",
+        CommentRecord.last_seen_at < cutoff,
+    )
     removed += _rowcount(
-        session.execute(
-            delete(CommentRecord).where(
-                CommentRecord.platform == "youtube",
-                CommentRecord.last_seen_at < cutoff,
-            )
-        )
+        session.execute(delete(ReplyDraft).where(ReplyDraft.comment_id.in_(doomed_comments)))
+    )
+    removed += _rowcount(
+        session.execute(delete(CommentRecord).where(CommentRecord.id.in_(doomed_comments)))
     )
     youtube_content = select(PlatformContent.id).where(PlatformContent.platform == "youtube")
     doomed_content = select(PlatformContent.id).where(
@@ -204,6 +211,14 @@ def purge_youtube_api_data(session: Session, *, now: datetime) -> int:
             )
         )
     )
+    # Draft targets pointing at doomed platform content are Runway-authored
+    # rows: they keep their row, their state and their published URL. The
+    # published_content_id link is cleared first - it has no ON DELETE rule.
+    session.execute(
+        update(DraftTarget)
+        .where(DraftTarget.published_content_id.in_(doomed_content))
+        .values(published_content_id=None)
+    )
     removed += _rowcount(
         session.execute(delete(PlatformContent).where(PlatformContent.id.in_(doomed_content)))
     )
@@ -218,7 +233,8 @@ def purge_dead_account_data(session: Session, token_store: TokenStore, *, now: d
     section 5) once ``updated_at`` is more than 7 days old. A surviving
     token ref is deleted through the token store. The account row itself
     stays (it is the reconnect and audit record), and Runway-authored rows
-    - drafts, targets, proposals - are never touched.
+    - drafts, targets, proposals - are never touched. The webhook inbox
+    dies too: an account that no longer exists keeps no deliveries.
     """
     cutoff = now - DEAD_ACCOUNT_DATA_DELAY
     rows = session.execute(
@@ -232,13 +248,31 @@ def purge_dead_account_data(session: Session, token_store: TokenStore, *, now: d
         return 0
     removed = 0
     content_ids = select(PlatformContent.id).where(PlatformContent.account_id.in_(account_ids))
+    # Collected before the subscriptions are deleted: a raw delivery whose
+    # account was never resolved is reachable only through this link.
+    subscription_ids = select(PlatformSubscription.id).where(
+        PlatformSubscription.account_id.in_(account_ids)
+    )
     removed += _rowcount(
         session.execute(
             delete(ContentMetricSnapshot).where(ContentMetricSnapshot.content_id.in_(content_ids))
         )
     )
+    # A reply draft to a deleted comment can never be sent: it dies first
+    # (reply_drafts.comment_id has no ON DELETE rule).
+    comment_ids = select(CommentRecord.id).where(CommentRecord.account_id.in_(account_ids))
+    removed += _rowcount(
+        session.execute(delete(ReplyDraft).where(ReplyDraft.comment_id.in_(comment_ids)))
+    )
     removed += _rowcount(
         session.execute(delete(CommentRecord).where(CommentRecord.account_id.in_(account_ids)))
+    )
+    # Draft targets pointing at the account's content keep their row, their
+    # state and their published URL; only the link is cleared.
+    session.execute(
+        update(DraftTarget)
+        .where(DraftTarget.published_content_id.in_(content_ids))
+        .values(published_content_id=None)
     )
     removed += _rowcount(
         session.execute(delete(PlatformContent).where(PlatformContent.account_id.in_(account_ids)))
@@ -251,6 +285,18 @@ def purge_dead_account_data(session: Session, token_store: TokenStore, *, now: d
     removed += _rowcount(
         session.execute(
             delete(AccountMetricSnapshot).where(AccountMetricSnapshot.account_id.in_(account_ids))
+        )
+    )
+    # The webhook inbox dies with the account - before the subscriptions
+    # go, so subscription-linked deliveries are still found.
+    removed += _rowcount(
+        session.execute(
+            delete(WebhookEvent).where(
+                or_(
+                    WebhookEvent.account_id.in_(account_ids),
+                    WebhookEvent.subscription_id.in_(subscription_ids),
+                )
+            )
         )
     )
     removed += _rowcount(
@@ -272,12 +318,27 @@ def run_purge_job(database: Database, settings: Settings, _job: Job) -> None:
 
     token_store = TokenStore(settings.resolved_data_dir / "secrets")
     with database.session() as session:
-        keys = IdempotencyStore(database).purge_expired(session)
-        events = purge_expired_events(session)
-        webhook_events = purge_webhook_events(session)
-        jobs = purge_finished_jobs(session)
-        youtube_rows = purge_youtube_api_data(session, now=utcnow())
-        dead_account_rows = purge_dead_account_data(session, token_store, now=utcnow())
+        duties: list[tuple[str, Callable[[], int]]] = [
+            ("idempotency keys", lambda: IdempotencyStore(database).purge_expired(session)),
+            ("events", lambda: purge_expired_events(session)),
+            ("webhook events", lambda: purge_webhook_events(session)),
+            ("finished jobs", lambda: purge_finished_jobs(session)),
+            ("stale youtube rows", lambda: purge_youtube_api_data(session, now=utcnow())),
+            (
+                "dead-account rows",
+                lambda: purge_dead_account_data(session, token_store, now=utcnow()),
+            ),
+        ]
+        removed: dict[str, int] = {}
+        for name, duty in duties:
+            try:
+                # One savepoint per duty: a failing duty rolls back its own
+                # work only and can never starve the rest of the purge.
+                with session.begin_nested():
+                    removed[name] = duty()
+            except Exception:  # noqa: BLE001
+                removed[name] = 0
+                logger.exception("retention purge duty %r failed; continuing", name)
         accounts = session.execute(select(ConnectedAccount.id, ConnectedAccount.token_ref)).all()
     token_refs = {str(token_ref) for _id, token_ref in accounts if token_ref}
     sync_names = {sync_lock_path(settings, int(account_id)).stem for account_id, _ in accounts}
@@ -286,11 +347,11 @@ def run_purge_job(database: Database, settings: Settings, _job: Job) -> None:
     logger.info(
         "retention purge removed %s idempotency keys, %s events, %s webhook events, "
         "%s jobs, %s stale youtube rows, %s dead-account rows and %s lock files",
-        keys,
-        events,
-        webhook_events,
-        jobs,
-        youtube_rows,
-        dead_account_rows,
+        removed["idempotency keys"],
+        removed["events"],
+        removed["webhook events"],
+        removed["finished jobs"],
+        removed["stale youtube rows"],
+        removed["dead-account rows"],
         locks,
     )
