@@ -1522,6 +1522,12 @@ class OAuthState(Base, WorkspaceOwned):
     state: Mapped[str] = mapped_column(String(128), unique=True)
     code_verifier: Mapped[str | None] = mapped_column(Text)
     redirect_uri: Mapped[str] = mapped_column(Text)
+    # Why this flow was started: "connect" (a new or unbound account),
+    # "reconnect" (re-attach an existing account), "enable_publishing"
+    # (incremental consent for extra scopes). A bound flow also records the
+    # account it was issued for; its callback refuses a different channel.
+    purpose: Mapped[str] = mapped_column(String(30), default="connect", server_default="connect")
+    account_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

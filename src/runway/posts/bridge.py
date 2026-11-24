@@ -15,12 +15,19 @@ from pathlib import Path
 from runway.auth.key_limits import acquire_cap_lock
 from runway.auth.principal import POSTS_WRITE, Principal, require
 from runway.auth.problems import Problem, ProblemCode
-from runway.db.models import CandidateImage, Channel, MediaAsset, Proposal
+from runway.db.models import (
+    CandidateImage,
+    Channel,
+    ConnectedAccount,
+    MediaAsset,
+    Proposal,
+)
 from runway.domain.enums import ProposalStatus
+from runway.posts.lineup_guard import browser_path_claimed, channel_conflict
 from runway.posts.media_service import MediaService
 from runway.posts.schemas import CrossPostRequest, PostCreate, PostOut
 from runway.posts.service import PostService, post_view
-from runway.posts.types import PostSource
+from runway.posts.types import PostSource, TargetPostType
 
 # "Accepted into the Lineup": approved, or anything after it except cancelled.
 ACCEPTED_PROPOSAL_STATUSES = frozenset(
@@ -65,6 +72,31 @@ class ProposalBridge:
                     ProblemCode.INVALID_STATE,
                     "only a proposal accepted into the Lineup can be posted elsewhere",
                 )
+            # Never both (spec 08 section 2): a proposal the browser publisher
+            # already sent to its Community tab cannot also go out by the
+            # posts API. Channel identity fails closed.
+            api_targets = [
+                target
+                for target in data.targets
+                if target.post_type == TargetPostType.YOUTUBE_POST.value
+            ]
+            if api_targets and browser_path_claimed(session, proposal):
+                for target in api_targets:
+                    account = (
+                        session.get(ConnectedAccount, target.account_id)
+                        if target.account_id is not None
+                        else None
+                    )
+                    if channel_conflict(
+                        account.external_account_id if account is not None else None,
+                        self.posts.settings.publisher_channel_id,
+                    ):
+                        raise Problem.of(
+                            ProblemCode.INVALID_STATE,
+                            "this proposal is already on its way to its Community tab "
+                            "through the browser publisher; the posts API cannot "
+                            "publish it a second time",
+                        )
             media_ids: list[int] = []
             candidate = session.get(CandidateImage, proposal.candidate_image_id)
             image = session.get(MediaAsset, candidate.media_asset_id) if candidate else None

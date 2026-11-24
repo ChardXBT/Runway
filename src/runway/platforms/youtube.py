@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -42,9 +43,11 @@ REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 API_BASE = "https://www.googleapis.com/youtube/v3"
 ANALYTICS_BASE = "https://youtubeanalytics.googleapis.com/v2"
 
+# Every component is optional (YouTube sends "PT1M" for a one-minute video),
+# but at least one must be present and "T" must be followed by a time part.
 _DURATION_PATTERN = re.compile(
-    r"^P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?"
-    r"(?P<seconds>\d+(?:\.\d+)?)S)?$"
+    r"^P(?!$)(?:(?P<days>\d+)D)?(?:T(?=\d)(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?"
+    r"(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?$"
 )
 SHORT_MAX_SECONDS = 180
 
@@ -90,6 +93,8 @@ def _as_str_or_none(value: object) -> str | None:
 
 class YouTubeProvider(PlatformProvider):
     platform = Platform.youtube
+    # videoCategories.list barely changes; one cached read per region per day.
+    CATEGORY_CACHE_TTL = timedelta(hours=24)
 
     def __init__(
         self,
@@ -105,6 +110,7 @@ class YouTubeProvider(PlatformProvider):
         # attaches (QuotaRecorder).
         self.quota_calls: list[tuple[str, str, int]] = []
         self.quota_recorder = quota_recorder
+        self._categories_cache: dict[str, tuple[datetime, list[dict[str, Any]]]] = {}
 
     def capabilities(self) -> list[CapabilityEntry]:
         return capability_matrix(
@@ -130,12 +136,17 @@ class YouTubeProvider(PlatformProvider):
         state: str,
         redirect_uri: str,
         code_challenge: str | None,
+        extra_scopes: Sequence[str] = (),
     ) -> str:
+        # The base scopes are sent again alongside the incremental ones so the
+        # consent screen re-asks for them; a deselected base scope can then be
+        # re-granted instead of silently breaking reads (spec 08 section 1).
+        scopes = list(dict.fromkeys([*self._scopes(), *extra_scopes]))
         params: dict[str, str] = {
             "client_id": self.settings.youtube_client_id or "",
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": " ".join(self._scopes()),
+            "scope": " ".join(scopes),
             "access_type": "offline",
             "prompt": "consent",
             "include_granted_scopes": "true",
@@ -313,6 +324,39 @@ class YouTubeProvider(PlatformProvider):
         return self._json_or_raise(response), units
 
     # --------------------------------------------------------------- identity
+
+    def list_video_categories(
+        self, token: TokenSet, *, region_code: str = "US"
+    ) -> list[dict[str, Any]]:
+        """Assignable `videoCategories.list` entries for one region, cached (spec 08 §2)."""
+        now = datetime.now(UTC)
+        cached = self._categories_cache.get(region_code)
+        if cached is not None and cached[0] > now:
+            return [dict(item) for item in cached[1]]
+        data, _ = self._api_get(
+            token,
+            f"{API_BASE}/videoCategories",
+            {"part": "snippet", "regionCode": region_code},
+            method="videoCategories.list",
+        )
+        items: list[dict[str, Any]] = []
+        raw_items = data.get("items")
+        for entry in raw_items if isinstance(raw_items, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            snippet = _as_dict(entry.get("snippet"))
+            category_id = str(entry.get("id") or "")
+            if not category_id:
+                continue
+            items.append(
+                {
+                    "id": category_id,
+                    "title": str(snippet.get("title") or ""),
+                    "assignable": bool(snippet.get("assignable", True)),
+                }
+            )
+        self._categories_cache[region_code] = (now + self.CATEGORY_CACHE_TTL, items)
+        return [dict(item) for item in items]
 
     def fetch_identity(self, token: TokenSet) -> AccountIdentity:
         data, _ = self._api_get(

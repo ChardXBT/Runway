@@ -14,6 +14,7 @@ from runway.db.models import MediaAssetV2
 from runway.mediastore import LocalDiskStore, MediaStore, R2Config, R2Store
 from runway.mediastore import validate as validate_probe
 from runway.mediastore.probe import ProbeResult
+from runway.platforms.limits import YOUTUBE_POST_IMAGE, YOUTUBE_POST_IMAGE_TYPES
 from runway.platforms.publisher import Issue
 from runway.posts.types import TargetPostType, platform_of
 
@@ -22,9 +23,8 @@ from runway.posts.types import TargetPostType, platform_of
 _VALIDATED_AS: dict[TargetPostType, str] = {
     TargetPostType.TIKTOK_DRAFT: TargetPostType.TIKTOK_VIDEO.value,
 }
-YOUTUBE_POST_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
-YOUTUBE_POST_IMAGE_MAX_BYTES = 16 * 1024 * 1024
-YOUTUBE_POST_ASPECT = (2 / 5, 5 / 2)
+YOUTUBE_POST_IMAGE_MAX_BYTES = YOUTUBE_POST_IMAGE.max_size_bytes
+YOUTUBE_POST_ASPECT = (YOUTUBE_POST_IMAGE.min_aspect, YOUTUBE_POST_IMAGE.max_aspect)
 _YOUTUBE_POST_SOURCE = "YouTube posts.imageUpload, read 2026-11-22"
 
 
@@ -92,7 +92,7 @@ def _youtube_post_issues(asset: MediaAssetV2, probe: ProbeResult) -> list[Issue]
         )
     aspect = probe.aspect_ratio
     low, high = YOUTUBE_POST_ASPECT
-    if aspect is not None and not low <= aspect <= high:
+    if aspect is not None and low is not None and high is not None and not (low <= aspect <= high):
         issues.append(
             Issue(
                 "error",

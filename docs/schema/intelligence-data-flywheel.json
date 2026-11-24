@@ -8380,6 +8380,13 @@
         "columns": [
           {
             "default": null,
+            "name": "account_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
             "name": "code_verifier",
             "nullable": true,
             "primary_key": 0,
@@ -8419,6 +8426,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "VARCHAR(20)"
+          },
+          {
+            "default": "'connect'",
+            "name": "purpose",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(30)"
           },
           {
             "default": null,
@@ -14326,7 +14340,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "8065101ee2ba110ef5553f234f0b35ffdfa93510bbd447ff9e3e7e3a75277ae6",
-  "migration": "0019_agent_interface",
+  "fingerprint": "78b796a11f56b14043f93fa44af863550e5589257621539f2e7647f1981f82a6",
+  "migration": "0020_youtube_publishing",
   "table_count": 91
 }

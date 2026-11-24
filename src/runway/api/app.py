@@ -19,13 +19,13 @@ from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
-from runway.api.v1.accounts_routes import build_accounts_router
 from runway.api.v1.approvals_routes import build_approvals_router
 from runway.api.v1.errors import install_problem_handlers
 from runway.api.v1.events_routes import build_events_router
 from runway.api.v1.keys_routes import build_keys_router
 from runway.api.v1.media_routes import build_media_router
 from runway.api.v1.posts_routes import build_cross_post_router, build_posts_router
+from runway.api.v1.sync_status_routes import build_sync_status_router
 from runway.api.v1.webhooks_routes import build_webhooks_router
 from runway.api.workspace_routes import build_workspace_router
 from runway.auth.audit import AgentAuditMiddleware
@@ -214,7 +214,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Signature-authenticated platform webhooks (spec 04 section 2) and the
         # per-account sync status; local only until tenancy covers them.
         application.include_router(build_hooks_router(database, active_settings))
-        application.include_router(build_accounts_router(database, active_settings))
+        application.include_router(build_sync_status_router(database, active_settings))
         # Agent interface (spec 06): keys, approvals and outbound webhooks; local
         # only until tenancy proves these routes isolated on Postgres too.
         application.include_router(build_keys_router(database, active_settings))
@@ -235,6 +235,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         application.state.post_service = post_service
         application.state.media_service = media_service
+        # Account-scoped v1 routes (spec 08): incremental publishing consent
+        # and YouTube categories. Local only, like the OAuth callback they
+        # feed into; hosted gets them when the tenancy work scopes the
+        # platform tables per workspace.
+        from runway.api.v1.accounts_routes import build_accounts_router
+
+        application.include_router(build_accounts_router(database, active_settings))
         application.include_router(build_posts_router(post_service))
         application.include_router(build_media_router(media_service))
         application.include_router(

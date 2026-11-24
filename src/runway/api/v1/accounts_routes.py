@@ -1,93 +1,174 @@
-"""`GET /api/v1/accounts/{id}/sync-status` (spec 04 section 5, RT2 part D).
+"""`/api/v1/accounts/{id}`: incremental publishing consent (spec 08 section 1).
 
-The Accounts page's freshness panel: every sync scope's last outcome and next
-due time, whether a platform push subscription is live, today's provider
-quota use, and whether the adaptive scheduler is enabled.
+`POST /api/v1/accounts/{id}/publishing/enable` starts an incremental OAuth
+flow that adds the upload scope (and the posts scope when the pilot flag is
+on) to a connected account. The state row is bound to the account, so the
+shared `/api/platforms/{platform}/oauth/callback` refuses to attach a token
+whose channel differs (the wrong-channel guard), and stores the scopes the
+response actually granted.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import re
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from runway.api.v1.router import build_v1_router
-from runway.auth.principal import ACCOUNTS_READ, Principal, get_principal, require
+from runway.auth.principal import (
+    ACCOUNTS_MANAGE,
+    ACCOUNTS_READ,
+    Principal,
+    get_principal,
+    require,
+)
 from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import AccountSyncState, ConnectedAccount, PlatformSubscription
-from runway.platforms.base import iso_utc
-from runway.realtime.quota import provider_quota_summary
-from runway.realtime.schedule import SCOPES
+from runway.db.models import ConnectedAccount
+from runway.platforms.base import (
+    AuthorizationExpired,
+    ProviderError,
+    RateLimited,
+    safe_error_summary,
+)
+from runway.platforms.capabilities import YOUTUBE_ENGAGE_SCOPE, Platform
+from runway.platforms.oauth import OAuthStateService
+from runway.platforms.publish_capability import YOUTUBE_UPLOAD_SCOPE
+from runway.platforms.registry import ProviderRegistry
+from runway.platforms.tokens import pkce_challenge
+from runway.platforms.youtube import YouTubeProvider
+
+_REGION = re.compile(r"^[A-Za-z]{2}$")
 
 
-def _aware(moment: datetime | None) -> datetime | None:
-    if moment is None:
-        return None
-    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+def _problem(code: ProblemCode, detail: str) -> Problem:
+    return Problem.of(code, detail)
 
 
-def _scope_entry(state: AccountSyncState | None) -> dict[str, object]:
-    if state is None:
-        return {
-            "last_run_at": None,
-            "last_status": None,
-            "last_error": None,
-            "next_run_at": None,
-            "boosted_until": None,
-            "source": "poll",
-        }
-    return {
-        "last_run_at": iso_utc(_aware(state.last_run_at)),
-        "last_status": state.last_status,
-        "last_error": state.last_error,
-        "next_run_at": iso_utc(_aware(state.next_run_at)),
-        "boosted_until": iso_utc(_aware(state.boosted_until)),
-        "source": state.source or "poll",
-    }
+def _account(session: Session, principal: Principal, account_id: int) -> ConnectedAccount:
+    account = session.get(ConnectedAccount, account_id)
+    if account is None or account.workspace_id != principal.workspace_id:
+        raise _problem(ProblemCode.NOT_FOUND, "this account does not exist")
+    session.expunge(account)
+    return account
 
 
 def build_accounts_router(database: Database, settings: Settings) -> APIRouter:
     router = build_v1_router(tags=["accounts"], prefix="/accounts")
+    registry = ProviderRegistry(database, settings)
+    oauth_states = OAuthStateService(database)
 
-    @router.get("/{account_id}/sync-status")
-    def sync_status(
+    @router.post("/{account_id}/publishing/enable")
+    def enable_publishing(
+        account_id: int, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
+        """The incremental-consent URL for this account's missing scopes."""
+        require(principal, ACCOUNTS_MANAGE)
+        with database.session() as session:
+            account = _account(session, principal, account_id)
+        platform = Platform(account.platform)
+        if platform is not Platform.youtube:
+            raise _problem(
+                ProblemCode.VALIDATION_FAILED,
+                f"publishing enable for {platform.value} is not built yet",
+            )
+        if settings.platform_provider == "mock":
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "mock provider mode has no OAuth; its accounts publish in mock mode",
+            )
+        provider = registry.provider(platform)
+        if not isinstance(provider, YouTubeProvider):
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "publishing enable is unavailable for this provider",
+            )
+        if not provider.configured():
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "YouTube OAuth is not configured; set the client credentials",
+            )
+        extra = [YOUTUBE_UPLOAD_SCOPE]
+        # youtube.force-ssl only when the build can use the posts API; asking
+        # for it otherwise buys the consent screen a scary scope for nothing.
+        if settings.youtube_posts_api_access:
+            extra.append(YOUTUBE_ENGAGE_SCOPE)
+        redirect_uri = registry.redirect_uri(platform)
+        issued = oauth_states.issue(
+            platform,
+            redirect_uri=redirect_uri,
+            use_pkce=True,
+            purpose="enable_publishing",
+            account_id=account_id,
+            workspace_id=principal.workspace_id,
+        )
+        authorization_url = provider.authorization_url(
+            state=issued.state,
+            redirect_uri=redirect_uri,
+            code_challenge=(pkce_challenge(issued.code_verifier) if issued.code_verifier else None),
+            extra_scopes=extra,
+        )
+        return {
+            "authorization_url": authorization_url,
+            "state": issued.state,
+            "requested_scopes": extra,
+        }
+
+    @router.get("/{account_id}/youtube/categories")
+    def youtube_categories(
         account_id: int,
+        region: str = "US",
         principal: Principal = Depends(get_principal),
     ) -> dict[str, object]:
-        """Per-scope sync freshness, push status and today's quota use."""
+        """Assignable `videoCategories.list` entries for the target settings UI.
+
+        Cached by the provider for a day per region (spec 08 section 2).
+        """
         require(principal, ACCOUNTS_READ)
+        if not _REGION.fullmatch(region):
+            raise _problem(ProblemCode.VALIDATION_FAILED, "region must be a two-letter region code")
         with database.session() as session:
-            account = session.get(ConnectedAccount, account_id)
-            # Another workspace's account is a 404, never a 403 that
-            # confirms it exists.
-            if account is None or int(account.workspace_id) != principal.workspace_id:
-                raise Problem.of(ProblemCode.NOT_FOUND, "no such account")
-            states = session.scalars(
-                select(AccountSyncState).where(AccountSyncState.account_id == account.id)
-            ).all()
-            by_scope = {state.scope: state for state in states}
-            push_enabled = (
-                session.scalar(
-                    select(PlatformSubscription.id)
-                    .where(
-                        PlatformSubscription.account_id == account.id,
-                        PlatformSubscription.state == "active",
-                    )
-                    .limit(1)
-                )
-                is not None
+            account = _account(session, principal, account_id)
+        platform = Platform(account.platform)
+        if platform is not Platform.youtube:
+            raise _problem(
+                ProblemCode.VALIDATION_FAILED,
+                "categories are a YouTube account feature",
             )
-            quota = provider_quota_summary(session, str(account.platform), settings)
-        return {
-            "account_id": int(account.id),
-            "platform": str(account.platform),
-            "adaptive_sync_enabled": settings.adaptive_sync_enabled,
-            "push_enabled": push_enabled,
-            "quota": quota,
-            "scopes": [{"scope": scope, **_scope_entry(by_scope.get(scope))} for scope in SCOPES],
-        }
+        if not account.token_ref:
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "the account has no stored token; reconnect it",
+            )
+        provider = registry.provider(platform)
+        if not isinstance(provider, YouTubeProvider):
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "categories are unavailable for this provider",
+            )
+        try:
+            token = registry.fresh_token(platform, account.token_ref)
+            items = provider.list_video_categories(token, region_code=region.upper())
+        except AuthorizationExpired as exc:
+            # needs_reauth: the read capability is not ready until the owner
+            # reconnects the account.
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "the YouTube account must be re-authorized; reconnect it",
+            ) from exc
+        except RateLimited as exc:
+            raise Problem.of(
+                ProblemCode.RATE_LIMITED,
+                safe_error_summary(exc),
+                headers={"Retry-After": "60"},
+            ) from exc
+        except ProviderError as exc:
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                safe_error_summary(exc),
+            ) from exc
+        return {"items": items, "region": region.upper()}
 
     return router

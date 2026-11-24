@@ -29,6 +29,7 @@ FactLabel = Literal["official", "community", "unverified", "inference", "decisio
 PostType = Literal[
     "youtube_video",
     "youtube_short",
+    "youtube_post",
     "instagram_reel",
     "instagram_image",
     "instagram_carousel",
@@ -451,6 +452,27 @@ TIKTOK_PHOTO = ImageLimits(
     read_on=RESEARCH_READ_ON,
 )
 
+# YouTube Community-post images (`posts.imageUpload`, pilot since 2026-11-16).
+# Not in IMAGE_LIMITS: `gif` has no whitelisted demuxer, and posts/media.py
+# applies these rules itself for the youtube_post post type.
+YOUTUBE_POST_IMAGE = ImageLimits(
+    post_type="youtube_post",
+    platform=Platform.youtube,
+    formats=frozenset({"jpeg", "png", "gif", "webp"}),
+    max_size_bytes=16 * MiB,
+    min_width=None,
+    max_width=None,
+    max_side=None,
+    min_aspect=2 / 5,
+    max_aspect=5 / 2,
+    recommended_aspect=None,
+    source=f"{_RECHECK} §1; {_SPEC_08} §2",
+    read_on=RECHECK_READ_ON,
+)
+
+# The MIME forms of YOUTUBE_POST_IMAGE.formats, for content-type checks.
+YOUTUBE_POST_IMAGE_TYPES = frozenset(f"image/{fmt}" for fmt in YOUTUBE_POST_IMAGE.formats)
+
 INSTAGRAM_CAROUSEL = CarouselLimits(
     min_children=2,
     max_children=20,
@@ -631,6 +653,20 @@ YOUTUBE_DAILY_UPLOADS = RateLimit(
     read_on=RESEARCH_READ_ON,
 )
 
+# `posts.insert` costs 1 unit against a separate "Post Uploads" bucket; its
+# ceiling is not public, so Runway's own guard keeps the count low.
+YOUTUBE_POST_QUOTA = RateLimit(
+    platform=Platform.youtube,
+    name="posts.insert",
+    max_count=5,
+    window=timedelta(days=1),
+    scope="per connected channel (Runway guard); the pilot bucket is separate from videos.insert",
+    note="1 'Post Uploads' unit per insert; five posts per channel per Pacific day stays under it",
+    source=f"{_RECHECK} §1; {_SPEC_08} §2",
+    read_on=RECHECK_READ_ON,
+    label="decision",
+)
+
 INSTAGRAM_DAILY_POSTS = RateLimit(
     platform=Platform.instagram,
     name="media_publish",
@@ -713,6 +749,7 @@ TIKTOK_STATUS_FETCH_RATE = RateLimit(
 
 DAILY_PUBLISH_LIMITS: tuple[RateLimit, ...] = (
     YOUTUBE_DAILY_UPLOADS,
+    YOUTUBE_POST_QUOTA,
     INSTAGRAM_DAILY_POSTS,
     INSTAGRAM_DAILY_CONTAINERS,
     TIKTOK_DAILY_DIRECT_POSTS,

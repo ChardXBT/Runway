@@ -609,3 +609,16 @@ def test_0019_downgrade_leaves_a_table_it_did_not_create(tmp_path: Path) -> None
     with engine.connect() as connection:
         assert connection.execute(text("SELECT note FROM webhook_endpoints")).all() == [("keep",)]
     engine.dispose()
+
+
+def test_0020_offline_downgrade_emits_both_oauth_states_drops(tmp_path: Path) -> None:
+    """`--sql` mode cannot inspect; the drops must be emitted unconditionally."""
+    settings = Settings(data_dir=tmp_path / "pg")
+    config = _config(settings)
+    config.set_main_option("sqlalchemy.url", "postgresql://runway@localhost/runway")
+    buffer = io.StringIO()
+    config.output_buffer = buffer
+    command.downgrade(config, "0020_youtube_publishing:0019_agent_interface", sql=True)
+    sql = buffer.getvalue()
+    assert "ALTER TABLE oauth_states DROP COLUMN account_id" in sql
+    assert "ALTER TABLE oauth_states DROP COLUMN purpose" in sql

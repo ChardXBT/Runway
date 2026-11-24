@@ -390,3 +390,15 @@ def test_exchange_code_falls_back_to_requested_scopes_when_omitted() -> None:
         "https://www.googleapis.com/auth/youtube.readonly",
         "https://www.googleapis.com/auth/yt-analytics.readonly",
     ]
+
+
+def test_parse_iso8601_duration_without_a_seconds_part() -> None:
+    # YouTube omits zero components: a one-minute Short is "PT1M".
+    assert parse_iso8601_duration("PT1M") == 60
+    assert parse_iso8601_duration("PT1H") == 3600
+    assert parse_iso8601_duration("PT2H5M") == 7500
+    assert parse_iso8601_duration("P1DT2H") == 93600
+    assert parse_iso8601_duration("P1D") == 86400
+    assert parse_iso8601_duration("PT") is None
+    assert parse_iso8601_duration("P") is None
+    assert parse_iso8601_duration("1M") is None
