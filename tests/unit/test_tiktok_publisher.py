@@ -493,6 +493,20 @@ def test_direct_preflight_rechecks_the_creator_options(
     assert "privacy_not_offered" in _errors(direct.preflight(public.ctx))
 
 
+def test_direct_preflight_refuses_an_empty_privacy_options_list(
+    direct: TikTokDirectPublisher, fake: FakeTikTok
+) -> None:
+    # No options at all means there is no valid choice, not a pass.
+    fake.creator["privacy_level_options"] = []
+    ctx = Ctx(
+        fake,
+        post_type="tiktok_video",
+        publisher="tiktok_direct",
+        settings={"privacy_level": "SELF_ONLY"},
+    )
+    assert "privacy_not_offered" in _errors(direct.preflight(ctx.ctx))
+
+
 def test_direct_preflight_blocks_interactions_the_creator_disabled(
     direct: TikTokDirectPublisher, fake: FakeTikTok
 ) -> None:

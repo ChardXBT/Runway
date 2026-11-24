@@ -579,7 +579,7 @@ class TikTokDirectPublisher(_TikTokPublisherBase):
                     field="privacy_level",
                 )
             )
-        elif info.privacy_level_options and str(privacy) not in info.privacy_level_options:
+        elif not info.privacy_level_options or str(privacy) not in info.privacy_level_options:
             issues.append(
                 Issue(
                     "error",
