@@ -130,7 +130,7 @@ class ProviderRegistry:
                 # Stored before the lock is released, so the next waiter
                 # re-reads the new token set instead of refreshing again.
                 self.token_store.store(token_ref, refreshed)
-                self._store_granted_scopes(token_ref, refreshed.scopes)
+                self._persist_granted_scopes(platform, token_ref, refreshed.scopes)
                 return refreshed
         except TokenRefreshBusy as exc:
             raise ProviderError(
@@ -138,19 +138,25 @@ class ProviderRegistry:
                 retryable=True,
             ) from exc
 
-    def _store_granted_scopes(self, token_ref: str, scopes: list[str]) -> None:
-        """Persist the scopes the token response reported, on the owning account.
+    def _persist_granted_scopes(
+        self, platform: Platform, token_ref: str, scopes: list[str]
+    ) -> None:
+        """Record the scopes a refresh response reports on the owning account.
 
         Spec 08 section 1: after every token exchange and every refresh the
         granted scopes are stored; the publishing capability is derived from
-        them, so it recomputes itself. When the response carries no `scope`
-        the provider falls back to the token's own set, which keeps the stored
-        set unchanged.
+        them, so it recomputes itself. A provider can widen or narrow the
+        grant on any exchange or refresh, so the stored set always mirrors
+        what the platform last confirmed. The lookup filters by platform as
+        well as token ref, so one provider's response can never rewrite
+        another platform's account.
         """
-        wanted = sorted({str(scope) for scope in scopes if str(scope)})
         with self.database.session() as session:
             account = session.scalar(
-                select(ConnectedAccount).where(ConnectedAccount.token_ref == token_ref)
+                select(ConnectedAccount).where(
+                    ConnectedAccount.token_ref == token_ref,
+                    ConnectedAccount.platform == platform.value,
+                )
             )
             if account is None:
                 return
@@ -158,9 +164,15 @@ class ProviderRegistry:
                 stored = json.loads(account.granted_scopes_json or "[]")
             except ValueError:
                 stored = []
-            if sorted(stored) == wanted:
+            if stored == scopes:
                 return
-            account.granted_scopes_json = json.dumps(wanted)
+            account.granted_scopes_json = json.dumps(scopes)
+            try:
+                metadata = json.loads(account.metadata_json or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            metadata["scopes_source"] = "granted"
+            account.metadata_json = json.dumps(metadata)
 
     def platforms(self) -> list[Platform]:
         return list(Platform)

@@ -172,9 +172,15 @@ def _enrich_token(
     return token.model_copy(update={"extra": extra})
 
 
-def build_platform_router(database: Database, settings: Settings) -> APIRouter:
+def build_platform_router(
+    database: Database,
+    settings: Settings,
+    *,
+    registry: ProviderRegistry | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["platforms"], dependencies=[Depends(get_principal)])
-    registry = ProviderRegistry(database, settings)
+    if registry is None:
+        registry = ProviderRegistry(database, settings)
     queue = JobQueue(database)
     oauth_states = OAuthStateService(database)
     sync_service = SyncService(database, settings, registry)
@@ -297,9 +303,12 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         """Attach the token to the exact account a bound state was issued for.
 
         Returns the redirect's error short-code on refusal. The identity check
-        (spec 08 section 1): the channel the token belongs to must equal the
-        account it was issued for; a consent-screen account switch never
-        attaches someone else's channel.
+        (spec 08 section 1): the platform identity the token belongs to must
+        equal the account it was issued for. The comparison is generic -
+        each provider's `fetch_identity` reports its canonical identity
+        (YouTube channel id, TikTok open_id, Instagram user id) as
+        `external_account_id` - so a consent-screen account switch never
+        attaches someone else's grant, on any platform.
         """
         with database.session() as session:
             account = session.get(ConnectedAccount, record_account_id)
@@ -430,7 +439,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             )
             if record.account_id is not None:
                 # A bound flow (reconnect, enable_publishing) must attach to
-                # the exact account it was issued for, channel id included.
+                # the exact account it was issued for, identity included.
                 refusal = _persist_bound_connection(
                     parsed,
                     record.account_id,

@@ -111,8 +111,8 @@ Direct adapters and the scopes that enable them:
 | `instagram_image` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |
 | `instagram_carousel` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |
 | `instagram_story` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |
-| `tiktok_video` | `tiktok_direct` | no (assisted only) | `video.publish` |
-| `tiktok_draft` | `tiktok_inbox` | no (assisted only) | `video.upload` |
+| `tiktok_video` | `tiktok_direct` | yes | `video.publish` |
+| `tiktok_draft` | `tiktok_inbox` | yes | `video.upload` |
 
 State once the direct adapter is installed, for a connected account:
 

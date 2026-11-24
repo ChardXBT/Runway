@@ -14,7 +14,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from runway.config import Settings
-from runway.db import Database
+from runway.db import Database, initialize_database
 from runway.operations import instance_lease
 from runway.operations.instance_lease import (
     Lease,
@@ -195,7 +195,7 @@ def test_a_machine_without_the_lease_cannot_refresh_or_write_tokens(tmp_path: Pa
     )
     TokenStore.from_settings(active).store("ref", expiring)
 
-    standby_registry = ProviderRegistry(cast(Database, None), standby)
+    standby_registry = ProviderRegistry(initialize_database(standby), standby)
     standby_provider = _CountingProvider()
     standby_registry.set_provider(Platform.tiktok, standby_provider)  # type: ignore[arg-type]
     with pytest.raises(StandbyError):
@@ -210,7 +210,7 @@ def test_a_machine_without_the_lease_cannot_refresh_or_write_tokens(tmp_path: Pa
     loaded = standby_registry.token_store.load("ref")
     assert loaded is not None and loaded.access_token == "old-access"
 
-    active_registry = ProviderRegistry(cast(Database, None), active)
+    active_registry = ProviderRegistry(initialize_database(active), active)
     active_provider = _CountingProvider()
     active_registry.set_provider(Platform.tiktok, active_provider)  # type: ignore[arg-type]
     refreshed = active_registry.fresh_token(Platform.tiktok, "ref")

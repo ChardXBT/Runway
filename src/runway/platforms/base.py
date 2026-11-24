@@ -109,12 +109,16 @@ class ProviderError(Exception):
         self,
         detail: str,
         *,
+        code: str | None = None,
         retryable: bool = False,
         status: int | None = None,
         delivery_unknown: bool = False,
     ) -> None:
         super().__init__(detail)
         self.detail = detail
+        # The platform's machine-readable error code (TikTok's `error.code`,
+        # such as `spam_risk_too_many_posts`), when one was returned.
+        self.code = code
         self.retryable = retryable
         self.status = status
         # True when the request may have reached the platform before the

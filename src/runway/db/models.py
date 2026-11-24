@@ -1525,7 +1525,7 @@ class OAuthState(Base, WorkspaceOwned):
     # Why this flow was started: "connect" (a new or unbound account),
     # "reconnect" (re-attach an existing account), "enable_publishing"
     # (incremental consent for extra scopes). A bound flow also records the
-    # account it was issued for; its callback refuses a different channel.
+    # account it was issued for; its callback refuses a different identity.
     purpose: Mapped[str] = mapped_column(String(30), default="connect", server_default="connect")
     account_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

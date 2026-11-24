@@ -949,6 +949,16 @@ class PostService:
                 )
             if has_errors(snap.issues):
                 raise _issues_problem("this target has errors to fix first", snap.issues)
+            if target.platform == Platform.tiktok.value and snap.post_type and snap.settings:
+                # TikTok's mandatory screen ends in an express consent; the
+                # release echoes the exact line the dialog showed (spec 08 §4).
+                notice = release_notice(snap.post_type, snap.settings)
+                if notice and data.consent != notice:
+                    raise _problem(
+                        ProblemCode.VALIDATION_FAILED,
+                        "repeat the consent text shown for this release",
+                        errors=[{"code": "consent_echo_required", "field": "consent"}],
+                    )
             if target.planned_at is None:
                 raise _problem(
                     ProblemCode.VALIDATION_FAILED,

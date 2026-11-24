@@ -235,10 +235,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         application.state.post_service = post_service
         application.state.media_service = media_service
-        # Account-scoped v1 routes (spec 08): incremental publishing consent
-        # and YouTube categories. Local only, like the OAuth callback they
-        # feed into; hosted gets them when the tenancy work scopes the
-        # platform tables per workspace.
+        # Account-scoped v1 routes (spec 08): incremental publishing consent,
+        # YouTube categories and the TikTok mandatory screen's fresh
+        # creator-info read (spec 08 section 1, section 4). Local only, like
+        # the OAuth callback they feed into; hosted gets them when the
+        # tenancy work scopes the platform tables per workspace.
         from runway.api.v1.accounts_routes import build_accounts_router
 
         application.include_router(build_accounts_router(database, active_settings))
