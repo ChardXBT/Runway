@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -32,6 +33,8 @@ from runway.platforms.capabilities import (
     capability_matrix,
 )
 from runway.realtime.quota import YOUTUBE_METHOD_COSTS, QuotaCallRecorder
+
+logger = logging.getLogger(__name__)
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -279,7 +282,13 @@ class YouTubeProvider(PlatformProvider):
         bucket, units = YOUTUBE_METHOD_COSTS.get(method, ("default", 1))
         self.quota_calls.append((method, bucket, units))
         if self.quota_recorder is not None:
-            self.quota_recorder(method, bucket, units)
+            try:
+                self.quota_recorder(method, bucket, units)
+            except Exception:  # noqa: BLE001
+                # The platform call already spent the quota; bookkeeping
+                # must never make it look failed (a "failed" reply would be
+                # posted twice).
+                logger.warning("quota recording failed for %s", method, exc_info=True)
         return units
 
     def _api_get(

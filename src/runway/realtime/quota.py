@@ -16,12 +16,16 @@ sync scopes defer by one hour.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from runway.config import Settings
@@ -40,6 +44,8 @@ from runway.realtime import schedule
 # YouTube's quota resets at midnight Pacific (spec 04 section 3; research
 # youtube.md section 1).
 PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
+
+logger = logging.getLogger(__name__)
 
 QUOTA_BUDGET_ERROR = "quota budget reached"
 INSTAGRAM_USAGE_THRESHOLD = 80.0
@@ -116,6 +122,15 @@ def next_pacific_reset(now: datetime) -> datetime:
 # ------------------------------------------------------------- unit recording
 
 
+def _upsert_insert(dialect: str) -> Callable[..., Any] | None:
+    """The dialect's upsert-capable insert, or None where it does not exist."""
+    if dialect == "sqlite":
+        return sqlite_insert
+    if dialect == "postgresql":
+        return postgresql_insert
+    return None
+
+
 def record_units(
     session: Session,
     provider: str,
@@ -124,7 +139,31 @@ def record_units(
     *,
     day: date,
 ) -> QuotaUsage:
-    """Add `units` to the (provider, bucket, day) row; the caller commits."""
+    """Add `units` to the (provider, bucket, day) row; the caller commits.
+
+    The insert-or-add is one atomic dialect upsert: two sessions recording
+    the same key can never duplicate-insert on `uq_quota_usage_day` - the
+    loser adds its units onto the committed row.
+    """
+    moment = utcnow()
+    upsert = _upsert_insert(session.get_bind().dialect.name)
+    if upsert is not None:
+        statement = upsert(QuotaUsage).values(
+            provider=provider,
+            bucket=bucket,
+            day=day,
+            units_used=units,
+            updated_at=moment,
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=["provider", "bucket", "day"],
+            set_={
+                "units_used": QuotaUsage.units_used + statement.excluded.units_used,
+                "updated_at": moment,
+            },
+        )
+        return session.execute(statement.returning(QuotaUsage)).scalar_one()
+    # Dialects without an upsert keep the read-modify-write form.
     row = session.scalar(
         select(QuotaUsage).where(
             QuotaUsage.provider == provider,
@@ -137,7 +176,7 @@ def record_units(
         session.add(row)
         session.flush()
     row.units_used += units
-    row.updated_at = utcnow()
+    row.updated_at = moment
     return row
 
 
@@ -178,8 +217,20 @@ class QuotaRecorder:
         self.provider = provider
 
     def __call__(self, method: str, bucket: str, units: int) -> None:  # noqa: ARG002
-        with self.database.session() as session:
-            record_units(session, self.provider, bucket, units, day=pacific_day(utcnow()))
+        try:
+            with self.database.session() as session:
+                record_units(session, self.provider, bucket, units, day=pacific_day(utcnow()))
+        except Exception:  # noqa: BLE001
+            # Bookkeeping rides on a call that already happened; a ledger
+            # failure must never propagate into the provider and make a
+            # successful platform call look failed.
+            logger.warning(
+                "could not record %s quota units for %s %s",
+                units,
+                self.provider,
+                bucket,
+                exc_info=True,
+            )
 
 
 # ---------------------------------------------------------------- the budget

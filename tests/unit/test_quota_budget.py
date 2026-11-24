@@ -10,10 +10,12 @@ never blocked. Instagram defers an hour when its usage headers pass 80%.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 from sqlalchemy import select
 
 from runway.config import Settings
@@ -45,6 +47,7 @@ from runway.realtime.quota import (
     enforce_youtube_budget,
     next_pacific_reset,
     pacific_day,
+    record_units,
     record_youtube_call,
     sync_budget_units,
     used_units,
@@ -259,6 +262,91 @@ def test_the_quota_recorder_persists_rows(tmp_path: Path) -> None:
         assert used_units(database, "youtube", "default", day=today) == 51
     finally:
         database.engine.dispose()
+
+
+def test_two_sessions_recording_the_same_key_both_succeed_and_the_units_add_up(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The (provider, bucket, day) row is an atomic insert-or-add.
+
+    A second session whose read raced the first commit believes no row
+    exists. Read-then-write inserted a duplicate and died on
+    uq_quota_usage_day; the upsert adds onto the committed row instead.
+    """
+    day = pacific_day(START)
+    first = database.session_factory()
+    try:
+        record_units(first, "youtube", "default", 5, day=day)
+        first.commit()
+    finally:
+        first.close()
+    second = database.session_factory()
+    try:
+        # The stale read: the second session selected before the first
+        # commit landed, so it believes the key is free.
+        monkeypatch.setattr(second, "scalar", lambda *args, **kwargs: None)
+        record_units(second, "youtube", "default", 3, day=day)
+        second.commit()
+    finally:
+        second.close()
+    assert used_units(database, "youtube", "default", day=day) == 8
+
+
+def test_a_recording_failure_is_logged_at_warning_and_never_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Bookkeeping must not fail the platform call it rode in on."""
+    settings = Settings(data_dir=tmp_path / "data")
+    database = initialize_database(settings)
+    try:
+        recorder = QuotaRecorder(database)
+
+        def broken_session() -> None:
+            raise RuntimeError("ledger down")
+
+        monkeypatch.setattr(database, "session", broken_session)
+        # caplog's handler lives on the root logger, which an earlier
+        # configure_logging() call may have cleared; attach it to the
+        # module logger so this test does not depend on run order.
+        quota_logger = logging.getLogger("runway.realtime.quota")
+        quota_logger.addHandler(caplog.handler)
+        try:
+            with caplog.at_level(logging.WARNING, logger="runway.realtime.quota"):
+                recorder("videos.list", "default", 1)
+        finally:
+            quota_logger.removeHandler(caplog.handler)
+        assert "quota" in caplog.text.lower()
+    finally:
+        database.engine.dispose()
+
+
+def test_a_failing_quota_recorder_does_not_fail_a_posted_reply(tmp_path: Path) -> None:
+    """The reply is already public once the POST returns; a ledger error
+    after that must not make it look failed (the caller would retry and
+    post a duplicate)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"id": "reply-1"})
+        return httpx.Response(200, json={"items": [{"id": "reply-1"}]})
+
+    def broken(method: str, bucket: str, units: int) -> None:
+        raise RuntimeError("ledger down")
+
+    provider = YouTubeProvider(
+        Settings(data_dir=tmp_path / "data", inbox_replies_enabled=True),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        quota_recorder=broken,
+    )
+    result = provider.reply_to_comment(
+        TokenSet(access_token="token"), comment_external_id="c1", text="hi"
+    )
+    assert result.external_id == "reply-1"
+    # The in-memory record still charged both calls the provider made.
+    assert provider.quota_calls == [
+        ("comments.insert", "default", 50),
+        ("comments.list", "default", 1),
+    ]
 
 
 def test_the_registry_attaches_a_quota_recorder(settings: Settings, database: Database) -> None:
