@@ -33,7 +33,12 @@ from sqlalchemy.orm import Session
 from runway.api.security import host_is_edge
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import PlatformSubscription, WebhookEvent, utcnow
+from runway.db.models import (
+    DEFAULT_WORKSPACE_ID,
+    PlatformSubscription,
+    WebhookEvent,
+    utcnow,
+)
 from runway.jobs.queue import JobQueue
 from runway.realtime import PROCESS_WEBHOOK_JOB
 
@@ -223,6 +228,7 @@ def _store(
     body: bytes,
     signature_ok: bool,
     subscription_id: int | None,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
     content_type: str | None,
     source: str,
 ) -> bool:
@@ -260,6 +266,7 @@ def _store(
             session,
             PROCESS_WEBHOOK_JOB,
             idempotency_key=f"webhook:{event.id}",
+            workspace_id=workspace_id,
             payload={"event_id": int(event.id)},
         )
     return True
@@ -301,7 +308,10 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
         challenge = request.query_params.get("hub.challenge")
         if topic is None or challenge is None:
             raise HTTPException(status_code=404)
-        with database.session() as session:
+        # Signed webhook traffic is system code: the platform signature is the
+        # authentication and the subscription's workspace is resolved, not
+        # assumed. `database.session()` would demand a request context.
+        with database.system_session() as session:
             subscription = _subscription_or_404(session, subscription_id, callback_token)
             if subscription.topic != topic:
                 raise HTTPException(status_code=404)
@@ -338,7 +348,7 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
         source = _source(request, edge_host, edge_port)
         if not limiter.allow(("youtube", source)):
             return JSONResponse({"detail": "rate limited"}, status_code=429)
-        with database.session() as session:
+        with database.system_session() as session:
             subscription = _subscription_or_404(session, subscription_id, callback_token)
             signature_ok = _verify_websub(
                 subscription.hub_secret,
@@ -352,6 +362,7 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
                 body=body,
                 signature_ok=signature_ok,
                 subscription_id=subscription.id,
+                workspace_id=subscription.workspace_id,
                 content_type=request.headers.get("content-type"),
                 source=source,
             )
@@ -381,7 +392,7 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
             request.headers.get("x-hub-signature-256"),
             body,
         )
-        with database.session() as session:
+        with database.system_session() as session:
             _store(
                 session,
                 queue,
@@ -409,7 +420,7 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
             request.headers.get("tiktok-signature"),
             body,
         )
-        with database.session() as session:
+        with database.system_session() as session:
             _store(
                 session,
                 queue,

@@ -150,7 +150,8 @@ def _guard_release(request: Request, principal: Principal) -> None:
         # Without the database neither the target nor the policy is known.
         raise Problem.of(ProblemCode.SCOPE_MISSING, "release cannot be authorized here")
     target_id = _target_id(request)
-    with database.session() as session:
+    # Runs inside get_principal, before the request's workspace context dep.
+    with database.session(workspace_id=principal.workspace_id) as session:
         platform: str | None = None
         if target_id is not None:
             platform = session.scalar(

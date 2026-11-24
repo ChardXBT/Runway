@@ -50,12 +50,14 @@ def _apply(
     database: Database, mirror: IdentityMirror, parsed: ParsedDelivery, delivery_id: str
 ) -> str:
     try:
-        with database.session() as session:
+        # Signature-authenticated system code: the mirror may create the
+        # workspace it then joins, so no request workspace binding exists.
+        with database.system_session() as session:
             return mirror.apply(session, parsed, delivery_id)
     except IntegrityError:
         # A concurrent delivery of the same id won the unique insert; or two
         # events raced on a new user or member row. Either way, re-check.
-        with database.session() as session:
+        with database.system_session() as session:
             return mirror.apply(session, parsed, delivery_id)
 
 

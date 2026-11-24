@@ -135,7 +135,8 @@ class SyncService:
         """
         cutoff = datetime.now(UTC) - STALE_RUN_AGE
         marked = 0
-        with self.database.session() as session:
+        # Startup sweep across every workspace's runs.
+        with self.database.system_session() as session:
             runs = session.scalars(select(SyncRun).where(SyncRun.status == "running")).all()
             for run in runs:
                 started = run.started_at
@@ -1112,7 +1113,8 @@ class PlatformSyncScheduler:
 
     def produce(self, now: datetime) -> None:
         slot = self._slot(now)
-        with self.database.session() as session:
+        # Producer sweep: scans every workspace's connected accounts.
+        with self.database.system_session() as session:
             accounts = session.execute(
                 select(ConnectedAccount.id, ConnectedAccount.workspace_id).where(
                     ConnectedAccount.status == "connected"

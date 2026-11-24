@@ -46,8 +46,15 @@ def _has_sqlite_foreign_key(
     column: str,
     referred_table: str,
 ) -> bool:
-    rows = op.get_bind().exec_driver_sql(f'PRAGMA foreign_key_list("{table}")').mappings()
-    return any(row["from"] == column and row["table"] == referred_table for row in rows)
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        rows = bind.exec_driver_sql(f'PRAGMA foreign_key_list("{table}")').mappings()
+        return any(row["from"] == column and row["table"] == referred_table for row in rows)
+    return any(
+        referred_table == foreign_key["referred_table"]
+        and column in foreign_key["constrained_columns"]
+        for foreign_key in sa.inspect(bind).get_foreign_keys(table)
+    )
 
 
 def upgrade() -> None:

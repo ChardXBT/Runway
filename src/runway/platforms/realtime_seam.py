@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from runway.db.base import Database
 from runway.db.models import DraftTarget, utcnow
@@ -51,7 +52,7 @@ def boost(database: Database | None, account_id: int, scope: str, minutes: float
 
 def on_publish_event(
     event_type: str,
-    database: Database | None = None,
+    session: Session | None = None,
     *,
     publish_id: str | None = None,
     account_id: int | None = None,
@@ -63,30 +64,31 @@ def on_publish_event(
     `publish_id` is the id the video init call returned; it is stored on the
     target as `external_id` when the upload finishes. Returns True when a
     target was found and nudged, False when the event matched nothing.
+
+    `session` is the caller's workspace-bound session: the seam joins its
+    transaction instead of opening a nested one (which deadlocked on SQLite's
+    single writer and bypassed the caller's workspace binding).
     """
-    if database is None:
+    if session is None:
         return False
-    with database.session() as session:
-        target = session.get(DraftTarget, target_id) if target_id is not None else None
-        if target is None and publish_id:
-            target = session.scalar(
-                select(DraftTarget).where(DraftTarget.external_id == publish_id)
-            )
-        if target is None:
-            logger.info(
-                "publish event %s matched no target (publish_id=%s account_id=%s)",
-                event_type,
-                publish_id,
-                account_id,
-            )
-            return False
-        enqueue_in(
-            session,
-            POLL_PROCESSING_JOB,
-            idempotency_key=free_key(session, f"poll:{target.id}:webhook:{event_type}"),
-            run_at=utcnow(),
-            workspace_id=target.workspace_id,
-            target_id=target.id,
-            payload={"via": "webhook", "event": event_type},
+    target = session.get(DraftTarget, target_id) if target_id is not None else None
+    if target is None and publish_id:
+        target = session.scalar(select(DraftTarget).where(DraftTarget.external_id == publish_id))
+    if target is None:
+        logger.info(
+            "publish event %s matched no target (publish_id=%s account_id=%s)",
+            event_type,
+            publish_id,
+            account_id,
         )
-        return True
+        return False
+    enqueue_in(
+        session,
+        POLL_PROCESSING_JOB,
+        idempotency_key=free_key(session, f"poll:{target.id}:webhook:{event_type}"),
+        run_at=utcnow(),
+        workspace_id=target.workspace_id,
+        target_id=target.id,
+        payload={"via": "webhook", "event": event_type},
+    )
+    return True

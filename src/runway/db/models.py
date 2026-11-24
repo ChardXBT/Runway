@@ -46,6 +46,21 @@ class WorkspaceOwned:
         )
 
 
+class WorkspaceScoped(WorkspaceOwned):
+    """Marker mixin: this model's rows belong to `workspace_id`, enforced.
+
+    Combines the `WorkspaceOwned` tenant column with the phase-P7 app-layer
+    contract: every workspace-bound session filters reads to its workspace
+    (`with_loader_criteria`), refuses foreign-workspace writes
+    (`before_flush`) and, on Postgres, mirrors the binding with
+    `SET LOCAL app.workspace_id` so row-level security applies the same rule.
+    Models that carry a `workspace_id` column but are deliberately NOT scoped
+    - the publish-job claim bucket, the pre-resolution webhook inbox,
+    directory tables like workspace members - do not use this mixin; see
+    `runway.db.workspace.UNSCOPED_WORKSPACE_TABLES`.
+    """
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -53,7 +68,7 @@ class TimestampMixin:
     )
 
 
-class Channel(Base, WorkspaceOwned, TimestampMixin):
+class Channel(Base, WorkspaceScoped, TimestampMixin):
     __tablename__ = "channels"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1484,7 +1499,7 @@ class IntelligenceExperiment(Base):
 # Creator platforms
 
 
-class ConnectedAccount(Base, WorkspaceOwned, TimestampMixin):
+class ConnectedAccount(Base, WorkspaceScoped, TimestampMixin):
     __tablename__ = "connected_accounts"
     __table_args__ = (
         UniqueConstraint(
@@ -1514,7 +1529,7 @@ class ConnectedAccount(Base, WorkspaceOwned, TimestampMixin):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class OAuthState(Base, WorkspaceOwned):
+class OAuthState(Base, WorkspaceScoped):
     __tablename__ = "oauth_states"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1533,7 +1548,7 @@ class OAuthState(Base, WorkspaceOwned):
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class ContentGroup(Base, WorkspaceOwned):
+class ContentGroup(Base, WorkspaceScoped):
     __tablename__ = "content_groups"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1542,7 +1557,7 @@ class ContentGroup(Base, WorkspaceOwned):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class PlatformContent(Base, WorkspaceOwned):
+class PlatformContent(Base, WorkspaceScoped):
     __tablename__ = "platform_content"
     __table_args__ = (
         UniqueConstraint("account_id", "external_id", name="uq_platform_content_external"),
@@ -1575,7 +1590,7 @@ class PlatformContent(Base, WorkspaceOwned):
     raw_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class ContentMetricSnapshot(Base, WorkspaceOwned):
+class ContentMetricSnapshot(Base, WorkspaceScoped):
     __tablename__ = "content_metric_snapshots"
     __table_args__ = (
         Index("ix_content_metric_snapshots_content_captured", "content_id", "captured_at"),
@@ -1587,7 +1602,7 @@ class ContentMetricSnapshot(Base, WorkspaceOwned):
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class AccountMetricSnapshot(Base, WorkspaceOwned):
+class AccountMetricSnapshot(Base, WorkspaceScoped):
     __tablename__ = "account_metric_snapshots"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1601,7 +1616,7 @@ class AccountMetricSnapshot(Base, WorkspaceOwned):
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class AccountMetricDay(Base, WorkspaceOwned):
+class AccountMetricDay(Base, WorkspaceScoped):
     __tablename__ = "account_metric_days"
     __table_args__ = (
         UniqueConstraint("account_id", "day", "metric", name="uq_account_metric_day"),
@@ -1616,7 +1631,7 @@ class AccountMetricDay(Base, WorkspaceOwned):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class CommentRecord(Base, WorkspaceOwned):
+class CommentRecord(Base, WorkspaceScoped):
     __tablename__ = "comment_records"
     __table_args__ = (
         UniqueConstraint("account_id", "external_id", name="uq_comment_record_external"),
@@ -1646,7 +1661,7 @@ class CommentRecord(Base, WorkspaceOwned):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class ReplyDraft(Base, WorkspaceOwned):
+class ReplyDraft(Base, WorkspaceScoped):
     __tablename__ = "reply_drafts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1657,7 +1672,7 @@ class ReplyDraft(Base, WorkspaceOwned):
     )
 
 
-class PlatformAction(Base, WorkspaceOwned):
+class PlatformAction(Base, WorkspaceScoped):
     __tablename__ = "platform_actions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1678,7 +1693,7 @@ class PlatformAction(Base, WorkspaceOwned):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class SyncRun(Base, WorkspaceOwned):
+class SyncRun(Base, WorkspaceScoped):
     __tablename__ = "sync_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1693,7 +1708,7 @@ class SyncRun(Base, WorkspaceOwned):
     error_summary: Mapped[str | None] = mapped_column(Text)
 
 
-class SyncCursor(Base, WorkspaceOwned):
+class SyncCursor(Base, WorkspaceScoped):
     __tablename__ = "sync_cursors"
     __table_args__ = (UniqueConstraint("account_id", "scope", name="uq_sync_cursor_scope"),)
 
@@ -1706,7 +1721,7 @@ class SyncCursor(Base, WorkspaceOwned):
     )
 
 
-class ContentDraft(Base, WorkspaceOwned, TimestampMixin):
+class ContentDraft(Base, WorkspaceScoped, TimestampMixin):
     """A post (spec 03 section 1). The table keeps its historical name."""
 
     __tablename__ = "content_drafts"
@@ -1729,7 +1744,7 @@ class ContentDraft(Base, WorkspaceOwned, TimestampMixin):
     created_by: Mapped[str | None] = mapped_column(String(200))
 
 
-class DraftTarget(Base, WorkspaceOwned):
+class DraftTarget(Base, WorkspaceScoped):
     """One post going to one account (spec 03 section 1).
 
     `state` is the declared target machine's column. `status` is its legacy
@@ -1777,7 +1792,7 @@ class DraftTarget(Base, WorkspaceOwned):
 # ledger, per-account publisher choice and the publishing pause switch.
 
 
-class MediaAssetV2(Base, WorkspaceOwned):
+class MediaAssetV2(Base, WorkspaceScoped):
     """An uploaded video or image (spec 02 section 3).
 
     Named v2 because `media_assets` already holds the intelligence images.
@@ -1805,7 +1820,7 @@ class MediaAssetV2(Base, WorkspaceOwned):
     delete_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class MediaUpload(Base, WorkspaceOwned):
+class MediaUpload(Base, WorkspaceScoped):
     """The resumable upload of one asset; `plan_json` is `UploadPlan.to_dict()`."""
 
     __tablename__ = "media_uploads"
@@ -1824,7 +1839,7 @@ class MediaUpload(Base, WorkspaceOwned):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class DraftMedia(Base, WorkspaceOwned):
+class DraftMedia(Base, WorkspaceScoped):
     """The ordered media of a post (spec 03 section 1)."""
 
     __tablename__ = "draft_media"
@@ -1843,7 +1858,7 @@ class DraftMedia(Base, WorkspaceOwned):
     position: Mapped[int] = mapped_column(Integer)
 
 
-class TargetAttempt(Base, WorkspaceOwned):
+class TargetAttempt(Base, WorkspaceScoped):
     """One step of publishing one target (spec 03 section 1). Append-only.
 
     A row is inserted (`outcome="pending"`) and committed before any platform
@@ -1874,7 +1889,7 @@ class TargetAttempt(Base, WorkspaceOwned):
     resumable_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
 
 
-class AccountPublisher(Base, WorkspaceOwned):
+class AccountPublisher(Base, WorkspaceScoped):
     """The owner's publisher choice for one account and post type (spec 03 section 5)."""
 
     __tablename__ = "account_publishers"
@@ -2099,7 +2114,7 @@ class WorkspacePolicy(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class ApiKeyReleaseGrant(Base, WorkspaceOwned):
+class ApiKeyReleaseGrant(Base, WorkspaceScoped):
     """`posts:release` for one key on one platform, with a daily cap (agent_release=per_key)."""
 
     __tablename__ = "api_key_release_grants"
@@ -2115,7 +2130,7 @@ class ApiKeyReleaseGrant(Base, WorkspaceOwned):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class WebhookEndpoint(Base, WorkspaceOwned, TimestampMixin):
+class WebhookEndpoint(Base, WorkspaceScoped, TimestampMixin):
     """An outbound webhook target for agent events (spec 06 section 8).
 
     The signing secret is stored Fernet-encrypted with the token-store key and
@@ -2148,7 +2163,7 @@ class WebhookEndpoint(Base, WorkspaceOwned, TimestampMixin):
     disabled_reason: Mapped[str | None] = mapped_column(String(300))
 
 
-class WebhookDelivery(Base, WorkspaceOwned):
+class WebhookDelivery(Base, WorkspaceScoped):
     """One event for one endpoint; retried with backoff for up to 24 hours.
 
     `event_id` has no foreign key: events are purged after 7 days and a
@@ -2179,7 +2194,7 @@ class WebhookDelivery(Base, WorkspaceOwned):
 # Webhook inbox (migration 0018, spec 04 section 2)
 
 
-class PlatformSubscription(Base, WorkspaceOwned, TimestampMixin):
+class PlatformSubscription(Base, WorkspaceScoped, TimestampMixin):
     """A platform push subscription (YouTube WebSub today).
 
     `hub_secret` is the per-subscription WebSub secret; it only authenticates
@@ -2264,7 +2279,7 @@ class WebhookEvent(Base):
 # Adaptive sync state and provider quota (migration 0018b, spec 04 sections 3-4)
 
 
-class AccountSyncState(Base, WorkspaceOwned):
+class AccountSyncState(Base, WorkspaceScoped):
     """The per-(account, scope) schedule the adaptive sync loop follows.
 
     `source` records what last set the refresh in motion (`poll` or `push`),
@@ -2305,7 +2320,7 @@ class AccountSyncState(Base, WorkspaceOwned):
 class QuotaUsage(Base):
     """Provider quota spend per (provider, bucket, day), project-level.
 
-    Deliberately not WorkspaceOwned: provider quota belongs to the project
+    Deliberately not WorkspaceScoped: provider quota belongs to the project
     credentials, not a workspace (spec 04 section 4). `day` is the
     provider's quota-reset date - Pacific time for YouTube.
     """

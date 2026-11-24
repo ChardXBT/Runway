@@ -55,7 +55,9 @@ def run_process_webhook_job(
     event_id = job.payload.get("event_id")
     if not isinstance(event_id, int):
         raise PermanentJobError("process_webhook job has no integer event_id")
-    with database.session() as session:
+    # Resolution is cross-workspace system work: the delivery's workspace is
+    # what this pass discovers, so it cannot run inside a workspace binding.
+    with database.system_session() as session:
         event = session.get(WebhookEvent, event_id)
         if event is None or event.processed_at is not None:
             # Purged already, or a claim raced a completed run: nothing to do.
@@ -75,6 +77,14 @@ def run_process_webhook_job(
             return
         event.account_id = account.id
         event.workspace_id = account.workspace_id
+        event_id_out, account_id, workspace_id = event.id, account.id, account.workspace_id
+    # Processing runs bound to the resolved workspace: criteria, the write
+    # guard and (on Postgres) the RLS GUC all apply to it.
+    with database.session(workspace_id=workspace_id) as session:
+        event = session.get(WebhookEvent, event_id_out)
+        account = session.get(ConnectedAccount, account_id)
+        if event is None or account is None:
+            return
         _process(session, queue, event, account, parsed, database)
         event.processed_at = utcnow()
 

@@ -24,6 +24,9 @@ dependencies = [
   "openai>=1.60,<3",
   "pillow>=11,<14",
   "playwright>=1.49,<2",
+  # Postgres driver for RUNWAY_PROFILE=hosted (spec 05). Pinned to the
+  # 14-days-old release window per the dependency policy.
+  "psycopg[binary]>=3.3.8,<3.4",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
   "pyyaml>=6,<7",
@@ -61,6 +64,9 @@ include = ["src/runway", "README.md", "alembic", "alembic.ini"]
 addopts = "-ra --strict-markers"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+  "postgres: needs a Postgres test database (--postgres-dsn; runs in the backend-postgres CI job)",
+]
 
 [tool.ruff]
 line-length = 100

@@ -316,7 +316,8 @@ class AdaptiveSyncScheduler:
         self.job_kind = job_kind
 
     def next_due(self, now: datetime) -> datetime | None:
-        with self.database.session() as session:
+        # Producer sweep: scans every workspace's sync schedule.
+        with self.database.system_session() as session:
             account_ids = session.scalars(
                 select(ConnectedAccount.id).where(ConnectedAccount.status == "connected")
             ).all()
@@ -334,7 +335,8 @@ class AdaptiveSyncScheduler:
         return min(due_times) if due_times else now
 
     def produce(self, now: datetime) -> None:
-        with self.database.session() as session:
+        # Producer sweep: scans every workspace's sync schedule.
+        with self.database.system_session() as session:
             accounts = session.scalars(
                 select(ConnectedAccount).where(ConnectedAccount.status == "connected")
             ).all()

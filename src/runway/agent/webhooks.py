@@ -457,7 +457,8 @@ class WebhookService:
         """Turn new events into pending deliveries for every active endpoint."""
         created = 0
         now = self.clock()
-        with self.database.session() as session:
+        # Producer sweep: fans out across every workspace's endpoints.
+        with self.database.system_session() as session:
             endpoints = session.scalars(
                 select(WebhookEndpoint).where(WebhookEndpoint.state == "active")
             ).all()
@@ -500,7 +501,8 @@ class WebhookService:
 
     def due_deliveries(self, now: datetime) -> list[tuple[int, int, int]]:
         """(delivery id, attempts, workspace id) of pending deliveries due now."""
-        with self.database.session() as session:
+        # Producer sweep: scans every workspace's deliveries.
+        with self.database.system_session() as session:
             rows = session.execute(
                 select(WebhookDelivery.id, WebhookDelivery.attempts, WebhookDelivery.workspace_id)
                 .where(WebhookDelivery.state == "pending", WebhookDelivery.next_attempt_at <= now)
@@ -510,7 +512,8 @@ class WebhookService:
         return [(int(row[0]), int(row[1]), int(row[2])) for row in rows]
 
     def next_attempt_at(self) -> datetime | None:
-        with self.database.session() as session:
+        # Producer sweep: scans every workspace's deliveries.
+        with self.database.system_session() as session:
             value = session.scalar(
                 select(func.min(WebhookDelivery.next_attempt_at)).where(
                     WebhookDelivery.state == "pending"

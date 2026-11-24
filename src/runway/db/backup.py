@@ -23,7 +23,17 @@ def backup_directory(settings: Settings) -> Path:
 
 
 def backup_database(settings: Settings, reason: str) -> Path:
-    """Copy the configured database to `data/backups/runway-<UTC time>-<reason>.db`."""
+    """Copy the configured database to `data/backups/runway-<UTC time>-<reason>.db`.
+
+    SQLite only: the backup uses SQLite's online backup API. Postgres backups
+    go through `pg_dump`, which `runway db upgrade/downgrade` directs the
+    operator to instead.
+    """
+    if settings.is_postgres:
+        raise RuntimeError(
+            "file backups are SQLite-only; back up Postgres with "
+            "`pg_dump --format=custom` against the database URL"
+        )
     source_path = settings.database_path
     if not source_path.is_file():
         raise FileNotFoundError(f"no database to back up at {source_path}")

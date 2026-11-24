@@ -249,7 +249,7 @@ def _not_found(what: str) -> Problem:
 
 
 def _account(context: ToolContext, principal: Principal, account_id: int) -> ConnectedAccount:
-    with context.database.session() as session:
+    with context.database.session(workspace_id=principal.workspace_id) as session:
         account = session.get(ConnectedAccount, account_id)
         if account is None or account.workspace_id != principal.workspace_id:
             raise _not_found("account")
@@ -261,7 +261,7 @@ def _account(context: ToolContext, principal: Principal, account_id: int) -> Con
 
 
 def list_accounts(context: ToolContext, principal: Principal, args: ListAccountsArgs) -> JSONObject:
-    with context.database.session() as session:
+    with context.database.session(workspace_id=principal.workspace_id) as session:
         statement = select(ConnectedAccount).where(
             ConnectedAccount.workspace_id == principal.workspace_id
         )
@@ -481,7 +481,7 @@ def request_release(
 def release_target(context: ToolContext, principal: Principal, args: ReleaseArgs) -> JSONObject:
     status = context.services.posts.target_status(principal, args.post_id, args.target_id)
     platform = status.get("platform")
-    with context.database.session() as session:
+    with context.database.session(workspace_id=principal.workspace_id) as session:
         # TikTok is human_required; then the grant for this platform and its daily cap.
         authorize_release(
             session, principal, platform=platform if isinstance(platform, str) else None

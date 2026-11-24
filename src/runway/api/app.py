@@ -19,6 +19,7 @@ from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
+from runway.api.v1.accounts_routes import build_accounts_router
 from runway.api.v1.approvals_routes import build_approvals_router
 from runway.api.v1.errors import install_problem_handlers
 from runway.api.v1.events_routes import build_events_router
@@ -167,6 +168,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # A platform write or token use reached on a machine without the instance lease.
         return JSONResponse(status_code=409, content={"detail": exc.detail})
 
+    # The posts engine and media stores back the workspace-scoped v1 surface
+    # in both profiles; hosted mounts them now that tenancy isolates them.
+    from runway.posts.bridge import ProposalBridge
+    from runway.posts.runtime import build_media_service, build_post_service
+
+    post_service = build_post_service(active_settings, database)
+    media_service = build_media_service(
+        active_settings,
+        database,
+        registry=post_service.registry,
+        stores=post_service.media_stores,
+    )
+    application.state.post_service = post_service
+    application.state.media_service = media_service
+
     if hosted:
         # Web-origin CORS and origin guard, rate limits, security headers and
         # the identity provider (spec 05 sections 2 and 6).
@@ -211,43 +227,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Hosted serves none of it (404) until the workspace-tenancy work
         # scopes every query by principal.workspace_id and calls require().
         application.include_router(build_platform_router(database, active_settings))
-        # Signature-authenticated platform webhooks (spec 04 section 2) and the
-        # per-account sync status; local only until tenancy covers them.
-        application.include_router(build_hooks_router(database, active_settings))
-        application.include_router(build_sync_status_router(database, active_settings))
-        # Agent interface (spec 06): keys, approvals and outbound webhooks; local
-        # only until tenancy proves these routes isolated on Postgres too.
-        application.include_router(build_keys_router(database, active_settings))
-        application.include_router(build_approvals_router(database, active_settings))
-        application.include_router(build_webhooks_router(WebhookService(database, active_settings)))
-        # Spec 03 section 8. Nothing here publishes: a release only queues a job
-        # for the separate `runway worker` process. Local only until the tenancy
-        # work proves workspace isolation on Postgres for these routes too.
-        from runway.posts.bridge import ProposalBridge
-        from runway.posts.runtime import build_media_service, build_post_service
-
-        post_service = build_post_service(active_settings, database)
-        media_service = build_media_service(
-            active_settings,
-            database,
-            registry=post_service.registry,
-            stores=post_service.media_stores,
-        )
-        application.state.post_service = post_service
-        application.state.media_service = media_service
-        # Account-scoped v1 routes (spec 08): incremental publishing consent,
-        # YouTube categories and the TikTok mandatory screen's fresh
-        # creator-info read (spec 08 section 1, section 4). Local only, like
-        # the OAuth callback they feed into; hosted gets them when the
-        # tenancy work scopes the platform tables per workspace.
-        from runway.api.v1.accounts_routes import build_accounts_router
-
-        application.include_router(build_accounts_router(database, active_settings))
-        application.include_router(build_posts_router(post_service))
-        application.include_router(build_media_router(media_service))
+        # The cross-post proposal bridge joins the local-only intelligence
+        # surfaces (the Lineup workflow is local-only).
         application.include_router(
             build_cross_post_router(ProposalBridge(post_service, media_service))
         )
+    # Workspace-scoped v1 surface (spec 06 sections 5-9, spec 08): mounted in
+    # both profiles now that every route runs inside the principal's workspace
+    # context (phase P7) and Postgres row-level security backs it.
+    application.include_router(build_accounts_router(database, active_settings))
+    application.include_router(build_posts_router(post_service))
+    application.include_router(build_media_router(media_service))
+    application.include_router(build_keys_router(database, active_settings))
+    application.include_router(build_approvals_router(database, active_settings))
+    application.include_router(build_webhooks_router(WebhookService(database, active_settings)))
+    application.include_router(build_sync_status_router(database, active_settings))
+    # Signature-authenticated platform webhooks (spec 04 section 2): the
+    # platform signature is the auth and the delivery resolves its own
+    # workspace, so /hooks/* mounts in hosted too.
+    application.include_router(build_hooks_router(database, active_settings))
     application.include_router(build_workspace_router(database, active_settings))
     # Versioned surface (spec 06): every router comes from build_v1_router.
     application.include_router(build_events_router(database))

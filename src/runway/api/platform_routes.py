@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from runway.api.v1.router import bind_workspace_context
 from runway.auth.principal import LOCAL_WORKSPACE_ID, Principal, get_principal
 from runway.auth.problems import Problem
 from runway.config import Settings
@@ -215,7 +216,11 @@ def build_platform_router(
     oauth_states: OAuthStateService | None = None,
     unified_provider: InstagramUnifiedProvider | None = None,
 ) -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["platforms"], dependencies=[Depends(get_principal)])
+    router = APIRouter(
+        prefix="/api",
+        tags=["platforms"],
+        dependencies=[Depends(get_principal), Depends(bind_workspace_context)],
+    )
     if registry is None:
         registry = ProviderRegistry(database, settings)
     queue = JobQueue(database)
@@ -253,6 +258,9 @@ def build_platform_router(
                 select(ConnectedAccount).where(
                     ConnectedAccount.platform == platform.value,
                     ConnectedAccount.external_account_id == identity.external_account_id,
+                    # Two workspaces may connect the same platform identity;
+                    # each keeps its own row (spec 01 section 4).
+                    ConnectedAccount.workspace_id == workspace_id,
                 )
             )
             if account is None or account.status == "disconnected":
@@ -263,6 +271,7 @@ def build_platform_router(
                     platform=platform.value,
                     external_account_id=identity.external_account_id,
                     token_ref=registry.token_store.new_token_ref(),
+                    workspace_id=workspace_id,
                 )
                 session.add(account)
             if account.token_ref is None:
@@ -748,17 +757,23 @@ def build_platform_router(
 
     # ----------------------------------------------------------- account ops
 
-    def _account_or_404(account_id: int) -> ConnectedAccount:
+    def _account_or_404(account_id: int, workspace_id: int) -> ConnectedAccount:
         with database.session() as session:
             account = session.get(ConnectedAccount, account_id)
-            if account is None:
+            # Another workspace's account is not a wrong answer: it is "not
+            # found", the same as an id that never existed (invariant 11).
+            if account is None or account.workspace_id != workspace_id:
                 raise HTTPException(status_code=404, detail="account not found")
             session.expunge(account)
             return account
 
     @router.post("/platforms/accounts/{account_id}/disconnect")
-    def disconnect(account_id: int, payload: ConfirmedRequest) -> dict[str, object]:
-        account = _account_or_404(account_id)
+    def disconnect(
+        account_id: int,
+        payload: ConfirmedRequest,
+        principal: Principal = Depends(get_principal),
+    ) -> dict[str, object]:
+        account = _account_or_404(account_id, principal.workspace_id)
         _require_active_instance()
         if account.token_ref:
             token = registry.token_store.load(account.token_ref)
@@ -787,7 +802,7 @@ def build_platform_router(
     def reconnect(
         account_id: int, principal: Principal = Depends(get_principal)
     ) -> dict[str, object]:
-        account = _account_or_404(account_id)
+        account = _account_or_404(account_id, principal.workspace_id)
         if account.status == "disconnected":
             _require_slot(principal)
         return _issue_connect(
@@ -798,8 +813,8 @@ def build_platform_router(
         )
 
     @router.post("/platforms/accounts/{account_id}/sync")
-    def sync_account(account_id: int) -> Response:
-        _account_or_404(account_id)
+    def sync_account(account_id: int, principal: Principal = Depends(get_principal)) -> Response:
+        _account_or_404(account_id, principal.workspace_id)
         try:
             run = sync_service.start_background(account_id, trigger="manual")
         except (SyncRunInProgress, SyncAccountDisconnected) as exc:
@@ -820,9 +835,11 @@ def build_platform_router(
 
     @router.get("/platforms/accounts/{account_id}/sync-runs")
     def account_sync_runs(
-        account_id: int, limit: int = Query(default=20, ge=1, le=100)
+        account_id: int,
+        limit: int = Query(default=20, ge=1, le=100),
+        principal: Principal = Depends(get_principal),
     ) -> list[dict[str, object]]:
-        _account_or_404(account_id)
+        _account_or_404(account_id, principal.workspace_id)
         with database.session() as session:
             runs = session.scalars(
                 select(SyncRun)
@@ -887,8 +904,11 @@ def build_platform_router(
     def account_analytics(
         account_id: int,
         range: Literal["7", "28", "90"] = "28",  # noqa: A002
+        principal: Principal = Depends(get_principal),
     ) -> dict[str, object]:
-        return account_analytics_view(database, _account_or_404(account_id), int(range))
+        return account_analytics_view(
+            database, _account_or_404(account_id, principal.workspace_id), int(range)
+        )
 
     @router.get("/inbox")
     def inbox_list(

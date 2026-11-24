@@ -58,7 +58,8 @@ def _upgrade(settings: Settings, backup: bool) -> None:
         # the old schema) is unsafe; the launcher stops it first.
         _refuse_while_the_worker_runs(settings, "upgrading")
     backup_path = None
-    if backup and before.current is not None and not before.up_to_date:
+    if backup and before.current is not None and not before.up_to_date and not settings.is_postgres:
+        # SQLite online backup only; Postgres backups are pg_dump's job.
         backup_path = backup_database(settings, UPGRADE_BACKUP_REASON)
         prune_automatic_backups(settings, UPGRADE_BACKUP_REASON, AUTOMATIC_BACKUPS_KEPT)
     database = initialize_database(settings)
@@ -139,6 +140,11 @@ def db_downgrade(
     force: bool = typer.Option(
         False, "--force", help=f"Allow targets older than {OLDEST_SUPPORTED_DOWNGRADE}."
     ),
+    i_have_a_backup: bool = typer.Option(
+        False,
+        "--i-have-a-backup",
+        help="Postgres only: confirm an external pg_dump exists (SQLite backs up online instead).",
+    ),
 ) -> None:
     """Roll the schema back to REVISION, after an online backup.
 
@@ -146,6 +152,15 @@ def db_downgrade(
     and worker stopped, then check out the older code.
     """
     settings = get_settings()
+    if settings.is_postgres and not i_have_a_backup:
+        typer.echo(
+            "refusing to downgrade a Postgres database without a backup. "
+            "Take one first, for example:\n"
+            "  pg_dump --format=custom --file=runway-before-downgrade.dump <database>\n"
+            "then re-run with --i-have-a-backup.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     status = migration_status(settings)
     if status.current is None:
         typer.echo("there is no migrated database to downgrade", err=True)
@@ -161,7 +176,11 @@ def db_downgrade(
         raise typer.Exit(code=2)
     with _only_migration(settings):
         _refuse_while_the_worker_runs(settings, "downgrading")
-        backup_path = backup_database(settings, f"before-downgrade-to-{revision}")
+        backup_path = (
+            None
+            if settings.is_postgres
+            else backup_database(settings, f"before-downgrade-to-{revision}")
+        )
         command.downgrade(config, revision)
         after = migration_status(settings)
     typer.echo(
