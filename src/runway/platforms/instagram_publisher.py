@@ -284,6 +284,13 @@ class InstagramDirectPublisher:
             self._create_containers(ctx, token, ig_id, state, progress)
             ctx.save_resumable(state)
         parent = self._parent(state)
+        if parent is None:
+            # `_create_containers` records one container per media item, so a
+            # missing parent means the post carries no media at all.
+            raise PublishRefused(
+                "no_container",
+                "no container was created or recorded for this target",
+            )
         status = self._container_status(token, parent["id"])
         if status == "ERROR":
             raise PublishRefused("container_error", self._container_detail(token, parent["id"]))
@@ -321,6 +328,8 @@ class InstagramDirectPublisher:
             return PollResult("processing", detail="no container recorded yet")
         status = self._container_status(self._token(ctx), parent["id"])
         if status == "PUBLISHED":
+            if ctx.account is None:
+                raise PublishRefused("account_required", "choose a connected account")
             row = self._latest_media_row(self._token(ctx), ctx.account.external_account_id)
             return PollResult(
                 "published",
@@ -407,7 +416,7 @@ class InstagramDirectPublisher:
         return state
 
     def _parent(self, state: Mapping[str, Any]) -> dict[str, Any] | None:
-        containers = state.get("containers") or []
+        containers: list[dict[str, Any]] = state.get("containers") or []
         for container in reversed(containers):
             if container.get("role") == "parent":
                 return container
@@ -439,6 +448,8 @@ class InstagramDirectPublisher:
 
     def _check_identity(self, ctx: PublishContext, token: TokenSet) -> str:
         """The token's Instagram user must be the target account (spec 08 §3)."""
+        if ctx.account is None:
+            raise PublishRefused("account_required", "choose a connected account")
         expected = str(ctx.account.external_account_id)
         held = token.extra.get("user_id")
         if held and str(held) != expected:
@@ -627,7 +638,8 @@ class InstagramDirectPublisher:
                 params["share_to_feed"] = _bool(settings["share_to_feed"])
             if settings.get("cover_asset_id") is not None:
                 cover_url = self._cover_url(ctx, state)
-                params["cover_url"] = cover_url
+                if cover_url is not None:
+                    params["cover_url"] = cover_url
             elif settings.get("thumb_offset_ms") is not None:
                 params["thumb_offset"] = str(int(settings["thumb_offset_ms"]))
             if settings.get("audio_name"):

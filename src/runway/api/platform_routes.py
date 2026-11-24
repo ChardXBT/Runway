@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -521,7 +522,7 @@ def build_platform_router(
         code: str,
         record: OAuthState,
         principal: Principal,
-        fail,
+        fail: Callable[[str], RedirectResponse],
     ) -> Response:
         """Unified Login callback (spec 08 section 3): exchange the code, list
         assigned accounts, persist the only one or defer to the owner pick."""
