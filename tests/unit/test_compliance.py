@@ -15,8 +15,11 @@ from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
+from fastapi.testclient import TestClient
 from r2_support import Clock, FakeR2, fake_r2_store
+from sqlalchemy import func, select
 
+from runway.api.app import create_app
 from runway.auth.problems import Problem
 from runway.config import Settings
 from runway.db.base import Database
@@ -49,6 +52,7 @@ from runway.mediastore.local import LocalDiskStore
 from runway.posts.media_service import poster_root
 from runway.realtime.meta_hooks import _signed_request_field, verify_signed_request
 from runway.workspaces.lifecycle import (
+    DELETE_WORKSPACE_JOB,
     EXPORT_WORKSPACE_JOB,
     delete_user,
     export_key,
@@ -364,6 +368,48 @@ def test_delete_workspace_job_removes_the_workspaces_stored_objects(tmp_path: Pa
         assert session.get(Workspace, victim_id) is None
         assert session.get(Workspace, 1) is not None
     database.engine.dispose()
+
+
+def test_workspace_delete_route_refuses_the_local_profiles_workspace(
+    tmp_path: Path,
+) -> None:
+    """DELETE /api/v1/workspace in `local`: a 422 without the echo, then a 409.
+
+    Workspace 1 is the local profile's only workspace - deleting it would
+    leave the install with no workspace at all, so even the correct echo is
+    refused with `invalid_state` and nothing is scheduled.
+    """
+    settings = Settings(data_dir=tmp_path / "data")
+    database = initialize_database(settings)
+    try:
+        with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
+            view = client.get("/api/v1/workspace")
+            assert view.status_code == 200, view.text
+            slug = str(view.json()["slug"])
+            for kwargs in (
+                {},
+                {"json": {"confirm": "not-the-workspace"}},
+                {"json": {"confirm": ""}},
+            ):
+                response = client.request("DELETE", "/api/v1/workspace", **kwargs)
+                assert response.status_code == 422, response.text
+                assert response.json()["code"] == "validation_failed"
+            refused = client.request(
+                "DELETE", "/api/v1/workspace", json={"confirm": slug}
+            )
+            assert refused.status_code == 409, refused.text
+            assert refused.json()["code"] == "invalid_state"
+        with database.session() as session:
+            workspace = session.get(Workspace, 1)
+            assert workspace is not None and workspace.deleted_at is None
+            scheduled = session.scalar(
+                select(func.count())
+                .select_from(PublishJob)
+                .where(PublishJob.kind == DELETE_WORKSPACE_JOB)
+            )
+            assert scheduled == 0
+    finally:
+        database.engine.dispose()
 
 
 def test_purge_workspace_removes_every_row(tmp_path: Path) -> None:

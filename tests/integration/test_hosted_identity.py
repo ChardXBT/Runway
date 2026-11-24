@@ -29,6 +29,7 @@ from identity_support import (
     session_claims,
     svix_headers,
 )
+from pydantic import SecretStr
 from sqlalchemy import func, select
 
 from runway.api.app import create_app
@@ -40,14 +41,19 @@ from runway.db.models import (
     AuditLogEntry,
     ConnectedAccount,
     ContentDraft,
+    PublishJob,
     User,
     Workspace,
     WorkspaceMember,
 )
 from runway.hosted.quotas import set_quota_overrides
 from runway.identity.registry import build_identity_provider
+from runway.workspaces.lifecycle import DELETE_WORKSPACE_JOB
 
 HOOK = "/hooks/identity/clerk"
+# Hosted refuses to boot without a database-token-store keyring (spec 05
+# section 3); the key only has to parse - no grant is ever decrypted here.
+_TOKEN_KEYRING = "v1:" + "a" * 43 + "="
 
 
 @dataclass
@@ -91,7 +97,11 @@ def hosted_settings(tmp_path: Path, **overrides: Any) -> Settings:
     )
     # model_copy skips validation: hosted Settings refuse SQLite until Postgres
     # support lands, but everything else here is the real hosted code path.
-    return base.model_copy(update={"profile": "hosted", "identity_provider": "clerk", **overrides})
+    copied = base.model_copy(
+        update={"profile": "hosted", "identity_provider": "clerk", **overrides}
+    )
+    copied.token_keys = SecretStr(_TOKEN_KEYRING)
+    return copied
 
 
 @contextmanager
@@ -468,6 +478,61 @@ def test_an_older_event_does_not_undo_a_newer_one(hosted: Hosted) -> None:
     assert hosted.hook(later, "msg_later").json()["outcome"] == "applied"
     assert hosted.hook(earlier, "msg_earlier").json()["outcome"] == "stale"
     assert hosted.count(WorkspaceMember) == 1  # only user_a
+
+
+def test_workspace_delete_requires_typing_the_slug_or_name(hosted: Hosted) -> None:
+    """DELETE /api/v1/workspace refuses a bare click and a wrong echo.
+
+    The confirm value must be the workspace's slug or name; anything else -
+    or no body at all - is a 422 that schedules nothing. A correct echo
+    soft-deletes and enqueues the purge job.
+    """
+    owner = hosted.auth("user_a", "org_a")
+    view = hosted.client.get("/api/v1/workspace", headers=owner).json()
+    workspace_id = int(view["id"])
+    assert workspace_id != 1  # hosted organizations never own the bootstrap workspace
+
+    for json_body in (None, {"confirm": "not-the-workspace"}, {"confirm": ""}):
+        kwargs: dict[str, Any] = {} if json_body is None else {"json": json_body}
+        response = hosted.client.request(
+            "DELETE", "/api/v1/workspace", headers=owner, **kwargs
+        )
+        _problem(response, 422, "validation_failed")
+        with hosted.database.session() as session:
+            workspace = session.get(Workspace, workspace_id)
+            assert workspace is not None and workspace.deleted_at is None
+        assert (
+            hosted.count(
+                PublishJob,
+                PublishJob.kind == DELETE_WORKSPACE_JOB,
+                PublishJob.workspace_id == workspace_id,
+            )
+            == 0
+        )
+
+    # The name works; the other workspace confirms by slug.
+    deleted = hosted.client.request(
+        "DELETE", "/api/v1/workspace", headers=owner, json={"confirm": view["name"]}
+    )
+    assert deleted.status_code == 202, deleted.text
+    with hosted.database.session() as session:
+        workspace = session.get(Workspace, workspace_id)
+        assert workspace is not None and workspace.deleted_at is not None
+    assert (
+        hosted.count(
+            PublishJob,
+            PublishJob.kind == DELETE_WORKSPACE_JOB,
+            PublishJob.workspace_id == workspace_id,
+        )
+        == 1
+    )
+
+    other = hosted.auth("user_b", "org_b")
+    other_view = hosted.client.get("/api/v1/workspace", headers=other).json()
+    deleted_other = hosted.client.request(
+        "DELETE", "/api/v1/workspace", headers=other, json={"confirm": other_view["slug"]}
+    )
+    assert deleted_other.status_code == 202, deleted_other.text
 
 
 def test_organization_and_user_deletion_revoke_memberships(hosted: Hosted) -> None:

@@ -22,7 +22,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from runway.api.v1.pagination import CursorParams, cursor_params, paginate
@@ -38,7 +38,13 @@ from runway.auth.principal import (
 from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import AuditLogEntry, PublishJob, utcnow
+from runway.db.models import (
+    DEFAULT_WORKSPACE_ID,
+    AuditLogEntry,
+    PublishJob,
+    Workspace,
+    utcnow,
+)
 from runway.jobs.queue import JobQueue, JobState
 from runway.mediastore.errors import InvalidMediaKey, MediaStoreError
 from runway.workspaces.lifecycle import (
@@ -65,6 +71,14 @@ class AuditEntryView(BaseModel):
 class AuditPage(BaseModel):
     items: list[AuditEntryView]
     next_cursor: str | None
+
+
+class DeleteWorkspaceRequest(BaseModel):
+    """The destructive-action echo: the workspace's slug or name, typed back."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: str
 
 
 def _problem(code: ProblemCode, detail: str) -> Problem:
@@ -112,16 +126,34 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
         return AuditPage(items=[_audit_view(row) for row in rows], next_cursor=next_cursor)
 
     @router.delete("/workspace", status_code=202)
-    def delete_workspace(principal: Principal = Depends(get_principal)) -> dict[str, object]:
-        """Soft-delete the workspace; the purge job erases the rows."""
+    def delete_workspace(
+        payload: DeleteWorkspaceRequest,
+        principal: Principal = Depends(get_principal),
+    ) -> dict[str, object]:
+        """Soft-delete the workspace; the purge job erases the rows.
+
+        The caller types the workspace's slug or name back: deleting erases
+        everything the workspace owns, so a bare click can never be enough.
+        The local profile's only workspace cannot go at all - the install
+        would be left with no workspace.
+        """
         require_person(principal, "delete this workspace")
         require(principal, WORKSPACE_ADMIN)
         if principal.role != "owner":
             raise _problem(ProblemCode.SCOPE_MISSING, "only the workspace owner can delete it")
-        from runway.db.models import Workspace
 
         with database.session() as session:
             workspace = current_workspace(session, principal)
+            if payload.confirm not in {workspace.slug, workspace.name}:
+                raise _problem(
+                    ProblemCode.VALIDATION_FAILED,
+                    "confirm must be the workspace's slug or name",
+                )
+            if settings.profile == "local" and workspace.id == DEFAULT_WORKSPACE_ID:
+                raise _problem(
+                    ProblemCode.INVALID_STATE,
+                    "the local profile's only workspace cannot be deleted",
+                )
             row = session.get(Workspace, workspace.id)
             if row is None:
                 raise _problem(ProblemCode.NOT_FOUND, "no such workspace")
