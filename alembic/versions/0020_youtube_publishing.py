@@ -1,6 +1,6 @@
 """Bind an OAuth state row to the account it was issued for (spec 08 section 1).
 
-Revision ID: 0018_youtube_publishing
+Revision ID: 0020_youtube_publishing
 Revises: 0017_publishing_engine
 
 Adds two columns to `oauth_states`:
@@ -28,7 +28,7 @@ import sqlalchemy as sa
 
 from alembic import context, op
 
-revision = "0018_youtube_publishing"
+revision = "0020_youtube_publishing"
 down_revision = "0017_publishing_engine"
 branch_labels = None
 depends_on = None
