@@ -46,6 +46,7 @@ from runway.platforms.capabilities import Platform
 from runway.platforms.drafts import external_id_candidates
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.registry import ProviderRegistry
+from runway.realtime import quota as sync_quota
 from runway.realtime import schedule as sync_schedule
 
 logger = logging.getLogger(__name__)
@@ -360,6 +361,12 @@ class SyncService:
                     error_summary = record["error"]
                 steps.append(record)
                 self._record_step_outcome(account_id, name, record, failure, scopes)
+                if isinstance(provider, InstagramProvider):
+                    # Meta's usage headers at >= 80% defer the account's other
+                    # scopes by an hour (spec 04 section 3).
+                    sync_quota.enforce_instagram_usage(
+                        self.database, account_id, provider.usage
+                    )
 
             self._finish_run(
                 run_id,

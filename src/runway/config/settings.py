@@ -113,6 +113,9 @@ class Settings(BaseSettings):
     # Adaptive per-scope sync (spec 04 section 3). False restores the old
     # fixed-slot scheduler, where platform_sync_interval_minutes applies.
     adaptive_sync_enabled: bool = True
+    # Percent of YouTube's shared 10,000-unit daily bucket held back for
+    # publishing and replies; sync splits the rest across active accounts.
+    youtube_quota_publish_reserve_percent: int = Field(default=30, ge=0, le=100)
     platform_sync_interval_minutes: int = Field(default=0, ge=0, le=1440)
     platform_sync_max_content_items: int = Field(default=200, ge=10, le=2000)
     platform_sync_comment_content_limit: int = Field(default=10, ge=0, le=100)

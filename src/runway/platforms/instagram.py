@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -35,6 +36,36 @@ TOKEN_URL = "https://api.instagram.com/oauth/access_token"
 GRAPH_BASE = f"https://graph.instagram.com/{API_VERSION}"
 LONG_LIVED_URL = "https://graph.instagram.com/access_token"
 REFRESH_URL = "https://graph.instagram.com/refresh_access_token"
+
+# Meta reports API pressure as percent values in these response headers; the
+# adaptive scheduler defers the account's sync scopes once one passes 80%
+# (spec 04 section 3).
+_USAGE_HEADERS = ("x-app-usage", "x-business-use-case-usage")
+_USAGE_FIELDS = ("call_count", "total_cputime", "total_time")
+
+
+def _usage_percentages(payload: object) -> list[float]:
+    """Percent values in a Meta usage-header JSON body.
+
+    `X-App-Usage` is flat ({"call_count":N,...}); `X-Business-Use-Case-Usage`
+    nests the same fields under each business object id.
+    """
+    found: list[float] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if (
+                key in _USAGE_FIELDS
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ):
+                found.append(float(value))
+            else:
+                found.extend(_usage_percentages(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.extend(_usage_percentages(item))
+    return found
+
 
 _CONTENT_TYPES = {
     "REELS": "reel",
@@ -72,6 +103,9 @@ class InstagramProvider(PlatformProvider):
         self.settings = settings
         self.client = client or httpx.Client(timeout=20.0)
         self.warnings: list[str] = []
+        # Latest usage-header percentages, per header name; the sync loop
+        # defers this account's scopes when one reaches 80.
+        self.usage: dict[str, float] = {}
 
     def capabilities(self) -> list[CapabilityEntry]:
         return capability_matrix(Platform.instagram)
@@ -211,7 +245,22 @@ class InstagramProvider(PlatformProvider):
 
     # -------------------------------------------------------------- HTTP core
 
+    def _track_usage(self, headers: httpx.Headers) -> None:
+        """Keep the newest usage-header percentage seen on any response."""
+        for header in _USAGE_HEADERS:
+            raw = headers.get(header)
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            percentages = _usage_percentages(parsed)
+            if percentages:
+                self.usage[header] = max(percentages)
+
     def _json_or_raise(self, response: httpx.Response) -> dict[str, Any]:
+        self._track_usage(response.headers)
         try:
             data = response.json()
         except ValueError:

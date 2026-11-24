@@ -195,6 +195,36 @@ def boost(
         state.updated_at = moment
 
 
+def defer_account_scopes(
+    source: Session | Database,
+    account_id: int,
+    until: datetime,
+    *,
+    reason: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Push every scope's `next_run_at` out to at least `until` (never earlier).
+
+    Used by the quota budget (next Pacific reset, `reason` "quota budget
+    reached") and Instagram's usage-header backpressure (+1 h, no reason -
+    throttling is not an error). Scopes that have never been scheduled get a
+    state row already pushed out.
+    """
+    moment = now or utcnow()
+    with _sessions(source) as session:
+        account = session.get(ConnectedAccount, account_id)
+        if account is None:
+            return
+        for scope in SCOPES:
+            state = _state_row(session, account, scope, moment)
+            next_run = _aware(state.next_run_at)
+            if next_run is None or next_run < until:
+                state.next_run_at = until
+            if reason is not None:
+                state.last_error = reason
+            state.updated_at = moment
+
+
 def record_scope_run(
     database: Database,
     account_id: int,
@@ -297,7 +327,15 @@ class AdaptiveSyncScheduler:
                 int(workspace.id): workspace
                 for workspace in session.scalars(select(Workspace)).all()
             }
+            from runway.realtime import quota  # local: quota imports this module
+
             for account in accounts:
+                if account.platform == "youtube" and quota.enforce_youtube_budget(
+                    session, int(account.id), self.settings, now=now
+                ):
+                    # Over its share of the default bucket: scopes sit out
+                    # until the Pacific reset (spec 04 section 3).
+                    continue
                 states = ensure_states(session, account, now)
                 last_seen = (
                     workspaces[int(account.workspace_id)].last_seen_at
