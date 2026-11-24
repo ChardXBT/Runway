@@ -1,7 +1,7 @@
 """Agent interface: release policy, per-key release grants and outbound webhooks.
 
 Revision ID: 0019_agent_interface
-Revises: 0017_publishing_engine
+Revises: 0018b_sync_state
 
 Follows the publishing engine (0017). The real-time job's 0018 lands in
 parallel; when it merges, the orchestrator re-chains whichever comes later.
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import context, op
 
 revision = "0019_agent_interface"
-down_revision = "0017_publishing_engine"
+down_revision = "0018b_sync_state"
 branch_labels = None
 depends_on = None
 

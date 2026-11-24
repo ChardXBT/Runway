@@ -136,9 +136,23 @@ class Settings(BaseSettings):
     youtube_engage_scopes: bool = False
     instagram_app_id: str | None = None
     instagram_app_secret: str | None = None
+    # Secret like instagram_app_secret: Meta's webhook handshake token. Never
+    # logged or returned by the API.
+    instagram_webhook_verify_token: str | None = None
     tiktok_client_key: str | None = None
     tiktok_client_secret: str | None = None
+    # Per-(provider, source) sliding-window cap on webhook POSTs.
+    webhook_rate_limit_per_minute: int = Field(default=120, ge=1)
+    # Public edge hostname (spec 04 section 6): the one non-loopback Host the
+    # request guard serves, and only for /hooks/ and OAuth callbacks.
+    public_edge_url: str | None = None
     inbox_replies_enabled: bool = False
+    # Adaptive per-scope sync (spec 04 section 3). False restores the old
+    # fixed-slot scheduler, where platform_sync_interval_minutes applies.
+    adaptive_sync_enabled: bool = True
+    # Percent of YouTube's shared 10,000-unit daily bucket held back for
+    # publishing and replies; sync splits the rest across active accounts.
+    youtube_quota_publish_reserve_percent: int = Field(default=30, ge=0, le=100)
     platform_sync_interval_minutes: int = Field(default=0, ge=0, le=1440)
     platform_sync_max_content_items: int = Field(default=200, ge=10, le=2000)
     platform_sync_comment_content_limit: int = Field(default=10, ge=0, le=100)
@@ -249,10 +263,12 @@ class Settings(BaseSettings):
     @field_validator(
         "oauth_redirect_base_url",
         "web_base_url",
+        "public_edge_url",
         "youtube_client_id",
         "youtube_client_secret",
         "instagram_app_id",
         "instagram_app_secret",
+        "instagram_webhook_verify_token",
         "tiktok_client_key",
         "tiktok_client_secret",
         "r2_account_id",
@@ -267,6 +283,27 @@ class Settings(BaseSettings):
         if value is None or (isinstance(value, str) and not value.strip()):
             return None
         return value
+
+    @field_validator("public_edge_url")
+    @classmethod
+    def valid_public_edge_url(cls, value: str | None) -> str | None:
+        """https://host only: no path beyond '/', no query, no userinfo."""
+        if value is None:
+            return None
+        try:
+            parsed = urlsplit(value.strip())
+            host = parsed.hostname
+            port = parsed.port  # raises on a malformed port
+        except ValueError as exc:
+            raise ValueError("public_edge_url must be a valid https:// URL") from exc
+        if parsed.scheme != "https" or not host:
+            raise ValueError("public_edge_url must be an https:// URL with a host")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("public_edge_url must not carry userinfo")
+        if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            raise ValueError("public_edge_url must not carry a path, query or fragment")
+        suffix = f":{port}" if port is not None else ""
+        return f"https://{host}{suffix}"
 
     @field_validator("default_post_time")
     @classmethod
@@ -427,6 +464,24 @@ class Settings(BaseSettings):
         if self.oauth_redirect_base_url:
             return self.oauth_redirect_base_url.rstrip("/")
         return f"http://127.0.0.1:{self.api_port}"
+
+    @property
+    def public_edge_host(self) -> str | None:
+        """The normalized edge hostname (no port), for the request guard."""
+        if not self.public_edge_url:
+            return None
+        return urlsplit(self.public_edge_url).hostname
+
+    @property
+    def public_edge_port(self) -> int | None:
+        """The explicit port in ``public_edge_url``, for edge Host matching.
+
+        None means the URL carried no port; the guard then matches the
+        hostname on the https default (443 or no port in the Host header).
+        """
+        if not self.public_edge_url:
+            return None
+        return urlsplit(self.public_edge_url).port
 
     @property
     def resolved_web_base_url(self) -> str:

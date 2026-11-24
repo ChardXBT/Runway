@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -31,6 +32,9 @@ from runway.platforms.capabilities import (
     Platform,
     capability_matrix,
 )
+from runway.realtime.quota import YOUTUBE_METHOD_COSTS, QuotaCallRecorder
+
+logger = logging.getLogger(__name__)
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -87,9 +91,20 @@ def _as_str_or_none(value: object) -> str | None:
 class YouTubeProvider(PlatformProvider):
     platform = Platform.youtube
 
-    def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.Client | None = None,
+        quota_recorder: QuotaCallRecorder | None = None,
+    ) -> None:
         self.settings = settings
         self.client = client or httpx.Client(timeout=20.0)
+        # Every Data API call the provider makes is charged to the project's
+        # quota ledger (spec 04 section 3): `quota_calls` is the always-on
+        # in-memory record, `quota_recorder` the persisting seam the registry
+        # attaches (QuotaRecorder).
+        self.quota_calls: list[tuple[str, str, int]] = []
+        self.quota_recorder = quota_recorder
 
     def capabilities(self) -> list[CapabilityEntry]:
         return capability_matrix(
@@ -262,13 +277,27 @@ class YouTubeProvider(PlatformProvider):
             raise PermissionMissing(detail, status=403)
         raise ProviderError(message, retryable=status_code >= 500, status=status_code)
 
+    def _record_quota(self, method: str) -> int:
+        """Charge `method`'s unit cost to the ledger; returns the units."""
+        bucket, units = YOUTUBE_METHOD_COSTS.get(method, ("default", 1))
+        self.quota_calls.append((method, bucket, units))
+        if self.quota_recorder is not None:
+            try:
+                self.quota_recorder(method, bucket, units)
+            except Exception:  # noqa: BLE001
+                # The platform call already spent the quota; bookkeeping
+                # must never make it look failed (a "failed" reply would be
+                # posted twice).
+                logger.warning("quota recording failed for %s", method, exc_info=True)
+        return units
+
     def _api_get(
         self,
         token: TokenSet,
         url: str,
         params: dict[str, Any],
         *,
-        quota_units: int,
+        method: str,
     ) -> tuple[dict[str, Any], int]:
         response = provider_request(
             self.client,
@@ -278,7 +307,10 @@ class YouTubeProvider(PlatformProvider):
             params=params,
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
-        return self._json_or_raise(response), quota_units
+        # A received response consumed quota whatever its status; a transport
+        # failure raised inside provider_request never left the machine.
+        units = self._record_quota(method)
+        return self._json_or_raise(response), units
 
     # --------------------------------------------------------------- identity
 
@@ -287,7 +319,7 @@ class YouTubeProvider(PlatformProvider):
             token,
             f"{API_BASE}/channels",
             {"part": "snippet,statistics,contentDetails", "mine": "true"},
-            quota_units=1,
+            method="channels.list",
         )
         items = data.get("items")
         if not isinstance(items, list) or not items:
@@ -340,7 +372,9 @@ class YouTubeProvider(PlatformProvider):
         }
         if cursor and cursor.get("page_token"):
             params["pageToken"] = str(cursor["page_token"])
-        data, units = self._api_get(token, f"{API_BASE}/playlistItems", params, quota_units=1)
+        data, units = self._api_get(
+            token, f"{API_BASE}/playlistItems", params, method="playlistItems.list"
+        )
         items = data.get("items")
         video_ids: list[str] = []
         for item in items if isinstance(items, list) else []:
@@ -371,7 +405,7 @@ class YouTubeProvider(PlatformProvider):
                     "part": "snippet,contentDetails,statistics,status",
                     "id": ",".join(batch),
                 },
-                quota_units=1,
+                method="videos.list",
             )
             items = data.get("items")
             if isinstance(items, list):
@@ -452,7 +486,7 @@ class YouTubeProvider(PlatformProvider):
                 "dimensions": "day",
                 "sort": "day",
             },
-            quota_units=1,
+            method="analytics.reports",
         )
         headers = data.get("columnHeaders")
         names = (
@@ -512,7 +546,9 @@ class YouTubeProvider(PlatformProvider):
         if cursor and cursor.get("page_token"):
             params["pageToken"] = str(cursor["page_token"])
         try:
-            data, units = self._api_get(token, f"{API_BASE}/commentThreads", params, quota_units=1)
+            data, units = self._api_get(
+                token, f"{API_BASE}/commentThreads", params, method="commentThreads.list"
+            )
         except PermissionMissing as exc:
             if "commentsDisabled" in exc.detail:
                 return Page(items=[], next_cursor=None, quota_units=1)
@@ -623,6 +659,7 @@ class YouTubeProvider(PlatformProvider):
             json={"snippet": {"parentId": comment_external_id, "textOriginal": text}},
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
+        self._record_quota("comments.insert")
         data = self._json_or_raise(response)
         reply_id = str(data.get("id") or "")
         verified = False
@@ -635,7 +672,7 @@ class YouTubeProvider(PlatformProvider):
                     token,
                     f"{API_BASE}/comments",
                     {"part": "snippet", "id": reply_id},
-                    quota_units=1,
+                    method="comments.list",
                 )
             except ProviderError:
                 check = {}

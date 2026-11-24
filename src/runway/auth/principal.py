@@ -6,6 +6,8 @@ route checks roles directly.
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Literal
 
 from fastapi import Request
@@ -13,6 +15,10 @@ from pydantic import BaseModel, ConfigDict
 
 from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
+from runway.db.base import Database
+from runway.db.models import Workspace, utcnow
+
+logger = logging.getLogger(__name__)
 
 PrincipalKind = Literal["user", "agent", "system"]
 Role = Literal["owner", "editor", "approver", "viewer"]
@@ -142,6 +148,47 @@ def resolve_principal(settings: Settings, request: Request) -> Principal:
     return resolve_hosted_principal(settings, request)
 
 
+# workspaces.last_seen_at is the "a human was here" heartbeat the adaptive
+# sync scheduler reads for its 14-day inactivity rule (spec 04 section 3).
+# One write per workspace per 10 minutes is plenty for a day-scale rule.
+SEEN_WRITE_INTERVAL_SECONDS = 600.0
+
+
+def _record_workspace_seen(request: Request, principal: Principal) -> None:
+    """Touch `workspaces.last_seen_at` for human requests, throttled per app.
+
+    Never raises: a broken heartbeat must not break the request it rode in on.
+    The throttle map lives on `app.state` so each app keeps its own cadence.
+    """
+    if principal.kind != "user":
+        return
+    if getattr(request.state, "runway_edge", False):
+        # Marked by LocalRequestGuard: public edge traffic is never a human
+        # heartbeat - a forged funnel request must not fake activity (the
+        # inactivity rule would keep syncing an abandoned install).
+        return
+    database = getattr(request.app.state, "database", None)
+    if not isinstance(database, Database):
+        return
+    writes = getattr(request.app.state, "workspace_seen_writes", None)
+    if writes is None:
+        writes = {}
+        request.app.state.workspace_seen_writes = writes
+    moment = time.monotonic()
+    if moment - writes.get(principal.workspace_id, -SEEN_WRITE_INTERVAL_SECONDS) < (
+        SEEN_WRITE_INTERVAL_SECONDS
+    ):
+        return
+    writes[principal.workspace_id] = moment
+    try:
+        with database.session() as session:
+            workspace = session.get(Workspace, principal.workspace_id)
+            if workspace is not None:
+                workspace.last_seen_at = utcnow()
+    except Exception:  # noqa: BLE001
+        logger.exception("could not record workspace %s activity", principal.workspace_id)
+
+
 def get_principal(request: Request) -> Principal:
     """FastAPI dependency required by every API route (spec 01 invariant 12)."""
     settings = getattr(request.app.state, "settings", None)
@@ -154,4 +201,5 @@ def get_principal(request: Request) -> Principal:
 
     enforce_request_policy(settings, request, principal)
     request.state.principal = principal
+    _record_workspace_seen(request, principal)
     return principal

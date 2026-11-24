@@ -19,6 +19,7 @@ from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
+from runway.api.v1.accounts_routes import build_accounts_router
 from runway.api.v1.approvals_routes import build_approvals_router
 from runway.api.v1.errors import install_problem_handlers
 from runway.api.v1.events_routes import build_events_router
@@ -39,6 +40,7 @@ from runway.operations.instance_lease import StandbyError, clear_stale_instance_
 from runway.operations.revision import checkout_revision
 from runway.operations.runtime_files import api_lock_path
 from runway.platforms.sync import SyncService
+from runway.realtime.hooks_routes import build_hooks_router
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +185,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             expose_headers=["ETag", "Idempotent-Replayed"],
         )
         # Added last so it runs first, before CORS handling and every route.
-        application.add_middleware(LocalRequestGuard, allowed_origins=web_origins)
+        # The public edge host (spec 04 section 6) reaches only /hooks/ and the
+        # OAuth callback; forwarded (tunnel) traffic is detected by its headers.
+        application.add_middleware(
+            LocalRequestGuard,
+            allowed_origins=web_origins,
+            edge_host=active_settings.public_edge_host,
+            edge_port=active_settings.public_edge_port,
+        )
         # Local-only surfaces (spec 01 section 7): media on local disk, capture,
         # catalogue, discovery, intelligence, the proposal/Lineup flow and the
         # browser publisher with its connector. Hosted does not mount them (404).
@@ -202,6 +211,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Hosted serves none of it (404) until the workspace-tenancy work
         # scopes every query by principal.workspace_id and calls require().
         application.include_router(build_platform_router(database, active_settings))
+        # Signature-authenticated platform webhooks (spec 04 section 2) and the
+        # per-account sync status; local only until tenancy covers them.
+        application.include_router(build_hooks_router(database, active_settings))
+        application.include_router(build_accounts_router(database, active_settings))
         # Agent interface (spec 06): keys, approvals and outbound webhooks; local
         # only until tenancy proves these routes isolated on Postgres too.
         application.include_router(build_keys_router(database, active_settings))

@@ -1912,6 +1912,9 @@ class Workspace(Base):
     slug: Mapped[str] = mapped_column(String(80))
     name: Mapped[str] = mapped_column(String(200))
     profile_note: Mapped[str | None] = mapped_column(Text)
+    # Last request from a human principal; drives sync's 14-day inactivity
+    # rule (spec 04 section 3). Written by get_principal, throttled per app.
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -2165,3 +2168,150 @@ class WebhookDelivery(Base, WorkspaceOwned):
     last_error: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# Webhook inbox (migration 0018, spec 04 section 2)
+
+
+class PlatformSubscription(Base, WorkspaceOwned, TimestampMixin):
+    """A platform push subscription (YouTube WebSub today).
+
+    `hub_secret` is the per-subscription WebSub secret; it only authenticates
+    hints and is never logged or returned by any API. `callback_token` is a
+    random 32-byte hex token the hub callbacks carry in their path, so the
+    route is unreachable to anyone we did not tell the URL to.
+    """
+
+    __tablename__ = "platform_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "provider", "topic", name="uq_platform_subscription"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="CASCADE",
+            name="fk_platform_subscriptions_account",
+        ),
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(20))
+    topic: Mapped[str] = mapped_column(String(500))
+    hub_secret: Mapped[str | None] = mapped_column(String(128))
+    callback_token: Mapped[str | None] = mapped_column(String(64))
+    lease_seconds: Mapped[int | None] = mapped_column(Integer)
+    subscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default=sql_text("'pending'")
+    )
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class WebhookEvent(Base):
+    """One raw webhook delivery, stored before anything trusts it.
+
+    The body is the unverified hint; `signature_ok` records whether the
+    platform signature matched. `dedupe_key` is NULL for unverified events so
+    a forged copy can never block the real delivery with the same bytes.
+    `workspace_id` stays NULL until `process_webhook` resolves the account.
+    """
+
+    __tablename__ = "webhook_events"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_webhook_events_dedupe_key"),
+        Index("ix_webhook_events_provider_received", "provider", "received_at"),
+        Index("ix_webhook_events_processed_at", "processed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "platform_subscriptions.id",
+            ondelete="SET NULL",
+            name="fk_webhook_events_subscription",
+        )
+    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    signature_ok: Mapped[bool] = mapped_column(Boolean)
+    dedupe_key: Mapped[str | None] = mapped_column(String(120))
+    body: Mapped[bytes] = mapped_column(LargeBinary)
+    content_type: Mapped[str | None] = mapped_column(String(100))
+    source: Mapped[str | None] = mapped_column(String(64))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(String(500))
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="SET NULL",
+            name="fk_webhook_events_account",
+        )
+    )
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_webhook_events_workspace")
+    )
+
+
+# -----------------------------------------------------------------------------
+# Adaptive sync state and provider quota (migration 0018b, spec 04 sections 3-4)
+
+
+class AccountSyncState(Base, WorkspaceOwned):
+    """The per-(account, scope) schedule the adaptive sync loop follows.
+
+    `source` records what last set the refresh in motion (`poll` or `push`),
+    `boosted_until` the temporary fast-cadence window, and
+    `consecutive_failures` the exponent for error backoff.
+    """
+
+    __tablename__ = "account_sync_state"
+    __table_args__ = (
+        UniqueConstraint("account_id", "scope", name="uq_account_sync_state_scope"),
+        Index("ix_account_sync_state_due", "next_run_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="CASCADE",
+            name="fk_account_sync_state_account",
+        ),
+        index=True,
+    )
+    scope: Mapped[str] = mapped_column(String(50))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(String(20))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    boosted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str | None] = mapped_column(String(10))
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=sql_text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class QuotaUsage(Base):
+    """Provider quota spend per (provider, bucket, day), project-level.
+
+    Deliberately not WorkspaceOwned: provider quota belongs to the project
+    credentials, not a workspace (spec 04 section 4). `day` is the
+    provider's quota-reset date - Pacific time for YouTube.
+    """
+
+    __tablename__ = "quota_usage"
+    __table_args__ = (UniqueConstraint("provider", "bucket", "day", name="uq_quota_usage_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    bucket: Mapped[str] = mapped_column(String(60))
+    day: Mapped[date] = mapped_column(Date)
+    units_used: Mapped[int] = mapped_column(Integer, default=0, server_default=sql_text("0"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

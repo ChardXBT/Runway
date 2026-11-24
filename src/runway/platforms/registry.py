@@ -19,6 +19,7 @@ from runway.platforms.mock import MockPlatformProvider, mock_token
 from runway.platforms.tiktok import TikTokProvider
 from runway.platforms.tokens import TokenRefreshBusy, TokenStore
 from runway.platforms.youtube import YouTubeProvider
+from runway.realtime.quota import QuotaRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,9 @@ class ProviderRegistry:
             if self.settings.platform_provider == "mock":
                 provider: PlatformProvider = MockPlatformProvider(platform, self.settings)
             elif platform is Platform.youtube:
-                provider = YouTubeProvider(self.settings)
+                provider = YouTubeProvider(
+                    self.settings, quota_recorder=QuotaRecorder(self.database)
+                )
             elif platform is Platform.instagram:
                 provider = InstagramProvider(self.settings)
             else:
