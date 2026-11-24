@@ -656,6 +656,10 @@ def read_remote_lease(settings: Settings, runner: CommandRunner | None = None) -
     instance_dir = _require_instance_dir(settings)
     repository = _configured_repository(ctx, instance_dir)
     with _instance_operation(instance_dir):
+        # The fetched lease decides active/standby, so the fetch faces the same
+        # destination checks as a push: a remote named like the verified URL or
+        # an insteadOf rule would otherwise read an attacker repository's lease.
+        verify_push_destination(ctx, instance_dir, repository)
         remote_ref = _remote_ref()
         try:
             if not _fetch(ctx, instance_dir, repository, remote_ref):

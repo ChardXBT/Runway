@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ import runway.config.instance as instance_config
 from runway.config import Settings
 from runway.operations import instance as ops
 from runway.operations.instance import InstanceContext, InstanceError
+from runway.operations.instance_lease import Lease, write_lease
 
 VERIFIED_URL = f"https://github.com/{PRIVATE_REPO}.git"
 
@@ -430,3 +432,76 @@ def test_a_public_flip_before_the_snapshot_upload_refuses(
 
     # The lease/manifest commit landed, but not a single asset was uploaded.
     assert fake_github.uploads() == []
+
+
+# --- the remote lease read is destination-guarded like a push -----------------
+
+
+def _foreign_bare_with_a_lease(fake: FakeGitHub, root: Path, holder: str) -> Path:
+    """A local bare repository whose main branch carries a forged lease.json."""
+    foreign = _bare(root, "foreign.git")
+    work = root / "foreign-work"
+    cloned = fake._real_git(["git", "clone", "--quiet", str(foreign), str(work)])
+    assert cloned.returncode == 0, cloned.stderr
+    now = datetime.now(UTC)
+    write_lease(work, Lease(holder=holder, holder_since=now, heartbeat_at=now))
+    _git_in(fake, work, "add", "lease.json")
+    _git_in(fake, work, "commit", "--quiet", "-m", "forged lease")
+    _git_in(fake, work, "push", "--quiet", "origin", "HEAD:main")
+    return foreign
+
+
+def test_read_remote_lease_refuses_an_insteadof_rewrite_to_a_foreign_repo(
+    tmp_path: Path,
+    fake_github: FakeGitHub,
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A url.*.insteadOf rule must not redirect the lease fetch to an attacker repo."""
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    settings = machine.settings()
+    # The clean clone reads the real holder first (positive control).
+    lease = ops.read_remote_lease(settings)
+    assert lease is not None and lease.holder == "machine-a"
+
+    foreign = _foreign_bare_with_a_lease(fake_github, tmp_path / "remotes", "attacker-machine")
+    _git_in(
+        fake_github,
+        machine.instance_dir,
+        "config",
+        f"url.{foreign.as_posix()}.insteadOf",
+        VERIFIED_URL,
+    )
+
+    # git applies insteadOf to `remote get-url` output too, so the refusal may
+    # fire on the rewritten origin URL or on the rule itself; either way the
+    # foreign repository's forged lease is never read.
+    with pytest.raises(InstanceError, match="refused.*(pushes to|insteadOf)"):
+        ops.read_remote_lease(settings)
+
+
+def test_read_remote_lease_refuses_a_remote_named_by_the_verified_url(
+    tmp_path: Path,
+    fake_github: FakeGitHub,
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A remote named ``https://github.com/...`` resolves before the URL: refused."""
+    machine = _machine(tmp_path, "machine-a", fake_github, clock)
+    ops.init(machine.context(monkeypatch), PRIVATE_REPO)
+    settings = machine.settings()
+    lease = ops.read_remote_lease(settings)
+    assert lease is not None and lease.holder == "machine-a"
+
+    foreign = _foreign_bare_with_a_lease(fake_github, tmp_path / "remotes", "attacker-machine")
+    _git_in(
+        fake_github,
+        machine.instance_dir,
+        "config",
+        f"remote.{VERIFIED_URL}.url",
+        str(foreign),
+    )
+
+    with pytest.raises(InstanceError, match="remote named"):
+        ops.read_remote_lease(settings)
