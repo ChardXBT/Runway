@@ -46,6 +46,11 @@ def _offline() -> bool:
     return context.is_offline_mode()
 
 
+def _recreate() -> str:
+    """SQLite rebuilds the table (keeps the declared foreign keys); Postgres alters in place."""
+    return "always" if op.get_context().dialect.name == "sqlite" else "auto"
+
+
 def _table_names() -> set[str]:
     if _offline():
         return set()
@@ -795,7 +800,7 @@ def _upgrade_retrieval_runs() -> None:
         )
         with op.batch_alter_table(
             "intelligence_retrieval_runs",
-            recreate="auto",
+            recreate=_recreate(),
         ) as batch:
             batch.alter_column(
                 "representation_sets_json",
@@ -863,7 +868,7 @@ def _upgrade_caption_candidates() -> None:
     if needs_batch:
         with op.batch_alter_table(
             "caption_candidate_records",
-            recreate="auto",
+            recreate=_recreate(),
         ) as batch:
             batch.alter_column(
                 "origin",
@@ -1003,7 +1008,7 @@ def _upgrade_pairwise_preferences() -> None:
     if needs_batch:
         with op.batch_alter_table(
             "pairwise_preferences",
-            recreate="auto",
+            recreate=_recreate(),
         ) as batch:
             for column, existing_type in (
                 ("target", sa.String(length=40)),
@@ -1115,7 +1120,7 @@ def _upgrade_feedback_signals() -> None:
     if needs_batch:
         with op.batch_alter_table(
             "feedback_signals",
-            recreate="auto",
+            recreate=_recreate(),
         ) as batch:
             batch.alter_column(
                 "derivation_version",
@@ -1173,7 +1178,7 @@ def _upgrade_generation_lineage() -> None:
     ):
         with op.batch_alter_table(
             "image_generation_runs",
-            recreate="auto",
+            recreate=_recreate(),
         ) as batch:
             if not _has_foreign_key(
                 "image_generation_runs",
@@ -1216,7 +1221,7 @@ def _upgrade_generation_lineage() -> None:
     if needs_batch:
         with op.batch_alter_table(
             "generated_asset_lineage",
-            recreate="auto",
+            recreate=_recreate(),
         ) as batch:
             batch.alter_column(
                 "review_status",
@@ -1244,7 +1249,7 @@ def _upgrade_generation_lineage() -> None:
 
 def _normalize_legacy_server_defaults() -> None:
     """Converge historical upgrades with the current 0001 bootstrap schema."""
-    with op.batch_alter_table("proposals", recreate="auto") as batch:
+    with op.batch_alter_table("proposals", recreate=_recreate()) as batch:
         batch.alter_column(
             "caption_rationale",
             existing_type=sa.Text(),
@@ -1257,14 +1262,14 @@ def _normalize_legacy_server_defaults() -> None:
             existing_nullable=False,
             server_default=None,
         )
-    with op.batch_alter_table("caption_feedback", recreate="auto") as batch:
+    with op.batch_alter_table("caption_feedback", recreate=_recreate()) as batch:
         batch.alter_column(
             "reason_codes_json",
             existing_type=sa.Text(),
             existing_nullable=False,
             server_default=None,
         )
-    with op.batch_alter_table("publish_attempts", recreate="auto") as batch:
+    with op.batch_alter_table("publish_attempts", recreate=_recreate()) as batch:
         batch.alter_column(
             "screenshot_paths_json",
             existing_type=sa.Text(),
@@ -1311,7 +1316,7 @@ def _drop_columns(
             for constraint in _inspector().get_unique_constraints(table)
             if constraint.get("name")
         }
-    with op.batch_alter_table(table, recreate="auto") as batch:
+    with op.batch_alter_table(table, recreate=_recreate()) as batch:
         for constraint in unique_constraints:
             if _offline() or constraint in existing_uniques:
                 batch.drop_constraint(constraint, type_="unique")
@@ -1320,7 +1325,7 @@ def _drop_columns(
 
 
 def _restore_legacy_server_defaults() -> None:
-    with op.batch_alter_table("proposals", recreate="auto") as batch:
+    with op.batch_alter_table("proposals", recreate=_recreate()) as batch:
         batch.alter_column(
             "caption_rationale",
             existing_type=sa.Text(),
@@ -1333,14 +1338,14 @@ def _restore_legacy_server_defaults() -> None:
             existing_nullable=False,
             server_default=sa.text("'[]'"),
         )
-    with op.batch_alter_table("caption_feedback", recreate="auto") as batch:
+    with op.batch_alter_table("caption_feedback", recreate=_recreate()) as batch:
         batch.alter_column(
             "reason_codes_json",
             existing_type=sa.Text(),
             existing_nullable=False,
             server_default=sa.text("'[]'"),
         )
-    with op.batch_alter_table("publish_attempts", recreate="auto") as batch:
+    with op.batch_alter_table("publish_attempts", recreate=_recreate()) as batch:
         batch.alter_column(
             "screenshot_paths_json",
             existing_type=sa.Text(),

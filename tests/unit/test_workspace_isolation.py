@@ -382,10 +382,13 @@ def test_row_level_security_enforces_isolation(request: pytest.FixtureRequest) -
             "SELECT DISTINCT workspace_id FROM connected_accounts"
         ).all()
         assert all(row[0] == 1 for row in rows)
-        # Cross-workspace write blocked by WITH CHECK.
+        # Cross-workspace write blocked by WITH CHECK. `created_at` is NOT NULL
+        # and the ORM's Python-side default never reaches raw SQL, so the
+        # insert supplies it - the row must fail on the policy, not the column.
         with pytest.raises(SQLAlchemyError):
             connection.exec_driver_sql(
-                "INSERT INTO content_groups (title, workspace_id) VALUES ('x', 2)"
+                "INSERT INTO content_groups (title, workspace_id, created_at) "
+                "VALUES ('x', 2, now())"
             )
         connection.rollback()
     engine.dispose()
@@ -404,9 +407,12 @@ def test_row_level_security_fails_closed_without_gucs(request: pytest.FixtureReq
     try:
         with engine.connect() as connection:
             # Seed through the system GUC, which is what system_session emits.
+            # `created_at` has only the ORM's Python-side default, so raw SQL
+            # must supply it.
             connection.exec_driver_sql("SET LOCAL app.system = 'on'")
             connection.exec_driver_sql(
-                "INSERT INTO content_groups (title, workspace_id) VALUES ('rls-seed', 1)"
+                "INSERT INTO content_groups (title, workspace_id, created_at) "
+                "VALUES ('rls-seed', 1, now())"
             )
             connection.commit()
         try:
@@ -417,7 +423,8 @@ def test_row_level_security_fails_closed_without_gucs(request: pytest.FixtureReq
                 )
                 with pytest.raises(SQLAlchemyError):
                     connection.exec_driver_sql(
-                        "INSERT INTO content_groups (title, workspace_id) VALUES ('x', 1)"
+                        "INSERT INTO content_groups (title, workspace_id, created_at) "
+                        "VALUES ('x', 1, now())"
                     )
                 connection.rollback()
             with engine.connect() as connection:

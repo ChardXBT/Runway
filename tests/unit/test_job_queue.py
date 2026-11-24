@@ -123,6 +123,10 @@ def test_claim_takes_the_earliest_due_job_of_a_handled_kind(queue: JobQueue, clo
 
 
 def test_sqlite_claim_runs_inside_begin_immediate(queue: JobQueue, database: Database) -> None:
+    if database.dialect != "sqlite":
+        # SQLite locks claims with BEGIN IMMEDIATE; Postgres emits the
+        # app.system GUC first and claims via FOR UPDATE SKIP LOCKED instead.
+        pytest.skip("BEGIN IMMEDIATE is the SQLite claim lock")
     statements: list[str] = []
 
     def record(_conn, _cursor, statement, *_args) -> None:  # type: ignore[no-untyped-def]
