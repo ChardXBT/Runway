@@ -21,6 +21,7 @@ from runway.config import Settings
 from runway.mediastore.probe import ProbeResult
 from runway.platforms.base import ProviderError, TokenSet
 from runway.platforms.capabilities import Platform
+from runway.platforms.limits import TIKTOK_INIT_RATE
 from runway.platforms.publisher import (
     AccountRef,
     Issue,
@@ -401,6 +402,30 @@ def test_an_init_without_an_upload_url_is_a_provider_error(
     with pytest.raises(ProviderError, match="upload_url"):
         inbox.send(holder.ctx, NullProgress())
     assert "put" not in fake.events, "a malformed init must stop before any PUT"
+
+
+def test_inits_are_capped_at_six_a_minute_per_account(
+    inbox: TikTokInboxPublisher, fake: FakeTikTok
+) -> None:
+    """TIKTOK_INIT_RATE: the seventh init inside a minute never reaches TikTok."""
+    fake.always_expire = True  # every send burns its init plus three restarts
+    for _ in range(2):
+        with pytest.raises(PublishRetryLater):
+            inbox.send(Ctx(fake).ctx, NullProgress())
+    assert fake.events.count("init") == TIKTOK_INIT_RATE.max_count
+
+    with pytest.raises(PublishRetryLater) as raised:
+        inbox.send(Ctx(fake).ctx, NullProgress())
+    assert raised.value.code == "tiktok_init_rate"
+    assert raised.value.retry_after == NOW + TIKTOK_INIT_RATE.window
+    assert fake.events.count("init") == TIKTOK_INIT_RATE.max_count
+
+    # Once the window frees the next init reaches TikTok again.
+    later = Ctx(fake, clock=lambda: NOW + TIKTOK_INIT_RATE.window + timedelta(seconds=1))
+    with pytest.raises(PublishRetryLater) as again:
+        inbox.send(later.ctx, NullProgress())
+    assert again.value.code != "tiktok_init_rate"
+    assert fake.events.count("init") > TIKTOK_INIT_RATE.max_count
 
 
 def test_the_pending_share_cap_is_a_final_refusal(

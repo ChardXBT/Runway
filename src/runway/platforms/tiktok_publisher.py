@@ -17,6 +17,8 @@ hands out a `publish_id` and an upload URL that lives for one hour
 
 from __future__ import annotations
 
+import threading
+from collections import deque
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,7 +35,7 @@ from runway.platforms.base import (
     TokenSet,
 )
 from runway.platforms.capabilities import Platform
-from runway.platforms.limits import TIKTOK_CHUNKS
+from runway.platforms.limits import TIKTOK_CHUNKS, TIKTOK_INIT_RATE
 from runway.platforms.publisher import (
     AdapterKind,
     Issue,
@@ -133,6 +135,9 @@ class _TikTokPublisherBase:
         self.settings = settings
         self.provider = provider
         self.clock = clock
+        # TIKTOK_INIT_RATE: init calls per account inside the sliding minute.
+        self._init_calls: dict[int, deque[datetime]] = {}
+        self._init_lock = threading.Lock()
 
     # ------------------------------------------------------------- preflight
 
@@ -220,8 +225,33 @@ class _TikTokPublisherBase:
     def _post_info(self, ctx: PublishContext) -> Mapping[str, Any] | None:
         return None
 
+    def _init_rate(self, ctx: PublishContext) -> None:
+        """TIKTOK_INIT_RATE: refuse a seventh init inside the account's minute.
+
+        TikTok counts init calls per access token on a sliding minute; the
+        in-process window refuses the call locally (before any request) so the
+        count is never spent. `retry_after` is when the oldest call leaves the
+        window. This guard is per process: the durable counters (rate guards,
+        attempt ledger) still apply across restarts.
+        """
+        key = ctx.account.id if ctx.account is not None else 0
+        now = ctx.now()
+        with self._init_lock:
+            calls = self._init_calls.setdefault(key, deque())
+            while calls and calls[0] <= now - TIKTOK_INIT_RATE.window:
+                calls.popleft()
+            if len(calls) >= TIKTOK_INIT_RATE.max_count:
+                raise PublishRetryLater(
+                    "tiktok_init_rate",
+                    f"TikTok allows {TIKTOK_INIT_RATE.max_count} publish inits a "
+                    "minute; the send retries when the window frees",
+                    retry_after=calls[0] + TIKTOK_INIT_RATE.window,
+                )
+            calls.append(now)
+
     def _init(self, ctx: PublishContext, token: TokenSet, media: MediaRef) -> dict[str, Any]:
         """Fresh publish session: init, then the resumable that survives a crash."""
+        self._init_rate(ctx)
         plan = plan_tiktok_chunks(media.size_bytes)
         try:
             init = self.provider.publish_init(
