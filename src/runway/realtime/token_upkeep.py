@@ -191,7 +191,6 @@ class TokenUpkeepScheduler:
     def produce(self, now: datetime) -> None:
         if self._last_scan is not None and now < self._last_scan + self.interval:
             return
-        self._last_scan = now
         with self.database.session() as session:
             rows = session.execute(
                 select(
@@ -234,6 +233,9 @@ class TokenUpkeepScheduler:
                     now=now,
                     warned=warned,
                 )
+        # Stamped only once the scan has committed: a scan that raised stays
+        # due, so the next produce retries instead of losing the interval.
+        self._last_scan = now
 
 
 def run_refresh_token_job(
