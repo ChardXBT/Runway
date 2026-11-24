@@ -6,6 +6,8 @@ route checks roles directly.
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Literal
 
 from fastapi import Request
@@ -13,6 +15,10 @@ from pydantic import BaseModel, ConfigDict
 
 from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
+from runway.db.base import Database
+from runway.db.models import Workspace, utcnow
+
+logger = logging.getLogger(__name__)
 
 PrincipalKind = Literal["user", "agent", "system"]
 Role = Literal["owner", "editor", "approver", "viewer"]
@@ -60,9 +66,8 @@ ROLE_SCOPES: dict[Role, frozenset[str]] = {
 
 LOCAL_WORKSPACE_ID = 1
 LOCAL_OWNER_ID = "local-owner"
-# Agent keys use this bearer prefix (spec 06 section 2). Key resolution arrives
-# with the api_keys work; until then a presented key is refused, never mapped
-# to the owner.
+# Agent keys use this bearer prefix (spec 06 section 2); runway.auth.api_keys
+# resolves them. A presented key is never mapped to the owner.
 API_KEY_PREFIX = "rwy_"
 
 
@@ -112,6 +117,16 @@ def require(principal: Principal, scope: str) -> None:
         raise Problem.of(ProblemCode.SCOPE_MISSING, f"this action needs the {scope} scope")
 
 
+def require_person(principal: Principal, action: str) -> None:
+    """Some decisions belong to a person, never to an API key (invariant 16).
+
+    Check this after the scope check: a key without the scope gets
+    `scope_missing`, a key holding it gets `human_required`.
+    """
+    if principal.kind == "agent":
+        raise Problem.of(ProblemCode.HUMAN_REQUIRED, f"only a person can {action}")
+
+
 def _presented_api_key(request: Request) -> bool:
     authorization = request.headers.get("authorization", "")
     scheme, _, credential = authorization.partition(" ")
@@ -120,22 +135,58 @@ def _presented_api_key(request: Request) -> bool:
 
 def resolve_principal(settings: Settings, request: Request) -> Principal:
     if _presented_api_key(request):
-        # ---- API-KEY SEAM (spec 06 section 2) -------------------------------
-        # An `rwy_` bearer is resolved here, before the profile branch, in both
-        # profiles: look the key up in `api_keys` by prefix, compare the hash,
-        # check expiry and revocation, and return Principal(kind="agent", ...).
-        # That is the API-key job's work; until it lands a key is refused and
-        # is never mapped to the local owner or to a session.
-        raise Problem.of(
-            ProblemCode.API_KEY_UNSUPPORTED,
-            "this Runway version cannot verify API keys; send the request without one",
-        )
+        # API-KEY SEAM (spec 06 section 2): resolved before the profile branch,
+        # in both profiles; never mapped to the local owner or to a session.
+        from runway.auth.api_keys import resolve_api_key
+
+        return resolve_api_key(settings, request)
     if settings.profile == "local":
         return local_owner()
     # Imported here so the local profile never loads the hosted identity stack.
     from runway.auth.hosted import resolve_hosted_principal
 
     return resolve_hosted_principal(settings, request)
+
+
+# workspaces.last_seen_at is the "a human was here" heartbeat the adaptive
+# sync scheduler reads for its 14-day inactivity rule (spec 04 section 3).
+# One write per workspace per 10 minutes is plenty for a day-scale rule.
+SEEN_WRITE_INTERVAL_SECONDS = 600.0
+
+
+def _record_workspace_seen(request: Request, principal: Principal) -> None:
+    """Touch `workspaces.last_seen_at` for human requests, throttled per app.
+
+    Never raises: a broken heartbeat must not break the request it rode in on.
+    The throttle map lives on `app.state` so each app keeps its own cadence.
+    """
+    if principal.kind != "user":
+        return
+    if getattr(request.state, "runway_edge", False):
+        # Marked by LocalRequestGuard: public edge traffic is never a human
+        # heartbeat - a forged funnel request must not fake activity (the
+        # inactivity rule would keep syncing an abandoned install).
+        return
+    database = getattr(request.app.state, "database", None)
+    if not isinstance(database, Database):
+        return
+    writes = getattr(request.app.state, "workspace_seen_writes", None)
+    if writes is None:
+        writes = {}
+        request.app.state.workspace_seen_writes = writes
+    moment = time.monotonic()
+    if moment - writes.get(principal.workspace_id, -SEEN_WRITE_INTERVAL_SECONDS) < (
+        SEEN_WRITE_INTERVAL_SECONDS
+    ):
+        return
+    writes[principal.workspace_id] = moment
+    try:
+        with database.session() as session:
+            workspace = session.get(Workspace, principal.workspace_id)
+            if workspace is not None:
+                workspace.last_seen_at = utcnow()
+    except Exception:  # noqa: BLE001
+        logger.exception("could not record workspace %s activity", principal.workspace_id)
 
 
 def get_principal(request: Request) -> Principal:
@@ -145,5 +196,10 @@ def get_principal(request: Request) -> Principal:
         # Fail closed: without the app's settings the profile is unknown.
         raise RuntimeError("the application has no settings; build it with create_app()")
     principal = resolve_principal(settings, request)
+    # Route-level rules that depend on who is asking (spec 06 sections 3, 4, 9).
+    from runway.auth.request_policy import enforce_request_policy
+
+    enforce_request_policy(settings, request, principal)
     request.state.principal = principal
+    _record_workspace_seen(request, principal)
     return principal

@@ -30,6 +30,13 @@ from runway.jobs.runtime import build_worker
 from runway.jobs.worker import PermanentJobError, Worker
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.sync import SYNC_ACCOUNT_JOB, PlatformSyncScheduler
+from runway.realtime.processing import PROCESS_WEBHOOK_JOB
+from runway.realtime.subscriptions import (
+    RENEW_SUBSCRIPTION_JOB,
+    SUBSCRIBE_APPS_JOB,
+    SubscriptionScheduler,
+)
+from runway.realtime.token_upkeep import REFRESH_TOKEN_JOB, TokenUpkeepScheduler
 
 START = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
@@ -396,8 +403,12 @@ def test_scheduler_produces_one_sync_job_per_account_per_interval(
 def test_the_worker_runs_scheduled_sync_with_the_existing_sync_code(tmp_path, clock: Clock) -> None:
     from runway.db import initialize_database
 
+    # The legacy fixed-slot path, kept behind adaptive_sync_enabled=false.
     settings = Settings(
-        data_dir=tmp_path / "data", platform_provider="mock", platform_sync_interval_minutes=30
+        data_dir=tmp_path / "data",
+        platform_provider="mock",
+        platform_sync_interval_minutes=30,
+        adaptive_sync_enabled=False,
     )
     database = initialize_database(settings)
     try:
@@ -424,12 +435,31 @@ def test_the_worker_runs_scheduled_sync_with_the_existing_sync_code(tmp_path, cl
 
 
 def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database: Database) -> None:
-    worker = build_worker(settings, database)
-    assert [type(producer) for producer in worker.producers] == [RetentionPurgeScheduler]
-    # Publishing: send, poll_processing, verify, reconcile and probe_media.
+    # Legacy path only: with adaptive sync enabled (the default) the
+    # AdaptiveSyncScheduler produces scoped jobs instead.
+    worker = build_worker(settings.model_copy(update={"adaptive_sync_enabled": False}), database)
+    from runway.agent.webhooks import DELIVER_WEBHOOK_JOB, WebhookDispatcher
     from runway.posts.jobs import PUBLISHING_JOB_KINDS
 
-    assert set(worker.handlers) == {SYNC_ACCOUNT_JOB, PURGE_JOB} | PUBLISHING_JOB_KINDS
+    assert [type(producer) for producer in worker.producers] == [
+        RetentionPurgeScheduler,
+        WebhookDispatcher,
+        SubscriptionScheduler,
+        TokenUpkeepScheduler,
+    ]
+    assert (
+        set(worker.handlers)
+        == {
+            SYNC_ACCOUNT_JOB,
+            PURGE_JOB,
+            DELIVER_WEBHOOK_JOB,
+            PROCESS_WEBHOOK_JOB,
+            RENEW_SUBSCRIPTION_JOB,
+            SUBSCRIBE_APPS_JOB,
+            REFRESH_TOKEN_JOB,
+        }
+        | PUBLISHING_JOB_KINDS
+    )
 
 
 def test_hourly_purge_removes_only_expired_keys_and_events(
@@ -650,3 +680,62 @@ def test_purge_removes_only_unreferenced_unheld_lock_files(
 
     assert sorted(path.stem for path in refresh_dir.glob("*.lock")) == ["heldref", "liveref"]
     assert [path.stem for path in sync_dir.glob("*.lock")] == [f"account-{live_id}"]
+
+
+def test_a_standby_machine_claims_no_job(queue: JobQueue, database: Database) -> None:
+    queue.enqueue("probe", idempotency_key="standby-1")
+    ran: list[int] = []
+    worker = _worker(queue, {"probe": lambda job: ran.append(job.id)}, is_active=lambda: False)
+
+    assert worker.run_once() is False
+    assert ran == []
+    with database.session() as session:
+        assert session.scalar(select(PublishJob.state)) == "pending"
+
+
+def test_a_job_that_finds_standby_after_marking_busy_is_deferred_not_run(
+    queue: JobQueue, database: Database, clock: Clock
+) -> None:
+    from contextlib import contextmanager
+
+    job = queue.enqueue("probe", idempotency_key="standby-2")
+    answers = iter([True, False])
+    events: list[str] = []
+
+    @contextmanager
+    def busy(kind: str):  # type: ignore[no-untyped-def]
+        events.append(f"busy {kind}")
+        yield
+        events.append("idle")
+
+    worker = _worker(
+        queue,
+        {"probe": lambda job: events.append("ran")},
+        is_active=lambda: next(answers),
+        busy=busy,
+    )
+
+    assert worker.run_once() is False
+    assert events == ["busy probe", "idle"]
+    row = _row(database, job.id)
+    assert (row.state, row.attempts) == ("pending", 0)
+    assert row.run_at.replace(tzinfo=UTC) > clock.now
+
+
+def test_an_active_machine_runs_the_job_inside_its_busy_marker(queue: JobQueue) -> None:
+    from contextlib import contextmanager
+
+    queue.enqueue("probe", idempotency_key="standby-3")
+    events: list[str] = []
+
+    @contextmanager
+    def busy(kind: str):  # type: ignore[no-untyped-def]
+        events.append("busy")
+        yield
+        events.append("idle")
+
+    worker = _worker(
+        queue, {"probe": lambda job: events.append("ran")}, is_active=lambda: True, busy=busy
+    )
+    assert worker.run_once() is True
+    assert events == ["busy", "ran", "idle"]

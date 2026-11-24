@@ -14,8 +14,12 @@ dependencies = [
   "alembic>=1.14,<2",
   "beautifulsoup4>=4.12,<5",
   "cryptography>=44,<51",
+  "defusedxml>=0.7,<1",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
+  # Official MCP SDK for `runway mcp` (spec 06 section 7). Exact pin: 2.3.0 serves
+  # protocol revisions 2025-11-25 and 2026-07-28 (mcp_types.version, verified 2026-11-23).
+  "mcp==2.3.0",
   "numpy>=2.1,<3",
   "openai>=1.60,<3",
   "pillow>=11,<14",

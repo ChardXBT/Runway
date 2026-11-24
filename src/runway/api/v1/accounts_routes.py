@@ -1,10 +1,20 @@
-"""`/api/v1/accounts` account routes: incremental consent and the TikTok screen.
+"""`/api/v1/accounts/{id}`: incremental publishing consent (spec 08 section 1).
 
-`POST /api/v1/accounts/{id}/publishing/enable` starts a re-consent that adds
-the publishing scopes an account does not yet have (TikTok `video.upload`, and
-`video.publish` only for an audited app — spec 08 section 1). The issued OAuth
-state names the account, so the shared callback refuses to attach the grant to
-any other identity.
+`POST /api/v1/accounts/{id}/publishing/enable` starts an incremental OAuth
+flow that adds the publishing scopes an account does not yet have, dispatched
+per platform:
+
+- YouTube: the upload scope (and the posts scope when the pilot flag is on).
+- TikTok: `video.upload`, and `video.publish` only for an audited app
+  (spec 08 section 4).
+
+The issued OAuth state row is bound to the account, so the shared
+`/api/platforms/{platform}/oauth/callback` refuses to attach a token whose
+platform identity differs (the wrong-channel guard), and stores the scopes
+the response actually granted.
+
+`GET /api/v1/accounts/{id}/youtube/categories` lists the assignable YouTube
+video categories for the target settings UI.
 
 `GET /api/v1/accounts/{id}/tiktok/creator-info` calls `creator_info` fresh on
 every request: the mandatory posting screen is built from exactly what TikTok
@@ -14,9 +24,10 @@ returns for this creator right now.
 from __future__ import annotations
 
 import json
+import re
 
-from fastapi import Depends
-from fastapi.routing import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from runway.api.v1.router import build_v1_router
 from runway.auth.principal import (
@@ -30,16 +41,30 @@ from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
-from runway.platforms.base import AuthorizationExpired, ProviderError, RateLimited
-from runway.platforms.capabilities import TIKTOK_SCOPES, Platform
+from runway.platforms.base import (
+    AuthorizationExpired,
+    ProviderError,
+    RateLimited,
+    safe_error_summary,
+)
+from runway.platforms.capabilities import (
+    TIKTOK_SCOPES,
+    YOUTUBE_ENGAGE_SCOPE,
+    Platform,
+)
 from runway.platforms.oauth import OAuthStateService
 from runway.platforms.post_settings import TikTokVideoSettings, release_notice
+from runway.platforms.publish_capability import YOUTUBE_UPLOAD_SCOPE
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.tiktok import TikTokProvider
+from runway.platforms.tokens import pkce_challenge
+from runway.platforms.youtube import YouTubeProvider
 from runway.posts.types import TargetPostType
 
 TIKTOK_UPLOAD_SCOPE = "video.upload"
 TIKTOK_PUBLISH_SCOPE = "video.publish"
+
+_REGION = re.compile(r"^[A-Za-z]{2}$")
 
 
 def _problem(code: ProblemCode, detail: str, **extra: object) -> Problem:
@@ -56,49 +81,36 @@ def _upstream(exc: ProviderError) -> Problem:
     )
 
 
+def _account(session: Session, principal: Principal, account_id: int) -> ConnectedAccount:
+    account = session.get(ConnectedAccount, account_id)
+    if account is None or account.workspace_id != principal.workspace_id:
+        raise _problem(ProblemCode.NOT_FOUND, "this account does not exist")
+    session.expunge(account)
+    return account
+
+
+def _granted_scopes(account: ConnectedAccount) -> list[str]:
+    try:
+        value = json.loads(account.granted_scopes_json or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [str(scope) for scope in value] if isinstance(value, list) else []
+
+
 def build_accounts_router(
     database: Database,
     settings: Settings,
     *,
     registry: ProviderRegistry | None = None,
 ) -> APIRouter:
-    router = build_v1_router(prefix="/accounts", tags=["accounts"])
+    router = build_v1_router(tags=["accounts"], prefix="/accounts")
     if registry is None:
         registry = ProviderRegistry(database, settings)
     oauth_states = OAuthStateService(database)
 
-    def _account_or_404(account_id: int, workspace_id: int) -> ConnectedAccount:
-        with database.session() as session:
-            account = session.get(ConnectedAccount, account_id)
-            if account is None or account.workspace_id != workspace_id:
-                raise _problem(ProblemCode.NOT_FOUND, "account not found")
-            session.expunge(account)
-            return account
-
-    def _granted_scopes(account: ConnectedAccount) -> list[str]:
-        try:
-            value = json.loads(account.granted_scopes_json or "[]")
-        except json.JSONDecodeError:
-            return []
-        return [str(scope) for scope in value] if isinstance(value, list) else []
-
-    @router.post("/{account_id}/publishing/enable")
-    def enable_publishing(
-        account_id: int, principal: Principal = Depends(get_principal)
+    def _enable_tiktok_publishing(
+        account: ConnectedAccount, principal: Principal
     ) -> dict[str, object]:
-        """Start the incremental consent that adds publishing scopes (`accounts:manage`).
-
-        Returns `consent_required` with the authorization URL to open, or
-        `already_enabled` when the account already holds every scope it needs.
-        """
-        require(principal, ACCOUNTS_MANAGE)
-        account = _account_or_404(account_id, principal.workspace_id)
-        if account.platform != Platform.tiktok.value:
-            raise _problem(
-                ProblemCode.VALIDATION_FAILED,
-                "incremental publishing consent is implemented for TikTok accounts",
-                platform=account.platform,
-            )
         if settings.platform_provider == "mock":
             raise _problem(
                 ProblemCode.VALIDATION_FAILED,
@@ -126,7 +138,9 @@ def build_accounts_router(
             Platform.tiktok,
             redirect_uri=registry.redirect_uri(Platform.tiktok),
             use_pkce=False,
-            for_account_id=account.id,
+            purpose="enable_publishing",
+            account_id=account.id,
+            workspace_id=principal.workspace_id,
         )
         return {
             "status": "consent_required",
@@ -141,6 +155,126 @@ def build_accounts_router(
             "scopes": requested,
         }
 
+    def _enable_youtube_publishing(
+        account: ConnectedAccount, principal: Principal
+    ) -> dict[str, object]:
+        if settings.platform_provider == "mock":
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "mock provider mode has no OAuth; its accounts publish in mock mode",
+            )
+        platform = Platform.youtube
+        provider = registry.provider(platform)
+        if not isinstance(provider, YouTubeProvider):
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "publishing enable is unavailable for this provider",
+            )
+        if not provider.configured():
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "YouTube OAuth is not configured; set the client credentials",
+            )
+        extra = [YOUTUBE_UPLOAD_SCOPE]
+        # youtube.force-ssl only when the build can use the posts API; asking
+        # for it otherwise buys the consent screen a scary scope for nothing.
+        if settings.youtube_posts_api_access:
+            extra.append(YOUTUBE_ENGAGE_SCOPE)
+        redirect_uri = registry.redirect_uri(platform)
+        issued = oauth_states.issue(
+            platform,
+            redirect_uri=redirect_uri,
+            use_pkce=True,
+            purpose="enable_publishing",
+            account_id=account.id,
+            workspace_id=principal.workspace_id,
+        )
+        authorization_url = provider.authorization_url(
+            state=issued.state,
+            redirect_uri=redirect_uri,
+            code_challenge=(pkce_challenge(issued.code_verifier) if issued.code_verifier else None),
+            extra_scopes=extra,
+        )
+        return {
+            "authorization_url": authorization_url,
+            "state": issued.state,
+            "requested_scopes": extra,
+        }
+
+    @router.post("/{account_id}/publishing/enable")
+    def enable_publishing(
+        account_id: int, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
+        """The incremental-consent URL for this account's missing publishing scopes."""
+        require(principal, ACCOUNTS_MANAGE)
+        with database.session() as session:
+            account = _account(session, principal, account_id)
+        platform = Platform(account.platform)
+        if platform is Platform.tiktok:
+            return _enable_tiktok_publishing(account, principal)
+        if platform is Platform.youtube:
+            return _enable_youtube_publishing(account, principal)
+        raise _problem(
+            ProblemCode.VALIDATION_FAILED,
+            f"publishing enable for {platform.value} is not built yet",
+            platform=platform.value,
+        )
+
+    @router.get("/{account_id}/youtube/categories")
+    def youtube_categories(
+        account_id: int,
+        region: str = "US",
+        principal: Principal = Depends(get_principal),
+    ) -> dict[str, object]:
+        """Assignable `videoCategories.list` entries for the target settings UI.
+
+        Cached by the provider for a day per region (spec 08 section 2).
+        """
+        require(principal, ACCOUNTS_READ)
+        if not _REGION.fullmatch(region):
+            raise _problem(ProblemCode.VALIDATION_FAILED, "region must be a two-letter region code")
+        with database.session() as session:
+            account = _account(session, principal, account_id)
+        platform = Platform(account.platform)
+        if platform is not Platform.youtube:
+            raise _problem(
+                ProblemCode.VALIDATION_FAILED,
+                "categories are a YouTube account feature",
+            )
+        if not account.token_ref:
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "the account has no stored token; reconnect it",
+            )
+        provider = registry.provider(platform)
+        if not isinstance(provider, YouTubeProvider):
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "categories are unavailable for this provider",
+            )
+        try:
+            token = registry.fresh_token(platform, account.token_ref)
+            items = provider.list_video_categories(token, region_code=region.upper())
+        except AuthorizationExpired as exc:
+            # needs_reauth: the read capability is not ready until the owner
+            # reconnects the account.
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "the YouTube account must be re-authorized; reconnect it",
+            ) from exc
+        except RateLimited as exc:
+            raise Problem.of(
+                ProblemCode.RATE_LIMITED,
+                safe_error_summary(exc),
+                headers={"Retry-After": "60"},
+            ) from exc
+        except ProviderError as exc:
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                safe_error_summary(exc),
+            ) from exc
+        return {"items": items, "region": region.upper()}
+
     @router.get("/{account_id}/tiktok/creator-info")
     def creator_info(
         account_id: int, principal: Principal = Depends(get_principal)
@@ -152,7 +286,8 @@ def build_accounts_router(
         strings the screen must show.
         """
         require(principal, ACCOUNTS_READ)
-        account = _account_or_404(account_id, principal.workspace_id)
+        with database.session() as session:
+            account = _account(session, principal, account_id)
         if account.platform != Platform.tiktok.value:
             raise _problem(ProblemCode.NOT_FOUND, "not a TikTok account")
         if settings.platform_provider == "mock":

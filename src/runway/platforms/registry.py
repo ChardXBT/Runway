@@ -19,6 +19,7 @@ from runway.platforms.mock import MockPlatformProvider, mock_token
 from runway.platforms.tiktok import TikTokProvider
 from runway.platforms.tokens import TokenRefreshBusy, TokenStore
 from runway.platforms.youtube import YouTubeProvider
+from runway.realtime.quota import QuotaRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class ProviderRegistry:
     def __init__(self, database: Database, settings: Settings) -> None:
         self.database = database
         self.settings = settings
-        self.token_store = TokenStore(settings.resolved_data_dir / "secrets")
+        self.token_store = TokenStore.from_settings(settings)
         self._providers: dict[Platform, PlatformProvider] = {}
 
     @property
@@ -76,7 +77,9 @@ class ProviderRegistry:
             if self.settings.platform_provider == "mock":
                 provider: PlatformProvider = MockPlatformProvider(platform, self.settings)
             elif platform is Platform.youtube:
-                provider = YouTubeProvider(self.settings)
+                provider = YouTubeProvider(
+                    self.settings, quota_recorder=QuotaRecorder(self.database)
+                )
             elif platform is Platform.instagram:
                 provider = InstagramProvider(self.settings)
             else:
@@ -87,14 +90,23 @@ class ProviderRegistry:
     def set_provider(self, platform: Platform, provider: PlatformProvider) -> None:
         self._providers[platform] = provider
 
-    def fresh_token(self, platform: Platform, token_ref: str) -> TokenSet:
+    def ensure_platform_write_allowed(self) -> None:
+        """Raise StandbyError when this machine does not hold the private instance lease."""
+        self.token_store.ensure_writable()
+
+    def fresh_token(
+        self, platform: Platform, token_ref: str, *, for_write: bool = False
+    ) -> TokenSet:
         """Load an account token, refreshing and re-storing it when it is near expiry.
 
         Raises AuthorizationExpired only when the account must be re-authorized
         (no stored token, a revoked grant). Transient refresh failures (timeouts,
         5xx, rate limits) propagate as their own ProviderError so callers do not
-        mistake a network blip for a revoked account.
+        mistake a network blip for a revoked account. ``for_write`` tokens are
+        refused on a standby machine even when they need no refresh.
         """
+        if for_write:
+            self.ensure_platform_write_allowed()
         token = self.token_store.load(token_ref)
         if token is None:
             raise AuthorizationExpired("account token is missing", status=401)
@@ -110,6 +122,10 @@ class ProviderRegistry:
                     raise AuthorizationExpired("account token is missing", status=401)
                 if not _needs_refresh(platform, token):
                     return token
+                # Before the refresh call: TikTok rotates refresh tokens, so a
+                # standby machine must not even ask, or it invalidates the
+                # active machine's token.
+                self.token_store.ensure_writable()
                 refreshed = self.provider(platform).refresh(token)
                 # Stored before the lock is released, so the next waiter
                 # re-reads the new token set instead of refreshing again.
@@ -127,9 +143,13 @@ class ProviderRegistry:
     ) -> None:
         """Record the scopes a refresh response reports on the owning account.
 
-        The granted-scopes column feeds every capability check; a provider can
-        widen or narrow the grant on any exchange or refresh, so the stored set
-        always mirrors what the platform last confirmed.
+        Spec 08 section 1: after every token exchange and every refresh the
+        granted scopes are stored; the publishing capability is derived from
+        them, so it recomputes itself. A provider can widen or narrow the
+        grant on any exchange or refresh, so the stored set always mirrors
+        what the platform last confirmed. The lookup filters by platform as
+        well as token ref, so one provider's response can never rewrite
+        another platform's account.
         """
         with self.database.session() as session:
             account = session.scalar(
@@ -140,7 +160,10 @@ class ProviderRegistry:
             )
             if account is None:
                 return
-            stored = json.loads(account.granted_scopes_json or "[]")
+            try:
+                stored = json.loads(account.granted_scopes_json or "[]")
+            except ValueError:
+                stored = []
             if stored == scopes:
                 return
             account.granted_scopes_json = json.dumps(scopes)

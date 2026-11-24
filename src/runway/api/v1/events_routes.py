@@ -10,6 +10,7 @@ from runway.auth.principal import Principal, get_principal
 from runway.auth.problems import Problem, ProblemCode
 from runway.db.base import Database
 from runway.events.stream import HEARTBEAT_SECONDS, POLL_SECONDS, event_stream, wakeup_for
+from runway.events.visibility import visibility_for
 
 
 def _event_id(value: str | None) -> int | None:
@@ -59,6 +60,8 @@ def build_events_router(
             wakeup=wakeup_for(database, poll_seconds=poll_seconds),
             is_disconnected=request.is_disconnected,
             heartbeat_seconds=heartbeat_seconds,
+            # Spec 06 section 8: filtered to the scopes the caller may read.
+            visible=visibility_for(principal),
         )
         return StreamingResponse(
             frames,

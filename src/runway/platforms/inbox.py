@@ -21,6 +21,7 @@ from runway.db.models import (
 from runway.domain.enums import CommentStatus, PlatformActionState
 from runway.domain.state_machine import COMMENT_STATUS_MACHINE, PLATFORM_ACTION_MACHINE
 from runway.hosted.quotas import require_send_allowed
+from runway.operations.instance_lease import worker_busy
 from runway.platforms.base import (
     AuthorizationExpired,
     ProviderError,
@@ -107,7 +108,9 @@ class InboxService:
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        workspace_id: int | None = None,
     ) -> dict[str, object]:
+        """Top-level comments; `workspace_id` limits them to one workspace (agent tools)."""
         with self.database.session() as session:
             statement = select(CommentRecord).where(CommentRecord.parent_external_id.is_(None))
             count_statement = (
@@ -115,6 +118,9 @@ class InboxService:
                 .select_from(CommentRecord)
                 .where(CommentRecord.parent_external_id.is_(None))
             )
+            if workspace_id is not None:
+                statement = statement.where(CommentRecord.workspace_id == workspace_id)
+                count_statement = count_statement.where(CommentRecord.workspace_id == workspace_id)
             if platform:
                 statement = statement.where(CommentRecord.platform == platform)
                 count_statement = count_statement.where(CommentRecord.platform == platform)
@@ -206,10 +212,14 @@ class InboxService:
             "handoff_url": handoff,
         }
 
-    def get_comment(self, comment_id: int) -> dict[str, object] | None:
+    def get_comment(
+        self, comment_id: int, *, workspace_id: int | None = None
+    ) -> dict[str, object] | None:
         with self.database.session() as session:
             comment = session.get(CommentRecord, comment_id)
             if comment is None:
+                return None
+            if workspace_id is not None and comment.workspace_id != workspace_id:
                 return None
             account = session.get(ConnectedAccount, comment.account_id)
             platform = Platform(comment.platform)
@@ -259,9 +269,14 @@ class InboxService:
             session.flush()
             return comment_view(comment)
 
-    def set_draft(self, comment_id: int, text: str) -> dict[str, object]:
+    def set_draft(
+        self, comment_id: int, text: str, *, workspace_id: int | None = None
+    ) -> dict[str, object]:
         with self.database.session() as session:
-            if session.get(CommentRecord, comment_id) is None:
+            comment = session.get(CommentRecord, comment_id)
+            if comment is None or (
+                workspace_id is not None and comment.workspace_id != workspace_id
+            ):
                 raise LookupError("comment not found")
             draft = session.scalar(select(ReplyDraft).where(ReplyDraft.comment_id == comment_id))
             if draft is None:
@@ -285,6 +300,8 @@ class InboxService:
         if self.registry is None:
             raise InboxReplyForbidden("reply service is unavailable")
         registry = self.registry
+        # Before anything is recorded: a standby machine never sends a platform write.
+        registry.ensure_platform_write_allowed()
         with self.database.session() as session:
             comment = session.get(CommentRecord, comment_id)
             if comment is None:
@@ -343,7 +360,7 @@ class InboxService:
         # YouTube access tokens last an hour; a reply long after the last sync
         # must refresh first rather than send an expired token.
         try:
-            token = registry.fresh_token(platform, account_token_ref)
+            token = registry.fresh_token(platform, account_token_ref, for_write=True)
         except AuthorizationExpired as exc:
             forbidden = InboxReplyForbidden(
                 f"account authorization expired; reconnect it ({safe_error_summary(exc)})"
@@ -360,9 +377,10 @@ class InboxService:
             PLATFORM_ACTION_MACHINE.apply(record, PlatformActionState.ATTEMPTED)
             record.attempted_at = utcnow()
         try:
-            result = provider.reply_to_comment(
-                token, comment_external_id=comment_external_id, text=text
-            )
+            with worker_busy(registry.settings, "comment_reply"):
+                result = provider.reply_to_comment(
+                    token, comment_external_id=comment_external_id, text=text
+                )
         except Exception as exc:  # noqa: BLE001
             # A reply is a public, non-idempotent write. When the failure may
             # have followed the request reaching the platform (a read timeout,

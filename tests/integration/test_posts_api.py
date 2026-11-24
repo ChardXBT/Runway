@@ -89,7 +89,10 @@ def test_assisted_adapter_completes_a_post_end_to_end_without_credentials(
     post = _create(client, account)
     target = post["targets"][0]  # type: ignore[index]
     assert target["state"] == "ready" and target["publisher"] == "assisted"
-    assert target["capability"]["state"] == "assisted_only"
+    # The youtube_post adapter is in this build, but the posts API pilot flag
+    # is off, so the direct path reports needs_app_approval and the assisted
+    # checklist is the default.
+    assert target["capability"]["state"] == "needs_app_approval"
     assert not target["releasable"]  # no planned time yet
 
     scheduled = client.post(

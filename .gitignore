@@ -32,3 +32,15 @@ Thumbs.db
 # Local Windows automation
 A_Runway.bat
 A_Runway_Task.xml
+
+# Private instance data (docs/PRIVATE_INSTANCE.md); scripts/secret_scan.py enforces it.
+.env.*
+!.env.example
+*.key
+platform-tokens.json
+secrets.enc.*
+lease.json
+*.db.gz
+*.sqlite
+*.sqlite3
+runway-operational-media.zip

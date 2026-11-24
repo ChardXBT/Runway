@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -19,6 +21,8 @@ from runway.db.models import (
     ConnectedAccount,
     PlatformContent,
 )
+from runway.operations import instance_lease
+from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.tokens import TokenStore
@@ -141,6 +145,76 @@ def test_oauth_connect_and_callback_happy_path(
         assert accounts[0]["platform"] == "youtube"
         assert accounts[0]["external_account_id"] == "UCtest"
         assert accounts[0]["status"] == "connected"
+
+
+def test_oauth_callback_gates_standby_before_exchanging_the_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        instance_dir=instance_dir,
+        machine_id="this-machine",
+        token_key=Fernet.generate_key().decode("ascii"),
+        platform_provider="live",
+        youtube_client_id="yt-client",
+        youtube_client_secret="yt-secret",
+    )
+    # This machine holds the lease and confirmed it remotely just now: active.
+    heartbeat = datetime.now(UTC)
+    instance_lease.write_lease(
+        instance_dir,
+        instance_lease.Lease(holder="this-machine", holder_since=heartbeat, heartbeat_at=heartbeat),
+    )
+    instance_lease.record_remote_check(instance_dir, "this-machine", heartbeat)
+    client = httpx.Client(transport=httpx.MockTransport(_youtube_handler), timeout=20.0)
+    provider = YouTubeProvider(settings, client)
+    exchanged: list[str] = []
+    real_exchange = provider.exchange_code
+
+    def exchange_spy(*, code: str, redirect_uri: str, code_verifier: str | None) -> TokenSet:
+        exchanged.append(code)
+        return real_exchange(code=code, redirect_uri=redirect_uri, code_verifier=code_verifier)
+
+    monkeypatch.setattr(provider, "exchange_code", exchange_spy)
+    original = ProviderRegistry.provider
+
+    def patched(self: ProviderRegistry, platform: Platform):
+        if platform is Platform.youtube:
+            return provider
+        return original(self, platform)
+
+    monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    initialize_database(settings).engine.dispose()
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
+        connect = web.post("/api/platforms/youtube/connect")
+        assert connect.status_code == 200
+        state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
+
+        # A push or handover on this machine makes it standby between the idle
+        # wait and the lease release.
+        with instance_lease.instance_transfer(settings, "push"):
+            standby = web.get(
+                "/api/platforms/youtube/oauth/callback",
+                params={"code": "auth-code", "state": state},
+                follow_redirects=False,
+            )
+
+        assert standby.status_code == 303
+        assert standby.headers["location"].endswith("/accounts?error=standby")
+        # The single-use authorization code was never burned at the provider.
+        assert exchanged == []
+
+        # The state was not consumed: the same callback succeeds once active.
+        good = web.get(
+            "/api/platforms/youtube/oauth/callback",
+            params={"code": "auth-code", "state": state},
+            follow_redirects=False,
+        )
+        assert good.status_code == 303
+        assert good.headers["location"].endswith("/accounts?connected=youtube")
+        assert exchanged == ["auth-code"]
 
 
 def test_mock_mode_auto_creates_three_accounts(mock_settings: Settings) -> None:

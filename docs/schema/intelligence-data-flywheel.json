@@ -319,6 +319,149 @@
           }
         ]
       },
+      "account_sync_state": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "boosted_until",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "0",
+            "name": "consecutive_failures",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "last_run_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "last_status",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "next_run_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "scope",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(50)"
+          },
+          {
+            "default": null,
+            "name": "source",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(10)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": "CASCADE",
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_account_sync_state_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "next_run_at"
+            ],
+            "name": "ix_account_sync_state_due",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_account_sync_state_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "account_id",
+              "scope"
+            ],
+            "name": "uq_account_sync_state_scope"
+          }
+        ]
+      },
       "active_learning_batches": {
         "check_constraints": [],
         "columns": [
@@ -984,6 +1127,107 @@
               "plan_hash"
             ],
             "name": "uq_annotation_refresh_plan"
+          }
+        ]
+      },
+      "api_key_release_grants": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "daily_cap",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "key_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "platform",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "key_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "api_keys"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "key_id"
+            ],
+            "name": "ix_api_key_release_grants_key_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_api_key_release_grants_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "key_id",
+              "platform"
+            ],
+            "name": "uq_api_key_release_grant"
           }
         ]
       },
@@ -8136,6 +8380,13 @@
         "columns": [
           {
             "default": null,
+            "name": "account_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
             "name": "code_verifier",
             "nullable": true,
             "primary_key": 0,
@@ -8164,13 +8415,6 @@
           },
           {
             "default": null,
-            "name": "for_account_id",
-            "nullable": true,
-            "primary_key": 0,
-            "type": "INTEGER"
-          },
-          {
-            "default": null,
             "name": "id",
             "nullable": false,
             "primary_key": 1,
@@ -8182,6 +8426,13 @@
             "nullable": false,
             "primary_key": 0,
             "type": "VARCHAR(20)"
+          },
+          {
+            "default": "'connect'",
+            "name": "purpose",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(30)"
           },
           {
             "default": null,
@@ -9133,6 +9384,157 @@
               "external_id"
             ],
             "name": "uq_platform_content_external"
+          }
+        ]
+      },
+      "platform_subscriptions": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "callback_token",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(64)"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "expires_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "hub_secret",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(500)"
+          },
+          {
+            "default": null,
+            "name": "lease_seconds",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "provider",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": "'pending'",
+            "name": "state",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "subscribed_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "topic",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(500)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": "CASCADE",
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ix_platform_subscriptions_account_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_platform_subscriptions_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "account_id",
+              "provider",
+              "topic"
+            ],
+            "name": "uq_platform_subscription"
           }
         ]
       },
@@ -10986,6 +11388,65 @@
         ],
         "indexes": [],
         "unique_constraints": []
+      },
+      "quota_usage": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "bucket",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(60)"
+          },
+          {
+            "default": null,
+            "name": "day",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATE"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "provider",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": "0",
+            "name": "units_used",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          }
+        ],
+        "foreign_keys": [],
+        "indexes": [],
+        "unique_constraints": [
+          {
+            "columns": [
+              "provider",
+              "bucket",
+              "day"
+            ],
+            "name": "uq_quota_usage_day"
+          }
+        ]
       },
       "raw_post_records": {
         "check_constraints": [],
@@ -13057,6 +13518,463 @@
           }
         ]
       },
+      "webhook_deliveries": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "attempts",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "delivered_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "endpoint_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "event_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "event_type",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(80)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          },
+          {
+            "default": null,
+            "name": "last_status_code",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "next_attempt_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "state",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "endpoint_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "webhook_endpoints"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "endpoint_id"
+            ],
+            "name": "ix_webhook_deliveries_endpoint_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "state",
+              "next_attempt_at"
+            ],
+            "name": "ix_webhook_deliveries_state_next",
+            "unique": false
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_webhook_deliveries_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "endpoint_id",
+              "event_id"
+            ],
+            "name": "uq_webhook_delivery_event"
+          }
+        ]
+      },
+      "webhook_endpoints": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "consecutive_failures",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "created_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "creator_scopes",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "cursor_event_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "description",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "disabled_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "disabled_reason",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          },
+          {
+            "default": null,
+            "name": "event_types_json",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "failing_since",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(300)"
+          },
+          {
+            "default": null,
+            "name": "last_failure_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "last_success_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "secret_encrypted",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": null,
+            "name": "state",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "url",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "TEXT"
+          },
+          {
+            "default": "1",
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "name": "ix_webhook_endpoints_workspace_id",
+            "unique": false
+          }
+        ],
+        "unique_constraints": []
+      },
+      "webhook_events": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "account_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "body",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BLOB"
+          },
+          {
+            "default": null,
+            "name": "content_type",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(100)"
+          },
+          {
+            "default": null,
+            "name": "dedupe_key",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(120)"
+          },
+          {
+            "default": null,
+            "name": "error",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(500)"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "processed_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "provider",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "received_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "signature_ok",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "BOOLEAN"
+          },
+          {
+            "default": null,
+            "name": "source",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(64)"
+          },
+          {
+            "default": null,
+            "name": "subscription_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "account_id"
+            ],
+            "ondelete": "SET NULL",
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "connected_accounts"
+          },
+          {
+            "columns": [
+              "subscription_id"
+            ],
+            "ondelete": "SET NULL",
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "platform_subscriptions"
+          },
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "processed_at"
+            ],
+            "name": "ix_webhook_events_processed_at",
+            "unique": false
+          },
+          {
+            "columns": [
+              "provider",
+              "received_at"
+            ],
+            "name": "ix_webhook_events_provider_received",
+            "unique": false
+          }
+        ],
+        "unique_constraints": [
+          {
+            "columns": [
+              "dedupe_key"
+            ],
+            "name": "uq_webhook_events_dedupe_key"
+          }
+        ]
+      },
       "workspace_identity_links": {
         "check_constraints": [],
         "columns": [
@@ -13308,6 +14226,53 @@
           }
         ]
       },
+      "workspace_policies": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "agent_release",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(20)"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "updated_by",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(200)"
+          },
+          {
+            "default": null,
+            "name": "workspace_id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "workspace_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "workspaces"
+          }
+        ],
+        "indexes": [],
+        "unique_constraints": []
+      },
       "workspaces": {
         "check_constraints": [],
         "columns": [
@@ -13331,6 +14296,13 @@
             "nullable": false,
             "primary_key": 1,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "last_seen_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
           },
           {
             "default": null,
@@ -13368,7 +14340,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "72e27458b3a4db361e7d96b28c8b0865b356e35fd4a6368d789cf50e18ead071",
-  "migration": "0018_tiktok_publishing",
-  "table_count": 83
+  "fingerprint": "78b796a11f56b14043f93fa44af863550e5589257621539f2e7647f1981f82a6",
+  "migration": "0020_youtube_publishing",
+  "table_count": 91
 }

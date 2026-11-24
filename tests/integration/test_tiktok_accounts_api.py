@@ -207,7 +207,8 @@ def test_enable_publishing_is_a_no_op_when_everything_is_granted(
 
 
 def test_enable_publishing_refuses_other_platforms(client: TestClient, database: Database) -> None:
-    account_id = _account(database, platform="youtube")
+    # YouTube and TikTok have their own branches; anything else is refused.
+    account_id = _account(database, platform="instagram")
     response = client.post(f"/api/v1/accounts/{account_id}/publishing/enable")
     assert response.status_code == 422
     assert response.json()["code"] == "validation_failed"
@@ -282,7 +283,8 @@ def test_enable_callback_refuses_a_different_tiktok_identity(
             follow_redirects=False,
         )
     assert callback.status_code == 303
-    assert "error=account_mismatch" in callback.headers["location"]
+    # One refusal code for a bound-flow identity mismatch on every platform.
+    assert "error=wrong_channel" in callback.headers["location"]
     assert _granted(database, account_id) == list(TIKTOK_SCOPES)
     with database.session() as session:
         row = session.get(ConnectedAccount, account_id)

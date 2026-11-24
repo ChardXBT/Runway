@@ -1,0 +1,10 @@
+# Optional local hooks: pip install pre-commit; pre-commit install
+# Without pre-commit, the same check is: python scripts/secret_scan.py --staged
+repos:
+  - repo: local
+    hooks:
+      - id: runway-secret-scan
+        name: Refuse private instance files and token-shaped strings
+        entry: python scripts/secret_scan.py
+        language: system
+        pass_filenames: true
