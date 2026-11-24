@@ -281,10 +281,14 @@ def test_a_full_sync_emits_one_pair_per_covered_scope(sync_env) -> None:
         for row in _events(database, account_id, "sync.finished")
         if json.loads(row.payload_json)["run_id"] == run.id
     }
-    assert started_scopes == finished_scopes == {
-        "identity",
-        "inventory",
-        "content_metrics_recent",
-        "daily_metrics",
-        "comments",
-    }
+    assert (
+        started_scopes
+        == finished_scopes
+        == {
+            "identity",
+            "inventory",
+            "content_metrics_recent",
+            "daily_metrics",
+            "comments",
+        }
+    )

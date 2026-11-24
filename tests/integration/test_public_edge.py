@@ -106,17 +106,20 @@ def test_edge_requests_with_credentials_are_refused(tmp_path: Path) -> None:
 
 def test_edge_paths_with_dot_segments_or_encoded_slashes_are_refused(tmp_path: Path) -> None:
     """Raw-path smuggling: `..`, `//`, `%2e`, `%2f` never reach the router."""
-    settings = Settings(
-        data_dir=tmp_path / "data",
-        platform_provider="mock",
-        public_edge_url=EDGE_URL,
-    )
     reached: list[str] = []
 
     async def sentinel(scope, receive, send):  # type: ignore[no-untyped-def]
         reached.append(scope["path"])
 
     guard = LocalRequestGuard(sentinel, allowed_origins=[], edge_host=EDGE_HOST)
+
+    sent: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request"}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
 
     for raw in (
         b"/hooks/../api/settings",
@@ -127,14 +130,7 @@ def test_edge_paths_with_dot_segments_or_encoded_slashes_are_refused(tmp_path: P
         b"/hooks/%2f%2f/tiktok",
         b"/api/platforms/%2e%2e/oauth/callback",
     ):
-        sent: list[dict[str, object]] = []
-
-        async def receive() -> dict[str, object]:
-            return {"type": "http.request"}
-
-        async def send(message: dict[str, object]) -> None:
-            sent.append(message)
-
+        sent.clear()
         scope = {
             "type": "http",
             "method": "GET",

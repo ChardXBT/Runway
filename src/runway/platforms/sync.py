@@ -27,6 +27,8 @@ from runway.db.models import (
 )
 from runway.domain.enums import CommentStatus
 from runway.domain.state_machine import COMMENT_STATUS_MACHINE, TARGET_DELIVERED_STATES
+from runway.events.log import record_event
+from runway.events.types import SYNC_FINISHED, SYNC_STARTED
 from runway.jobs.queue import Job, JobQueue
 from runway.jobs.worker import PermanentJobError
 from runway.locks import LockTimeout, exclusive_file_lock
@@ -46,8 +48,6 @@ from runway.platforms.capabilities import Platform
 from runway.platforms.drafts import external_id_candidates
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.registry import ProviderRegistry
-from runway.events.log import record_event
-from runway.events.types import SYNC_FINISHED, SYNC_STARTED
 from runway.realtime import quota as sync_quota
 from runway.realtime import schedule as sync_schedule
 
@@ -368,9 +368,7 @@ class SyncService:
                 if isinstance(provider, InstagramProvider):
                     # Meta's usage headers at >= 80% defer the account's other
                     # scopes by an hour (spec 04 section 3).
-                    sync_quota.enforce_instagram_usage(
-                        self.database, account_id, provider.usage
-                    )
+                    sync_quota.enforce_instagram_usage(self.database, account_id, provider.usage)
 
             self._finish_run(
                 run_id,
@@ -518,9 +516,11 @@ class SyncService:
         exc: ProviderError,
     ) -> None:
         """A run that never reached its steps still marks its scopes failed."""
-        names = scopes if scopes is not None else [
-            scope for group in _STEP_TO_SCOPES.values() for scope in group
-        ]
+        names = (
+            scopes
+            if scopes is not None
+            else [scope for group in _STEP_TO_SCOPES.values() for scope in group]
+        )
         retry_after = exc.retry_after if isinstance(exc, RateLimited) else None
         for scope in names or []:
             sync_schedule.record_scope_run(

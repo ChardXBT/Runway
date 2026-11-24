@@ -2039,9 +2039,7 @@ class QuotaUsage(Base):
     """
 
     __tablename__ = "quota_usage"
-    __table_args__ = (
-        UniqueConstraint("provider", "bucket", "day", name="uq_quota_usage_day"),
-    )
+    __table_args__ = (UniqueConstraint("provider", "bucket", "day", name="uq_quota_usage_day"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     provider: Mapped[str] = mapped_column(String(20))

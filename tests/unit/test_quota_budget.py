@@ -50,7 +50,7 @@ from runway.realtime.quota import (
     used_units,
     youtube_account_share,
 )
-from runway.realtime.schedule import AdaptiveSyncScheduler, SCOPES
+from runway.realtime.schedule import SCOPES, AdaptiveSyncScheduler
 
 # Noon Pacific on 2026-11-23 (PST, UTC-8); the quota resets at 2026-11-24T08:00Z.
 START = datetime(2026, 11, 23, 20, 0, tzinfo=UTC)
@@ -62,7 +62,10 @@ def _aware(moment: datetime) -> datetime:
 
 
 def _account(
-    database: Database, platform: str = "youtube", status: str = "connected", external: str = "ext-1"
+    database: Database,
+    platform: str = "youtube",
+    status: str = "connected",
+    external: str = "ext-1",
 ) -> int:
     with database.session() as session:
         account = ConnectedAccount(
@@ -178,9 +181,7 @@ def test_recording_calls_upserts_units_per_bucket_and_pacific_day(
 
     assert used_units(database, "youtube", "default", day=date(2026, 11, 23)) == 53
     assert used_units(database, "youtube", "search.list", day=date(2026, 11, 23)) == 100
-    assert (
-        used_units(database, "youtube", "videos.batchGetStats", day=date(2026, 11, 23)) == 1
-    )
+    assert used_units(database, "youtube", "videos.batchGetStats", day=date(2026, 11, 23)) == 1
     # The call made after Pacific midnight opened a new day's row.
     assert used_units(database, "youtube", "default", day=date(2026, 11, 24)) == 1
 
@@ -233,12 +234,8 @@ def test_the_youtube_provider_records_every_api_call(tmp_path: Path) -> None:
     token = TokenSet(access_token="token")
     provider.fetch_identity(token)
     provider.fetch_content_metrics(token, ["v1"])
-    provider.list_comments(
-        token, content_external_id="v1", cursor=None, limit=10
-    )
-    provider.reply_to_comment(
-        token, comment_external_id="c1", text="hi"
-    )
+    provider.list_comments(token, content_external_id="v1", cursor=None, limit=10)
+    provider.reply_to_comment(token, comment_external_id="c1", text="hi")
 
     methods = [method for method, _bucket, _units in recorded]
     assert methods == [
@@ -326,7 +323,9 @@ def test_zero_budget_defers_every_scope_but_never_blocks_publishing(
         assert len(events) == 1
 
         # Enforcing again stays deferred and does not duplicate the event.
-        assert enforce_youtube_budget(database, account_id, settings, now=START + timedelta(hours=1))
+        assert enforce_youtube_budget(
+            database, account_id, settings, now=START + timedelta(hours=1)
+        )
         assert len(_quota_events(database, account_id)) == 1
     finally:
         database.engine.dispose()

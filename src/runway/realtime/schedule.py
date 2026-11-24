@@ -107,7 +107,8 @@ def effective_interval(
     """The cadence a scope is on right now, including the inactivity floor."""
     normal, boosted = _SCOPE_INTERVALS[scope]
     interval = normal
-    if boosted is not None and boosted_until is not None and _aware(boosted_until) > now:
+    boost_until = _aware(boosted_until)
+    if boosted is not None and boost_until is not None and boost_until > now:
         interval = boosted
     if workspace_inactive(last_seen_at, now):
         interval = max(interval, INACTIVITY_FLOOR)
@@ -124,7 +125,9 @@ def failure_delay(
     """normal x 2^failures capped at 24 h, jittered +/-20%; retry-after wins."""
     if retry_after is not None:
         return timedelta(seconds=retry_after)
-    base = min(normal * (2 ** consecutive_failures), BACKOFF_CAP)
+    # `1 << n` stays `int` where `2**n` is `Any` to mypy; clamping n keeps the
+    # shift legal and the product inside timedelta's range before `min` caps.
+    base = min(normal * (1 << min(max(consecutive_failures, 0), 28)), BACKOFF_CAP)
     spread = base * BACKOFF_JITTER * (rand() * 2 - 1)
     return base + spread
 
@@ -135,7 +138,9 @@ def _sessions(source: Session | Database) -> AbstractContextManager[Session]:
     return nullcontext(source)
 
 
-def _state_row(session: Session, account: ConnectedAccount, scope: str, now: datetime) -> AccountSyncState:
+def _state_row(
+    session: Session, account: ConnectedAccount, scope: str, now: datetime
+) -> AccountSyncState:
     state = session.scalar(
         select(AccountSyncState).where(
             AccountSyncState.account_id == account.id,

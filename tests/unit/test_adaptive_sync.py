@@ -47,8 +47,8 @@ from runway.platforms.sync import (
 )
 from runway.realtime.processing import PROCESS_WEBHOOK_JOB, run_process_webhook_job
 from runway.realtime.schedule import (
-    AdaptiveSyncScheduler,
     SCOPES,
+    AdaptiveSyncScheduler,
     boost,
     effective_interval,
     failure_delay,
@@ -63,7 +63,10 @@ def _aware(moment: datetime) -> datetime:
 
 
 def _account(
-    database: Database, platform: str = "youtube", status: str = "connected", external: str = "ext-1"
+    database: Database,
+    platform: str = "youtube",
+    status: str = "connected",
+    external: str = "ext-1",
 ) -> int:
     with database.session() as session:
         account = ConnectedAccount(
@@ -376,9 +379,7 @@ def test_older_metrics_rotate_through_the_back_catalogue(sync_env) -> None:
             calls.append(list(external_ids))
             return {}
 
-    registry.set_provider(
-        Platform.youtube, RecordingProvider(Platform.youtube, settings)
-    )
+    registry.set_provider(Platform.youtube, RecordingProvider(Platform.youtube, settings))
 
     service.run(account_id, scopes=["content_metrics_older"])
     assert len(calls) == 1
@@ -403,7 +404,12 @@ def test_a_failed_scope_backs_off_exponentially_inside_twenty_percent(
     normal = timedelta(minutes=30)  # inventory
 
     record_scope_run(
-        database, account_id, "inventory", status="failed", error="boom", now=START,
+        database,
+        account_id,
+        "inventory",
+        status="failed",
+        error="boom",
+        now=START,
         rand=lambda: 0.5,
     )
     state = _states(database, account_id)["inventory"]
@@ -411,7 +417,12 @@ def test_a_failed_scope_backs_off_exponentially_inside_twenty_percent(
     assert _aware(state.next_run_at) == START + normal * 2
 
     record_scope_run(
-        database, account_id, "inventory", status="failed", error="boom", now=START,
+        database,
+        account_id,
+        "inventory",
+        status="failed",
+        error="boom",
+        now=START,
         rand=lambda: 0.5,
     )
     state = _states(database, account_id)["inventory"]
@@ -425,11 +436,21 @@ def test_a_failed_scope_backs_off_exponentially_inside_twenty_percent(
         (lambda: 1.0, normal * 2 * 1.2),
     ):
         record_scope_run(
-            database, account_id, "inventory", status="completed", error=None, now=START,
+            database,
+            account_id,
+            "inventory",
+            status="completed",
+            error=None,
+            now=START,
             rand=lambda: 0.5,
         )
         record_scope_run(
-            database, account_id, "inventory", status="failed", error="boom", now=START,
+            database,
+            account_id,
+            "inventory",
+            status="failed",
+            error="boom",
+            now=START,
             rand=rand,
         )
         state = _states(database, account_id)["inventory"]
@@ -442,7 +463,12 @@ def test_backoff_caps_at_one_day_and_honours_retry_after(database: Database) -> 
     _active_workspace(database)
     for _ in range(9):
         record_scope_run(
-            database, account_id, "inventory", status="failed", error="x", now=START,
+            database,
+            account_id,
+            "inventory",
+            status="failed",
+            error="x",
+            now=START,
             rand=lambda: 0.5,
         )
     state = _states(database, account_id)["inventory"]
@@ -525,7 +551,7 @@ def test_human_requests_touch_the_workspace_at_most_once_per_ten_minutes(
             assert workspace is not None
             assert _aware(workspace.last_seen_at) == START
 
-        writes = getattr(application.state, "workspace_seen_writes")
+        writes = application.state.workspace_seen_writes
         writes[1] -= 700  # pretend the last write was 11+ minutes ago
         assert client.get("/api/settings").status_code == 200
         with database.session() as session:

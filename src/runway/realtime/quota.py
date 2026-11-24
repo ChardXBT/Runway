@@ -179,9 +179,7 @@ class QuotaRecorder:
 
     def __call__(self, method: str, bucket: str, units: int) -> None:  # noqa: ARG002
         with self.database.session() as session:
-            record_units(
-                session, self.provider, bucket, units, day=pacific_day(utcnow())
-            )
+            record_units(session, self.provider, bucket, units, day=pacific_day(utcnow()))
 
 
 # ---------------------------------------------------------------- the budget

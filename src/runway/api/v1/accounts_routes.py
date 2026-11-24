@@ -87,9 +87,7 @@ def build_accounts_router(database: Database, settings: Settings) -> APIRouter:
             "adaptive_sync_enabled": settings.adaptive_sync_enabled,
             "push_enabled": push_enabled,
             "quota": quota,
-            "scopes": [
-                {"scope": scope, **_scope_entry(by_scope.get(scope))} for scope in SCOPES
-            ],
+            "scopes": [{"scope": scope, **_scope_entry(by_scope.get(scope))} for scope in SCOPES],
         }
 
     return router
