@@ -382,7 +382,68 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
 
     # ---------------------------------------------------------------- OAuth
 
-    def _issue_connect(platform: Platform) -> dict[str, object]:
+    def _persist_bound_connection(
+        record_platform: Platform,
+        record_account_id: int,
+        token: TokenSet,
+        *,
+        workspace_id: int,
+    ) -> str | None:
+        """Attach the token to the exact account a bound state was issued for.
+
+        Returns the redirect's error short-code on refusal. The identity check
+        (spec 08 section 1): the channel the token belongs to must equal the
+        account it was issued for; a consent-screen account switch never
+        attaches someone else's channel.
+        """
+        with database.session() as session:
+            account = session.get(ConnectedAccount, record_account_id)
+            if (
+                account is None
+                or account.workspace_id != workspace_id
+                or account.platform != record_platform.value
+            ):
+                return "unknown_account"
+            account_id = account.id
+            expected_external_id = account.external_account_id
+        provider = registry.provider(record_platform)
+        identity = provider.fetch_identity(token)
+        if identity.external_account_id != expected_external_id:
+            return "wrong_channel"
+        token = _enrich_token(
+            record_platform, token, identity.raw, identity.external_account_id
+        )
+        now = utcnow()
+        with database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            assert account is not None
+            if not account.token_ref:
+                account.token_ref = registry.token_store.new_token_ref()
+            account.handle = identity.handle
+            account.display_name = identity.display_name
+            account.avatar_url = identity.avatar_url
+            account.profile_url = identity.profile_url
+            account.account_type = identity.account_type
+            account.status = "connected"
+            # The response's `scope` is the authoritative current grant set.
+            account.granted_scopes_json = json.dumps(list(token.scopes))
+            account.last_verified_at = now
+            account.last_error = None
+            account.metadata_json = json.dumps(
+                {"raw": identity.raw, "scopes_source": "granted"}
+            )
+            session.flush()
+            token_ref = str(account.token_ref)
+        registry.token_store.store(token_ref, token)
+        return None
+
+    def _issue_connect(
+        platform: Platform,
+        *,
+        purpose: str = "connect",
+        account_id: int | None = None,
+        workspace_id: int = LOCAL_WORKSPACE_ID,
+    ) -> dict[str, object]:
         if settings.platform_provider == "mock":
             raise HTTPException(
                 status_code=400,
@@ -399,6 +460,9 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             platform,
             redirect_uri=registry.redirect_uri(platform),
             use_pkce=use_pkce,
+            purpose=purpose,
+            account_id=account_id,
+            workspace_id=workspace_id,
         )
         authorization_url = provider.authorization_url(
             state=issued.state,
@@ -455,7 +519,21 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 redirect_uri=record.redirect_uri,
                 code_verifier=record.code_verifier,
             )
-            _persist_connection(parsed, token, token.scopes, workspace_id=principal.workspace_id)
+            if record.account_id is not None:
+                # A bound flow (reconnect, enable_publishing) must attach to
+                # the exact account it was issued for, channel id included.
+                refusal = _persist_bound_connection(
+                    parsed,
+                    record.account_id,
+                    token,
+                    workspace_id=principal.workspace_id,
+                )
+                if refusal is not None:
+                    return fail(refusal)
+            else:
+                _persist_connection(
+                    parsed, token, token.scopes, workspace_id=principal.workspace_id
+                )
         except Problem as exc:
             # The workspace reached its connected-accounts quota meanwhile.
             return fail(exc.code)
@@ -465,8 +543,9 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         except Exception:  # noqa: BLE001
             logger.exception("oauth callback failed for %s", platform)
             return fail("exchange_failed")
+        outcome = "publishing_enabled" if record.purpose == "enable_publishing" else "connected"
         return RedirectResponse(
-            url=f"{web_base}/accounts?connected={parsed.value}",
+            url=f"{web_base}/accounts?{outcome}={parsed.value}",
             status_code=303,
         )
 
@@ -538,7 +617,12 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         account = _account_or_404(account_id)
         if account.status == "disconnected":
             _require_slot(principal)
-        return _issue_connect(Platform(account.platform))
+        return _issue_connect(
+            Platform(account.platform),
+            purpose="reconnect",
+            account_id=account_id,
+            workspace_id=principal.workspace_id,
+        )
 
     @router.post("/platforms/accounts/{account_id}/sync")
     def sync_account(account_id: int) -> Response:

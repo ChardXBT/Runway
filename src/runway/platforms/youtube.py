@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -115,12 +116,17 @@ class YouTubeProvider(PlatformProvider):
         state: str,
         redirect_uri: str,
         code_challenge: str | None,
+        extra_scopes: Sequence[str] = (),
     ) -> str:
+        # The base scopes are sent again alongside the incremental ones so the
+        # consent screen re-asks for them; a deselected base scope can then be
+        # re-granted instead of silently breaking reads (spec 08 section 1).
+        scopes = list(dict.fromkeys([*self._scopes(), *extra_scopes]))
         params: dict[str, str] = {
             "client_id": self.settings.youtube_client_id or "",
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": " ".join(self._scopes()),
+            "scope": " ".join(scopes),
             "access_type": "offline",
             "prompt": "consent",
             "include_granted_scopes": "true",

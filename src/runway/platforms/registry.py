@@ -114,12 +114,37 @@ class ProviderRegistry:
                 # Stored before the lock is released, so the next waiter
                 # re-reads the new token set instead of refreshing again.
                 self.token_store.store(token_ref, refreshed)
+                self._store_granted_scopes(token_ref, refreshed.scopes)
                 return refreshed
         except TokenRefreshBusy as exc:
             raise ProviderError(
                 "another process is still refreshing this account's token",
                 retryable=True,
             ) from exc
+
+    def _store_granted_scopes(self, token_ref: str, scopes: list[str]) -> None:
+        """Persist the scopes the token response reported, on the owning account.
+
+        Spec 08 section 1: after every token exchange and every refresh the
+        granted scopes are stored; the publishing capability is derived from
+        them, so it recomputes itself. When the response carries no `scope`
+        the provider falls back to the token's own set, which keeps the stored
+        set unchanged.
+        """
+        wanted = sorted({str(scope) for scope in scopes if str(scope)})
+        with self.database.session() as session:
+            account = session.scalar(
+                select(ConnectedAccount).where(ConnectedAccount.token_ref == token_ref)
+            )
+            if account is None:
+                return
+            try:
+                stored = json.loads(account.granted_scopes_json or "[]")
+            except ValueError:
+                stored = []
+            if sorted(stored) == wanted:
+                return
+            account.granted_scopes_json = json.dumps(wanted)
 
     def platforms(self) -> list[Platform]:
         return list(Platform)

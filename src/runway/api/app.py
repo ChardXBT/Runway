@@ -174,6 +174,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         application.state.post_service = post_service
         application.state.media_service = media_service
+        # Account-scoped v1 routes (spec 08): incremental publishing consent
+        # and YouTube categories. Local only, like the OAuth callback they
+        # feed into; hosted gets them when the tenancy work scopes the
+        # platform tables per workspace.
+        from runway.api.v1.accounts_routes import build_accounts_router
+
+        application.include_router(build_accounts_router(database, active_settings))
         application.include_router(build_posts_router(post_service))
         application.include_router(build_media_router(media_service))
         application.include_router(

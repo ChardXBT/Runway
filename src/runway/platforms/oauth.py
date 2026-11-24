@@ -36,7 +36,17 @@ class OAuthStateService:
         *,
         redirect_uri: str,
         use_pkce: bool,
+        purpose: str = "connect",
+        account_id: int | None = None,
+        workspace_id: int = 1,
     ) -> IssuedState:
+        """A single-use state row for one OAuth flow.
+
+        `purpose` records why the flow was started ("connect", "reconnect" or
+        "enable_publishing"); `account_id` binds it to the connected account it
+        was issued for, so the callback can refuse a token for a different
+        channel (spec 08 section 1: identity check before every write).
+        """
         verifier = pkce_verifier() if use_pkce else None
         state = secrets.token_urlsafe(32)
         now = utcnow()
@@ -47,6 +57,9 @@ class OAuthStateService:
                     state=state,
                     code_verifier=verifier,
                     redirect_uri=redirect_uri,
+                    purpose=purpose,
+                    account_id=account_id,
+                    workspace_id=workspace_id,
                     created_at=now,
                     expires_at=now + STATE_TTL,
                 )
