@@ -643,7 +643,7 @@ class InstagramProvider(PlatformProvider):
             self.client,
             "Instagram",
             "POST",
-            f"{GRAPH_BASE}/{comment_external_id}/replies",
+            f"{self._graph_base(token)}/{comment_external_id}/replies",
             data={"message": text},
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
