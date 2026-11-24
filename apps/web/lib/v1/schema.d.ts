@@ -966,6 +966,14 @@ export interface components {
             /** Channel Url */
             channel_url: string;
         };
+        /**
+         * ConnectRequest
+         * @description Optional connect body; `adapter` picks a non-default connection flow.
+         */
+        ConnectRequest: {
+            /** Adapter */
+            adapter?: "instagram_unified" | null;
+        };
         /** CreatedApiKey */
         CreatedApiKey: {
             key: components["schemas"]["ApiKeyView"];
@@ -1814,6 +1822,13 @@ export interface components {
             settings?: {
                 [key: string]: unknown;
             };
+        };
+        /** UnifiedSelectRequest */
+        UnifiedSelectRequest: {
+            /** External Account Id */
+            external_account_id: string;
+            /** State */
+            state: string;
         };
         /** UploadPlanOut */
         UploadPlanOut: {

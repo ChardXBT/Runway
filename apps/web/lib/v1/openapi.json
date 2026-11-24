@@ -708,6 +708,25 @@
         "title": "ConfirmedRequest",
         "type": "object"
       },
+      "ConnectRequest": {
+        "description": "Optional connect body; `adapter` picks a non-default connection flow.",
+        "properties": {
+          "adapter": {
+            "anyOf": [
+              {
+                "const": "instagram_unified",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adapter"
+          }
+        },
+        "title": "ConnectRequest",
+        "type": "object"
+      },
       "ConnectorAccessRequest": {
         "properties": {
           "channel_url": {
@@ -3318,6 +3337,28 @@
           }
         },
         "title": "TargetUpdate",
+        "type": "object"
+      },
+      "UnifiedSelectRequest": {
+        "properties": {
+          "external_account_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "External Account Id",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 200,
+            "minLength": 8,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "external_account_id"
+        ],
+        "title": "UnifiedSelectRequest",
         "type": "object"
       },
       "UploadPlanOut": {
