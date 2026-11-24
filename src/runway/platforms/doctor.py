@@ -895,7 +895,7 @@ class PlatformsDoctor:
                     )
         if not usable and not missing:
             missing.append(
-                f"{platform.value}: connect a {platform.value} account in the "
+                f"{platform.value}: connect your {platform.value} account in the "
                 "web app (Accounts > Connect)"
             )
         return missing
@@ -944,8 +944,8 @@ class PlatformsDoctor:
         elif platform is Platform.tiktok:
             if app_status_value == "sandbox":
                 notes.append(
-                    "sandbox app: direct video.post stays off; inbox drafts need a "
-                    "target user added in the TikTok developer portal"
+                    "sandbox app: direct posts (video.publish) stay off; inbox drafts "
+                    "need a target user added in the TikTok developer portal"
                 )
             elif app_status_value == "production":
                 notes.append(
