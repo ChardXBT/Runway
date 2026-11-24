@@ -513,7 +513,7 @@ class PublishingEngine:
                     finished=False,
                     request={"payload": snap.payload, "publisher": target.publisher},
                     resumable=resumable,
-                    request_sent_at=(previous.request_sent_at if sent_at is not None else None),
+                    request_sent_at=sent_at,
                 )
                 set_target_state(session, target, _T.SENDING, post=post)
             ctx = self._context(
