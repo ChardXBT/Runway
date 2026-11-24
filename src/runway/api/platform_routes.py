@@ -22,6 +22,7 @@ from runway.db.models import (
     SyncRun,
     utcnow,
 )
+from runway.jobs.queue import JobQueue
 from runway.platforms.base import (
     ProviderError,
     TokenSet,
@@ -43,6 +44,7 @@ from runway.platforms.overview import OverviewService, account_freshness, metric
 from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncAccountDisconnected, SyncRunInProgress, SyncService
 from runway.platforms.tokens import pkce_challenge
+from runway.realtime import subscriptions
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +284,7 @@ def _enrich_token(
 def build_platform_router(database: Database, settings: Settings) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["platforms"], dependencies=[Depends(get_principal)])
     registry = ProviderRegistry(database, settings)
+    queue = JobQueue(database)
     oauth_states = OAuthStateService(database)
     sync_service = SyncService(database, settings, registry)
     content_service = ContentService(database)
@@ -330,6 +333,10 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 {"raw": identity.raw, "scopes_source": scopes_source}
             )
             session.flush()
+            # Push subscriptions join the connect transaction (spec 04
+            # section 2): a YouTube WebSub row plus its subscribe job, only
+            # when a public callback base exists.
+            subscriptions.on_account_connected(session, queue, settings, account)
             token_ref = str(account.token_ref)
             account_id = account.id
         registry.token_store.store(token_ref, token)
@@ -507,6 +514,9 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 record.status = "disconnected"
                 record.token_ref = None
                 record.last_error = None
+                # WebSub subscriptions are cancelled and an unsubscribe job is
+                # enqueued in the same transaction (spec 04 section 2).
+                subscriptions.on_account_disconnected(session, queue, record)
         return {"account_id": account_id, "status": "disconnected"}
 
     @router.post("/platforms/accounts/{account_id}/reconnect")

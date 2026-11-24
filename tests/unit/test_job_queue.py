@@ -31,6 +31,7 @@ from runway.jobs.worker import PermanentJobError, Worker
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.sync import SYNC_ACCOUNT_JOB, PlatformSyncScheduler
 from runway.realtime.processing import PROCESS_WEBHOOK_JOB
+from runway.realtime.subscriptions import RENEW_SUBSCRIPTION_JOB, SubscriptionScheduler
 
 START = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
@@ -408,8 +409,16 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
     # Legacy path only: with adaptive sync enabled (the default) the
     # AdaptiveSyncScheduler produces scoped jobs instead.
     worker = build_worker(settings.model_copy(update={"adaptive_sync_enabled": False}), database)
-    assert [type(producer) for producer in worker.producers] == [RetentionPurgeScheduler]
-    assert set(worker.handlers) == {SYNC_ACCOUNT_JOB, PURGE_JOB, PROCESS_WEBHOOK_JOB}
+    assert [type(producer) for producer in worker.producers] == [
+        RetentionPurgeScheduler,
+        SubscriptionScheduler,
+    ]
+    assert set(worker.handlers) == {
+        SYNC_ACCOUNT_JOB,
+        PURGE_JOB,
+        PROCESS_WEBHOOK_JOB,
+        RENEW_SUBSCRIPTION_JOB,
+    }
 
 
 def test_hourly_purge_removes_only_expired_keys_and_events(

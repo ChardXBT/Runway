@@ -18,6 +18,11 @@ from runway.platforms.sync import (
 )
 from runway.realtime.processing import PROCESS_WEBHOOK_JOB, run_process_webhook_job
 from runway.realtime.schedule import AdaptiveSyncScheduler
+from runway.realtime.subscriptions import (
+    RENEW_SUBSCRIPTION_JOB,
+    SubscriptionScheduler,
+    run_renew_subscription_job,
+)
 
 __all__ = ["build_worker", "worker_lock_path"]
 
@@ -29,8 +34,13 @@ def build_worker(settings: Settings, database: Database) -> Worker:
         SYNC_ACCOUNT_JOB: partial(run_sync_account_job, sync_service),
         PURGE_JOB: partial(run_purge_job, database, settings),
         PROCESS_WEBHOOK_JOB: partial(run_process_webhook_job, database, settings, queue),
+        RENEW_SUBSCRIPTION_JOB: partial(run_renew_subscription_job, database, settings, queue),
     }
-    producers: list[JobProducer] = [RetentionPurgeScheduler(queue)]
+    producers: list[JobProducer] = [
+        RetentionPurgeScheduler(queue),
+        # WebSub leases are renewed at 80% and resubscribed after expiry.
+        SubscriptionScheduler(database, queue),
+    ]
     if settings.adaptive_sync_enabled:
         # Per-scope cadence (spec 04 section 3); replaces the fixed-slot
         # scheduler. platform_sync_interval_minutes only governs the latter.
