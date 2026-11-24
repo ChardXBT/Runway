@@ -87,10 +87,13 @@ def _as_str_or_none(value: object) -> str | None:
 
 class YouTubeProvider(PlatformProvider):
     platform = Platform.youtube
+    # videoCategories.list barely changes; one cached read per region per day.
+    CATEGORY_CACHE_TTL = timedelta(hours=24)
 
     def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
         self.settings = settings
         self.client = client or httpx.Client(timeout=20.0)
+        self._categories_cache: dict[str, tuple[datetime, list[dict[str, Any]]]] = {}
 
     def capabilities(self) -> list[CapabilityEntry]:
         return capability_matrix(
@@ -287,6 +290,39 @@ class YouTubeProvider(PlatformProvider):
         return self._json_or_raise(response), quota_units
 
     # --------------------------------------------------------------- identity
+
+    def list_video_categories(
+        self, token: TokenSet, *, region_code: str = "US"
+    ) -> list[dict[str, Any]]:
+        """Assignable `videoCategories.list` entries for one region, cached (spec 08 §2)."""
+        now = datetime.now(UTC)
+        cached = self._categories_cache.get(region_code)
+        if cached is not None and cached[0] > now:
+            return [dict(item) for item in cached[1]]
+        data, _ = self._api_get(
+            token,
+            f"{API_BASE}/videoCategories",
+            {"part": "snippet", "regionCode": region_code},
+            quota_units=1,
+        )
+        items: list[dict[str, Any]] = []
+        raw_items = data.get("items")
+        for entry in raw_items if isinstance(raw_items, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            snippet = _as_dict(entry.get("snippet"))
+            category_id = str(entry.get("id") or "")
+            if not category_id:
+                continue
+            items.append(
+                {
+                    "id": category_id,
+                    "title": str(snippet.get("title") or ""),
+                    "assignable": bool(snippet.get("assignable", True)),
+                }
+            )
+        self._categories_cache[region_code] = (now + self.CATEGORY_CACHE_TTL, items)
+        return [dict(item) for item in items]
 
     def fetch_identity(self, token: TokenSet) -> AccountIdentity:
         data, _ = self._api_get(

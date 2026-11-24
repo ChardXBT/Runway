@@ -104,8 +104,8 @@ Direct adapters and the scopes that enable them:
 
 | Post type | Direct adapter | In this build | Scope (any of) |
 | --- | --- | --- | --- |
-| `youtube_video` | `youtube_direct` | no (assisted only) | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube`, `https://www.googleapis.com/auth/youtube.force-ssl` |
-| `youtube_short` | `youtube_direct` | no (assisted only) | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube`, `https://www.googleapis.com/auth/youtube.force-ssl` |
+| `youtube_video` | `youtube_direct` | yes | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube`, `https://www.googleapis.com/auth/youtube.force-ssl` |
+| `youtube_short` | `youtube_direct` | yes | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube`, `https://www.googleapis.com/auth/youtube.force-ssl` |
 | `youtube_post` | `youtube_post` | no (assisted only) | `https://www.googleapis.com/auth/youtube.force-ssl`, `https://www.googleapis.com/auth/youtube` |
 | `instagram_reel` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |
 | `instagram_image` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |

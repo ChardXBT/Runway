@@ -10,11 +10,19 @@ response actually granted.
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from runway.api.v1.router import build_v1_router
-from runway.auth.principal import ACCOUNTS_MANAGE, Principal, get_principal, require
+from runway.auth.principal import (
+    ACCOUNTS_MANAGE,
+    ACCOUNTS_READ,
+    Principal,
+    get_principal,
+    require,
+)
 from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
 from runway.db.base import Database
@@ -26,14 +34,14 @@ from runway.platforms.registry import ProviderRegistry
 from runway.platforms.tokens import pkce_challenge
 from runway.platforms.youtube import YouTubeProvider
 
+_REGION = re.compile(r"^[A-Za-z]{2}$")
+
 
 def _problem(code: ProblemCode, detail: str) -> Problem:
     return Problem.of(code, detail)
 
 
-def _account(
-    session: Session, principal: Principal, account_id: int
-) -> ConnectedAccount:
+def _account(session: Session, principal: Principal, account_id: int) -> ConnectedAccount:
     account = session.get(ConnectedAccount, account_id)
     if account is None or account.workspace_id != principal.workspace_id:
         raise _problem(ProblemCode.NOT_FOUND, "this account does not exist")
@@ -101,5 +109,41 @@ def build_accounts_router(database: Database, settings: Settings) -> APIRouter:
             "state": issued.state,
             "requested_scopes": extra,
         }
+
+    @router.get("/{account_id}/youtube/categories")
+    def youtube_categories(
+        account_id: int,
+        region: str = "US",
+        principal: Principal = Depends(get_principal),
+    ) -> dict[str, object]:
+        """Assignable `videoCategories.list` entries for the target settings UI.
+
+        Cached by the provider for a day per region (spec 08 section 2).
+        """
+        require(principal, ACCOUNTS_READ)
+        if not _REGION.fullmatch(region):
+            raise _problem(ProblemCode.VALIDATION_FAILED, "region must be a two-letter region code")
+        with database.session() as session:
+            account = _account(session, principal, account_id)
+        platform = Platform(account.platform)
+        if platform is not Platform.youtube:
+            raise _problem(
+                ProblemCode.VALIDATION_FAILED,
+                "categories are a YouTube account feature",
+            )
+        if not account.token_ref:
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "the account has no stored token; reconnect it",
+            )
+        provider = registry.provider(platform)
+        if not isinstance(provider, YouTubeProvider):
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "categories are unavailable for this provider",
+            )
+        token = registry.fresh_token(platform, account.token_ref)
+        items = provider.list_video_categories(token, region_code=region.upper())
+        return {"items": items, "region": region.upper()}
 
     return router

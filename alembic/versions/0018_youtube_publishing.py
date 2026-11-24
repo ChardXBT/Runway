@@ -50,9 +50,7 @@ def _column_names(table: str) -> set[str]:
 
 
 NEW_COLUMNS = (
-    sa.Column(
-        "purpose", sa.String(length=30), nullable=False, server_default=sa.text("'connect'")
-    ),
+    sa.Column("purpose", sa.String(length=30), nullable=False, server_default=sa.text("'connect'")),
     sa.Column("account_id", sa.Integer(), nullable=True),
 )
 

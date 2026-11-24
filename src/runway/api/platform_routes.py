@@ -410,9 +410,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         identity = provider.fetch_identity(token)
         if identity.external_account_id != expected_external_id:
             return "wrong_channel"
-        token = _enrich_token(
-            record_platform, token, identity.raw, identity.external_account_id
-        )
+        token = _enrich_token(record_platform, token, identity.raw, identity.external_account_id)
         now = utcnow()
         with database.session() as session:
             account = session.get(ConnectedAccount, account_id)
@@ -429,9 +427,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             account.granted_scopes_json = json.dumps(list(token.scopes))
             account.last_verified_at = now
             account.last_error = None
-            account.metadata_json = json.dumps(
-                {"raw": identity.raw, "scopes_source": "granted"}
-            )
+            account.metadata_json = json.dumps({"raw": identity.raw, "scopes_source": "granted"})
             session.flush()
             token_ref = str(account.token_ref)
         registry.token_store.store(token_ref, token)
