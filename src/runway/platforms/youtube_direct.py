@@ -22,7 +22,8 @@ Spec 08 section 2 "Send":
   `308` means incomplete and safe to resume; `404`/`410` means the session
   expired, so the channel's newest uploads are matched by title and duration
   within the attempt's time window. One match: `published`. None: `absent`
-  (`failed_retryable`). Several: `uncertain` with the candidates shown.
+  (`failed_retryable`). Anything else - several candidates, or a title-only
+  one whose duration cannot be verified - is `uncertain`, never `published`.
 - Named errors (`uploadLimitExceeded`, `quotaExceeded`, `invalidPublishAt`,
   `forbiddenPrivacySetting`, `invalidTitle`, `invalidDescription`,
   `invalidTags`, `invalidCategoryId`) map to final or retryable with a
@@ -483,6 +484,25 @@ class YouTubeDirectPublisher:
             raise PublishRefused("media_missing", "the target has no video to upload")
         video = ctx.media[0]
         settings = self._settings(ctx)
+        # Last-resort guard, before the first HTTP call: the declarations
+        # preflight requires must be explicit; None must never reach YouTube
+        # (an omitted flag is itself a declaration there).
+        missing = [
+            name
+            for name, value in (
+                ("privacy", settings.privacy),
+                ("made_for_kids", settings.made_for_kids),
+                ("has_paid_product_placement", settings.has_paid_product_placement),
+            )
+            if value is None
+        ]
+        if missing:
+            raise PublishRefused(
+                "settings_incomplete",
+                "the YouTube declarations are incomplete: "
+                + ", ".join(missing)
+                + " must be set explicitly",
+            )
         publish_at = self._publish_at(ctx, settings)
         token = ctx.access_token()
         self._check_channel(ctx, token)
@@ -880,8 +900,8 @@ class YouTubeDirectPublisher:
         # The session expired (or was never recorded): match the newest uploads
         # by title and duration inside the attempt's window (spec 08 section 2).
         checked.append(f"the channel's {RECONCILE_PAGE} newest uploads")
-        matches = self._recent_matches(ctx, token)
-        if len(matches) == 1:
+        matches, candidates = self._recent_matches(ctx, token)
+        if len(matches) == 1 and len(candidates) == 1:
             match = matches[0]
             return ReconcileResult(
                 status="published",
@@ -890,7 +910,7 @@ class YouTubeDirectPublisher:
                 detail="one recent upload matches the title, duration and time window",
                 checked=tuple(checked),
             )
-        if not matches:
+        if not candidates:
             return ReconcileResult(
                 status="absent",
                 detail="no recent upload matches; nothing was published",
@@ -898,7 +918,12 @@ class YouTubeDirectPublisher:
             )
         return ReconcileResult(
             status="uncertain",
-            detail="several recent uploads could be this post; a person must choose",
+            detail=(
+                "one recent upload matches the title but its duration cannot be "
+                "verified; a person must confirm"
+                if len(candidates) == 1
+                else "several recent uploads could be this post; a person must choose"
+            ),
             checked=tuple(checked),
             candidates=tuple(
                 {
@@ -907,11 +932,17 @@ class YouTubeDirectPublisher:
                     "permalink": item.permalink,
                     "published_at": item.published_at.isoformat() if item.published_at else None,
                 }
-                for item in matches
+                for item in candidates
             ),
         )
 
-    def _recent_matches(self, ctx: PublishContext, token: TokenSet) -> list[Any]:
+    def _recent_matches(self, ctx: PublishContext, token: TokenSet) -> tuple[list[Any], list[Any]]:
+        """`(matches, candidates)` among the channel's newest uploads.
+
+        A candidate matches the title and the attempt's time window. A match
+        also agrees on duration; when either side's duration is unknown the
+        item stays a title-only candidate - never enough for `published`.
+        """
         settings = self._settings(ctx)
         expected_title = settings.title or ctx.title
         duration_s: float | None = None
@@ -923,16 +954,17 @@ class YouTubeDirectPublisher:
         since = anchor - RECONCILE_LOOKBACK
         page = self._provider.list_content(token, cursor=None, limit=RECONCILE_PAGE)
         matches: list[Any] = []
+        candidates: list[Any] = []
         for item in page.items:
             if (item.title or "") != expected_title:
                 continue
+            if item.published_at is not None and item.published_at < since:
+                continue
+            candidates.append(item)
             if (
                 duration_s is not None
                 and item.duration_seconds is not None
-                and abs(item.duration_seconds - duration_s) > DURATION_TOLERANCE_S
+                and abs(item.duration_seconds - duration_s) <= DURATION_TOLERANCE_S
             ):
-                continue
-            if item.published_at is not None and item.published_at < since:
-                continue
-            matches.append(item)
-        return matches
+                matches.append(item)
+        return matches, candidates

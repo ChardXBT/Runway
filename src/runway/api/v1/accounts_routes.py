@@ -27,6 +27,12 @@ from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
+from runway.platforms.base import (
+    AuthorizationExpired,
+    ProviderError,
+    RateLimited,
+    safe_error_summary,
+)
 from runway.platforms.capabilities import YOUTUBE_ENGAGE_SCOPE, Platform
 from runway.platforms.oauth import OAuthStateService
 from runway.platforms.publish_capability import YOUTUBE_UPLOAD_SCOPE
@@ -142,8 +148,27 @@ def build_accounts_router(database: Database, settings: Settings) -> APIRouter:
                 ProblemCode.CAPABILITY_NOT_READY,
                 "categories are unavailable for this provider",
             )
-        token = registry.fresh_token(platform, account.token_ref)
-        items = provider.list_video_categories(token, region_code=region.upper())
+        try:
+            token = registry.fresh_token(platform, account.token_ref)
+            items = provider.list_video_categories(token, region_code=region.upper())
+        except AuthorizationExpired as exc:
+            # needs_reauth: the read capability is not ready until the owner
+            # reconnects the account.
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                "the YouTube account must be re-authorized; reconnect it",
+            ) from exc
+        except RateLimited as exc:
+            raise Problem.of(
+                ProblemCode.RATE_LIMITED,
+                safe_error_summary(exc),
+                headers={"Retry-After": "60"},
+            ) from exc
+        except ProviderError as exc:
+            raise _problem(
+                ProblemCode.CAPABILITY_NOT_READY,
+                safe_error_summary(exc),
+            ) from exc
         return {"items": items, "region": region.upper()}
 
     return router

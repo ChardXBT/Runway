@@ -507,3 +507,16 @@ def test_postgres_downgrade_alters_in_place(tmp_path: Path) -> None:
     assert "_alembic_tmp" not in sql
     assert "ALTER TABLE channels DROP COLUMN workspace_id" in sql
     assert "DROP TABLE workspaces" in sql
+
+
+def test_0020_offline_downgrade_emits_both_oauth_states_drops(tmp_path: Path) -> None:
+    """`--sql` mode cannot inspect; the drops must be emitted unconditionally."""
+    settings = Settings(data_dir=tmp_path / "pg")
+    config = _config(settings)
+    config.set_main_option("sqlalchemy.url", "postgresql://runway@localhost/runway")
+    buffer = io.StringIO()
+    config.output_buffer = buffer
+    command.downgrade(config, "0020_youtube_publishing:0017_publishing_engine", sql=True)
+    sql = buffer.getvalue()
+    assert "ALTER TABLE oauth_states DROP COLUMN account_id" in sql
+    assert "ALTER TABLE oauth_states DROP COLUMN purpose" in sql

@@ -38,6 +38,7 @@ from runway.platforms.publisher import (
     NullProgress,
     PublishContext,
     PublishError,
+    PublishRefused,
     PublishRetryLater,
     RateGuardContext,
     classify_send_failure,
@@ -122,6 +123,7 @@ class FakeYouTube:
         self.thumbnail_status = 204
         self.thumbnail_calls = 0
         self.categories_calls = 0
+        self.categories_error: httpx.Response | None = None
         self.channels_calls = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -194,6 +196,8 @@ class FakeYouTube:
             return httpx.Response(self.thumbnail_status)
         if request.method == "GET" and path == "/youtube/v3/videoCategories":
             self.categories_calls += 1
+            if self.categories_error is not None:
+                return self.categories_error
             return httpx.Response(
                 200,
                 json={
@@ -527,6 +531,28 @@ def test_native_preflight_needs_a_future_time_and_public_privacy(tmp_path: Path)
     assert any(issue.severity == "error" for issue in past)
 
 
+@pytest.mark.parametrize(
+    "missing_field",
+    ["privacy", "made_for_kids", "has_paid_product_placement"],
+)
+def test_send_refuses_an_unset_declaration_before_any_request(
+    tmp_path: Path, missing_field: str
+) -> None:
+    """A declaration preflight missed must stop send() before the first HTTP call."""
+    settings = live_settings(tmp_path)
+    database = Database(settings)
+    fake = FakeYouTube()
+    publisher = make_publisher(settings, database, fake)
+    ctx = make_ctx(settings=youtube_settings(**{missing_field: None}))
+
+    with pytest.raises(PublishRefused):
+        publisher.send(ctx, NullProgress())
+
+    assert fake.channels_calls == 0
+    assert fake.session_calls == 0
+    assert fake.chunk_puts == []
+
+
 def test_youtube_short_flags_the_heuristic(tmp_path: Path) -> None:
     settings = live_settings(tmp_path)
     database = Database(settings)
@@ -716,7 +742,9 @@ def _uploaded_item(
     video_id: str,
     *,
     title: str = "Launch day",
-    duration: str = "PT1M",
+    # "PT1M" does not parse (the duration regex needs a seconds part), which
+    # would make the duration unknown; "PT1M0S" is a real 60-second duration.
+    duration: str | None = "PT1M0S",
     published_at: datetime | None = None,
 ) -> dict[str, object]:
     return {
@@ -727,7 +755,7 @@ def _uploaded_item(
                 "%Y-%m-%dT%H:%M:%SZ"
             ),
         },
-        "contentDetails": {"duration": duration},
+        "contentDetails": ({"duration": duration} if duration is not None else {}),
         "status": {"uploadStatus": "processed", "privacyStatus": "unlisted"},
     }
 
@@ -820,6 +848,62 @@ def test_reconcile_no_match_is_absent_and_several_is_uncertain(tmp_path: Path) -
     result = publisher.reconcile(ctx)
     assert result.status == "uncertain"
     assert len(result.candidates) == 2
+
+
+def test_reconcile_a_title_only_candidate_is_uncertain_never_published(
+    tmp_path: Path,
+) -> None:
+    """A matching title with an unknown duration (either side) is not a match."""
+    settings = live_settings(tmp_path)
+    database = Database(settings)
+    fake = FakeYouTube()
+    fake.session_query_response = httpx.Response(404, json={})
+    publisher = make_publisher(settings, database, fake)
+
+    # The platform's item has no duration: title alone never proves the upload.
+    ctx = make_ctx(
+        resumable={"session_uri": fake.session_uri},
+        request_sent_at=NOW - timedelta(minutes=5),
+    )
+    fake.playlist_items = [{"contentDetails": {"videoId": "maybe-1"}}]
+    fake.videos_response = {"items": [_uploaded_item("maybe-1", duration=None)]}
+    result = publisher.reconcile(ctx)
+    assert result.status == "uncertain"
+    assert result.external_id is None
+    assert [candidate["video_id"] for candidate in result.candidates] == ["maybe-1"]
+
+    # The local probe has no duration either: same outcome.
+    ctx = make_ctx(
+        resumable={"session_uri": fake.session_uri},
+        request_sent_at=NOW - timedelta(minutes=5),
+        probe={"width": 1920, "height": 1080},
+    )
+    fake.videos_response = {"items": [_uploaded_item("maybe-1")]}
+    result = publisher.reconcile(ctx)
+    assert result.status == "uncertain"
+    assert [candidate["video_id"] for candidate in result.candidates] == ["maybe-1"]
+
+    # One verified match beside a title-only lookalike is still uncertain.
+    ctx = make_ctx(
+        resumable={"session_uri": fake.session_uri},
+        request_sent_at=NOW - timedelta(minutes=5),
+    )
+    fake.playlist_items = [
+        {"contentDetails": {"videoId": "match-1"}},
+        {"contentDetails": {"videoId": "maybe-1"}},
+    ]
+    fake.videos_response = {
+        "items": [
+            _uploaded_item("match-1"),
+            _uploaded_item("maybe-1", duration=None),
+        ]
+    }
+    result = publisher.reconcile(ctx)
+    assert result.status == "uncertain"
+    assert {candidate["video_id"] for candidate in result.candidates} == {
+        "match-1",
+        "maybe-1",
+    }
 
 
 # --------------------------------------------------------------- rate guard
@@ -919,6 +1003,19 @@ def _patched_provider(
     return provider
 
 
+def _store_token(settings: Settings, token_ref: str = "tok-1") -> None:
+    from runway.platforms.tokens import TokenStore
+
+    TokenStore(settings.resolved_data_dir / "secrets").store(
+        token_ref,
+        TokenSet(
+            access_token="yt-access",
+            scopes=[UPLOAD_SCOPE],
+            extra={"channel_id": "UCexpected", "uploads_playlist": "UUup"},
+        ),
+    )
+
+
 def test_categories_route_lists_categories_and_caches_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -927,16 +1024,7 @@ def test_categories_route_lists_categories_and_caches_them(
     account_id = _add_account(database)
     fake = FakeYouTube()
     _patched_provider(monkeypatch, settings, fake)
-    from runway.platforms.tokens import TokenStore
-
-    TokenStore(settings.resolved_data_dir / "secrets").store(
-        "tok-1",
-        TokenSet(
-            access_token="yt-access",
-            scopes=[UPLOAD_SCOPE],
-            extra={"channel_id": "UCexpected", "uploads_playlist": "UUup"},
-        ),
-    )
+    _store_token(settings)
 
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
         first = web.get(f"/api/v1/accounts/{account_id}/youtube/categories")
@@ -967,3 +1055,92 @@ def test_categories_route_rejects_non_youtube_accounts(tmp_path: Path) -> None:
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
         response = web.get(f"/api/v1/accounts/{account_id}/youtube/categories")
         assert response.status_code == 422
+
+
+def test_categories_route_maps_a_missing_token_to_a_problem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`fresh_token` raises AuthorizationExpired when nothing is stored for the ref."""
+    settings = live_settings(tmp_path)
+    database = Database(settings)
+    account_id = _add_account(database)
+    fake = FakeYouTube()
+    _patched_provider(monkeypatch, settings, fake)
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
+        response = web.get(f"/api/v1/accounts/{account_id}/youtube/categories")
+
+    assert response.status_code == 409
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["code"] == "capability_not_ready"
+    assert fake.categories_calls == 0
+
+
+def test_categories_route_maps_a_provider_401_to_a_problem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = live_settings(tmp_path)
+    database = Database(settings)
+    account_id = _add_account(database)
+    fake = FakeYouTube()
+    _patched_provider(monkeypatch, settings, fake)
+    _store_token(settings)
+    fake.categories_error = httpx.Response(401, json={})
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
+        response = web.get(f"/api/v1/accounts/{account_id}/youtube/categories")
+
+    assert response.status_code == 409
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["code"] == "capability_not_ready"
+
+
+def test_categories_route_maps_rate_limited_to_429_with_retry_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = live_settings(tmp_path)
+    database = Database(settings)
+    account_id = _add_account(database)
+    fake = FakeYouTube()
+    _patched_provider(monkeypatch, settings, fake)
+    _store_token(settings)
+    fake.categories_error = httpx.Response(
+        403,
+        json={
+            "error": {
+                "code": 403,
+                "message": "quota exceeded",
+                "errors": [{"reason": "rateLimitExceeded", "message": "quota exceeded"}],
+            }
+        },
+    )
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
+        response = web.get(f"/api/v1/accounts/{account_id}/youtube/categories")
+
+    assert response.status_code == 429
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["code"] == "rate_limited"
+    assert response.headers["Retry-After"] == "60"
+
+
+def test_categories_route_maps_other_provider_errors_to_a_problem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = live_settings(tmp_path)
+    database = Database(settings)
+    account_id = _add_account(database)
+    fake = FakeYouTube()
+    _patched_provider(monkeypatch, settings, fake)
+    _store_token(settings)
+    fake.categories_error = httpx.Response(
+        500,
+        json={"error": {"code": 500, "message": "backend exploded"}},
+    )
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
+        response = web.get(f"/api/v1/accounts/{account_id}/youtube/categories")
+
+    assert response.status_code == 409
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["code"] == "capability_not_ready"

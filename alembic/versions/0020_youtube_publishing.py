@@ -65,5 +65,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     present = _column_names("oauth_states")
     for column in reversed(NEW_COLUMNS):
-        if column.name in present:
+        # Offline `--sql` cannot inspect: emit every drop, as upgrade emits every add.
+        if _offline() or column.name in present:
             op.drop_column("oauth_states", column.name)
