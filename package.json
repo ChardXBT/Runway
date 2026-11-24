@@ -9,7 +9,9 @@
     "web:lint": "npm --prefix apps/web run lint",
     "web:typecheck": "npm --prefix apps/web run typecheck",
     "web:test": "npm --prefix apps/web run test",
-    "check": "npm run web:lint && npm run web:typecheck && npm run web:test && npm run web:build"
+    "gen:api": "npm --prefix apps/web run gen:api",
+    "web:check:api": "npm --prefix apps/web run check:api",
+    "check": "npm run web:lint && npm run web:typecheck && npm run web:test && npm run web:check:api && npm run web:build"
   },
   "engines": {
     "node": ">=20.9.0"

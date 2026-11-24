@@ -42,6 +42,8 @@ import type {
 } from "@/lib/types";
 
 import { AssistedPublishingWorkspace } from "./assisted-publishing-workspace";
+import { CrossPostDialog } from "./cross-post-dialog";
+import { postTypeLabel, targetStateCopy } from "@/lib/post-copy";
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
   month: "long",
@@ -154,6 +156,16 @@ function isRecoveryResponse(value: unknown): value is RecoveryResponse {
 }
 
 type DialogMode = "edit" | "remove" | "publish" | null;
+
+/** A v1 post target as one read-only calendar chip (spec 08 §6). */
+export interface PostTargetChip {
+  postId: number;
+  targetId: number;
+  platform: string;
+  postType: string | null;
+  state: string;
+  plannedAt: string;
+}
 type LineupAction = "edit" | "remove" | "retry" | "verify" | "push" | null;
 
 const idlePublisherQueue: PublisherQueueStatus = {
@@ -197,6 +209,7 @@ export function LineupCalendar({
   publishingMode = "assisted",
   channelName = "Qlob",
   initialPublisherQueue = idlePublisherQueue,
+  postTargets = [],
 }: {
   initialLineup: LineupSchedule;
   initialPublished?: Proposal[];
@@ -204,6 +217,7 @@ export function LineupCalendar({
   publishingMode?: PublishingMode;
   channelName?: string;
   initialPublisherQueue?: PublisherQueueStatus;
+  postTargets?: PostTargetChip[];
 }) {
   const initialPublishedSorted = useMemo(
     () =>
@@ -257,6 +271,7 @@ export function LineupCalendar({
   const [recentlyChangedIds, setRecentlyChangedIds] = useState<number[]>([]);
   const [assistedWorkspace, setAssistedWorkspace] =
     useState<AssistedWorkspace | null>(null);
+  const [crossPostFor, setCrossPostFor] = useState<Proposal | null>(null);
   const [nowMs, setNowMs] = useState(initialNowMs);
   const actionLock = useRef(false);
   const dialogRef = useRef<HTMLElement>(null);
@@ -331,6 +346,16 @@ export function LineupCalendar({
     }
     return map;
   }, [allPosts, lineup.timezone]);
+
+  const targetsByDate = useMemo(() => {
+    const map = new Map<string, PostTargetChip[]>();
+    for (const chip of postTargets) {
+      const key = localDate(chip.plannedAt, lineup.timezone);
+      if (!key) continue;
+      map.set(key, [...(map.get(key) ?? []), chip]);
+    }
+    return map;
+  }, [postTargets, lineup.timezone]);
 
   const calendarDays = useMemo(() => {
     const first = new Date(month);
@@ -1429,6 +1454,17 @@ export function LineupCalendar({
                         <small>{statusLabel(proposal.status)}</small>
                       </button>
                     )}
+                    {(targetsByDate.get(key) ?? []).map((chip) => (
+                      <Link
+                        key={chip.targetId}
+                        href={`/posts/${chip.postId}`}
+                        className={`lineup-post-target status-tone-${targetStateCopy(chip.state).tone}`}
+                        aria-label={`Open post ${chip.postId}: ${postTypeLabel(chip.postType)} on ${chip.platform}, ${targetStateCopy(chip.state).label}`}
+                      >
+                        <span>{postTypeLabel(chip.postType)}</span>
+                        <small>{targetStateCopy(chip.state).label}</small>
+                      </Link>
+                    ))}
                     {proposals.length > 1 && (
                       <span className="lineup-conflict">
                         +{proposals.length - 1} conflict
@@ -1723,6 +1759,17 @@ export function LineupCalendar({
                       >
                         View on YouTube ↗
                       </a>
+                    )}
+                    {["approved", "internally_scheduled", "externally_scheduled"].includes(
+                      selected.status,
+                    ) && (
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => setCrossPostFor(selected)}
+                      >
+                        Also post to…
+                      </button>
                     )}
                   </div>
                   <p className="lineup-sync-note">
@@ -2045,6 +2092,13 @@ export function LineupCalendar({
           </section>
         </div>
       )}
+      {crossPostFor ? (
+        <CrossPostDialog
+          proposalId={crossPostFor.id}
+          proposalTitle={crossPostFor.final_caption}
+          onClose={() => setCrossPostFor(null)}
+        />
+      ) : null}
     </div>
   );
 }

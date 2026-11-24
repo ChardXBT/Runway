@@ -8,7 +8,9 @@
     "start": "next start --hostname 127.0.0.1 --port 3000",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:api": "node scripts/gen-api.mjs",
+    "check:api": "node scripts/gen-api.mjs --check"
   },
   "dependencies": {
     "next": "^16.4.6",
@@ -25,6 +27,7 @@
     "eslint": "^9.0.0",
     "eslint-config-next": "^16.4.6",
     "jsdom": "^27.0.0",
+    "openapi-typescript": "7.13.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.9.0",
     "vitest": "^4.1.12"
