@@ -78,7 +78,9 @@ def _account(database: Database, token_ref: str, **fields: object) -> int:
         token_ref=token_ref,
         **fields,
     )
-    with database.session() as session:
+    # Seeding is system work: it must run in the hosted profile too, where a
+    # bare session() has no workspace context.
+    with database.system_session() as session:
         session.add(account)
         session.flush()
         return account.id
@@ -88,7 +90,7 @@ def _row(database: Database, account_id: int) -> sqlite3.Row:
 
     from runway.db.models import AccountToken
 
-    with database.session() as session:
+    with database.system_session() as session:
         row = session.get(AccountToken, account_id)
         assert row is not None
         session.expunge(row)
@@ -263,12 +265,13 @@ def test_moved_ciphertext_fails_the_tag_check(db_store) -> None:
         row_b.key_version = row_a.key_version
     with pytest.raises(TokenStoreError):
         store.load(ref_b)
-    # Same for a row pointed at another workspace.
+    # Same for a row pointed at another workspace. The deliberate
+    # cross-workspace move is surgery a bound session rightly refuses.
     from runway.db.models import Workspace
 
-    with database.session() as session:
+    with database.system_session() as session:
         session.add(Workspace(slug="other", name="Other"))
-    with database.session() as session:
+    with database.system_session() as session:
         row_a = session.get(AccountToken, id_a)
         row_a.workspace_id = 2
     with pytest.raises(TokenStoreError):

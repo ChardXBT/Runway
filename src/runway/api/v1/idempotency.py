@@ -117,7 +117,7 @@ class IdempotencyStore:
         self, workspace_id: int, principal_id: str, key: str, request_hash: str
     ) -> ReserveResult:
         try:
-            with self.database.session() as session:
+            with self.database.session(workspace_id=workspace_id) as session:
                 row = self._find(session, workspace_id, principal_id, key)
                 if row is not None and self._expired(row):
                     session.delete(row)
@@ -138,7 +138,7 @@ class IdempotencyStore:
                 return self._existing(row, request_hash)
         except IntegrityError:
             # A concurrent request reserved the same key first.
-            with self.database.session() as session:
+            with self.database.session(workspace_id=workspace_id) as session:
                 row = self._find(session, workspace_id, principal_id, key)
                 if row is None:
                     raise
@@ -155,14 +155,14 @@ class IdempotencyStore:
     def complete(
         self, workspace_id: int, principal_id: str, key: str, status: int, body: str
     ) -> None:
-        with self.database.session() as session:
+        with self.database.session(workspace_id=workspace_id) as session:
             row = self._find(session, workspace_id, principal_id, key)
             if row is not None:
                 row.response_status = status
                 row.response_body = body
 
     def release(self, workspace_id: int, principal_id: str, key: str) -> None:
-        with self.database.session() as session:
+        with self.database.session(workspace_id=workspace_id) as session:
             row = self._find(session, workspace_id, principal_id, key)
             if row is not None and row.response_status is None:
                 session.delete(row)

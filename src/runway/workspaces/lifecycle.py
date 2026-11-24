@@ -426,7 +426,9 @@ def run_export_workspace_job(database: Any, settings: Any, job: Any, *, stores: 
     """
     workspace_id = int(job.payload["workspace_id"])
     export_id = str(job.payload["export_id"])
-    with database.session() as session:
+    # The export is one workspace's rows, read under that workspace's binding;
+    # the worker job's own context is not guaranteed to be the payload's.
+    with database.session(workspace_id=workspace_id) as session:
         document = export_workspace_data(session, workspace_id)
     payload = json.dumps(document, indent=2, sort_keys=True).encode("utf-8")
     path = export_path(settings, workspace_id, export_id)
@@ -507,7 +509,9 @@ def run_delete_workspace_job(database: Any, settings: Any, job: Any, *, stores: 
         stores = dict(default_media_stores(settings))
     registry = ProviderRegistry(database, settings)
     queue = JobQueue(database)
-    with database.session() as session:
+    # The purge writes only the doomed workspace's rows; binding it keeps the
+    # write guard and RLS active instead of running context-free.
+    with database.session(workspace_id=workspace_id) as session:
         accounts = session.scalars(
             select(ConnectedAccount).where(
                 ConnectedAccount.workspace_id == workspace_id,

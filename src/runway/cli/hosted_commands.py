@@ -34,7 +34,7 @@ def _database() -> Database:
 
 
 def _require_workspace(database: Database, workspace_id: int) -> None:
-    with database.session() as session:
+    with database.system_session() as session:
         if session.get(Workspace, workspace_id) is None:
             raise typer.BadParameter(f"workspace {workspace_id} does not exist")
 
@@ -45,7 +45,7 @@ def hosted_status(workspace_id: int = typer.Argument(..., min=1)) -> None:
     settings = get_settings()
     database = _database()
     _require_workspace(database, workspace_id)
-    with database.session() as session:
+    with database.system_session() as session:
         gate = publishing_gate(session, settings, workspace_id)
         quotas = quotas_for(session, settings, workspace_id)
     typer.echo(
@@ -71,7 +71,7 @@ def pause_publishing(
     """Kill switch: stop every send for one workspace until resumed."""
     database = _database()
     _require_workspace(database, workspace_id)
-    with database.session() as session:
+    with database.system_session() as session:
         set_publishing_disabled(
             session, workspace_id, disabled=True, reason=reason, updated_by=OPERATOR
         )
@@ -83,7 +83,7 @@ def resume_publishing(workspace_id: int = typer.Argument(..., min=1)) -> None:
     """Lift the per-workspace kill switch (the global pause is a setting)."""
     database = _database()
     _require_workspace(database, workspace_id)
-    with database.session() as session:
+    with database.system_session() as session:
         set_publishing_disabled(
             session, workspace_id, disabled=False, reason=None, updated_by=OPERATOR
         )
@@ -102,7 +102,7 @@ def set_quota(
     """Override one workspace's quotas; options left out keep their current value."""
     database = _database()
     _require_workspace(database, workspace_id)
-    with database.session() as session:
+    with database.system_session() as session:
         set_quota_overrides(
             session,
             workspace_id,

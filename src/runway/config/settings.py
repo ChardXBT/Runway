@@ -82,6 +82,25 @@ class Settings(BaseSettings):
     capture_checkpoint_every: int = Field(default=10, ge=1)
 
     data_dir: Path = Path("data")
+    # Postgres overrides (phase P7). `local` accepts SQLite (default) or
+    # Postgres; `hosted` requires Postgres. These are environment-only DSNs -
+    # secrets stay out of instance.toml and are never logged or returned by
+    # the API. `postgresql+psycopg://` only.
+    # RUNWAY_DATABASE_URL: the application role (row-level security applies).
+    database_dsn: SecretStr | None = Field(default=None, validation_alias="RUNWAY_DATABASE_URL")
+    # RUNWAY_MIGRATION_DATABASE_URL: the migration/owner role used by
+    # `runway db upgrade` (defaults to RUNWAY_DATABASE_URL when unset).
+    migration_database_dsn: SecretStr | None = Field(
+        default=None, validation_alias="RUNWAY_MIGRATION_DATABASE_URL"
+    )
+    # RUNWAY_SYSTEM_DATABASE_URL: an optional dedicated role for system
+    # sessions (queue claims, webhook ingest before the workspace is known,
+    # api-key resolution, operator CLI). System sessions also work on the app
+    # role - they emit `SET LOCAL app.system = 'on'`, which the RLS policies
+    # grant - so this is defense in depth, e.g. a BYPASSRLS role in hosted.
+    system_database_dsn: SecretStr | None = Field(
+        default=None, validation_alias="RUNWAY_SYSTEM_DATABASE_URL"
+    )
     host: str = "127.0.0.1"
     api_port: int = 8000
     web_port: int = 3000
@@ -330,6 +349,29 @@ class Settings(BaseSettings):
             raise ValueError("default_post_time must be a valid local time")
         return f"{hour:02d}:{minute:02d}"
 
+    @field_validator("database_dsn", "migration_database_dsn", "system_database_dsn", mode="before")
+    @classmethod
+    def blank_dsn(cls, value: object) -> object | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def database_dsn_scheme(self) -> Settings:
+        """Only `postgresql+psycopg://` DSNs are accepted (phase P7)."""
+        for env, dsn in (
+            ("RUNWAY_DATABASE_URL", self.database_dsn),
+            ("RUNWAY_MIGRATION_DATABASE_URL", self.migration_database_dsn),
+            ("RUNWAY_SYSTEM_DATABASE_URL", self.system_database_dsn),
+        ):
+            if dsn is None:
+                continue
+            if not dsn.get_secret_value().startswith("postgresql+psycopg://"):
+                raise ValueError(
+                    f"{env} must be a postgresql+psycopg:// URL; other schemes are not supported"
+                )
+        return self
+
     @model_validator(mode="after")
     def profile_requirements(self) -> Settings:
         """Fail fast on combinations a profile cannot run safely (spec 01 section 2)."""
@@ -339,7 +381,7 @@ class Settings(BaseSettings):
             return self
         problems: list[str] = []
         if self.database_url.startswith("sqlite"):
-            problems.append("a Postgres database (SQLite is local-only)")
+            problems.append("a Postgres database (SQLite is local-only; set RUNWAY_DATABASE_URL)")
         provider = self.identity_provider.strip()
         if not provider:
             problems.append("a configured identity provider (RUNWAY_IDENTITY_PROVIDER)")
@@ -455,8 +497,38 @@ class Settings(BaseSettings):
     def database_path(self) -> Path:
         return self.resolved_data_dir / "runway.db"
 
+    @staticmethod
+    def _dsn(dsn: SecretStr | None) -> str | None:
+        if dsn is None:
+            return None
+        return dsn.get_secret_value()
+
     @property
     def database_url(self) -> str:
+        """The app-role database URL: RUNWAY_DATABASE_URL or the SQLite file."""
+        override = self._dsn(self.database_dsn)
+        if override is not None:
+            return override
+        return self._sqlite_database_url()
+
+    @property
+    def is_postgres(self) -> bool:
+        return not self.database_url.startswith("sqlite")
+
+    @property
+    def migration_database_url(self) -> str:
+        """URL for `runway db upgrade`; defaults to the app URL."""
+        override = self._dsn(self.migration_database_dsn)
+        if override is not None:
+            return override
+        return self.database_url
+
+    @property
+    def system_database_url(self) -> str | None:
+        """URL for a dedicated system-session role, or None to reuse the app role."""
+        return self._dsn(self.system_database_dsn)
+
+    def _sqlite_database_url(self) -> str:
         path = self.database_path
         if "?" in path.as_posix():
             # SQLAlchemy reads everything after `?` as URL query parameters and does

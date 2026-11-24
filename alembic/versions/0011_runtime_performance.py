@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0011_runtime_performance"
 down_revision = "0010_neural_intelligence"
@@ -60,7 +60,14 @@ INDEXES: tuple[tuple[str, str, list[str]], ...] = (
 )
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _indexes(table_name: str) -> set[str]:
+    if _offline():
+        return set()
     return {
         str(index["name"])
         for index in sa.inspect(op.get_bind()).get_indexes(table_name)
@@ -76,5 +83,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for name, table_name, _columns in reversed(INDEXES):
-        if name in _indexes(table_name):
+        if _offline() or name in _indexes(table_name):
             op.drop_index(name, table_name=table_name)

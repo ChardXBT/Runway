@@ -64,7 +64,7 @@ def server(tmp_path: Path) -> Iterator[tuple[str, Database]]:
         assert time.monotonic() < deadline, "uvicorn did not start"
         time.sleep(0.05)
     database: Database = application.state.database
-    with database.session() as session:
+    with database.system_session() as session:
         session.execute(
             text(
                 "INSERT INTO workspaces (id, slug, name, created_at) "
@@ -79,7 +79,7 @@ def server(tmp_path: Path) -> Iterator[tuple[str, Database]]:
 
 
 def _record(database: Database, workspace_id: int, subject_id: int) -> int:
-    with database.session() as session:
+    with database.system_session() as session:
         row = record_event(
             session, workspace_id, types.COMMENT_NEW, "comment", subject_id, {"n": subject_id}
         )

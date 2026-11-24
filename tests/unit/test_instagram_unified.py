@@ -469,7 +469,9 @@ def _two_account_select(
 
 
 def _held_ciphertext(database: Database, select_state: str) -> str | None:
-    with database.session() as session:
+    # Test-side introspection is system work; a hosted-profile database would
+    # refuse a bare session() with no workspace context.
+    with database.system_session() as session:
         record = session.scalar(select(OAuthState).where(OAuthState.state == select_state))
         assert record is not None
         return record.token_ciphertext

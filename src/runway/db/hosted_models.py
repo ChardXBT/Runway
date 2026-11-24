@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from runway.db.base import Base
-from runway.db.models import utcnow
+from runway.db.models import WorkspaceScoped, utcnow
 
 
 class WorkspaceIdentityLink(Base):
@@ -82,7 +82,7 @@ class IdentityWebhookDelivery(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class WorkspaceLimits(Base):
+class WorkspaceLimits(Base, WorkspaceScoped):
     """Operator overrides for one workspace: quotas and the publishing kill switch.
 
     A NULL quota column means "use the configured default". The row is

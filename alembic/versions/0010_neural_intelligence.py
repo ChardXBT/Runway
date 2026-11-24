@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0010_neural_intelligence"
 down_revision = "0009_editorial_diversity"
@@ -20,19 +20,32 @@ def _inspector() -> sa.Inspector:
     return sa.inspect(op.get_bind())
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _tables() -> set[str]:
+    if _offline():
+        return set()
     return set(_inspector().get_table_names())
 
 
 def _columns(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {str(column["name"]) for column in _inspector().get_columns(table)}
 
 
 def _indexes(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {str(index["name"]) for index in _inspector().get_indexes(table)}
 
 
 def _foreign_keys(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {
         str(foreign_key["name"])
         for foreign_key in _inspector().get_foreign_keys(table)
@@ -299,7 +312,7 @@ def downgrade() -> None:
         "multimodal_rerank_runs",
         "candidate_exposures",
     ):
-        if table in _tables():
+        if _offline() or table in _tables():
             op.drop_table(table)
 
     response_columns = _columns("blind_study_responses")
@@ -311,10 +324,10 @@ def downgrade() -> None:
             "genericness_score",
             "grounding_problems_json",
         ):
-            if name in response_columns:
+            if _offline() or name in response_columns:
                 batch.drop_column(name)
 
-    if "ix_blind_study_cases_third_candidate_id" in _indexes("blind_study_cases"):
+    if _offline() or "ix_blind_study_cases_third_candidate_id" in _indexes("blind_study_cases"):
         op.drop_index(
             "ix_blind_study_cases_third_candidate_id",
             table_name="blind_study_cases",
@@ -322,15 +335,15 @@ def downgrade() -> None:
     case_foreign_keys = _foreign_keys("blind_study_cases")
     case_columns = _columns("blind_study_cases")
     with op.batch_alter_table("blind_study_cases") as batch:
-        if "fk_blind_study_cases_third_candidate" in case_foreign_keys:
+        if _offline() or "fk_blind_study_cases_third_candidate" in case_foreign_keys:
             batch.drop_constraint(
                 "fk_blind_study_cases_third_candidate",
                 type_="foreignkey",
             )
         for name in ("arm_metrics_json", "third_candidate_id", "third_caption"):
-            if name in case_columns:
+            if _offline() or name in case_columns:
                 batch.drop_column(name)
-    if "arm_identities_json" in _columns("blind_studies"):
+    if _offline() or "arm_identities_json" in _columns("blind_studies"):
         with op.batch_alter_table("blind_studies") as batch:
             batch.drop_column("arm_identities_json")
 
@@ -343,7 +356,7 @@ def downgrade() -> None:
             "model_cited_evidence_json",
             "model_supplied_evidence_json",
         ):
-            if name in candidate_record_columns:
+            if _offline() or name in candidate_record_columns:
                 batch.drop_column(name)
 
     slate_columns = _columns("caption_slates")
@@ -355,10 +368,10 @@ def downgrade() -> None:
             "model_supplied_evidence_json",
             "retrieval_selected_evidence_json",
         ):
-            if name in slate_columns:
+            if _offline() or name in slate_columns:
                 batch.drop_column(name)
 
-    if "ix_candidate_images_topic_eligibility_class" in _indexes("candidate_images"):
+    if _offline() or "ix_candidate_images_topic_eligibility_class" in _indexes("candidate_images"):
         op.drop_index(
             "ix_candidate_images_topic_eligibility_class",
             table_name="candidate_images",
@@ -371,8 +384,8 @@ def downgrade() -> None:
             "topic_eligibility_json",
             "topic_eligibility_class",
         ):
-            if name in candidate_columns:
+            if _offline() or name in candidate_columns:
                 batch.drop_column(name)
-    if "selection_diagnostics_json" in _columns("generation_runs"):
+    if _offline() or "selection_diagnostics_json" in _columns("generation_runs"):
         with op.batch_alter_table("generation_runs") as batch:
             batch.drop_column("selection_diagnostics_json")

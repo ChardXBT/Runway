@@ -421,7 +421,10 @@ class ApiKeyService:
         if parsed.env != key_env(self.settings):
             raise invalid_key("this API key belongs to a different kind of Runway installation")
         presented = hash_key(raw)
-        with self.database.session() as session:
+        # The key hash maps a secret to its workspace before any workspace is
+        # known: a global directory lookup, so it runs as system code (and
+        # under the bypass-RLS role on Postgres).
+        with self.database.system_session() as session:
             row = session.scalar(select(ApiKey).where(ApiKey.prefix == parsed.prefix))
             if row is None or not hmac.compare_digest(row.key_hash, presented):
                 raise invalid_key()

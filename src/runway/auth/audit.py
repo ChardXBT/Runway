@@ -126,7 +126,9 @@ class AgentAuditMiddleware:
         target_type, target_id = target if isinstance(target, tuple) else (None, None)
 
         def write() -> None:
-            with self.database.session() as session:
+            # The middleware runs outside the route's workspace binding, so
+            # bind explicitly: audit_log rows are workspace-scoped.
+            with self.database.session(workspace_id=principal.workspace_id) as session:
                 record_audit(
                     session,
                     principal,

@@ -37,7 +37,9 @@ def export_command(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=EXIT_REFUSED) from None
     database = Database(settings)
-    with database.session() as session:
+    # A maintenance command, not a request: the export filters the workspace
+    # it names, so it runs context-free like the other CLI sweeps.
+    with database.system_session() as session:
         workspace_id = session.scalar(select(Workspace.id).limit(1))
         if workspace_id is None:
             typer.echo("no workspace exists yet", err=True)

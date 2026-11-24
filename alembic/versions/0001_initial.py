@@ -21,4 +21,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    Base.metadata.drop_all(bind=op.get_bind())
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        # `metadata.drop_all` cannot order the DROPs: the models contain a
+        # proposals<->caption_slates foreign-key cycle. CASCADE removes each
+        # table regardless of constraints other tables still point at it.
+        for table in reversed(list(Base.metadata.tables.values())):
+            op.execute(f'DROP TABLE "{table.name}" CASCADE')
+    else:
+        Base.metadata.drop_all(bind=bind)

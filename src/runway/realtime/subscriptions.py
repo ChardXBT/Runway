@@ -261,7 +261,8 @@ class SubscriptionScheduler:
         )
 
     def next_due(self, now: datetime) -> datetime | None:
-        with self.database.session() as session:
+        # Producer sweep: scans every workspace's subscriptions.
+        with self.database.system_session() as session:
             subscriptions = session.scalars(
                 select(PlatformSubscription).where(PlatformSubscription.state == "active")
             ).all()
@@ -276,7 +277,8 @@ class SubscriptionScheduler:
         return min(upcoming) if upcoming else None
 
     def produce(self, now: datetime) -> None:
-        with self.database.session() as session:
+        # Producer sweep: scans every workspace's subscriptions.
+        with self.database.system_session() as session:
             subscriptions = session.scalars(select(PlatformSubscription)).all()
             for subscription in subscriptions:
                 expires_at = _aware(subscription.expires_at)

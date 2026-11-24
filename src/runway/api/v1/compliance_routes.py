@@ -287,7 +287,9 @@ def build_compliance_router(database: Database, settings: Settings) -> APIRouter
                 ProblemCode.VALIDATION_FAILED,
                 "this identity has no self-service deletion",
             ) from None
-        with database.session() as session:
+        # delete_user erases this person's rows in every workspace they
+        # belong to - a bound session would see only the caller's workspace.
+        with database.system_session() as session:
             workspace_ids = delete_user(session, user_id)
             record_audit(
                 session,

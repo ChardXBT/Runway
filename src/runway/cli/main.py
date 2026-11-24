@@ -433,7 +433,7 @@ def annotation_refresh_status(
     if run_id is not None:
         result: object = service.status(run_id)
     else:
-        with database.session() as session:
+        with database.system_session() as session:
             channel = get_channel(session, settings.channel_handle)
             ids = list(
                 session.scalars(
@@ -511,7 +511,7 @@ def preference_status() -> None:
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         datasets = session.scalars(
             select(PreferenceDataset)
@@ -670,7 +670,7 @@ def intelligence_feedback_status() -> None:
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         legacy = int(
             session.scalar(
@@ -736,7 +736,7 @@ def intelligence_runs_list(
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         rows = session.scalars(
             select(IntelligenceAgentRun)
@@ -1489,7 +1489,7 @@ def embeddings_status() -> None:
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         count = int(
             session.scalar(
@@ -1531,7 +1531,7 @@ def embeddings_backfill(
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         candidates = session.scalars(
             select(CandidateImage)
@@ -2289,7 +2289,7 @@ def platforms_list() -> None:
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         accounts = session.scalars(
             select(ConnectedAccount).order_by(ConnectedAccount.platform)
         ).all()
@@ -2328,7 +2328,7 @@ def platforms_sync(
     settings = get_settings()
     database = initialize_database(settings)
     service = SyncService(database, settings)
-    with database.session() as session:
+    with database.system_session() as session:
         if account is not None:
             record = session.get(ConnectedAccount, account)
             if record is None:

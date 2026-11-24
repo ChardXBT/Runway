@@ -58,7 +58,10 @@ class OAuthStateService:
         stored = verifier if verifier is not None else payload
         state = secrets.token_urlsafe(32)
         now = utcnow()
-        with self.database.session() as session:
+        # Bound to the workspace the row is written for, like JobQueue.enqueue:
+        # the write guard would otherwise refuse a state outside the caller's
+        # own workspace.
+        with self.database.session(workspace_id=workspace_id) as session:
             session.add(
                 OAuthState(
                     platform=platform.value,
@@ -108,7 +111,10 @@ class OAuthStateService:
                 ):
                     raise OAuthStateError("invalid_state")
                 raise OAuthStateError("expired_state")
-            assert record is not None
+            if record is None:
+                # The update matched but the row is invisible to this session's
+                # workspace binding - a foreign workspace's state is refused.
+                raise OAuthStateError("invalid_state")
             session.expunge(record)
             return record
 

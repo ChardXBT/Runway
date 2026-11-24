@@ -528,6 +528,43 @@ def test_postgres_downgrade_alters_in_place(tmp_path: Path) -> None:
     assert "DROP TABLE workspaces" in sql
 
 
+def test_postgres_full_chain_renders_only_portable_sql(tmp_path: Path) -> None:
+    """Every revision, base->head and head->base, emits SQL Postgres accepts.
+
+    Offline there is nothing to inspect: each revision must still emit its DDL
+    instead of calling `sa.inspect` on a missing connection, and nothing in the
+    chain may produce SQLite-only syntax."""
+    up = _offline_postgres_sql(tmp_path, f"base:{HEAD}")
+
+    # The whole chain ran: the final version stamp is the head revision.
+    assert f"UPDATE alembic_version SET version_num='{HEAD}'" in up
+    # No SQLite-only syntax survives into the Postgres script.
+    assert "PRAGMA" not in up
+    assert "AUTOINCREMENT" not in up
+    assert "sqlite" not in up.lower()
+    # Batch mode uses recreate="auto": no move-and-copy on Postgres.
+    assert "_alembic_tmp" not in up
+    # Boolean server defaults render as real booleans, never SQLite's 0/1.
+    for bad in (
+        "BOOLEAN DEFAULT 0",
+        "BOOLEAN DEFAULT 1",
+        "BOOLEAN DEFAULT '0'",
+        "BOOLEAN DEFAULT '1'",
+    ):
+        assert bad not in up
+    assert "BOOLEAN DEFAULT false" in up
+
+    down = _offline_postgres_sql(tmp_path, f"{HEAD}:base")
+    assert "PRAGMA" not in down
+    assert "_alembic_tmp" not in down
+    # 0001 cannot sort the proposals<->caption_slates cycle for DROP: it emits
+    # CASCADE drops on Postgres instead of metadata.drop_all().
+    assert 'DROP TABLE "proposals" CASCADE' in down
+    # The whole chain ran back: head's own downgrade and the removal of 0001.
+    assert f"WHERE alembic_version.version_num = '{HEAD}'" in down
+    assert "DELETE FROM alembic_version WHERE alembic_version.version_num = '0001_initial'" in down
+
+
 def test_0019_adds_and_removes_only_the_agent_interface_tables(at_0012: Settings) -> None:
     config = _config(at_0012)
     command.upgrade(config, "0016_shared_contracts")

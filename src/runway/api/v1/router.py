@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from enum import Enum
 
 from fastapi import APIRouter, Depends
 from fastapi.routing import APIRoute
 
 from runway.api.v1.idempotency import RouteHandler, is_idempotent, wrap_idempotent_handler
-from runway.auth.principal import get_principal
+from runway.auth.principal import Principal, get_principal
+from runway.db.workspace import workspace_context
 
 V1_PREFIX = "/api/v1"
 
@@ -32,6 +33,20 @@ class V1Route(APIRoute):
         return handler
 
 
+async def bind_workspace_context(
+    principal: Principal = Depends(get_principal),
+) -> AsyncIterator[None]:
+    """Bind the request's database sessions to the principal's workspace.
+
+    Async dependencies run in the request task, so the context set here is
+    visible to the handler and to every session it opens - including work
+    queued to worker threads, which inherit the task's context. `get_principal`
+    itself is sync and runs in a threadpool, so it cannot set this itself.
+    """
+    with workspace_context(principal.workspace_id):
+        yield
+
+
 def build_v1_router(*, tags: Sequence[str | Enum], prefix: str = "") -> APIRouter:
     """A router under /api/v1 whose every route requires a Principal.
 
@@ -43,7 +58,7 @@ def build_v1_router(*, tags: Sequence[str | Enum], prefix: str = "") -> APIRoute
     return APIRouter(
         prefix=V1_PREFIX + prefix,
         tags=list(tags),
-        dependencies=[Depends(get_principal)],
+        dependencies=[Depends(get_principal), Depends(bind_workspace_context)],
         responses=V1_ERROR_RESPONSES,
         route_class=V1Route,
     )

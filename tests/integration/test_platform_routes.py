@@ -10,9 +10,11 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import func, select
 
 from runway.api.app import create_app
+from runway.auth.principal import Principal, get_principal
 from runway.config import Settings
 from runway.db import initialize_database
 from runway.db.base import Database
@@ -21,14 +23,22 @@ from runway.db.models import (
     AuditLogEntry,
     CommentRecord,
     ConnectedAccount,
+    OAuthState,
     PlatformContent,
+    Workspace,
 )
+from runway.db.workspace import workspace_context
 from runway.operations import instance_lease
 from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
+from runway.platforms.oauth import OAuthStateService
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.tokens import FileTokenStore
 from runway.platforms.youtube import YouTubeProvider
+
+# A valid but throwaway keyring: hosted apps boot the database token store,
+# which refuses to start without RUNWAY_TOKEN_KEYS.
+_TOKEN_KEYRING = "v1:" + "a" * 43 + "="
 
 
 def migrated(settings: Settings) -> Settings:
@@ -164,6 +174,90 @@ def test_oauth_connect_and_callback_happy_path(
                 assert json.loads(audit.detail_json) == {"external_account_id": "UCtest"}
     finally:
         database.engine.dispose()
+
+
+def _principal(workspace_id: int) -> Principal:
+    return Principal(
+        kind="user",
+        id=f"user-{workspace_id}",
+        workspace_id=workspace_id,
+        role="owner",
+        scopes=frozenset(),
+        display=f"Owner {workspace_id}",
+    )
+
+
+def _hosted_app(settings: Settings):
+    return create_app(settings.model_copy(update={"profile": "hosted"}))
+
+
+def test_hosted_connect_binds_the_state_to_the_principal_workspace(tmp_path: Path) -> None:
+    settings = migrated(
+        Settings(
+            data_dir=tmp_path / "data",
+            platform_provider="live",
+            youtube_client_id="yt-client",
+            youtube_client_secret="yt-secret",
+            token_keys=SecretStr(_TOKEN_KEYRING),
+        ).model_copy(update={"profile": "hosted"})
+    )
+    app = _hosted_app(settings)
+    database = app.state.database
+    with database.system_session() as session:
+        session.add(Workspace(id=2, slug="other", name="Other"))
+    app.dependency_overrides[get_principal] = lambda: _principal(2)
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+
+    connect = client.post("/api/platforms/youtube/connect")
+    assert connect.status_code == 200
+    state = connect.json()["state"]
+    with database.system_session() as session:
+        record = session.scalar(select(OAuthState).where(OAuthState.state == state))
+        assert record is not None
+        assert record.workspace_id == 2
+
+
+def test_hosted_callback_refuses_a_state_from_another_workspace(tmp_path: Path) -> None:
+    settings = migrated(
+        Settings(
+            data_dir=tmp_path / "data",
+            platform_provider="live",
+            youtube_client_id="yt-client",
+            youtube_client_secret="yt-secret",
+            token_keys=SecretStr(_TOKEN_KEYRING),
+        ).model_copy(update={"profile": "hosted"})
+    )
+    app = _hosted_app(settings)
+    database = app.state.database
+    with database.system_session() as session:
+        session.add(Workspace(id=2, slug="other", name="Other"))
+    with workspace_context(2):
+        state = (
+            OAuthStateService(database)
+            .issue(
+                Platform.youtube,
+                redirect_uri="https://api.test/cb",
+                use_pkce=False,
+                workspace_id=2,
+            )
+            .state
+        )
+    app.dependency_overrides[get_principal] = lambda: _principal(1)
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+
+    response = client.get(
+        "/api/platforms/youtube/oauth/callback",
+        params={"code": "auth-code", "state": state},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "error=invalid_state" in response.headers["location"]
+    with database.system_session() as session:
+        # The foreign state was refused, not consumed, and nothing persisted.
+        record = session.scalar(select(OAuthState).where(OAuthState.state == state))
+        assert record is not None
+        assert record.consumed_at is None
+        assert session.scalars(select(ConnectedAccount)).all() == []
 
 
 def test_oauth_callback_gates_standby_before_exchanging_the_code(

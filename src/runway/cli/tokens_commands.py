@@ -103,7 +103,8 @@ def tokens_migrate_file_to_db(
         file_store = FileTokenStore.from_settings(settings)
         db_store = token_store_from_settings(settings, database)
         assert isinstance(db_store, DatabaseTokenStore)
-        with database.session() as session:
+        # Every bound ref across all workspaces, not one tenant's set.
+        with database.system_session() as session:
             bound_refs = {
                 str(ref)
                 for (ref,) in session.execute(

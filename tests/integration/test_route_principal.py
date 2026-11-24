@@ -161,7 +161,10 @@ def test_hosted_clerk_app_exempts_only_its_signed_webhook(tmp_path: Path) -> Non
 
 
 # Every route the hosted API serves, and why each is safe there. Adding a
-# router to hosted must add it here, with its tenancy argument.
+# router to hosted must add it here, with its tenancy argument. Since phase P7
+# every /api/v1 route runs inside bind_workspace_context, so its ORM queries
+# see only principal.workspace_id's rows and Postgres row-level security
+# enforces the same boundary below the ORM.
 HOSTED_ROUTES = {
     # Liveness probe: product name, version and switches; no tenant data.
     ("GET", "/health"),
@@ -185,24 +188,77 @@ HOSTED_ROUTES = {
     ("GET", "/api/v1/workspace/exports/{export_id}"),
     ("DELETE", "/api/v1/users/me"),
     ("GET", "/api/v1/audit"),
-    # Media uploads (spec 02 section 4): every query is filtered by
-    # principal.workspace_id, uploads are direct-to-R2 (the API never carries
-    # the bytes), and the poster is a redirect to a short-lived signed URL.
-    ("POST", "/api/v1/media"),
-    ("PUT", "/api/v1/media/{asset_id}/parts/{part_number}"),
-    ("GET", "/api/v1/media/{asset_id}/upload"),
-    ("POST", "/api/v1/media/{asset_id}/complete"),
+    # Keys (spec 06 section 5): workspace-scoped CRUD and release grants.
+    ("GET", "/api/v1/keys"),
+    ("POST", "/api/v1/keys"),
+    ("GET", "/api/v1/keys/{key_id}"),
+    ("DELETE", "/api/v1/keys/{key_id}"),
+    ("PUT", "/api/v1/keys/{key_id}/release-grants"),
+    # Approvals (spec 06 section 8): workspace-scoped pending targets.
+    ("GET", "/api/v1/approvals"),
+    ("POST", "/api/v1/approvals/{target_id}/reject"),
+    # Outbound webhooks (spec 06 section 9): workspace-scoped endpoints and
+    # their deliveries.
+    ("GET", "/api/v1/webhooks"),
+    ("POST", "/api/v1/webhooks"),
+    ("GET", "/api/v1/webhooks/{endpoint_id}"),
+    ("PATCH", "/api/v1/webhooks/{endpoint_id}"),
+    ("DELETE", "/api/v1/webhooks/{endpoint_id}"),
+    ("GET", "/api/v1/webhooks/{endpoint_id}/deliveries"),
+    # Accounts (spec 08): sync status and per-platform publishing consent on
+    # workspace-scoped connected accounts.
+    ("GET", "/api/v1/accounts/{account_id}/sync-status"),
+    ("GET", "/api/v1/accounts/{account_id}/tiktok/creator-info"),
+    ("GET", "/api/v1/accounts/{account_id}/youtube/categories"),
+    ("POST", "/api/v1/accounts/{account_id}/publishing/enable"),
+    ("GET", "/api/v1/accounts/{account_id}/publishing/capability"),
+    # Media (spec 06 section 6, spec 02 section 4): workspace-scoped assets;
+    # uploads are direct-to-R2 (the API never carries the bytes) and the
+    # poster is a redirect to a short-lived signed URL.
     ("GET", "/api/v1/media/{asset_id}"),
     ("DELETE", "/api/v1/media/{asset_id}"),
     ("GET", "/api/v1/media/{asset_id}/poster"),
-    # Clerk webhook: authenticated by the Svix signature, not by a principal.
-    ("POST", "/hooks/identity/clerk"),
+    ("GET", "/api/v1/media/{asset_id}/upload"),
+    ("POST", "/api/v1/media"),
+    ("POST", "/api/v1/media/{asset_id}/complete"),
+    ("PUT", "/api/v1/media/{asset_id}/parts/{part_number}"),
+    # Posts engine (spec 03/06): workspace-scoped posts, targets and attempts.
+    ("GET", "/api/v1/posts"),
+    ("POST", "/api/v1/posts"),
+    ("GET", "/api/v1/posts/{post_id}"),
+    ("PATCH", "/api/v1/posts/{post_id}"),
+    ("POST", "/api/v1/posts/{post_id}/targets"),
+    ("PUT", "/api/v1/posts/{post_id}/targets/{target_id}"),
+    ("GET", "/api/v1/posts/{post_id}/targets/{target_id}/attempts"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/cancel"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/mark-published"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/reconcile"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/release"),
+    ("POST", "/api/v1/posts/{post_id}/targets/{target_id}/schedule"),
+    # Workspace policy read/write (workspace-scoped singleton).
+    ("GET", "/api/v1/policy"),
+    ("PUT", "/api/v1/policy"),
+    # Platform webhooks (spec 04 section 2): the platform signature is the
+    # auth; the delivery resolves its workspace before touching tenant data.
+    ("GET", "/hooks/health"),
+    ("GET", "/hooks/instagram"),
+    ("POST", "/hooks/instagram"),
+    ("POST", "/hooks/tiktok"),
+    ("GET", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
+    ("POST", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
     # Meta compliance callbacks: authenticated by the signed_request HMAC.
     ("POST", "/hooks/meta/deauthorize"),
     ("POST", "/hooks/meta/data-deletion"),
     # The data-deletion status page Meta links users to; the code in the path
     # is the unguessable request hash.
     ("GET", "/hooks/meta/data-deletion/{code}"),
+    # Clerk webhook: authenticated by the Svix signature, not by a principal.
+    ("POST", "/hooks/identity/clerk"),
+    # OAuth connect + callback (spec 08): the only hosted platform routes.
+    # State rows carry the principal's workspace and the callback persists
+    # into it, so a state never crosses workspaces.
+    ("POST", "/api/platforms/{platform}/connect"),
+    ("GET", "/api/platforms/{platform}/oauth/callback"),
 }
 
 

@@ -27,7 +27,7 @@ from runway.api.v1.pagination import (
     encode_cursor,
     paginate,
 )
-from runway.api.v1.router import V1_PREFIX, V1Route, build_v1_router
+from runway.api.v1.router import V1_PREFIX, V1Route, bind_workspace_context, build_v1_router
 from runway.auth.principal import get_principal
 from runway.auth.problems import PROBLEM_MEDIA_TYPE, Problem, ProblemCode, default_status
 from runway.config import Settings
@@ -144,7 +144,11 @@ def test_the_v1_factory_requires_a_principal_and_uses_the_v1_route(tmp_path: Pat
     router = build_v1_router(tags=["x"], prefix="/x")
     assert router.prefix == "/api/v1/x"
     assert router.route_class is V1Route
-    assert [dependency.dependency for dependency in router.dependencies] == [get_principal]
+    # Every v1 route resolves the principal, then binds the session workspace.
+    assert [dependency.dependency for dependency in router.dependencies] == [
+        get_principal,
+        bind_workspace_context,
+    ]
     for bad in ("x", "/x/"):
         with pytest.raises(ValueError):
             build_v1_router(tags=["x"], prefix=bad)

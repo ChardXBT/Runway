@@ -1,7 +1,7 @@
 """Database token store (spec 05 section 3, work package 7.5).
 
 Revision ID: 0022_account_tokens
-Revises: 0020_youtube_publishing
+Revises: 0021_row_level_security
 
 Adds:
 
@@ -15,6 +15,12 @@ Adds:
   unified login), encrypted under the token-store cipher. Kept on the state
   row because it outlives the request but dies with the state's TTL.
 
+`account_tokens` carries `workspace_id`, so on Postgres it also joins the
+fail-closed RLS set from `0021_row_level_security`: `ENABLE` + `FORCE` ROW
+LEVEL SECURITY and the same `runway_workspace` policy (system sessions mark
+themselves `app.system = 'on'`, bound sessions match `app.workspace_id`, a
+session with neither GUC sees zero rows). A no-op on SQLite, like 0021.
+
 Every step inspects first, so a fresh database (built by 0001 from the
 current models) and a rerun after an interrupted upgrade both skip finished
 work. Plain `CREATE TABLE` plus one `ADD COLUMN` - no rebuilds.
@@ -27,9 +33,24 @@ import sqlalchemy as sa
 from alembic import context, op
 
 revision = "0022_account_tokens"
-down_revision = "0020_youtube_publishing"
+down_revision = "0021_row_level_security"
 branch_labels = None
 depends_on = None
+
+# Tables created by this revision that carry `workspace_id` and must sit under
+# row-level security on Postgres. Kept literal for the same reason as 0021's:
+# the migration stays stable as models evolve.
+SCOPED_TABLES = ("account_tokens",)
+
+POLICY_NAME = "runway_workspace"
+
+# Identical fail-closed policy to 0021: a session marked `app.system = 'on'`
+# (emitted by `Database.system_session`) or matching `app.workspace_id` sees
+# rows; a session with neither GUC sees zero.
+_POLICY_EXPRESSION = (
+    "current_setting('app.system', true) = 'on' "
+    "OR workspace_id = nullif(current_setting('app.workspace_id', true), '')::int"
+)
 
 
 def _inspector() -> sa.Inspector:
@@ -59,6 +80,26 @@ def _index_names(table: str) -> set[str]:
     return {str(index["name"]) for index in _inspector().get_indexes(table)}
 
 
+def _enable_rls(table: str) -> None:
+    """0021's policy shape, applied to a table this revision created."""
+    if op.get_bind().dialect.name != "postgresql":
+        return
+    op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+    op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+    op.execute(
+        f"CREATE POLICY {POLICY_NAME} ON {table} "
+        f"USING ({_POLICY_EXPRESSION}) WITH CHECK ({_POLICY_EXPRESSION})"
+    )
+
+
+def _disable_rls(table: str) -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return
+    op.execute(f"DROP POLICY IF EXISTS {POLICY_NAME} ON {table}")
+    op.execute(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY")
+    op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
+
+
 def upgrade() -> None:
     if _offline() or "account_tokens" not in _table_names():
         # `op.create_table`, not a standalone `sa.Table`: a table built against
@@ -83,6 +124,9 @@ def upgrade() -> None:
         )
     if _offline() or "ix_account_tokens_workspace_id" not in _index_names("account_tokens"):
         op.create_index("ix_account_tokens_workspace_id", "account_tokens", ["workspace_id"])
+    if _offline() or "account_tokens" in _table_names():
+        for table in SCOPED_TABLES:
+            _enable_rls(table)
     if _offline() or "token_ciphertext" not in _column_names("oauth_states"):
         op.add_column("oauth_states", sa.Column("token_ciphertext", sa.Text(), nullable=True))
 
@@ -91,4 +135,6 @@ def downgrade() -> None:
     if _offline() or "token_ciphertext" in _column_names("oauth_states"):
         op.drop_column("oauth_states", "token_ciphertext")
     if _offline() or "account_tokens" in _table_names():
+        for table in SCOPED_TABLES:
+            _disable_rls(table)
         op.drop_table("account_tokens")

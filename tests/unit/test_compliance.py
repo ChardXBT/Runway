@@ -274,7 +274,9 @@ def test_meta_deletion_matches_ig_id_or_the_app_scoped_meta_user_id(
 
 def test_export_includes_every_workspace_table(tmp_path: Path) -> None:
     database = _database(tmp_path)
-    with database.session() as session:
+    # Two workspaces are seeded: fixture writes are system work, not bound
+    # to one workspace's session.
+    with database.system_session() as session:
         workspace = _workspace(session)
         other = _workspace(session, "other")
         _member(session, workspace, "a@x.test", "owner")
@@ -323,7 +325,9 @@ def test_export_carries_no_secret_column_values(tmp_path: Path) -> None:
         "hub_secret": "s3ntinel-hub",
         "callback_token": "s3ntinel-callback",
     }
-    with database.session() as session:
+    # `_workspace` creates a non-default workspace; seeding its rows is
+    # system work, not a bound workspace session.
+    with database.system_session() as session:
         workspace = _workspace(session)
         _member(session, workspace, "exp@x.test", "owner")
         account = ConnectedAccount(
@@ -429,7 +433,9 @@ def test_delete_workspace_job_removes_the_workspaces_stored_objects(tmp_path: Pa
     stores: dict[str, object] = {"local": local, "r2": r2}
     digest = hashlib.sha256(b"media").hexdigest()
 
-    with database.session() as session:
+    # Seeding rows across two workspaces is system work, not one
+    # workspace's bound session.
+    with database.system_session() as session:
         victim = _workspace(session, "victim")
         assets = []
         for workspace_id, storage, name in (
@@ -597,7 +603,8 @@ def test_download_export_refuses_a_malformed_export_id(tmp_path: Path) -> None:
 
 def test_purge_workspace_removes_every_row(tmp_path: Path) -> None:
     database = _database(tmp_path)
-    with database.session() as session:
+    # Purge is system work across every workspace's rows.
+    with database.system_session() as session:
         workspace = _workspace(session)
         _member(session, workspace, "b@x.test", "owner")
         session.add(
@@ -729,7 +736,9 @@ def test_purge_workspace_reaches_the_channel_subgraph_and_breaks_the_fk_cycle(
     other through nullable columns no topological order can resolve.
     """
     database = _database(tmp_path)
-    with database.session() as session:
+    # Two workspaces are seeded and one purged: system work, not bound to
+    # either workspace's session.
+    with database.system_session() as session:
         workspace = _workspace(session)
         other = _workspace(session, "other")
         _member(session, workspace, "purge@x.test", "owner")
@@ -771,7 +780,9 @@ def test_purge_workspace_reaches_the_channel_subgraph_and_breaks_the_fk_cycle(
 
 def test_delete_user_removes_memberships_and_row(tmp_path: Path) -> None:
     database = _database(tmp_path)
-    with database.session() as session:
+    # delete_user spans the person's memberships in every workspace: it is
+    # system work, not one workspace's bound session.
+    with database.system_session() as session:
         workspace = _workspace(session)
         user, _ = _member(session, workspace, "c@x.test", "viewer")
         _member(session, workspace, "d@x.test", "owner")
@@ -788,7 +799,7 @@ def test_delete_user_removes_memberships_and_row(tmp_path: Path) -> None:
 
 def test_delete_user_refuses_last_owner_with_members(tmp_path: Path) -> None:
     database = _database(tmp_path)
-    with database.session() as session:
+    with database.system_session() as session:
         workspace = _workspace(session)
         owner, _ = _member(session, workspace, "e@x.test", "owner")
         _member(session, workspace, "f@x.test", "viewer")
@@ -799,7 +810,7 @@ def test_delete_user_refuses_last_owner_with_members(tmp_path: Path) -> None:
 
 def test_delete_user_allows_last_owner_of_empty_workspace(tmp_path: Path) -> None:
     database = _database(tmp_path)
-    with database.session() as session:
+    with database.system_session() as session:
         workspace = _workspace(session)
         owner, _ = _member(session, workspace, "g@x.test", "owner")
         assert delete_user(session, owner.id) == [workspace.id]

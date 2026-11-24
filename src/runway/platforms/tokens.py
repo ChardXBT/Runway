@@ -411,7 +411,9 @@ class DatabaseTokenStore:
         refresh_expires_at = _parse_stored_datetime(token.extra.get("refresh_expires_at"))
         for attempt in (True, False):
             try:
-                with self.database.session() as session:
+                # Token upkeep, purges and reconnects reach refs owned by any
+                # workspace; the ref -> account resolution is the guard.
+                with self.database.system_session() as session:
                     account = self._bound_account(session, token_ref)
                     ciphertext = AESGCM(key.key).encrypt(
                         nonce, plaintext, self._aad(account.workspace_id, account.id, key.version)
@@ -435,7 +437,7 @@ class DatabaseTokenStore:
         return
 
     def load(self, token_ref: str) -> TokenSet | None:
-        with self.database.session() as session:
+        with self.database.system_session() as session:
             account = self._resolve_account(session, token_ref)
             if account is None:
                 return None
@@ -470,7 +472,7 @@ class DatabaseTokenStore:
         self.ensure_writable()
         from runway.db.models import AccountToken
 
-        with self.database.session() as session:
+        with self.database.system_session() as session:
             account = self._resolve_account(session, token_ref)
             if account is None:
                 return
@@ -500,7 +502,7 @@ class DatabaseTokenStore:
             lock_key = int.from_bytes(
                 hashlib.sha256(token_ref.encode("utf-8")).digest()[:8], "big", signed=True
             )
-            with self.database.session() as session:
+            with self.database.system_session() as session:
                 session.execute(text(f"SET LOCAL lock_timeout = '{int(timeout * 1000)}ms'"))
                 try:
                     session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
@@ -530,7 +532,8 @@ class DatabaseTokenStore:
         primary = self._primary
         cursor = 0
         while True:
-            with self.database.session() as session:
+            # Rewrap walks every workspace's rows: it is a maintenance sweep.
+            with self.database.system_session() as session:
                 rows = list(
                     session.scalars(
                         select(AccountToken)

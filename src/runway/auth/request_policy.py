@@ -51,6 +51,8 @@ LEGACY_WRITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/hooks/instagram"),
         ("POST", "/hooks/tiktok"),
         ("POST", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
+        # Instagram Unified Login account pick (the owner's browser, mid-connect).
+        ("POST", "/api/platforms/instagram/unified/select"),
         ("POST", "/api/analysis/history"),
         ("PATCH", "/api/annotations/{post_id}"),
         ("POST", "/api/candidates/{candidate_id}/block-domain"),
@@ -150,7 +152,8 @@ def _guard_release(request: Request, principal: Principal) -> None:
         # Without the database neither the target nor the policy is known.
         raise Problem.of(ProblemCode.SCOPE_MISSING, "release cannot be authorized here")
     target_id = _target_id(request)
-    with database.session() as session:
+    # Runs inside get_principal, before the request's workspace context dep.
+    with database.session(workspace_id=principal.workspace_id) as session:
         platform: str | None = None
         if target_id is not None:
             platform = session.scalar(

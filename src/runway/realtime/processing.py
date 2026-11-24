@@ -60,7 +60,9 @@ def run_process_webhook_job(
     event_id = job.payload.get("event_id")
     if not isinstance(event_id, int):
         raise PermanentJobError("process_webhook job has no integer event_id")
-    with database.session() as session:
+    # Resolution is cross-workspace system work: the delivery's workspace is
+    # what this pass discovers, so it cannot run inside a workspace binding.
+    with database.system_session() as session:
         event = session.get(WebhookEvent, event_id)
         if event is None or event.processed_at is not None:
             # Purged already, or a claim raced a completed run: nothing to do.
@@ -77,14 +79,31 @@ def run_process_webhook_job(
         if parsed is _UNPARSABLE:
             _drop(event, "unparsable body")
             return
-        account = _resolve_account(session, event, parsed)
-        if account is None:
+        accounts = _resolve_accounts(session, event, parsed)
+        if not accounts:
             _drop(event, "unknown account")
             return
-        event.account_id = account.id
-        event.workspace_id = account.workspace_id
-        _process(session, queue, event, account, parsed, database)
-        event.processed_at = utcnow()
+        # Two workspaces may have connected the same platform identity: every
+        # matching account gets its own processing pass below. The delivery
+        # row itself can carry one workspace_id, so it is filed under the
+        # first resolved account's.
+        event.account_id = accounts[0].id
+        event.workspace_id = accounts[0].workspace_id
+        event_id_out, provider = event.id, event.provider
+        targets = [(account.id, account.workspace_id) for account in accounts]
+    # Each pass runs bound to that account's workspace: criteria, the write
+    # guard and (on Postgres) the RLS GUC all apply to it.
+    for account_id, workspace_id in targets:
+        with database.session(workspace_id=workspace_id) as session:
+            account = session.get(ConnectedAccount, account_id)
+            if account is None:
+                continue
+            _process(session, queue, event_id_out, provider, account, parsed, database)
+    # The delivery row lives under the first resolved account's workspace.
+    with database.session(workspace_id=targets[0][1]) as session:
+        event = session.get(WebhookEvent, event_id_out)
+        if event is not None:
+            event.processed_at = utcnow()
 
 
 def _drop(event: WebhookEvent, error: str) -> None:
@@ -104,75 +123,84 @@ def _parse_body(event: WebhookEvent) -> object:
         return _UNPARSABLE
 
 
-def _resolve_account(
+def _resolve_accounts(
     session: Session, event: WebhookEvent, parsed: object
-) -> ConnectedAccount | None:
+) -> list[ConnectedAccount]:
+    """Every account the delivery hints at - one per workspace that connected
+    the same platform identity (spec 01 section 4)."""
     if event.provider == "youtube":
         if event.subscription_id is None:
-            return None
+            return []
         subscription = session.get(PlatformSubscription, event.subscription_id)
         if subscription is None:
-            return None
-        return session.get(ConnectedAccount, subscription.account_id)
+            return []
+        account = session.get(ConnectedAccount, subscription.account_id)
+        return [] if account is None else [account]
     if event.provider == "instagram":
         if not isinstance(parsed, dict):
-            return None
+            return []
         entries = parsed.get("entry")
         if not isinstance(entries, list):
-            return None
+            return []
+        seen: set[int] = set()
+        accounts: list[ConnectedAccount] = []
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
             external_id = entry.get("id")
             if external_id is None:
                 continue
-            account = _account_by_external_id(session, "instagram", str(external_id))
-            if account is not None:
-                return account
-        return None
+            for account in _accounts_by_external_id(session, "instagram", str(external_id)):
+                if account.id not in seen:
+                    seen.add(account.id)
+                    accounts.append(account)
+        return accounts
     if event.provider == "tiktok":
         if not isinstance(parsed, dict):
-            return None
+            return []
         openid = parsed.get("user_openid")
         if openid is None:
-            return None
-        return _account_by_external_id(session, "tiktok", str(openid))
-    return None
+            return []
+        return _accounts_by_external_id(session, "tiktok", str(openid))
+    return []
 
 
-def _account_by_external_id(
+def _accounts_by_external_id(
     session: Session, platform: str, external_id: str
-) -> ConnectedAccount | None:
-    return session.scalar(
-        select(ConnectedAccount)
-        .where(
-            ConnectedAccount.platform == platform,
-            ConnectedAccount.external_account_id == external_id,
-        )
-        .limit(1)
+) -> list[ConnectedAccount]:
+    return list(
+        session.scalars(
+            select(ConnectedAccount)
+            .where(
+                ConnectedAccount.platform == platform,
+                ConnectedAccount.external_account_id == external_id,
+            )
+            .order_by(ConnectedAccount.id)
+        ).all()
     )
 
 
 def _process(
     session: Session,
     queue: JobQueue,
-    event: WebhookEvent,
+    event_id: int,
+    provider: str,
     account: ConnectedAccount,
     parsed: object,
     database: Database,
 ) -> None:
-    if event.provider == "tiktok" and isinstance(parsed, dict):
-        _process_tiktok(session, queue, event, account, parsed, database)
+    if provider == "tiktok" and isinstance(parsed, dict):
+        _process_tiktok(session, queue, event_id, account, parsed, database)
         return
     # youtube (Atom entry, e.g. yt:videoId) and instagram (changes[].field)
     # both mean "this account changed": fetch it, trusting nothing else.
-    _enqueue_sync(session, queue, event, account)
+    _enqueue_sync(session, queue, event_id, account)
 
 
 def _process_tiktok(
     session: Session,
     queue: JobQueue,
-    event: WebhookEvent,
+    event_id: int,
     account: ConnectedAccount,
     parsed: dict[str, Any],
     database: Database,
@@ -199,7 +227,7 @@ def _process_tiktok(
         boost(session, account.id, "inventory", INVENTORY_BOOST_MINUTES)
         boost(session, account.id, "content_metrics_recent", RECENT_METRICS_BOOST_MINUTES)
         return
-    _enqueue_sync(session, queue, event, account)
+    _enqueue_sync(session, queue, event_id, account)
 
 
 def _meta_user_id(account: ConnectedAccount) -> str | None:
@@ -309,7 +337,7 @@ def _cancel_pending_jobs(session: Session, account_id: int) -> int:
 
 
 def _enqueue_sync(
-    session: Session, queue: JobQueue, event: WebhookEvent, account: ConnectedAccount
+    session: Session, queue: JobQueue, event_id: int, account: ConnectedAccount
 ) -> None:
     """The scheduler's payload shape, keyed so webhook retries cannot duplicate it.
 
@@ -321,7 +349,7 @@ def _enqueue_sync(
     queue.enqueue_pending_job(
         session,
         SYNC_ACCOUNT_JOB,
-        idempotency_key=f"{SYNC_ACCOUNT_JOB}:{account.id}:webhook:{event.id}",
+        idempotency_key=f"{SYNC_ACCOUNT_JOB}:{account.id}:webhook:{event_id}",
         payload={"account_id": int(account.id), "trigger": "webhook"},
         workspace_id=int(account.workspace_id),
         # A missed hint is covered by the next scheduled sync; do not pile up retries.

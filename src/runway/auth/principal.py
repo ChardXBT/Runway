@@ -181,7 +181,9 @@ def _record_workspace_seen(request: Request, principal: Principal) -> None:
         return
     writes[principal.workspace_id] = moment
     try:
-        with database.session() as session:
+        # Runs before the request's workspace context is bound, so bind the
+        # session to the principal explicitly.
+        with database.session(workspace_id=principal.workspace_id) as session:
             workspace = session.get(Workspace, principal.workspace_id)
             if workspace is not None:
                 workspace.last_seen_at = utcnow()

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0012_creator_platforms"
 down_revision = "0011_runtime_performance"
@@ -34,7 +34,14 @@ NEW_TABLES = (
 )
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _table_names() -> set[str]:
+    if _offline():
+        return set()
     return set(sa.inspect(op.get_bind()).get_table_names())
 
 
@@ -365,5 +372,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     existing = _table_names()
     for table_name in reversed(NEW_TABLES):
-        if table_name in existing:
+        if _offline() or table_name in existing:
             op.drop_table(table_name)

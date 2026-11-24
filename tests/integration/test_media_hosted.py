@@ -168,7 +168,7 @@ def test_hosted_upload_is_direct_and_the_api_never_carries_media_bytes(
     assert ready["has_poster"] is True
 
     # The probe stored the poster frame as an object; no local file exists.
-    with hosted_db.session() as session:
+    with hosted_db.system_session() as session:
         row = session.get(MediaAssetV2, asset_id)
         assert row is not None and row.poster_key is not None
         assert row.poster_key.startswith("w/1/") and row.poster_key.endswith(".jpg")
@@ -200,7 +200,7 @@ def test_hosted_complete_still_verifies_the_total_size(
     _app, client, _service = hosted_app
     data = _payload(PART + 10)
     asset_id, _body = _begin(client, data)
-    with hosted_db.session() as session:
+    with hosted_db.system_session() as session:
         upload = session.scalar(select(MediaUpload).where(MediaUpload.asset_id == asset_id))
         assert upload is not None
         upload_id = upload.upload_id
@@ -306,7 +306,7 @@ def test_export_download_survives_the_tracking_jobs_retention_purge(
     assert key in fake.objects
 
     # The export job finished and aged past the 14-day finished-job retention.
-    with hosted_db.session() as session:
+    with hosted_db.system_session() as session:
         row = session.scalar(
             select(PublishJob).where(PublishJob.idempotency_key == f"export:{export_id}")
         )
