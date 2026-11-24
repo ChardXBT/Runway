@@ -39,6 +39,18 @@ EXEMPT_SIGNED_WEBHOOKS = frozenset(
         "/hooks/youtube/websub/{subscription_id}/{callback_token}",
         "/hooks/instagram",
         "/hooks/tiktok",
+        # Meta compliance callbacks: verified by the signed_request HMAC, not
+        # by a principal (spec 05 section 4).
+        "/hooks/meta/deauthorize",
+        "/hooks/meta/data-deletion",
+    }
+)
+# Public pages that return no tenant data without an unguessable id.
+EXEMPT_PUBLIC_PAGES = frozenset(
+    {
+        # Meta's required data-deletion status page; the code is the SHA-256
+        # of the signed request body.
+        "/hooks/meta/data-deletion/{code}",
     }
 )
 
@@ -59,7 +71,7 @@ def _unguarded_routes(application: FastAPI) -> list[str]:
         if isinstance(route, APIRoute):
             if (
                 context.path in EXEMPT_HEALTH_ROUTES | EXEMPT_SIGNATURE_ROUTES
-                or context.path in EXEMPT_SIGNED_WEBHOOKS
+                or context.path in EXEMPT_SIGNED_WEBHOOKS | EXEMPT_PUBLIC_PAGES
             ):
                 continue
             if get_principal not in set(_calls(context.dependant)):
@@ -162,8 +174,24 @@ HOSTED_ROUTES = {
     ("PATCH", "/api/v1/workspace/members/{user_id}"),
     # Event stream: every query is filtered by principal.workspace_id.
     ("GET", "/api/v1/events/stream"),
+    # Account disconnect: workspace-scoped lookup, accounts:manage; the only
+    # accounts route hosted serves (spec 05 section 4).
+    ("POST", "/api/v1/accounts/{account_id}/disconnect"),
+    # Compliance router: workspace delete/export and the audit list are
+    # workspace:admin, self-delete is require_person (spec 05 sections 4-5).
+    ("DELETE", "/api/v1/workspace"),
+    ("POST", "/api/v1/workspace/export"),
+    ("GET", "/api/v1/workspace/exports/{export_id}"),
+    ("DELETE", "/api/v1/users/me"),
+    ("GET", "/api/v1/audit"),
     # Clerk webhook: authenticated by the Svix signature, not by a principal.
     ("POST", "/hooks/identity/clerk"),
+    # Meta compliance callbacks: authenticated by the signed_request HMAC.
+    ("POST", "/hooks/meta/deauthorize"),
+    ("POST", "/hooks/meta/data-deletion"),
+    # The data-deletion status page Meta links users to; the code in the path
+    # is the unguessable request hash.
+    ("GET", "/hooks/meta/data-deletion/{code}"),
 }
 
 

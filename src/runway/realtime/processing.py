@@ -31,8 +31,13 @@ from runway.events.log import record_event
 from runway.events.types import ACCOUNT_UPDATED
 from runway.jobs.queue import JOB_STATE_MACHINE, Job, JobQueue, JobState
 from runway.jobs.worker import PermanentJobError
+from runway.platforms.capabilities import Platform
 from runway.platforms.sync import SYNC_ACCOUNT_JOB
 from runway.realtime import PROCESS_WEBHOOK_JOB, hooks, standby
+from runway.realtime.meta_hooks import (
+    META_DATA_DELETION_PROVIDER,
+    META_DEAUTHORIZE_PROVIDER,
+)
 from runway.realtime.schedule import (
     INVENTORY_BOOST_MINUTES,
     RECENT_METRICS_BOOST_MINUTES,
@@ -64,6 +69,9 @@ def run_process_webhook_job(
             # Routes never enqueue unverified events; if a job points at one
             # anyway, it is noise, not a hint.
             _drop(event, "unverified signature")
+            return
+        if event.provider in (META_DEAUTHORIZE_PROVIDER, META_DATA_DELETION_PROVIDER):
+            _process_meta(session, database, settings, queue, event)
             return
         parsed = _parse_body(event)
         if parsed is _UNPARSABLE:
@@ -192,6 +200,58 @@ def _process_tiktok(
         boost(session, account.id, "content_metrics_recent", RECENT_METRICS_BOOST_MINUTES)
         return
     _enqueue_sync(session, queue, event, account)
+
+
+def _process_meta(
+    session: Session,
+    database: Database,
+    settings: Settings,
+    queue: JobQueue,
+    event: WebhookEvent,
+) -> None:
+    """Meta compliance callbacks: detach or scrub the matching account.
+
+    The body is the form field ``signed_request``; the signature was checked
+    at ingest and is re-checked here so a secret rotation cannot launder a
+    stored forgery. A delivery naming a Meta user we never connected is still
+    a valid request - there is simply nothing to delete.
+    """
+    from runway.platforms.registry import ProviderRegistry
+    from runway.realtime.lifecycle import disconnect_account, purge_account_data
+    from runway.realtime.meta_hooks import (
+        META_DATA_DELETION_PROVIDER,
+        _app_secrets,
+        _signed_request_field,
+        verify_signed_request,
+    )
+
+    raw = _signed_request_field(event.body)
+    payload = verify_signed_request(raw, _app_secrets(settings)) if raw is not None else None
+    if payload is None:
+        _drop(event, "signed_request no longer verifies")
+        return
+    event.processed_at = utcnow()
+    user_id = payload.get("user_id")
+    if user_id is None:
+        event.error = "signed_request carries no user_id"
+        return
+    accounts = session.scalars(
+        select(ConnectedAccount).where(
+            ConnectedAccount.platform == Platform.instagram.value,
+            ConnectedAccount.external_account_id == str(user_id),
+        )
+    ).all()
+    if not accounts:
+        # A person may request deletion without ever connecting; nothing held.
+        return
+    registry = ProviderRegistry(database, settings)
+    for account in accounts:
+        event.account_id = account.id
+        event.workspace_id = account.workspace_id
+        if event.provider == META_DATA_DELETION_PROVIDER:
+            purge_account_data(session, registry, queue, account, marker=f"{event.id}:{account.id}")
+        else:
+            disconnect_account(session, registry, queue, account)
 
 
 def _publish_id(parsed: dict[str, Any]) -> str | None:

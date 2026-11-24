@@ -32,6 +32,7 @@ import re
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from runway.api.v1.idempotency import idempotent
 from runway.api.v1.router import build_v1_router
 from runway.auth.principal import (
     ACCOUNTS_MANAGE,
@@ -44,6 +45,7 @@ from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
+from runway.jobs.queue import JobQueue
 from runway.platforms.base import (
     AuthorizationExpired,
     ProviderError,
@@ -69,6 +71,7 @@ from runway.platforms.tiktok import TikTokProvider
 from runway.platforms.tokens import pkce_challenge
 from runway.platforms.youtube import YouTubeProvider
 from runway.posts.types import TargetPostType
+from runway.realtime.lifecycle import disconnect_account
 
 TIKTOK_UPLOAD_SCOPE = "video.upload"
 TIKTOK_PUBLISH_SCOPE = "video.publish"
@@ -144,9 +147,6 @@ def build_accounts_router(
         if settings.tiktok_app_status == "audited":
             needed.append(TIKTOK_PUBLISH_SCOPE)
         granted = _granted_scopes(account)
-        missing = [scope for scope in needed if scope not in granted]
-        if not missing:
-            return {"status": "already_enabled", "account_id": account.id}
         # Request the read scopes plus the publishing scopes the consent adds;
         # TikTok keeps scopes already granted on the account.
         requested = list(dict.fromkeys([*TIKTOK_SCOPES, *needed, *granted]))
@@ -412,5 +412,46 @@ def build_accounts_router(
                 ),
             },
         }
+
+    return router
+
+
+def build_disconnect_router(
+    database: Database,
+    settings: Settings,
+    *,
+    registry: ProviderRegistry | None = None,
+) -> APIRouter:
+    """`POST /api/v1/accounts/{id}/disconnect`, mounted in both profiles.
+
+    Kept apart from `build_accounts_router` (which stays local-only until the
+    remaining routes are tenancy-proven) because the compliance surface -
+    detach the grant, drop the token, cancel the sends - must exist wherever
+    accounts can be connected (spec 05 section 4).
+    """
+    router = build_v1_router(tags=["accounts"], prefix="/accounts")
+    if registry is None:
+        registry = ProviderRegistry(database, settings)
+
+    @router.post("/{account_id}/disconnect")
+    @idempotent
+    def disconnect(account_id: int, principal: Principal = Depends(get_principal)):
+        """Detach the grant: revoke, drop the stored token, cancel pending sends."""
+        require(principal, ACCOUNTS_MANAGE)
+        # A standby machine may not revoke or delete tokens (spec 07 section 4).
+        registry.token_store.ensure_writable()
+        with database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            if account is None or account.workspace_id != principal.workspace_id:
+                raise _problem(ProblemCode.NOT_FOUND, "this account does not exist")
+            if account.status == "disconnected":
+                return {
+                    "account_id": account_id,
+                    "status": "disconnected",
+                    "revoke": "no_token",
+                }
+            return disconnect_account(
+                session, registry, JobQueue(database), account, actor=principal
+            )
 
     return router

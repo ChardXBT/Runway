@@ -41,6 +41,7 @@ from runway.operations.revision import checkout_revision
 from runway.operations.runtime_files import api_lock_path
 from runway.platforms.sync import SyncService
 from runway.realtime.hooks_routes import build_hooks_router
+from runway.realtime.meta_hooks import build_meta_hooks_router
 
 logger = logging.getLogger(__name__)
 
@@ -257,8 +258,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             build_cross_post_router(ProposalBridge(post_service, media_service))
         )
     application.include_router(build_workspace_router(database, active_settings))
+    # Meta compliance callbacks (spec 05 section 4) arrive signed-request form
+    # posts on the public edge in every profile.
+    application.include_router(build_meta_hooks_router(database, active_settings))
     # Versioned surface (spec 06): every router comes from build_v1_router.
     application.include_router(build_events_router(database))
+    # Account disconnect is compliance surface too, so hosted serves it even
+    # though the rest of the accounts router stays local-only for now.
+    from runway.api.v1.accounts_routes import build_disconnect_router
+    from runway.api.v1.compliance_routes import build_compliance_router
+
+    application.include_router(build_disconnect_router(database, active_settings))
+    # Delete/export/audit (spec 05 sections 4-5) apply in every profile.
+    application.include_router(build_compliance_router(database, active_settings))
     if hosted and active_settings.identity_provider.strip() == "clerk":
         if not active_settings.clerk_webhook_secrets:
             # The API receives the membership webhooks; without the secret it

@@ -18,6 +18,7 @@ from runway.config import Settings
 from runway.hosted.middleware import ClientRateLimit, HostedRequestGuard, SecurityHeaders
 from runway.hosted.ratelimit import InProcessTokenBucket, RateLimit
 from runway.identity.registry import build_identity_provider
+from runway.realtime.meta_hooks import META_DATA_DELETION_PATH, META_DEAUTHORIZE_PATH
 
 # `/api/settings` keys a hosted tenant may see. The rest of public_dict()
 # describes the operator's machine (data paths, the browser publisher's
@@ -57,7 +58,11 @@ def configure_hosted(application: FastAPI, settings: Settings) -> None:
         ClientRateLimit,
         limiter=limiter,
         limit=RateLimit(settings.rate_limit_ip_per_minute),
-        address_only_paths=(CLERK_HOOK_PATH,),
+        address_only_paths=(
+            CLERK_HOOK_PATH,
+            META_DATA_DELETION_PATH,
+            META_DEAUTHORIZE_PATH,
+        ),
     )
     application.add_middleware(SecurityHeaders)
 

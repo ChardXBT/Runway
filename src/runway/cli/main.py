@@ -25,6 +25,7 @@ from runway.capture.browser import BrowserCaptureService, CapturePaused
 from runway.capture.service import CaptureService
 from runway.catalog.service import CatalogService
 from runway.cli.db_commands import db_app
+from runway.cli.export_commands import export_command
 from runway.cli.hosted_commands import hosted_app
 from runway.cli.instance import instance_app
 from runway.cli.keys_commands import keys_app
@@ -119,6 +120,7 @@ app.add_typer(platforms_app, name="platforms")
 app.add_typer(db_app, name="db")
 app.add_typer(keys_app, name="keys")
 app.add_typer(tokens_app, name="tokens")
+app.command("export")(export_command)
 app.command("worker")(worker_command)
 app.add_typer(hosted_app, name="hosted")
 app.add_typer(instance_app, name="instance")

@@ -19,6 +19,7 @@ from runway.auth.problems import Problem
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
+    AuditLogEntry,
     ConnectedAccount,
     OAuthState,
     SyncRun,
@@ -50,6 +51,7 @@ from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncAccountDisconnected, SyncRunInProgress, SyncService
 from runway.platforms.tokens import pkce_challenge
 from runway.realtime import subscriptions
+from runway.realtime.lifecycle import disconnect_account
 
 logger = logging.getLogger(__name__)
 
@@ -394,6 +396,22 @@ def build_platform_router(
             account.last_error = None
             account.metadata_json = json.dumps({"raw": identity.raw, "scopes_source": "granted"})
             session.flush()
+            # The OAuth callback has no caller principal; the grant itself is
+            # the actor (spec 05 section 5).
+            session.add(
+                AuditLogEntry(
+                    workspace_id=account.workspace_id,
+                    actor_kind="oauth",
+                    actor_id=account.platform,
+                    action="account.connect",
+                    target_type="account",
+                    target_id=str(account.id),
+                    detail_json=json.dumps(
+                        {"external_account_id": identity.external_account_id},
+                        sort_keys=True,
+                    ),
+                )
+            )
             token_ref = str(account.token_ref)
         registry.token_store.store(token_ref, token)
         return None
@@ -769,29 +787,15 @@ def build_platform_router(
 
     @router.post("/platforms/accounts/{account_id}/disconnect")
     def disconnect(account_id: int, payload: ConfirmedRequest) -> dict[str, object]:
-        account = _account_or_404(account_id)
+        _account_or_404(account_id)
         _require_active_instance()
-        if account.token_ref:
-            token = registry.token_store.load(account.token_ref)
-            if token is not None:
-                try:
-                    registry.provider(Platform(account.platform)).revoke(token)
-                except ProviderError as exc:
-                    logger.warning(
-                        "token revoke failed for account %s: %s",
-                        account_id,
-                        exc.detail,
-                    )
-            registry.token_store.delete(account.token_ref)
         with database.session() as session:
             record = session.get(ConnectedAccount, account_id)
             if record is not None:
-                record.status = "disconnected"
-                record.token_ref = None
-                record.last_error = None
-                # WebSub subscriptions are cancelled and an unsubscribe job is
-                # enqueued in the same transaction (spec 04 section 2).
-                subscriptions.on_account_disconnected(session, queue, record)
+                # Revoke, drop the stored token, cancel pending sends and run
+                # the subscription teardown in one transaction (spec 04
+                # section 2, spec 05 section 4).
+                disconnect_account(session, registry, queue, record)
         return {"account_id": account_id, "status": "disconnected"}
 
     @router.post("/platforms/accounts/{account_id}/reconnect")

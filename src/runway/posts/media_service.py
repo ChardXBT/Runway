@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from runway.auth.audit import record_audit
 from runway.auth.principal import MEDIA_WRITE, POSTS_READ, Principal, require
 from runway.auth.problems import Problem, ProblemCode
 from runway.config import Settings
@@ -484,6 +485,14 @@ class MediaService:
             self._remove_poster(asset)
             asset.status = "deleted"
             asset.poster_key = None
+            record_audit(
+                session,
+                principal,
+                "media.delete",
+                target_type="media",
+                target_id=asset.id,
+                detail={"storage": asset.storage},
+            )
 
     def poster_path(self, principal: Principal, asset_id: int) -> Path:
         require(principal, POSTS_READ)
