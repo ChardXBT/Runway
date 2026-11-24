@@ -155,6 +155,44 @@ describe("ApprovalsWorkspace", () => {
     });
   });
 
+  it("names the account in the release dialog when the API provides it", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(post()));
+    render(
+      <ApprovalsWorkspace
+        initialPage={{ items: [item], next_cursor: null }}
+        accounts={[
+          {
+            id: 5,
+            platform: "youtube",
+            handle: "@nw",
+            display_name: "Northwind",
+            status: "connected",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Review & release" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: /to Northwind\?/ }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("hides the Prepared line when no time is set", () => {
+    render(
+      <ApprovalsWorkspace
+        initialPage={{
+          items: [{ ...item, planned_at: null }],
+          next_cursor: null,
+        }}
+      />,
+    );
+    expect(screen.getByText("no time set")).toBeInTheDocument();
+    expect(screen.queryByText(/^Prepared/)).not.toBeInTheDocument();
+  });
+
   it("shows the empty panel when nothing waits", () => {
     render(<ApprovalsWorkspace initialPage={{ items: [], next_cursor: null }} />);
     expect(screen.getByText("Nothing waiting")).toBeInTheDocument();

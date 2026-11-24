@@ -44,8 +44,9 @@ export default async function LineupPage() {
       "/api/publisher/queue",
       isPublisherQueueStatus,
     ),
-    // Optional: an API without the v1 posts routes shows the Lineup alone.
-    apiGetOptional<PostPage>("/api/v1/posts", isPostPage),
+    // Optional: the v1 post chips never break the Lineup — a 404 (an API
+    // without the v1 routes) or any other failure shows the calendar alone.
+    apiGetOptional<PostPage>("/api/v1/posts", isPostPage).catch(() => null),
   ]);
 
   const postTargets = (posts?.items ?? []).flatMap((post) =>

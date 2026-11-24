@@ -128,4 +128,22 @@ describe("PostsWorkspace", () => {
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toContain("/api/v1/posts?cursor=cursor-2");
   });
+
+  it("shows a load-more failure instead of dropping it", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("network down"));
+    render(
+      <PostsWorkspace
+        initialPage={{ items: [post()], next_cursor: "cursor-2" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /could not reach the local service/,
+    );
+    // The button recovers for a retry; the first page is still shown.
+    expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
+    expect(screen.getByText("Launch clip")).toBeInTheDocument();
+  });
 });

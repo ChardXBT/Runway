@@ -15,6 +15,7 @@ import { useCallback, useState } from "react";
 import { PlatformBadge } from "@/components/platform-badge";
 import { ReleaseDialog } from "@/components/release-dialog";
 import { StatePanel } from "@/components/state-panel";
+import { accountLabel, type EditorAccount } from "@/components/post-editor";
 import { actionError } from "@/lib/client-api";
 import { useEventStream } from "@/lib/event-stream";
 import { formatAbsoluteTime, formatRelativeTime } from "@/lib/format";
@@ -22,7 +23,21 @@ import { postTypeLabel } from "@/lib/post-copy";
 import { V1, findTarget } from "@/lib/v1-client";
 import type { ApprovalItem, ApprovalPage, PostOut, TargetOut } from "@/lib/v1-guards";
 
-export function ApprovalsWorkspace({ initialPage }: { initialPage: ApprovalPage }) {
+function releaseAccountLabel(
+  accounts: EditorAccount[],
+  accountId: number | null,
+): string {
+  const account = accounts.find((item) => item.id === accountId);
+  return account ? accountLabel(account) : `account ${accountId ?? ""}`;
+}
+
+export function ApprovalsWorkspace({
+  initialPage,
+  accounts = [],
+}: {
+  initialPage: ApprovalPage;
+  accounts?: EditorAccount[];
+}) {
   const [page, setPage] = useState(initialPage);
   const [release, setRelease] = useState<{ post: PostOut; target: TargetOut } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +112,7 @@ export function ApprovalsWorkspace({ initialPage }: { initialPage: ApprovalPage 
         <ReleaseDialog
           post={release.post}
           target={release.target}
-          accountLabel={`account ${release.target.account_id ?? ""}`}
+          accountLabel={releaseAccountLabel(accounts, release.target.account_id)}
           onClose={() => setRelease(null)}
           onReleased={() => {
             setRelease(null);
@@ -209,7 +224,9 @@ function ApprovalRow({
           </div>
         </div>
       ) : null}
-      <p className="field-hint">Prepared {formatAbsoluteTime(item.planned_at)}</p>
+      {item.planned_at ? (
+        <p className="field-hint">Prepared {formatAbsoluteTime(item.planned_at)}</p>
+      ) : null}
     </article>
   );
 }

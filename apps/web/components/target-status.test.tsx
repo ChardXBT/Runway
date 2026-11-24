@@ -135,6 +135,57 @@ describe("TargetStatus", () => {
     });
   });
 
+  it("links a published_url only when it is http or https", () => {
+    render(
+      <TargetStatus
+        post={post()}
+        target={target({
+          state: "published",
+          last_attempt: null,
+          published_url: "https://youtube.com/watch?v=abc",
+        })}
+        onChanged={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("link", { name: "Open on the platform" }),
+    ).toHaveAttribute("href", "https://youtube.com/watch?v=abc");
+
+    cleanup();
+    render(
+      <TargetStatus
+        post={post()}
+        target={target({
+          state: "published",
+          last_attempt: null,
+          published_url: "javascript:alert(1)",
+        })}
+        onChanged={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("link", { name: "Open on the platform" }),
+    ).not.toBeInTheDocument();
+    // The URL still shows, as text the person can copy.
+    expect(screen.getByText("javascript:alert(1)")).toBeInTheDocument();
+  });
+
+  it("links to the platform inside the uncertain panel when a url is known", () => {
+    render(
+      <TargetStatus
+        post={post()}
+        target={target({ published_url: "https://youtube.com/watch?v=abc" })}
+        onChanged={vi.fn()}
+      />,
+    );
+    const panel = document.querySelector(".target-uncertain");
+    expect(panel).not.toBeNull();
+    // The link sits in the panel where the person decides, not only the head.
+    expect(
+      panel!.querySelector("a"),
+    ).toHaveAttribute("href", "https://youtube.com/watch?v=abc");
+  });
+
   it("expands the attempts ledger", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({

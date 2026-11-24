@@ -69,6 +69,18 @@ export function TargetStatus({
   };
 
   const publishedUrl = target.published_url;
+  // Only http(s) URLs become links — anything else renders as plain text.
+  const safeUrl =
+    publishedUrl && /^https?:\/\//i.test(publishedUrl) ? publishedUrl : null;
+  const platformLink = safeUrl ? (
+    <p>
+      <a className="text-link" href={safeUrl} target="_blank" rel="noreferrer">
+        Open on the platform
+      </a>
+    </p>
+  ) : publishedUrl ? (
+    <p className="field-hint">{publishedUrl}</p>
+  ) : null;
   return (
     <div className="target-status" data-testid={`target-status-${target.id}`}>
       <div className="target-status-head">
@@ -78,13 +90,8 @@ export function TargetStatus({
         <div className="target-status-copy">
           <p>{copy.detail}</p>
           {target.state_reason ? <p className="field-hint">{target.state_reason}</p> : null}
-          {publishedUrl ? (
-            <p>
-              <a className="text-link" href={publishedUrl} target="_blank" rel="noreferrer">
-                Open on the platform
-              </a>
-            </p>
-          ) : null}
+          {/* An uncertain target shows the link below, where it is decided. */}
+          {target.state !== "uncertain" ? platformLink : null}
         </div>
       </div>
 
@@ -104,6 +111,7 @@ export function TargetStatus({
               The platform gave no clear answer; nothing more was confirmed.
             </p>
           )}
+          {platformLink}
           <div className="form-actions">
             <button
               type="button"

@@ -34,6 +34,10 @@ const SCOPE_LABELS: Record<string, string> = {
 
 const PLATFORMS = ["youtube", "instagram", "tiktok"] as const;
 
+function sameScopes(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((scope, index) => scope === b[index]);
+}
+
 export function ApiKeysManager() {
   const [keys, setKeys] = useState<ApiKeyView[] | null>(null);
   const [policy, setPolicy] = useState<PolicyResponse | null>(null);
@@ -105,15 +109,17 @@ export function ApiKeysManager() {
           </button>
         </div>
       ) : null}
-      <CreateKeyForm
-        defaultScopes={policy?.default_agent_scopes ?? []}
-        perKeyAllowed={policy?.agent_release === "per_key"}
-        onCreated={(key) => {
-          setCreated(key);
-          void refresh();
-        }}
-        onError={setError}
-      />
+      {policy ? (
+        <CreateKeyForm
+          defaultScopes={policy.default_agent_scopes}
+          perKeyAllowed={policy.agent_release === "per_key"}
+          onCreated={(key) => {
+            setCreated(key);
+            void refresh();
+          }}
+          onError={setError}
+        />
+      ) : null}
       {keys === null ? (
         <p className="field-hint">Loading keys…</p>
       ) : keys.length === 0 ? (
@@ -203,6 +209,13 @@ function CreateKeyForm({
   const [scopes, setScopes] = useState<string[]>(defaultScopes);
   const [grants, setGrants] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [seededDefaults, setSeededDefaults] = useState<string[]>(defaultScopes);
+  // The defaults can arrive (or change) after the form is mounted: re-seed the
+  // checked scopes when the list itself changes.
+  if (!sameScopes(seededDefaults, defaultScopes)) {
+    setSeededDefaults(defaultScopes);
+    setScopes(defaultScopes);
+  }
   const scopeOptions = Object.keys(SCOPE_LABELS).filter(
     (scope) => scope !== "workspace:admin" && scope !== "posts:release",
   );

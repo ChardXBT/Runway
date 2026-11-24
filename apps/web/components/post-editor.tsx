@@ -24,7 +24,7 @@ import { localDate, localTime, zonedScheduleIso } from "@/lib/datetime";
 import { POST_EVENT_TYPES, useEventStream } from "@/lib/event-stream";
 import { formatHandle } from "@/lib/format";
 import { postTypeLabel, postTypesForPlatform, targetStateCopy } from "@/lib/post-copy";
-import { V1, V1ApiError } from "@/lib/v1-client";
+import { findTarget, V1, V1ApiError } from "@/lib/v1-client";
 import type { IssueOut, PostOut, TargetOut } from "@/lib/v1-guards";
 import type { AccountView } from "@/lib/types";
 
@@ -86,6 +86,16 @@ function draftFromTarget(target: TargetOut, timezone: string): TargetDraft {
   };
 }
 
+function sameDraft(a: TargetDraft, b: TargetDraft): boolean {
+  return (
+    a.postType === b.postType &&
+    a.captionOverride === b.captionOverride &&
+    a.date === b.date &&
+    a.time === b.time &&
+    JSON.stringify(a.settings) === JSON.stringify(b.settings)
+  );
+}
+
 function TargetCard({
   post,
   target,
@@ -102,9 +112,26 @@ function TargetCard({
   onRelease: (target: TargetOut) => void;
 }) {
   const [draft, setDraft] = useState<TargetDraft>(() => draftFromTarget(target, timezone));
+  // The server state the draft was last seeded from or acknowledged at: a
+  // version bump with no unsaved edits adopts the new server state; with
+  // unsaved edits the draft is kept and a notice offers to load the latest.
+  const [sync, setSync] = useState(() => ({
+    targetId: target.id,
+    version: target.version,
+    draft: draftFromTarget(target, timezone),
+  }));
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const serverMoved = target.id !== sync.targetId || target.version !== sync.version;
+  const dirty = !sameDraft(draft, sync.draft);
+  if (serverMoved && (!dirty || target.id !== sync.targetId)) {
+    const seeded = draftFromTarget(target, timezone);
+    setSync({ targetId: target.id, version: target.version, draft: seeded });
+    setDraft(seeded);
+    setMessage(null);
+    setError(null);
+  }
   const platformAccounts = accounts.filter((account) => account.platform === target.platform);
   const account = platformAccounts.find((item) => item.id === target.account_id);
   const stats = captionStats(draft.captionOverride || target.caption);
@@ -122,10 +149,20 @@ function TargetCard({
     try {
       const updated = await action();
       onChanged(updated);
+      // Acknowledge the new version: the draft is kept (the date/time pickers
+      // do not go through save), and the bump is not "changed elsewhere".
+      const fresh = findTarget(updated, target.id);
+      setSync({
+        targetId: target.id,
+        version: fresh?.version ?? target.version,
+        draft: fresh ? draftFromTarget(fresh, timezone) : sync.draft,
+      });
       setMessage("Saved.");
     } catch (err) {
       if (err instanceof V1ApiError && err.status === 409) {
-        setError("This post changed elsewhere — reloaded the latest version.");
+        setError(
+          "This post changed elsewhere — the latest is shown and your unsaved edits were kept.",
+        );
         onChanged(await V1.posts.get(post.id));
       } else {
         setError(actionError(err, "The change could not be saved."));
@@ -133,6 +170,13 @@ function TargetCard({
     } finally {
       setBusy(null);
     }
+  };
+
+  const loadLatest = () => {
+    const seeded = draftFromTarget(target, timezone);
+    setSync({ targetId: target.id, version: target.version, draft: seeded });
+    setDraft(seeded);
+    setError(null);
   };
 
   const save = () =>
@@ -257,6 +301,14 @@ function TargetCard({
           </div>
           <IssueList issues={target.issues} />
           {tiktokIssues.length ? <IssueList issues={tiktokIssues.map((message) => ({ severity: "error", code: "tiktok", message }))} /> : null}
+          {serverMoved && dirty ? (
+            <p className="notice warning-notice" role="status">
+              This target changed; reload to see the latest.{" "}
+              <button type="button" className="text-link" onClick={loadLatest}>
+                Load the latest
+              </button>
+            </p>
+          ) : null}
           {error ? <p className="dialog-error" role="alert">{error}</p> : null}
           {message ? <p className="form-message form-message-success" role="status">{message}</p> : null}
           <div className="form-actions">
@@ -320,12 +372,14 @@ function NewTargetCard({
   target,
   accounts,
   timezone,
+  aiGenerated,
   onChange,
   onRemove,
 }: {
   target: NewTarget;
   accounts: EditorAccount[];
   timezone: string;
+  aiGenerated: boolean;
   onChange: (next: NewTarget) => void;
   onRemove: () => void;
 }) {
@@ -392,7 +446,7 @@ function NewTargetCard({
           settings={target.settings}
           onChange={(settings) => onChange({ ...target, settings })}
           captionLength={stats.utf16Chars}
-          aiGenerated={false}
+          aiGenerated={aiGenerated}
         />
       ) : (
         <TargetSettingsPanel
@@ -602,7 +656,7 @@ export function PostEditor({
             <h2 className="section-heading">Targets</h2>
             {post.targets.map((target) => (
               <TargetCard
-                key={`${target.id}:${target.version}`}
+                key={target.id}
                 post={post}
                 target={target}
                 accounts={accounts}
@@ -632,6 +686,7 @@ export function PostEditor({
                 target={target}
                 accounts={accounts}
                 timezone={timezone}
+                aiGenerated={aiGenerated}
                 onChange={(next) =>
                   setNewTargets((current) => current.map((item) => (item.key === target.key ? next : item)))
                 }

@@ -122,6 +122,44 @@ describe("TikTokScreen", () => {
     expect(onChange).toHaveBeenCalledWith({ privacy_level: "SELF_ONLY" });
   });
 
+  it("shows the branded consent only for commercial branded content", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(creatorInfo));
+    const { rerender } = render(
+      <TikTokScreen
+        accountId={9}
+        settings={{ branded_content: true }}
+        onChange={vi.fn()}
+        captionLength={0}
+        aiGenerated={false}
+      />,
+    );
+    // branded_content without commercial_content is not the branded consent:
+    // the API's release_notice requires both.
+    await waitFor(() =>
+      expect(
+        screen.getByText("By posting, you agree to TikTok's terms."),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText("Branded content needs the music usage rights."),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <TikTokScreen
+        accountId={9}
+        settings={{ commercial_content: true, branded_content: true }}
+        onChange={vi.fn()}
+        captionLength={0}
+        aiGenerated={false}
+      />,
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText("Branded content needs the music usage rights."),
+      ).toBeInTheDocument(),
+    );
+  });
+
   it("says the creator options are required when the load fails", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "boom" }, 500));
     render(

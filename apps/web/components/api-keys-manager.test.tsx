@@ -67,6 +67,33 @@ describe("ApiKeysManager", () => {
     expect(urls).toContain("http://127.0.0.1:8000/api/v1/policy");
   });
 
+  it("checks the default agent scopes once the policy arrives", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ items: [], next_cursor: null }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ...policy,
+          default_agent_scopes: ["posts:read", "posts:write"],
+        }),
+      );
+    render(<ApiKeysManager />);
+
+    // The form mounts with the server's defaults, not the empty list that was
+    // there before the policy response landed.
+    fireEvent.click(await screen.findByText("New API key"));
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(/Read posts/) as HTMLInputElement,
+      ).toBeChecked(),
+    );
+    expect(
+      screen.getByLabelText(/Create and edit posts/) as HTMLInputElement,
+    ).toBeChecked();
+    expect(
+      screen.getByLabelText(/Read accounts/) as HTMLInputElement,
+    ).not.toBeChecked();
+  });
+
   it("shows the new key's secret exactly once", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ items: [apiKey], next_cursor: null }))

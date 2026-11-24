@@ -7,6 +7,7 @@ import { useCallback, useState } from "react";
 
 import { PlatformBadge } from "@/components/platform-badge";
 import { StatePanel } from "@/components/state-panel";
+import { actionError } from "@/lib/client-api";
 import { POST_EVENT_TYPES, useEventStream } from "@/lib/event-stream";
 import { formatAbsoluteTime, formatRelativeTime } from "@/lib/format";
 import { postStatusCopy, postTypeLabel, targetStateCopy } from "@/lib/post-copy";
@@ -16,6 +17,7 @@ import type { PostPage } from "@/lib/v1-guards";
 export function PostsWorkspace({ initialPage }: { initialPage: PostPage }) {
   const [page, setPage] = useState(initialPage);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -36,12 +38,15 @@ export function PostsWorkspace({ initialPage }: { initialPage: PostPage }) {
   const loadMore = async () => {
     if (!page.next_cursor) return;
     setLoadingMore(true);
+    setLoadMoreError(null);
     try {
       const next = await V1.posts.list(page.next_cursor);
       setPage((current) => ({
         items: [...current.items, ...next.items],
         next_cursor: next.next_cursor,
       }));
+    } catch (err) {
+      setLoadMoreError(actionError(err, "More posts could not be loaded."));
     } finally {
       setLoadingMore(false);
     }
@@ -117,6 +122,11 @@ export function PostsWorkspace({ initialPage }: { initialPage: PostPage }) {
           })}
         </div>
       )}
+      {loadMoreError ? (
+        <p className="notice error-notice" role="alert">
+          {loadMoreError}
+        </p>
+      ) : null}
       {page.next_cursor ? (
         <button type="button" className="button secondary" onClick={loadMore} disabled={loadingMore}>
           {loadingMore ? "Loading…" : "Load more"}

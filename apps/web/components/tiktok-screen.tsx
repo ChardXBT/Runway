@@ -94,7 +94,12 @@ export function TikTokScreen({
   const branded = settings.branded_content === true;
   const privacy = typeof settings.privacy_level === "string" ? settings.privacy_level : "";
   const issues = tiktokScreenIssues(settings);
-  const consent = branded ? (info?.consent.branded ?? info?.consent.default) : info?.consent.default;
+  // Same rule as the API's release_notice: the branded consent applies only
+  // when commercial content is on AND branded content is chosen.
+  const consent =
+    commercial && branded
+      ? (info?.consent.branded ?? info?.consent.default)
+      : info?.consent.default;
 
   if (accountId === null) {
     return (
