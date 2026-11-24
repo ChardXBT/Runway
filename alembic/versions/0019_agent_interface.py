@@ -12,19 +12,30 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0019_agent_interface"
 down_revision = "0017_publishing_engine"
 branch_labels = None
 depends_on = None
 
+# Drop order: children first (deliveries reference endpoints, grants reference
+# api_keys). Only these four tables are this revision's to remove.
 NEW_TABLES = (
     "webhook_deliveries",
     "webhook_endpoints",
     "api_key_release_grants",
     "workspace_policies",
 )
+
+# Columns only this revision's DDL carries. A table present at downgrade time
+# but missing the signature was not made here, so it is left alone.
+SIGNATURES: dict[str, frozenset[str]] = {
+    "webhook_deliveries": frozenset({"endpoint_id", "event_id", "next_attempt_at"}),
+    "webhook_endpoints": frozenset({"secret_encrypted", "cursor_event_id", "creator_scopes"}),
+    "api_key_release_grants": frozenset({"key_id", "platform", "daily_cap"}),
+    "workspace_policies": frozenset({"agent_release"}),
+}
 
 
 def _table_names() -> set[str]:
@@ -37,8 +48,10 @@ def _workspace_column() -> sa.Column[int]:
 
 
 def upgrade() -> None:
-    # 0001 builds a fresh database from the current models; create only what is missing.
-    existing = _table_names()
+    # 0001 builds a fresh database from the current models; create only what
+    # is missing. Offline (`alembic upgrade --sql`) there is no database to
+    # inspect, so the DDL is emitted unconditionally.
+    existing = set() if context.is_offline_mode() else _table_names()
     if "workspace_policies" not in existing:
         op.create_table(
             "workspace_policies",
@@ -84,6 +97,7 @@ def upgrade() -> None:
             sa.Column("state", sa.String(length=20), nullable=False),
             sa.Column("description", sa.String(length=200), nullable=True),
             sa.Column("created_by", sa.String(length=200), nullable=True),
+            sa.Column("creator_scopes", sa.Text(), nullable=True),
             sa.Column("cursor_event_id", sa.Integer(), nullable=False),
             sa.Column("consecutive_failures", sa.Integer(), nullable=False),
             sa.Column("failing_since", sa.DateTime(timezone=True), nullable=True),
@@ -137,8 +151,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Offline there is nothing to inspect: emit the drops in drop order.
+    if context.is_offline_mode():
+        for table in NEW_TABLES:
+            op.drop_table(table)
+        return
     existing = _table_names()
-    # Children first: deliveries reference endpoints, grants reference api_keys.
+    inspector = sa.inspect(op.get_bind())
+    # Children first. A table that exists but lacks this revision's signature
+    # columns was not created here (it predates the upgrade or belongs to
+    # another revision); it is left in place.
     for table in NEW_TABLES:
-        if table in existing:
+        if table not in existing:
+            continue
+        columns = {column["name"] for column in inspector.get_columns(table)}
+        if SIGNATURES[table] <= columns:
             op.drop_table(table)

@@ -8,8 +8,10 @@ new columns. The downgraded schema must equal the committed 0012 contract.
 
 from __future__ import annotations
 
+import importlib.util
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
@@ -360,3 +362,65 @@ def test_0019_adds_and_removes_only_the_agent_interface_tables(at_0012: Settings
     command.downgrade(config, "0016_shared_contracts")
     assert _row_counts(at_0012) == before
     assert _snapshot(at_0012)["fingerprint"] == snapshot_0016["fingerprint"]
+
+
+def _load_0019() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "migration_0019",
+        Path(__file__).parents[2] / "alembic" / "versions" / "0019_agent_interface.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_0019_emits_plain_ddl_and_drops_in_offline_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Offline (`--sql`) there is no database to inspect: the revision emits
+    unconditional DDL instead of calling the inspector."""
+    migration = _load_0019()
+    created: list[str] = []
+    dropped: list[str] = []
+    monkeypatch.setattr(migration.context, "is_offline_mode", lambda: True)
+    monkeypatch.setattr(
+        migration.op,
+        "create_table",
+        lambda name, *_args, **_kwargs: created.append(str(name)),
+    )
+    monkeypatch.setattr(migration.op, "create_index", lambda *_a, **_k: None)
+    monkeypatch.setattr(migration.op, "drop_table", lambda name: dropped.append(str(name)))
+    migration.upgrade()
+    assert set(created) == set(migration.NEW_TABLES)
+    migration.downgrade()
+    assert dropped == list(migration.NEW_TABLES)
+
+
+def test_0019_downgrade_leaves_a_table_it_did_not_create(tmp_path: Path) -> None:
+    """A same-named table with a foreign shape is not this revision's to drop."""
+    settings = Settings(data_dir=tmp_path / "foreign")
+    settings.ensure_directories()
+    config = _config(settings)
+    command.upgrade(config, "0016_shared_contracts")
+    engine = _engine(settings)
+    # Stand-in for a table another revision (or a hand fix) made first: same
+    # name as an agent table but none of this revision's signature columns.
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE webhook_endpoints"))
+        connection.execute(
+            text("CREATE TABLE webhook_endpoints (id INTEGER PRIMARY KEY, note TEXT)")
+        )
+        connection.execute(text("INSERT INTO webhook_endpoints (id, note) VALUES (1, 'keep')"))
+    command.upgrade(config, "head")
+    command.downgrade(config, "0016_shared_contracts")
+    names = set(inspect(engine).get_table_names())
+    assert "webhook_endpoints" in names  # foreign shape: preserved
+    assert "webhook_deliveries" not in names  # created by 0019: dropped
+    assert "workspace_policies" not in names
+    assert "api_key_release_grants" not in names
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT note FROM webhook_endpoints")).all() == [
+            ("keep",)
+        ]
+    engine.dispose()
