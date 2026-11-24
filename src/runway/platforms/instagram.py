@@ -48,10 +48,18 @@ _CONTENT_TYPES = {
     "VIDEO": "video",
 }
 
-_CONTENT_METRICS = "comments,likes,reach,saved,shares,total_interactions,views"
-_STORY_METRICS = "reach,replies,shares,total_interactions,views"
+# `total_*` insights (total_interactions and friends) aggregate Instagram,
+# Facebook crossposts and boosted media: never requested and never stored as
+# an Instagram metric (research/recheck-20261123 §3).
+_CONTENT_METRICS = "comments,likes,reach,saved,shares,views"
+_STORY_METRICS = "reach,replies,shares,views"
 _DAILY_METRICS = "reach,follower_count"
-_TOTAL_VALUE_METRICS = "views,profile_views,accounts_engaged,total_interactions"
+_TOTAL_VALUE_METRICS = "views,profile_views,accounts_engaged"
+
+
+def _is_total_metric(name: str) -> bool:
+    """`total_*` metrics count cross-surface engagements, not Instagram ones."""
+    return name.startswith("total_")
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:
@@ -348,7 +356,11 @@ class InstagramProvider(PlatformProvider):
         totals: dict[str, int | float | None] = {}
         entries = data.get("data")
         for entry in entries if isinstance(entries, list) else []:
-            if not isinstance(entry, dict) or not entry.get("name"):
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("name")
+                or _is_total_metric(str(entry["name"]))
+            ):
                 continue
             total = entry.get("total_value")
             value = total.get("value") if isinstance(total, dict) else None
@@ -394,7 +406,16 @@ class InstagramProvider(PlatformProvider):
                     caption=str(entry["caption"]) if entry.get("caption") else None,
                     permalink=(str(entry["permalink"]) if entry.get("permalink") else None),
                     thumbnail_url=(
-                        str(entry.get("thumbnail_url") or entry.get("media_url") or "") or None
+                        # `media_url` is omitted for videos with licensed
+                        # audio; fall back to thumbnail_url, then permalink
+                        # (research/recheck-20261123 §3).
+                        str(
+                            entry.get("thumbnail_url")
+                            or entry.get("media_url")
+                            or entry.get("permalink")
+                            or ""
+                        )
+                        or None
                     ),
                     published_at=_parse_timestamp(
                         str(entry["timestamp"]) if entry.get("timestamp") else None
@@ -440,7 +461,11 @@ class InstagramProvider(PlatformProvider):
         values: dict[str, int | float | None] = {}
         entries = data.get("data")
         for entry in entries if isinstance(entries, list) else []:
-            if not isinstance(entry, dict) or not entry.get("name"):
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("name")
+                or _is_total_metric(str(entry["name"]))
+            ):
                 continue
             metric_values = entry.get("values")
             if isinstance(metric_values, list) and metric_values:
@@ -492,7 +517,11 @@ class InstagramProvider(PlatformProvider):
         results: list[DailyMetric] = []
         entries = data.get("data")
         for entry in entries if isinstance(entries, list) else []:
-            if not isinstance(entry, dict) or not entry.get("name"):
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("name")
+                or _is_total_metric(str(entry["name"]))
+            ):
                 continue
             metric = str(entry["name"])
             values = entry.get("values")
