@@ -54,6 +54,12 @@ WEBSUB_HUB_URL = "https://pubsubhubbub.appspot.com/subscribe"
 # section 1); ask for it explicitly and renew once 80% has passed.
 WEBSUB_LEASE_SECONDS = 432_000
 RENEW_AT_FRACTION = 0.8
+# A subscribe POST is answered by the hub's async verification GET; when
+# none arrives within the hour the subscribe is lost and the row expires.
+PENDING_VERIFY_TIMEOUT = timedelta(hours=1)
+# Dead rows (``expired``, ``failed``) are resubscribed at most once per
+# backoff window; ``updated_at`` times the last transition or attempt.
+RESUBSCRIBE_INTERVAL = timedelta(hours=6)
 
 # A WebSub form POST returning an HTTP status; injectable so tests never
 # touch the network.
@@ -226,7 +232,11 @@ class SubscriptionScheduler:
     An ``active`` subscription is renewed the moment 80% of its granted lease
     has passed - the job is keyed on that due instant, so producing again can
     never duplicate it, and a lease that already lapsed flips the row to
-    ``expired`` with a resubscribe job keyed on the expiry instant.
+    ``expired`` with a resubscribe job keyed on the expiry instant. A
+    ``pending`` row the hub never verified inside the hour is a lost
+    subscribe and expires the same way. Dead rows - ``expired`` and
+    ``failed`` - are resubscribed at most once per backoff window, timed on
+    ``updated_at``; ``unsubscribed`` rows are never touched.
     """
 
     def __init__(self, database: Database, queue: JobQueue) -> None:
@@ -273,6 +283,7 @@ class SubscriptionScheduler:
                 if subscription.state == "active" and expires_at is not None and expires_at <= now:
                     # The lease lapsed unrenewed: mark it, then resubscribe.
                     subscription.state = "expired"
+                    subscription.updated_at = now
                     self._enqueue(
                         session,
                         subscription,
@@ -280,8 +291,38 @@ class SubscriptionScheduler:
                         now=now,
                     )
                     continue
-                if subscription.state != "active":
+                if subscription.state == "pending":
+                    # The hub's verification GET never arrived within the
+                    # hour: the subscribe is lost, so the row expires and is
+                    # resubscribed like any other dead row.
+                    touched = _aware(subscription.updated_at)
+                    if touched is not None and touched <= now - PENDING_VERIFY_TIMEOUT:
+                        subscription.state = "expired"
+                        subscription.updated_at = now
+                        self._enqueue(
+                            session,
+                            subscription,
+                            key_slot=int(now.timestamp()),
+                            now=now,
+                        )
                     continue
+                if subscription.state in {"expired", "failed"}:
+                    # A dead row is resubscribed at most once per backoff
+                    # window: updated_at times the last transition or
+                    # attempt, and each enqueue stamps it again.
+                    touched = _aware(subscription.updated_at)
+                    if touched is not None and touched > now - RESUBSCRIBE_INTERVAL:
+                        continue
+                    subscription.updated_at = now
+                    self._enqueue(
+                        session,
+                        subscription,
+                        key_slot=int(now.timestamp()),
+                        now=now,
+                    )
+                    continue
+                if subscription.state != "active":
+                    continue  # `unsubscribed` rows are never touched
                 due = renewal_due(subscription)
                 if due is None or now < due:
                     continue
@@ -350,8 +391,12 @@ def run_renew_subscription_job(
                     subscription.state = "unsubscribed"
             else:
                 failure = f"hub returned HTTP {status}"
-                subscription.state = "failed"
                 subscription.last_error = failure
+                if mode == "subscribe":
+                    # Only a failed subscribe marks the row: writing `failed`
+                    # over `unsubscribed` would let the producer resubscribe
+                    # a channel the owner just disconnected.
+                    subscription.state = "failed"
     if failure is not None:
         raise ProviderError(f"WebSub {mode} failed: {failure}", retryable=True)
 

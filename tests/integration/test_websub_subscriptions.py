@@ -180,6 +180,13 @@ def _recording_post(
     return post
 
 
+def _aware(moment: datetime | None) -> datetime | None:
+    """SQLite returns naive datetimes for aware columns; compare aware."""
+    if moment is None:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+
+
 # ---------------------------------------------------------------- connect
 
 
@@ -391,6 +398,114 @@ def test_an_expired_lease_is_marked_expired_and_retried(tmp_path: Path) -> None:
         database.engine.dispose()
 
 
+# ------------------------------------------------- lost and dead rows
+
+
+def test_a_pending_row_unverified_for_an_hour_expires_and_resubscribes(
+    tmp_path: Path,
+) -> None:
+    """A subscribe POST is answered by the hub's verification GET. When it
+    never arrives within the hour the subscribe is lost: the row becomes
+    ``expired`` and gets a fresh subscribe job."""
+    database = initialize_database(_settings(tmp_path, public_edge_url=EDGE))
+    queue = JobQueue(database)
+    now = utcnow()
+    try:
+        subscription = _subscription(
+            database,
+            account_id=_account(database),
+            state="pending",
+            updated_at=now,
+        )
+        scheduler = SubscriptionScheduler(database, queue)
+
+        # Inside the verification window the row is untouched.
+        scheduler.produce(now + timedelta(minutes=30))
+        subscription = _get_subscription(database, subscription.id)
+        assert subscription.state == "pending"
+        assert _jobs(database, RENEW_SUBSCRIPTION_JOB) == []
+
+        # Past it: the row expires and is resubscribed.
+        scheduler.produce(now + timedelta(hours=1, seconds=1))
+        subscription = _get_subscription(database, subscription.id)
+        assert subscription.state == "expired"
+        jobs = _jobs(database, RENEW_SUBSCRIPTION_JOB)
+        assert len(jobs) == 1
+        assert json.loads(jobs[0].payload_json) == {
+            "subscription_id": subscription.id,
+            "mode": "subscribe",
+        }
+    finally:
+        database.engine.dispose()
+
+
+def test_dead_rows_resubscribe_at_most_once_per_backoff_window(tmp_path: Path) -> None:
+    """``expired`` and ``failed`` rows get a resubscribe job, but at most one
+    per row per backoff window - ``updated_at`` times the last attempt."""
+    database = initialize_database(_settings(tmp_path, public_edge_url=EDGE))
+    queue = JobQueue(database)
+    now = utcnow()
+
+    def _subscribe_jobs(subscription_id: int) -> list[PublishJob]:
+        return [
+            job
+            for job in _jobs(database, RENEW_SUBSCRIPTION_JOB)
+            if json.loads(job.payload_json).get("subscription_id") == subscription_id
+        ]
+
+    try:
+        for state in ("expired", "failed"):
+            subscription = _subscription(
+                database,
+                account_id=_account(database, external_id=f"ch-{state}"),
+                topic=f"topic-{state}",
+                state=state,
+                updated_at=now - timedelta(hours=7),
+            )
+            scheduler = SubscriptionScheduler(database, queue)
+
+            scheduler.produce(now)
+            jobs = _subscribe_jobs(subscription.id)
+            assert len(jobs) == 1, state
+            assert json.loads(jobs[0].payload_json)["mode"] == "subscribe"
+
+            # The attempt stamped updated_at: inside the window, no repeat.
+            scheduler.produce(now + timedelta(hours=3))
+            assert len(_subscribe_jobs(subscription.id)) == 1, state
+
+            # Past it, a fresh resubscribe job lands under a new key.
+            scheduler.produce(now + timedelta(hours=7))
+            assert len(_subscribe_jobs(subscription.id)) == 2, state
+    finally:
+        database.engine.dispose()
+
+
+def test_an_unsubscribed_row_is_never_resubscribed(tmp_path: Path) -> None:
+    """``unsubscribed`` means the owner disconnected: the producer never
+    touches the row, however old it is."""
+    database = initialize_database(_settings(tmp_path, public_edge_url=EDGE))
+    queue = JobQueue(database)
+    now = utcnow()
+    try:
+        untouched = now - timedelta(days=30)
+        subscription = _subscription(
+            database,
+            account_id=_account(database),
+            state="unsubscribed",
+            updated_at=untouched,
+            expires_at=untouched,
+        )
+        scheduler = SubscriptionScheduler(database, queue)
+        scheduler.produce(now)
+
+        subscription = _get_subscription(database, subscription.id)
+        assert subscription.state == "unsubscribed"
+        assert _aware(subscription.updated_at) == untouched
+        assert _jobs(database, RENEW_SUBSCRIPTION_JOB) == []
+    finally:
+        database.engine.dispose()
+
+
 # ---------------------------------------------------------------- disconnect
 
 
@@ -435,6 +550,36 @@ def test_disconnect_marks_unsubscribed_and_the_job_posts_the_unsubscribe_form(
         assert fields["hub.topic"] == YOUTUBE_TOPIC
         assert "hub.secret" not in fields
         assert "hub.lease_seconds" not in fields
+    finally:
+        database.engine.dispose()
+
+
+def test_a_failed_unsubscribe_post_keeps_the_unsubscribed_state(tmp_path: Path) -> None:
+    """A failed unsubscribe POST must not write ``failed`` over
+    ``unsubscribed`` - the producer would resubscribe a row the owner
+    disconnected. The error is still recorded and the job still retries."""
+    settings = _settings(tmp_path, public_edge_url=EDGE)
+    database = initialize_database(settings)
+    queue = JobQueue(database)
+    try:
+        subscription = _subscription(
+            database,
+            account_id=_account(database),
+            state="unsubscribed",
+        )
+        calls: list[tuple[str, dict[str, str]]] = []
+        with pytest.raises(ProviderError):
+            run_renew_subscription_job(
+                database,
+                settings,
+                queue,
+                _job_row(subscription.id, mode="unsubscribe"),
+                http_post=_recording_post(calls, 500),
+            )
+
+        subscription = _get_subscription(database, subscription.id)
+        assert subscription.state == "unsubscribed"
+        assert subscription.last_error == "hub returned HTTP 500"
     finally:
         database.engine.dispose()
 
