@@ -280,40 +280,52 @@ class InstagramDirectPublisher:
         ig_id = self._check_identity(ctx, token)
         self._check_quota(token, ig_id)
         state = self._new_state(ctx, ctx.resumable)
-        if not state["containers"]:
-            self._create_containers(ctx, token, ig_id, state, progress)
-            ctx.save_resumable(state)
-        parent = self._parent(state)
-        if parent is None:
-            # `_create_containers` records one container per media item, so a
-            # missing parent means the post carries no media at all.
-            raise PublishRefused(
-                "no_container",
-                "no container was created or recorded for this target",
-            )
-        status = self._container_status(token, parent["id"])
-        if status == "ERROR":
-            raise PublishRefused("container_error", self._container_detail(token, parent["id"]))
-        if status == "EXPIRED":
-            parent = self._recreate_expired(ctx, token, ig_id, state)
+        try:
+            if not state["containers"]:
+                self._create_containers(ctx, token, ig_id, state, progress)
+                ctx.save_resumable(state)
+            parent = self._parent(state)
+            if parent is None:
+                # `_create_containers` records one container per media item, so a
+                # missing parent means the post carries no media at all.
+                raise PublishRefused(
+                    "no_container",
+                    "no container was created or recorded for this target",
+                )
             status = self._container_status(token, parent["id"])
-        deadline = self._clock() + _STATUS_WAIT
-        while status == "IN_PROGRESS" and self._clock() < deadline:
-            self._sleep(_STATUS_STEP.total_seconds())
-            status = self._container_status(token, parent["id"])
-        if status == "ERROR":
-            raise PublishRefused("container_error", self._container_detail(token, parent["id"]))
-        if status == "EXPIRED":
-            raise PublishRefused(
-                "container_expired",
-                "the container expired before it could publish",
-            )
-        # FINISHED, PUBLISHED (republished by an earlier attempt), or an
-        # unreadable container all go through `media_publish`: for a PUBLISHED
-        # container Meta answers 9007 and the media id is then read off the
-        # container, never a second post.
-        ctx.mark_request_sent()
-        media_id = self._publish(token, ig_id, parent["id"])
+            if status == "ERROR":
+                raise PublishRefused(
+                    "container_error", self._container_detail(token, parent["id"])
+                )
+            if status == "EXPIRED":
+                parent = self._recreate_expired(ctx, token, ig_id, state)
+                status = self._container_status(token, parent["id"])
+            deadline = self._clock() + _STATUS_WAIT
+            while status == "IN_PROGRESS" and self._clock() < deadline:
+                self._sleep(_STATUS_STEP.total_seconds())
+                status = self._container_status(token, parent["id"])
+            if status == "ERROR":
+                raise PublishRefused(
+                    "container_error", self._container_detail(token, parent["id"])
+                )
+            if status == "EXPIRED":
+                raise PublishRefused(
+                    "container_expired",
+                    "the container expired before it could publish",
+                )
+            # FINISHED, PUBLISHED (republished by an earlier attempt), or an
+            # unreadable container all go through `media_publish`: for a PUBLISHED
+            # container Meta answers 9007 and the media id is then read off the
+            # container, never a second post.
+            ctx.mark_request_sent()
+            media_id = self._publish(token, ig_id, parent["id"])
+        except PublishError as exc:
+            # A terminal "nothing was published" answer (refused, revoked auth)
+            # makes the staged copies useless; retryable or uncertain outcomes
+            # keep them so a retry or a reconcile still has them.
+            if exc.final and exc.delivered is False:
+                self._cleanup_r2(ctx, state)
+            raise
         self._cleanup_r2(ctx, state)
         return SendResult(
             "published",
@@ -331,6 +343,7 @@ class InstagramDirectPublisher:
             if ctx.account is None:
                 raise PublishRefused("account_required", "choose a connected account")
             row = self._latest_media_row(self._token(ctx), ctx.account.external_account_id)
+            self._cleanup_r2(ctx, state)
             return PollResult(
                 "published",
                 external_id=str(row["id"]) if row and row.get("id") else None,
@@ -338,6 +351,7 @@ class InstagramDirectPublisher:
             )
         if status in ("FINISHED", "IN_PROGRESS"):
             return PollResult("processing", next_poll_seconds=60)
+        self._cleanup_r2(ctx, state)
         return PollResult(
             "failed",
             error_code=f"container_{status.lower()}",

@@ -66,6 +66,7 @@ class FakeGraph:
         self.quota_total = 50
         self.me_id = IG
         self.publish_outcomes: list[object] = []
+        self.media_post_responses: list[httpx.Response] = []
         self.requests: list[tuple[str, str, dict[str, object]]] = []
         self.marker_at: list[int] = []
         self._marker_count = lambda: 0
@@ -115,6 +116,8 @@ class FakeGraph:
                 },
             )
         if path.endswith("/media") and method == "POST":
+            if self.media_post_responses:
+                return self.media_post_responses.pop(0)
             self.next_container += 1
             container_id = f"c{self.next_container}"
             self.containers[container_id] = {
@@ -678,6 +681,66 @@ def test_send_fails_final_when_a_container_is_in_error() -> None:
     assert not [r for r in graph.requests if r[1] == f"{IG}/media_publish"]
 
 
+def test_send_deletes_the_r2_copy_when_the_container_is_in_error() -> None:
+    graph = FakeGraph()
+    graph.containers["c1"] = {
+        "status_code": "ERROR",
+        "status": "codec rejected",
+        "params": {},
+    }
+    graph.next_container = 1
+    r2 = FakeR2()
+    publisher = _publisher(graph, r2=r2)
+    key = "w/1/igpub7p0/" + "e" * 16 + ".mp4"
+    ctx, _m, _s = _context(
+        resumable={
+            "containers": [{"id": "c1", "position": 0, "role": "main"}],
+            "r2_keys": [key],
+        }
+    )
+    with pytest.raises(PublishRefused) as caught:
+        publisher.send(ctx, None)
+    assert caught.value.code == "container_error"
+    assert r2.deleted == [key]
+
+
+def test_send_deletes_the_r2_copy_when_recreation_is_exhausted() -> None:
+    graph = FakeGraph()
+    graph.containers["c2"] = {"status_code": "EXPIRED", "params": {}}
+    graph.next_container = 2
+    r2 = FakeR2()
+    publisher = _publisher(graph, r2=r2)
+    key = "w/1/igpub7p0/" + "e" * 16 + ".mp4"
+    ctx, _m, _s = _context(
+        resumable={
+            "containers": [{"id": "c2", "position": 0, "role": "main"}],
+            "r2_keys": [key],
+            "recreated": True,
+        }
+    )
+    with pytest.raises(PublishRefused) as caught:
+        publisher.send(ctx, None)
+    assert caught.value.code == "container_expired"
+    assert r2.deleted == [key]
+
+
+def test_send_keeps_the_r2_copy_on_a_retryable_failure() -> None:
+    graph = FakeGraph()
+    graph.media_post_responses = [
+        httpx.Response(429, json={"error": {"code": 4, "message": "rate limited"}})
+    ]
+    r2 = FakeR2()
+    publisher = _publisher(graph, r2=r2)
+    ctx, _m, _s = _context(
+        media=(_media("video", storage="local", key="w/1/7/dddddddddddddddd.mp4"),),
+        signed={},
+    )
+    with pytest.raises(PublishRetryLater):
+        publisher.send(ctx, None)
+    # The staged copy survives a retryable failure: the retry reuses it.
+    assert r2.completed and r2.deleted == []
+
+
 def test_story_uses_the_stories_media_type_and_video_url() -> None:
     graph = FakeGraph()
     publisher = _publisher(graph)
@@ -766,6 +829,27 @@ def test_poll_reports_published_with_the_media_id() -> None:
     result = publisher.poll(ctx)
     assert result.status == "published"
     assert result.external_id == media_id
+
+
+def test_poll_deletes_the_r2_copy_on_a_terminal_status() -> None:
+    for status in ("PUBLISHED", "EXPIRED", "ERROR"):
+        graph = FakeGraph()
+        graph.containers["c1"] = {"status_code": status, "params": {}}
+        graph.next_container = 1
+        if status == "PUBLISHED":
+            graph.new_media()
+        r2 = FakeR2()
+        publisher = _publisher(graph, r2=r2)
+        key = "w/1/igpub7p0/" + "e" * 16 + ".mp4"
+        ctx, _m, _s = _read_context(
+            resumable={
+                "containers": [{"id": "c1", "position": 0, "role": "main"}],
+                "r2_keys": [key],
+            }
+        )
+        result = publisher.poll(ctx)
+        assert result.status == ("published" if status == "PUBLISHED" else "failed")
+        assert r2.deleted == [key]
 
 
 # -------------------------------------------------------------------- verify
