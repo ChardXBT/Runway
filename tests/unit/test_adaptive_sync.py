@@ -54,6 +54,12 @@ from runway.realtime.schedule import (
     failure_delay,
     record_scope_run,
 )
+from runway.realtime.subscriptions import (
+    RENEW_SUBSCRIPTION_JOB,
+    SUBSCRIBE_APPS_JOB,
+    SubscriptionScheduler,
+)
+from runway.realtime.token_upkeep import REFRESH_TOKEN_JOB, TokenUpkeepScheduler
 
 START = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
@@ -159,8 +165,20 @@ def test_adaptive_scheduler_replaces_the_fixed_one_when_enabled(tmp_path: Path) 
     try:
         worker = build_worker(settings, database)
         kinds = [type(producer) for producer in worker.producers]
-        assert kinds == [RetentionPurgeScheduler, AdaptiveSyncScheduler]
-        assert set(worker.handlers) == {SYNC_ACCOUNT_JOB, PURGE_JOB, PROCESS_WEBHOOK_JOB}
+        assert kinds == [
+            RetentionPurgeScheduler,
+            SubscriptionScheduler,
+            TokenUpkeepScheduler,
+            AdaptiveSyncScheduler,
+        ]
+        assert set(worker.handlers) == {
+            SYNC_ACCOUNT_JOB,
+            PURGE_JOB,
+            PROCESS_WEBHOOK_JOB,
+            RENEW_SUBSCRIPTION_JOB,
+            SUBSCRIBE_APPS_JOB,
+            REFRESH_TOKEN_JOB,
+        }
     finally:
         database.engine.dispose()
 
@@ -176,7 +194,12 @@ def test_adaptive_sync_disabled_keeps_the_fixed_scheduler(tmp_path: Path) -> Non
     try:
         worker = build_worker(settings, database)
         kinds = [type(producer) for producer in worker.producers]
-        assert kinds == [RetentionPurgeScheduler, PlatformSyncScheduler]
+        assert kinds == [
+            RetentionPurgeScheduler,
+            SubscriptionScheduler,
+            TokenUpkeepScheduler,
+            PlatformSyncScheduler,
+        ]
     finally:
         database.engine.dispose()
 
