@@ -52,6 +52,7 @@ def upgrade() -> None:
             sa.Column("provider", sa.String(length=20), nullable=False),
             sa.Column("topic", sa.String(length=500), nullable=False),
             sa.Column("hub_secret", sa.String(length=128), nullable=True),
+            sa.Column("callback_token", sa.String(length=64), nullable=True),
             sa.Column("lease_seconds", sa.Integer(), nullable=True),
             sa.Column("subscribed_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),

@@ -140,6 +140,7 @@ def test_0018_creates_and_removes_the_webhook_inbox_tables(at_0016: Settings) ->
         "provider",
         "topic",
         "hub_secret",
+        "callback_token",
         "lease_seconds",
         "subscribed_at",
         "expires_at",

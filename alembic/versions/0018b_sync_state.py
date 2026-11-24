@@ -99,9 +99,7 @@ def upgrade() -> None:
             sa.Column("provider", sa.String(length=20), nullable=False),
             sa.Column("bucket", sa.String(length=60), nullable=False),
             sa.Column("day", sa.Date(), nullable=False),
-            sa.Column(
-                "units_used", sa.Integer(), server_default=sa.text("0"), nullable=False
-            ),
+            sa.Column("units_used", sa.Integer(), server_default=sa.text("0"), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.PrimaryKeyConstraint("id"),
             sa.UniqueConstraint("provider", "bucket", "day", name="uq_quota_usage_day"),

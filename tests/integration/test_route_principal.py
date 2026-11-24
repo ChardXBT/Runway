@@ -27,7 +27,7 @@ EXEMPT_SIGNED_WEBHOOKS = frozenset(
     {
         # liveness for the public edge; returns no data
         "/hooks/health",
-        "/hooks/youtube/websub/{subscription_id}",
+        "/hooks/youtube/websub/{subscription_id}/{callback_token}",
         "/hooks/instagram",
         "/hooks/tiktok",
     }

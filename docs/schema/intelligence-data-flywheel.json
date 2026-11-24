@@ -8604,6 +8604,13 @@
           },
           {
             "default": null,
+            "name": "callback_token",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(64)"
+          },
+          {
+            "default": null,
             "name": "created_at",
             "nullable": false,
             "primary_key": 0,
@@ -12798,7 +12805,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "a4277eecc9adcd8b1aa40b8167fcb6ea2134a7b2460a922b5d49b801eb880d72",
+  "fingerprint": "a91d97339065fed43e833aff62ffff66269c7f69d6cc3765987002f0d8c87d1b",
   "migration": "0018b_sync_state",
   "table_count": 78
 }

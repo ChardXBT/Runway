@@ -36,6 +36,7 @@ IG_APP_SECRET = "test-instagram-app-secret"
 IG_VERIFY_TOKEN = "test-instagram-verify-token"
 TT_CLIENT_SECRET = "test-tiktok-client-secret"
 WEBSUB_SECRET = "test-websub-hub-secret"
+CALLBACK_TOKEN = "ab" * 32  # what a real 32-byte hex callback token looks like
 YOUTUBE_TOPIC = "https://www.youtube.com/xml/feeds/videos.xml?channel_id=UC-test"
 MAX_BODY_BYTES = 1_048_576
 
@@ -98,6 +99,7 @@ def _subscription(
     *,
     secret: str | None = WEBSUB_SECRET,
     state: str = "pending",
+    callback_token: str | None = CALLBACK_TOKEN,
 ) -> int:
     with database.session() as session:
         subscription = models.PlatformSubscription(
@@ -105,6 +107,7 @@ def _subscription(
             provider="youtube",
             topic=YOUTUBE_TOPIC,
             hub_secret=secret,
+            callback_token=callback_token,
             state=state,
         )
         session.add(subscription)
@@ -235,9 +238,10 @@ def test_youtube_websub_verification_signed_delivery_and_dedupe(
     database = hook_app[1]
     account_id = _account(database, "youtube", "UC-test")
     subscription_id = _subscription(database, account_id)
+    callback = f"/hooks/youtube/websub/{subscription_id}/{CALLBACK_TOKEN}"
 
     verified = client.get(
-        f"/hooks/youtube/websub/{subscription_id}",
+        callback,
         params={
             "hub.mode": "subscribe",
             "hub.topic": YOUTUBE_TOPIC,
@@ -259,7 +263,7 @@ def test_youtube_websub_verification_signed_delivery_and_dedupe(
         assert delta.total_seconds() == 432000
 
     wrong_topic = client.get(
-        f"/hooks/youtube/websub/{subscription_id}",
+        callback,
         params={
             "hub.mode": "subscribe",
             "hub.topic": YOUTUBE_TOPIC + "-forged",
@@ -271,7 +275,7 @@ def test_youtube_websub_verification_signed_delivery_and_dedupe(
 
     sha1 = "sha1=" + hmac.new(WEBSUB_SECRET.encode(), ATOM_FEED, hashlib.sha1).hexdigest()
     delivered = client.post(
-        f"/hooks/youtube/websub/{subscription_id}",
+        callback,
         content=ATOM_FEED,
         headers={"X-Hub-Signature": sha1},
     )
@@ -281,14 +285,14 @@ def test_youtube_websub_verification_signed_delivery_and_dedupe(
     other_feed = ATOM_FEED.replace(b"VIDEO-1", b"VIDEO-2")
     sha256 = "sha256=" + hmac.new(WEBSUB_SECRET.encode(), other_feed, hashlib.sha256).hexdigest()
     delivered_again = client.post(
-        f"/hooks/youtube/websub/{subscription_id}",
+        callback,
         content=other_feed,
         headers={"X-Hub-Signature": sha256},
     )
     assert delivered_again.status_code == 200
 
     unsigned = client.post(
-        f"/hooks/youtube/websub/{subscription_id}",
+        callback,
         content=ATOM_FEED.replace(b"VIDEO-1", b"VIDEO-3"),
     )
     assert unsigned.status_code == 403
@@ -583,3 +587,194 @@ def test_process_webhook_jobs_are_registered_with_the_worker(
 ) -> None:
     worker: Worker = build_worker(hook_app[2], hook_app[1])
     assert PROCESS_WEBHOOK_JOB in worker.handlers
+
+
+# ------------------------------------------------------------- review fixes
+
+
+def test_the_websub_callback_requires_its_unguessable_token(
+    client: TestClient, hook_app: tuple[FastAPI, Database, Settings]
+) -> None:
+    """The callback token is part of the URL: without it the route is a 404.
+
+    A wrong or missing token reveals nothing and changes nothing — not even an
+    unverified `webhook_events` row is stored, so a guessed subscription id
+    cannot be probed or polluted.
+    """
+    database = hook_app[1]
+    account_id = _account(database, "youtube", "UC-test")
+    subscription_id = _subscription(database, account_id)
+
+    good_params = {
+        "hub.mode": "subscribe",
+        "hub.topic": YOUTUBE_TOPIC,
+        "hub.challenge": "challenge-abc",
+        "hub.lease_seconds": "432000",
+    }
+    wrong_token = client.get(
+        f"/hooks/youtube/websub/{subscription_id}/{'cd' * 32}",
+        params=good_params,
+    )
+    assert wrong_token.status_code == 404
+    # The pre-token route shape is gone entirely.
+    old_path = client.get(f"/hooks/youtube/websub/{subscription_id}", params=good_params)
+    assert old_path.status_code == 404
+
+    sha1 = "sha1=" + hmac.new(WEBSUB_SECRET.encode(), ATOM_FEED, hashlib.sha1).hexdigest()
+    posted_wrong = client.post(
+        f"/hooks/youtube/websub/{subscription_id}/{'cd' * 32}",
+        content=ATOM_FEED,
+        headers={"X-Hub-Signature": sha1},
+    )
+    assert posted_wrong.status_code == 404
+    posted_old = client.post(
+        f"/hooks/youtube/websub/{subscription_id}",
+        content=ATOM_FEED,
+        headers={"X-Hub-Signature": sha1},
+    )
+    assert posted_old.status_code == 404
+
+    assert _events(database) == []
+    with database.session() as session:
+        subscription = session.get(models.PlatformSubscription, subscription_id)
+        assert subscription is not None
+        assert subscription.state == "pending"
+        assert subscription.subscribed_at is None
+
+
+def test_a_non_ascii_callback_token_is_a_404_not_a_500(
+    client: TestClient, hook_app: tuple[FastAPI, Database, Settings]
+) -> None:
+    database = hook_app[1]
+    account_id = _account(database, "youtube", "UC-test")
+    subscription_id = _subscription(database, account_id)
+
+    response = client.get(
+        f"/hooks/youtube/websub/{subscription_id}/tok\u00e9n",
+        params={"hub.mode": "subscribe", "hub.topic": YOUTUBE_TOPIC, "hub.challenge": "c"},
+    )
+    assert response.status_code == 404
+
+
+def test_non_ascii_signature_headers_and_verify_tokens_are_unverified(
+    client: TestClient, hook_app: tuple[FastAPI, Database, Settings]
+) -> None:
+    """Non-ASCII material compares as bytes: unverified/403, never a 500."""
+    database = hook_app[1]
+    account_id = _account(database, "youtube", "UC-test")
+    subscription_id = _subscription(database, account_id)
+
+    # Header values go over the wire as bytes; httpx only refuses str values
+    # outside ASCII, so the raw byte form is how a non-ASCII signature arrives.
+    tiktok = client.post(
+        "/hooks/tiktok",
+        content=b'{"event":"x"}',
+        headers={b"tiktok-signature": b"t=" + str(int(time.time())).encode() + b",s=\xe9\xe9\xe9"},
+    )
+    assert tiktok.status_code == 403
+    websub = client.post(
+        f"/hooks/youtube/websub/{subscription_id}/{CALLBACK_TOKEN}",
+        content=ATOM_FEED,
+        headers={b"x-hub-signature": b"sha256=\xe9\xe9"},
+    )
+    assert websub.status_code == 403
+    instagram = client.post(
+        "/hooks/instagram",
+        content=b"{}",
+        headers={b"x-hub-signature-256": b"sha256=\xe9\xe9"},
+    )
+    assert instagram.status_code == 403
+    handshake = client.get(
+        "/hooks/instagram",
+        params={
+            "hub.mode": "subscribe",
+            "hub.verify_token": "tok\u00e9n",
+            "hub.challenge": "c",
+        },
+    )
+    assert handshake.status_code == 403
+
+    events = _events(database)
+    assert len(events) == 3
+    assert [event.signature_ok for event in events] == [False, False, False]
+
+
+def test_stored_content_type_and_source_are_truncated_to_their_columns(
+    hook_app: tuple[FastAPI, Database, Settings],
+) -> None:
+    application, database, _settings = hook_app
+    long_source = "x" * 90
+    long_type = "application/" + "y" * 200
+    client = TestClient(application, base_url="http://127.0.0.1:8000", client=(long_source, 9))
+
+    response = client.post(
+        "/hooks/tiktok",
+        content=b'{"event":"x"}',
+        headers={
+            "TikTok-Signature": "t=1,s=bad",
+            "Content-Type": long_type,
+        },
+    )
+    assert response.status_code == 403  # stored unverified, not rejected
+    event = _events(database)[0]
+    assert event.content_type == long_type[:100]
+    assert event.source == long_source[:64]
+
+
+def _edge_client(
+    application: FastAPI, *, peer: str = "127.0.0.1", base_url: str = "https://edge.example.com"
+) -> TestClient:
+    return TestClient(application, base_url=base_url, client=(peer, 4321))
+
+
+def test_rate_limit_keys_on_left_most_forwarded_for_only_via_the_edge(
+    tmp_path: Path,
+) -> None:
+    """Behind the public edge the real client is the left-most X-Forwarded-For.
+
+    Tailscale Funnel terminates the public request and forwards it from a
+    loopback peer with XFF set; each remote source then gets its own bucket.
+    The same header on a direct or non-loopback request is spoofable and is
+    never trusted.
+    """
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="mock",
+        tiktok_client_secret=TT_CLIENT_SECRET,
+        webhook_rate_limit_per_minute=2,
+        public_edge_url="https://edge.example.com",
+    )
+    database = initialize_database(settings)
+    application = create_app(settings)
+
+    def post(client: TestClient, xff: str | None) -> int:
+        headers = {"TikTok-Signature": "t=1,s=bad"}
+        if xff is not None:
+            headers["X-Forwarded-For"] = xff
+        return client.post("/hooks/tiktok", content=b'{"event":"x"}', headers=headers).status_code
+
+    try:
+        # The funnel's own shape: loopback peer, edge Host.
+        funnel = _edge_client(application)
+        assert [post(funnel, "203.0.113.1") for _ in range(2)] == [403, 403]
+        assert post(funnel, "203.0.113.1") == 429  # third hit in the window
+        assert post(funnel, "203.0.113.2") == 403  # a different client: fresh bucket
+        # A proxy chain keys on the left-most (original) address: changing the
+        # right side stays in the same bucket, so it still hits the limit.
+        assert [post(funnel, "203.0.113.3, 10.0.0.9") for _ in range(2)] == [403, 403]
+        assert post(funnel, "203.0.113.3, 10.0.0.8") == 429
+
+        # A non-loopback peer claiming the edge host cannot name its source.
+        stranger = _edge_client(application, peer="10.9.9.9")
+        assert [post(stranger, "198.51.100.1") for _ in range(2)] == [403, 403]
+        assert post(stranger, "198.51.100.2") == 429  # still the peer's bucket
+
+        # Direct requests ignore XFF entirely.
+        direct = TestClient(
+            application, base_url="http://127.0.0.1:8000", client=("203.0.113.7", 9)
+        )
+        assert [post(direct, "198.51.100.5") for _ in range(2)] == [403, 403]
+        assert post(direct, "198.51.100.6") == 429
+    finally:
+        database.engine.dispose()
+        application.state.database.engine.dispose()

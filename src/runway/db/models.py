@@ -1914,7 +1914,9 @@ class PlatformSubscription(Base, WorkspaceOwned, TimestampMixin):
     """A platform push subscription (YouTube WebSub today).
 
     `hub_secret` is the per-subscription WebSub secret; it only authenticates
-    hints and is never logged or returned by any API.
+    hints and is never logged or returned by any API. `callback_token` is a
+    random 32-byte hex token the hub callbacks carry in their path, so the
+    route is unreachable to anyone we did not tell the URL to.
     """
 
     __tablename__ = "platform_subscriptions"
@@ -1934,6 +1936,7 @@ class PlatformSubscription(Base, WorkspaceOwned, TimestampMixin):
     provider: Mapped[str] = mapped_column(String(20))
     topic: Mapped[str] = mapped_column(String(500))
     hub_secret: Mapped[str | None] = mapped_column(String(128))
+    callback_token: Mapped[str | None] = mapped_column(String(64))
     lease_seconds: Mapped[int | None] = mapped_column(Integer)
     subscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -12,6 +12,9 @@ import json
 import logging
 from typing import Any
 
+# Untrusted webhook bodies are parsed with defusedxml only (a hard dependency);
+# the stdlib parser is never a fallback for platform-supplied XML.
+from defusedxml import ElementTree as _ElementTree  # type: ignore[import-untyped]
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -35,11 +38,6 @@ from runway.realtime.schedule import (
     RECENT_METRICS_BOOST_MINUTES,
     boost,
 )
-
-try:
-    from defusedxml import ElementTree as _ElementTree  # type: ignore[import-untyped]
-except ImportError:  # pragma: no cover - defusedxml ships in requirements.lock
-    from xml.etree import ElementTree as _ElementTree
 
 logger = logging.getLogger(__name__)
 

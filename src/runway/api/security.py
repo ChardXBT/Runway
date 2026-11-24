@@ -47,6 +47,15 @@ def _hostname(host_header: str) -> str:
     return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
 
 
+def host_is_edge(host_header: str, edge_host: str | None) -> bool:
+    """True when a Host header names the configured public edge hostname.
+
+    Shared by the guard and the webhook rate-limit source so both normalize a
+    host the same way (case-folded, bracketed IPv6 kept, one port dropped).
+    """
+    return edge_host is not None and _hostname(host_header) == _hostname(edge_host)
+
+
 class LocalRequestGuard:
     def __init__(
         self,
