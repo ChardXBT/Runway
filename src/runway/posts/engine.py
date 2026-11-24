@@ -481,9 +481,7 @@ class PublishingEngine:
             # sent" and blindly retries into a second publish session.
             sent_at = (
                 utc(previous.request_sent_at)
-                if previous is not None
-                and resumable
-                and previous.request_sent_at is not None
+                if previous is not None and resumable and previous.request_sent_at is not None
                 else None
             )
             lead = adapter_prepare_lead(publisher)
@@ -515,9 +513,7 @@ class PublishingEngine:
                     finished=False,
                     request={"payload": snap.payload, "publisher": target.publisher},
                     resumable=resumable,
-                    request_sent_at=(
-                        previous.request_sent_at if sent_at is not None else None
-                    ),
+                    request_sent_at=(previous.request_sent_at if sent_at is not None else None),
                 )
                 set_target_state(session, target, _T.SENDING, post=post)
             ctx = self._context(

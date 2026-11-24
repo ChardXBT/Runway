@@ -586,17 +586,13 @@ def test_a_resumed_send_inherits_the_first_attempts_marker(harness: Harness) -> 
     with harness.database.session() as session:
         sends = session.scalars(
             select(TargetAttempt)
-            .where(
-                TargetAttempt.target_id == target_id, TargetAttempt.kind == "send"
-            )
+            .where(TargetAttempt.target_id == target_id, TargetAttempt.kind == "send")
             .order_by(TargetAttempt.id)
         ).all()
         assert sends[1].request_sent_at is not None
         assert sends[1].request_sent_at == sends[0].request_sent_at
         pending_sends = session.scalars(
-            select(PublishJob).where(
-                PublishJob.kind == "send", PublishJob.state == "pending"
-            )
+            select(PublishJob).where(PublishJob.kind == "send", PublishJob.state == "pending")
         ).all()
     assert pending_sends == []
 
