@@ -202,6 +202,20 @@ def _process_tiktok(
     _enqueue_sync(session, queue, event, account)
 
 
+def _meta_user_id(account: ConnectedAccount) -> str | None:
+    """The app-scoped Meta user id a Unified Login account recorded at connect.
+
+    Meta's compliance callbacks name that id, not the Instagram account id
+    `external_account_id` holds; both identify the same connection.
+    """
+    try:
+        meta = json.loads(account.metadata_json or "{}")
+    except json.JSONDecodeError:
+        return None
+    value = meta.get("meta_user_id") if isinstance(meta, dict) else None
+    return str(value) if isinstance(value, str) and value else None
+
+
 def _process_meta(
     session: Session,
     database: Database,
@@ -235,12 +249,15 @@ def _process_meta(
     if user_id is None:
         event.error = "signed_request carries no user_id"
         return
-    accounts = session.scalars(
-        select(ConnectedAccount).where(
-            ConnectedAccount.platform == Platform.instagram.value,
-            ConnectedAccount.external_account_id == str(user_id),
-        )
-    ).all()
+    accounts = [
+        account
+        for account in session.scalars(
+            select(ConnectedAccount).where(
+                ConnectedAccount.platform == Platform.instagram.value,
+            )
+        ).all()
+        if str(user_id) in {account.external_account_id, _meta_user_id(account)}
+    ]
     if not accounts:
         # A person may request deletion without ever connecting; nothing held.
         return

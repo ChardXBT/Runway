@@ -97,13 +97,22 @@ class InstagramUnifiedProvider(InstagramProvider):
         return TokenSet(access_token=access_token, scopes=scopes, extra=extra)
 
     def attach_business_id(self, token: TokenSet) -> TokenSet:
-        """`GET /me?fields=client_business_id` — the portfolio that owns the app."""
-        data = self._graph_get(token, "me", {"fields": "client_business_id"})
+        """`GET /me?fields=id,client_business_id` — the user and their portfolio.
+
+        `id` is the app-scoped Meta user id: Meta's deauthorize and
+        data-deletion signed_requests name it, so the token carries it to
+        the account row (metadata_json `meta_user_id`), where the compliance
+        sweep can find the account.
+        """
+        data = self._graph_get(token, "me", {"fields": "id,client_business_id"})
         business_id = data.get("client_business_id")
         if not business_id:
             raise ProviderError("Unified Login /me returned no client_business_id")
         extra = dict(token.extra)
         extra["client_business_id"] = str(business_id)
+        meta_user_id = data.get("id")
+        if meta_user_id:
+            extra["meta_user_id"] = str(meta_user_id)
         return token.model_copy(update={"extra": extra})
 
     def assigned_accounts(self, token: TokenSet) -> list[dict[str, str]]:

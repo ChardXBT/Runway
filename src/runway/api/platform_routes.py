@@ -283,19 +283,21 @@ def build_platform_router(
             account.connected_at = now
             account.last_verified_at = now
             account.last_error = None
-            account.metadata_json = json.dumps(
-                {
-                    "raw": identity.raw,
-                    "scopes_source": scopes_source,
-                    # The connection adapter decides the account's direct
-                    # publisher (instagram_direct vs instagram_unified).
-                    "connection": (
-                        "instagram_unified"
-                        if token.extra.get("login") == "unified"
-                        else platform.value
-                    ),
-                }
-            )
+            metadata: dict[str, object] = {
+                "raw": identity.raw,
+                "scopes_source": scopes_source,
+                # The connection adapter decides the account's direct
+                # publisher (instagram_direct vs instagram_unified).
+                "connection": (
+                    "instagram_unified" if token.extra.get("login") == "unified" else platform.value
+                ),
+            }
+            # Unified Login also knows the app-scoped Meta user id; Meta's
+            # compliance callbacks name it, so it lives on the row.
+            meta_user_id = token.extra.get("meta_user_id")
+            if isinstance(meta_user_id, str) and meta_user_id:
+                metadata["meta_user_id"] = meta_user_id
+            account.metadata_json = json.dumps(metadata)
             session.flush()
             # Push subscriptions join the connect transaction (spec 04
             # section 2): a YouTube WebSub row plus its subscribe job, only

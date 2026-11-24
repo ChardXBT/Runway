@@ -49,6 +49,7 @@ from runway.db.models import (
     Workspace,
     WorkspaceMember,
 )
+from runway.jobs.queue import JobQueue
 from runway.mediastore.keys import make_media_key
 from runway.mediastore.local import LocalDiskStore
 from runway.posts.media_service import poster_root
@@ -57,6 +58,7 @@ from runway.realtime.meta_hooks import (
     build_meta_hooks_router,
     verify_signed_request,
 )
+from runway.realtime.processing import _process_meta
 from runway.workspaces.lifecycle import (
     DELETE_WORKSPACE_JOB,
     EXPORT_WORKSPACE_JOB,
@@ -77,6 +79,21 @@ def _signed(payload: dict[str, object], secret: str = SECRET) -> str:
     body = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
     sig = hmac.new(secret.encode("utf-8"), body.encode("ascii"), hashlib.sha256).digest()
     return f"{base64.urlsafe_b64encode(sig).decode('ascii').rstrip('=')}.{body}"
+
+
+def _meta_event(session, provider: str, user_id: str) -> WebhookEvent:
+    """A stored Meta compliance delivery whose signed_request verifies."""
+    signed = _signed({"user_id": user_id, "algorithm": "HMAC-SHA256", "issued_at": 1})
+    body = f"signed_request={quote(signed, safe='')}".encode()
+    event = WebhookEvent(
+        provider=provider,
+        signature_ok=True,
+        dedupe_key=f"{provider}:{hashlib.sha256(body).hexdigest()}",
+        body=body,
+    )
+    session.add(event)
+    session.flush()
+    return event
 
 
 def _database(tmp_path: Path) -> Database:
@@ -164,6 +181,58 @@ def test_data_deletion_status_page_requires_a_hex_confirmation_code(
                 response = client.get(f"/hooks/meta/data-deletion/{bad}")
                 assert response.status_code == 404, (bad, response.status_code)
                 assert bad not in response.text
+    finally:
+        database.engine.dispose()
+
+
+def test_meta_deletion_matches_ig_id_or_the_app_scoped_meta_user_id(
+    tmp_path: Path,
+) -> None:
+    """Unified Login accounts are found by `meta_user_id`, direct ones by IG id.
+
+    Meta's signed_request names the app-scoped Meta user id: an Instagram
+    Login account's external id is the IG user id, while a Unified Login
+    account records `meta_user_id` in metadata_json at connect. A deletion
+    request must reach the account through either field.
+    """
+    database = _database(tmp_path)
+    settings = Settings(data_dir=tmp_path / "data", meta_app_secret=SECRET)
+    queue = JobQueue(database)
+    try:
+        with database.session() as session:
+            direct = ConnectedAccount(
+                workspace_id=1,
+                platform="instagram",
+                external_account_id="ig-direct-1",
+                status="connected",
+                metadata_json="{}",
+            )
+            unified = ConnectedAccount(
+                workspace_id=1,
+                platform="instagram",
+                external_account_id="ig-unified-1",
+                status="connected",
+                metadata_json=json.dumps(
+                    {"connection": "instagram_unified", "meta_user_id": "meta-7"}
+                ),
+            )
+            session.add_all([direct, unified])
+            session.flush()
+            for user_id, account in (("meta-7", unified), ("ig-direct-1", direct)):
+                event = _meta_event(session, "meta-data-deletion", user_id)
+                _process_meta(session, database, settings, queue, event)
+                session.flush()
+                assert event.account_id == account.id
+                assert event.error is None
+                assert account.status == "disconnected"
+                assert account.external_account_id.startswith("purged:")
+                assert account.metadata_json == "{}"
+            # A Meta user we never connected is acknowledged, not an error.
+            unknown = _meta_event(session, "meta-data-deletion", "meta-nobody")
+            _process_meta(session, database, settings, queue, unknown)
+            assert unknown.account_id is None
+            assert unknown.error is None
+            assert unknown.processed_at is not None
     finally:
         database.engine.dispose()
 

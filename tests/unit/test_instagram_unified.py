@@ -148,7 +148,7 @@ class FakeFacebook:
                     }
                 },
             )
-        if path == "me" and query.get("fields") == ["client_business_id"]:
+        if path == "me" and "client_business_id" in (query.get("fields") or [""])[0]:
             return httpx.Response(
                 200, json={"id": "sys-1", "client_business_id": self.client_business_id}
             )
@@ -210,6 +210,10 @@ def test_client_business_id_and_assigned_accounts(tmp_path: Path) -> None:
     )
     token = provider.attach_business_id(token)
     assert token.extra["client_business_id"] == "biz-9"
+    # The /me `id` is the app-scoped Meta user id: Meta's compliance
+    # callbacks name it, so it is kept for the deauthorize/data-deletion
+    # account lookup.
+    assert token.extra["meta_user_id"] == "sys-1"
     assert provider.assigned_accounts(token) == [{"id": IG, "username": "northwindstudio"}]
 
 
@@ -381,6 +385,9 @@ def test_unified_callback_connects_the_only_assigned_account(
         assert account.handle == "northwindstudio"
         meta = json.loads(account.metadata_json or "{}")
         assert meta["connection"] == "instagram_unified"
+        # The app-scoped Meta user id rides the account so a data-deletion
+        # or deauthorize delivery naming it can find the account.
+        assert meta["meta_user_id"] == "sys-1"
         token_ref = account.token_ref
     assert token_ref is not None
     token = registry.token_store.load(token_ref)
