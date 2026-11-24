@@ -107,10 +107,10 @@ Direct adapters and the scopes that enable them:
 | `youtube_video` | `youtube_direct` | no (assisted only) | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube`, `https://www.googleapis.com/auth/youtube.force-ssl` |
 | `youtube_short` | `youtube_direct` | no (assisted only) | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube`, `https://www.googleapis.com/auth/youtube.force-ssl` |
 | `youtube_post` | `youtube_post` | no (assisted only) | `https://www.googleapis.com/auth/youtube.force-ssl`, `https://www.googleapis.com/auth/youtube` |
-| `instagram_reel` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |
-| `instagram_image` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |
-| `instagram_carousel` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |
-| `instagram_story` | `instagram_direct` | no (assisted only) | `instagram_business_content_publish` |
+| `instagram_reel` | `instagram_direct` | yes | `instagram_business_content_publish` |
+| `instagram_image` | `instagram_direct` | yes | `instagram_business_content_publish` |
+| `instagram_carousel` | `instagram_direct` | yes | `instagram_business_content_publish` |
+| `instagram_story` | `instagram_direct` | yes | `instagram_business_content_publish` |
 | `tiktok_video` | `tiktok_direct` | no (assisted only) | `video.publish` |
 | `tiktok_draft` | `tiktok_inbox` | no (assisted only) | `video.upload` |
 

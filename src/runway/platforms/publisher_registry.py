@@ -22,7 +22,7 @@ from runway.platforms.publisher import Publisher, adapter_kind
 # The adapters a live (non-mock) build registers. Update this together with
 # `build_publisher_registry` when a real adapter is added; a test compares
 # them, and docs/PLATFORM_CAPABILITIES.md is generated from this set.
-LIVE_PUBLISHER_NAMES: frozenset[str] = frozenset({"assisted"})
+LIVE_PUBLISHER_NAMES: frozenset[str] = frozenset({"assisted", "instagram_direct"})
 
 
 class DuplicatePublisher(ValueError):
@@ -84,7 +84,10 @@ def build_publisher_registry(
         for publisher in mock_publishers(settings, clock=clock):
             registry.register(publisher)
         return registry
-    # Live direct adapters (youtube_direct, youtube_post, instagram_direct,
+    from runway.platforms.instagram_publisher import InstagramDirectPublisher
+
+    registry.register(InstagramDirectPublisher(settings, database))
+    # Live direct adapters (youtube_direct, youtube_post,
     # tiktok_direct, tiktok_inbox) register here as they are built, e.g.:
     #     registry.register(YouTubeDirectPublisher(settings, database))
     return registry
