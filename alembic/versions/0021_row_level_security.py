@@ -6,13 +6,14 @@ Revises: 0020_youtube_publishing
 Every table that carries a `workspace_id` column gets `ENABLE` + `FORCE` ROW
 LEVEL SECURITY and one policy, `runway_workspace`:
 
-- Sessions that never set `app.workspace_id` (the application's
-  `system_session()` sweeps and any superuser/role with BYPASSRLS) see every
-  row: `current_setting(..., missing_ok := true)` returns NULL for them.
-- Sessions with `SET LOCAL app.workspace_id = '<id>'` - which `Database` emits
-  on `after_begin` for every workspace-bound session - read and write only
-  their workspace's rows. `FORCE` makes even the table owner obey the policy,
-  so the application role cannot widen a query it forgot to filter.
+- Sessions with `SET LOCAL app.system = 'on'` - which `Database.system_session`
+  emits on `after_begin` - see every row. So does any role with BYPASSRLS.
+- Sessions with `SET LOCAL app.workspace_id = '<id>'` - emitted for every
+  workspace-bound session - read and write only their workspace's rows.
+  `FORCE` makes even the table owner obey the policy, so the application role
+  cannot widen a query it forgot to filter.
+- Sessions with neither GUC fail closed: they see zero rows. An unmarked
+  session can never widen itself into a system session by omission.
 
 NULL `workspace_id` rows (only `webhook_events` keeps them, as the ingest
 buffer before the platform signature resolves a workspace) match no
@@ -73,10 +74,12 @@ SCOPED_TABLES = (
 
 POLICY_NAME = "runway_workspace"
 
-# Unset-or-empty `app.workspace_id` (system sessions) bypasses the filter.
-# NULLIF(...)::int cannot fail on '' because NULLIF turns it into NULL first.
+# Fail closed: rows are visible to a session that marked itself a system
+# session (`app.system = 'on'`, emitted by `Database.system_session`) or whose
+# `app.workspace_id` equals the row's tenant. A session with neither GUC sees
+# zero rows. NULLIF(...)::int cannot fail on '' because NULLIF makes it NULL.
 _POLICY_EXPRESSION = (
-    "nullif(current_setting('app.workspace_id', true), '') IS NULL "
+    "current_setting('app.system', true) = 'on' "
     "OR workspace_id = nullif(current_setting('app.workspace_id', true), '')::int"
 )
 

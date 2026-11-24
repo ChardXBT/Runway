@@ -11,6 +11,8 @@ from runway.config import Settings
 from runway.db.workspace import (
     GUC_NAME,
     SESSION_INFO_KEY,
+    SYSTEM_GUC_NAME,
+    SYSTEM_INFO_KEY,
     WorkspaceContextError,
     WorkspaceIsolationError,
     current_workspace,
@@ -102,15 +104,22 @@ def _guard_workspace_writes(session: Session, _flush_context: object, _instances
 def _set_workspace_guc(
     database: Database, session: Session, connection: object, tx: object
 ) -> None:
-    """Mirror the session workspace into Postgres for row-level security."""
+    """Mirror the session's tenancy into Postgres for row-level security.
+
+    RLS fails closed - a session needs one of the two GUCs to see anything -
+    so the system flag is emitted explicitly rather than left unset.
+    """
     if database.dialect != "postgresql":
         return
     if tx.nested:  # type: ignore[attr-defined]
         return
+    # connection is the driver's ConnectionFairy, not the ORM Session
+    if session.info.get(SYSTEM_INFO_KEY):
+        connection.exec_driver_sql(f"SET LOCAL {SYSTEM_GUC_NAME} = 'on'")  # type: ignore[attr-defined]
+        return
     workspace_id = session.info.get(SESSION_INFO_KEY)
     if workspace_id is None:
         return
-    # connection is the driver's ConnectionFairy, not the ORM Session
     connection.exec_driver_sql(f"SET LOCAL {GUC_NAME} = {int(workspace_id)}")  # type: ignore[attr-defined]
 
 
@@ -126,9 +135,9 @@ class Database:
         if is_sqlite:
             _configure_sqlite(self.engine)
         system_url = settings.system_database_url
-        # A distinct bypass-RLS role for system sessions; when unset (or equal
-        # to the app URL) system sessions share the app engine and fail closed
-        # under row-level security.
+        # An optional dedicated role for system sessions; when unset (or equal
+        # to the app URL) system sessions share the app engine and rely on the
+        # app.system GUC the after_begin listener below emits.
         self.system_engine: Engine | None = (
             create_engine(system_url, future=True)
             if system_url is not None and system_url != url
@@ -152,11 +161,16 @@ class Database:
         )
         event.listen(self.session_factory, "do_orm_execute", _workspace_criteria)
         event.listen(self.session_factory, "before_flush", _guard_workspace_writes)
-        event.listen(
-            self.session_factory,
-            "after_begin",
-            lambda session, tx, connection: _set_workspace_guc(self, session, connection, tx),
-        )
+
+        def emit_guc(session: Session, tx: object, connection: object) -> None:
+            _set_workspace_guc(self, session, connection, tx)
+
+        event.listen(self.session_factory, "after_begin", emit_guc)
+        if self.system_session_factory is not self.session_factory:
+            # A dedicated system engine still needs the GUC listener: without
+            # it a non-bypass system role would see zero rows under fail-closed
+            # RLS. When the factories are one object the listener is already on.
+            event.listen(self.system_session_factory, "after_begin", emit_guc)
 
     def _workspace_for(self, workspace_id: int | None) -> int:
         """Resolve a workspace binding: explicit arg, then context, then profile."""
@@ -198,13 +212,14 @@ class Database:
     def system_session(self) -> Generator[Session, None, None]:
         """A context-free session for system code only (queue, sweeps, ingest).
 
-        No workspace criteria, no write guard and no GUC. On Postgres the RLS
-        policy's unset-setting branch (`nullif(current_setting(...), '') IS
-        NULL`) grants visibility to any session that never set the GUC, so the
-        app role suffices; RUNWAY_SYSTEM_DATABASE_URL adds a dedicated role
-        for system traffic as defense in depth.
+        No workspace criteria and no write guard; `session.info["system"]`
+        marks it. On Postgres it emits `SET LOCAL app.system = 'on'`: the RLS
+        policies fail closed for sessions with neither GUC, so only an
+        explicit system session (or a BYPASSRLS role) sees every row.
+        RUNWAY_SYSTEM_DATABASE_URL can still point system traffic at a
+        dedicated role as defense in depth.
         """
-        session = self.system_session_factory()
+        session = self.system_session_factory(info={SYSTEM_INFO_KEY: True})
         try:
             yield session
             session.commit()

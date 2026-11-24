@@ -22,7 +22,10 @@ Three cooperating layers keep one workspace from ever seeing another's rows:
 cross-workspace by definition: the publish queue claim bucket, webhook ingest
 before the account (and therefore workspace) is known, api-key resolution,
 retention sweeps and operator CLI commands. It applies no criteria and no
-guard and is only ever opened by the call sites that need it.
+guard and is only ever opened by the call sites that need it. On Postgres it
+emits ``SET LOCAL app.system = 'on'``: the RLS policies fail closed, so a
+session with neither GUC sees zero rows and only an explicit system session
+(or a ``BYPASSRLS`` role) sees every row.
 """
 
 from __future__ import annotations
@@ -35,10 +38,15 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from runway.db.base import Base
 
-# The GUC name the RLS policies read; mirrored into session.info on ORM
+# The GUC names the RLS policies read; mirrored into session.info on ORM
 # sessions and emitted as `SET LOCAL` inside Postgres transactions.
 GUC_NAME = "app.workspace_id"
 SESSION_INFO_KEY = "workspace_id"
+# `app.system = 'on'` marks a system session for RLS. The policies grant rows
+# only to this flag or an `app.workspace_id` match, so a session with neither
+# fails closed instead of silently seeing every workspace.
+SYSTEM_GUC_NAME = "app.system"
+SYSTEM_INFO_KEY = "system"
 
 
 class WorkspaceContextError(RuntimeError):

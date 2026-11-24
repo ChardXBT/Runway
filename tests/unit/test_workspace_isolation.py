@@ -23,6 +23,8 @@ from runway.db.models import (
     Workspace,
 )
 from runway.db.workspace import (
+    SESSION_INFO_KEY,
+    SYSTEM_INFO_KEY,
     WorkspaceContextError,
     WorkspaceIsolationError,
     scoped_models,
@@ -184,6 +186,62 @@ def test_smuggled_foreign_row_is_rejected_on_flush(two_workspaces: Database) -> 
         session.flush()
 
 
+def test_system_session_is_marked_not_bound(database: Database) -> None:
+    """The GUC listener reads the system flag; a bound id must not be there."""
+    with database.system_session() as session:
+        assert session.info[SYSTEM_INFO_KEY] is True
+        assert SESSION_INFO_KEY not in session.info
+
+
+def test_postgres_sessions_emit_their_gucs(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """after_begin emits app.system for system sessions, else the bound id.
+
+    RLS fails closed: a session that emits neither GUC sees zero rows, so
+    system sessions have to be marked - not just left unbound.
+    """
+    from sqlalchemy.engine import Connection
+
+    emitted: list[str] = []
+    monkeypatch.setattr(database, "dialect", "postgresql")
+    monkeypatch.setattr(
+        Connection,
+        "exec_driver_sql",
+        lambda _connection, statement, *args, **kwargs: emitted.append(statement),
+    )
+    with database.session(workspace_id=OTHER_WORKSPACE) as session:
+        session.connection()  # autobegin fires after_begin
+    assert emitted == ["SET LOCAL app.workspace_id = 2"]
+    emitted.clear()
+    with database.system_session() as session:
+        session.connection()
+    assert emitted == ["SET LOCAL app.system = 'on'"]
+    emitted.clear()
+    # No marks, no GUC: a raw session would see zero rows under fail-closed RLS.
+    raw = database.session_factory()
+    try:
+        raw.connection()
+        assert emitted == []
+    finally:
+        raw.close()
+
+
+def test_queue_and_engine_exclusive_sessions_run_as_system(database: Database) -> None:
+    """Claim and engine locks cross workspaces: they must be system sessions."""
+    from runway.jobs.queue import JobQueue
+    from runway.platforms.publisher_registry import PublisherRegistry
+    from runway.posts.engine import PublishingEngine
+
+    with JobQueue(database)._exclusive() as session:
+        assert session.info[SYSTEM_INFO_KEY] is True
+        assert SESSION_INFO_KEY not in session.info
+    engine = PublishingEngine(database, database.settings, PublisherRegistry(mock_mode=True))
+    with engine._exclusive() as session:
+        assert session.info[SYSTEM_INFO_KEY] is True
+        assert SESSION_INFO_KEY not in session.info
+
+
 def test_workspace_context_binds_sessions(two_workspaces: Database) -> None:
     with two_workspaces.system_session() as session:
         session.add_all([_account(1), _account(OTHER_WORKSPACE)])
@@ -262,3 +320,49 @@ def test_row_level_security_enforces_isolation(request: pytest.FixtureRequest) -
             )
         connection.rollback()
     engine.dispose()
+
+
+@pytest.mark.postgres()
+def test_row_level_security_fails_closed_without_gucs(request: pytest.FixtureRequest) -> None:
+    """A session with neither GUC sees no rows; app.system = 'on' sees them all."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import SQLAlchemyError
+
+    dsn = request.config.getoption("--postgres-dsn")
+    if not dsn:
+        pytest.skip("pass --postgres-dsn=postgresql+psycopg://... to run the RLS checks")
+    engine = create_engine(dsn)
+    try:
+        with engine.connect() as connection:
+            # Seed through the system GUC, which is what system_session emits.
+            connection.exec_driver_sql("SET LOCAL app.system = 'on'")
+            connection.exec_driver_sql(
+                "INSERT INTO content_groups (title, workspace_id) VALUES ('rls-seed', 1)"
+            )
+            connection.commit()
+        try:
+            with engine.connect() as connection:
+                # Neither app.system nor app.workspace_id set: fail closed.
+                assert (
+                    connection.exec_driver_sql("SELECT count(*) FROM content_groups").scalar() == 0
+                )
+                with pytest.raises(SQLAlchemyError):
+                    connection.exec_driver_sql(
+                        "INSERT INTO content_groups (title, workspace_id) VALUES ('x', 1)"
+                    )
+                connection.rollback()
+            with engine.connect() as connection:
+                connection.exec_driver_sql("SET LOCAL app.system = 'on'")
+                assert (
+                    connection.exec_driver_sql(
+                        "SELECT count(*) FROM content_groups WHERE title = 'rls-seed'"
+                    ).scalar()
+                    == 1
+                )
+        finally:
+            with engine.connect() as connection:
+                connection.exec_driver_sql("SET LOCAL app.system = 'on'")
+                connection.exec_driver_sql("DELETE FROM content_groups WHERE title = 'rls-seed'")
+                connection.commit()
+    finally:
+        engine.dispose()

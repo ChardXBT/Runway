@@ -202,20 +202,17 @@ class JobQueue:
 
     @contextmanager
     def _exclusive(self) -> Iterator[Session]:
-        """A write transaction that excludes other claimers from its first statement."""
-        session = self.database.session_factory()
-        try:
+        """A write transaction that excludes other claimers from its first statement.
+
+        Claims cross workspaces by definition, so this is a system session: on
+        Postgres the fail-closed RLS policy would otherwise show zero rows.
+        """
+        with self.database.system_session() as session:
             if self.dialect == "sqlite":
                 # pysqlite starts transactions lazily and as DEFERRED; take the
                 # write lock up front so read-then-update cannot interleave.
                 session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             yield session
-            session.commit()
-        except BaseException:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     # ---------------------------------------------------------------- enqueue
 

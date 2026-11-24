@@ -222,18 +222,16 @@ class PublishingEngine:
 
     @contextmanager
     def _exclusive(self) -> Iterator[Session]:
-        """A write transaction that holds the database write lock from its start."""
-        session = self.database.session_factory()
-        try:
+        """A write transaction that holds the database write lock from its start.
+
+        Send jobs are claimed without a workspace context, so this is a system
+        session: on Postgres the fail-closed RLS policy would otherwise show
+        zero rows.
+        """
+        with self.database.system_session() as session:
             if self.database.engine.dialect.name == "sqlite":
                 session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             yield session
-            session.commit()
-        except BaseException:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def publishing_paused(self, session: Session, workspace_id: int) -> bool:
         # The global switch and the operator's workspace kill switch

@@ -52,10 +52,12 @@ Postgres and tenancy are in place: `runway db` migrates through
 connect through `RUNWAY_DATABASE_URL` (the app role, `NOBYPASSRLS`). Every
 workspace-owned table carries row-level security (`0021_row_level_security`,
 `ENABLE` + `FORCE`, policy `runway_workspace`): a request's session emits
-`SET LOCAL app.workspace_id` per transaction, and a session that never sets
-it - `system_session()`, used only by system code - sees every row. On top of
-the policy the application layer filters ORM reads and refuses
-cross-workspace writes (`runway.db.base`).
+`SET LOCAL app.workspace_id` per transaction and sees only that workspace;
+`system_session()`, used only by system code, emits
+`SET LOCAL app.system = 'on'` and sees every row; a session with neither GUC
+sees nothing - the policy fails closed. On top of the policy the application
+layer filters ORM reads and refuses cross-workspace writes
+(`runway.db.base`).
 
 Routes served in hosted today: `/health`, `/api/settings` (product switches
 only), the workspace-scoped `/api/v1` surface (`workspace`, `keys`,

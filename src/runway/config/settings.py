@@ -93,10 +93,11 @@ class Settings(BaseSettings):
     migration_database_dsn: SecretStr | None = Field(
         default=None, validation_alias="RUNWAY_MIGRATION_DATABASE_URL"
     )
-    # RUNWAY_SYSTEM_DATABASE_URL: the bypass-RLS role for system sessions
-    # (queue claims, webhook ingest before the workspace is known, api-key
-    # resolution, operator CLI). Hosted deployments need it for those paths;
-    # without it system sessions fall back to the app role and fail closed.
+    # RUNWAY_SYSTEM_DATABASE_URL: an optional dedicated role for system
+    # sessions (queue claims, webhook ingest before the workspace is known,
+    # api-key resolution, operator CLI). System sessions also work on the app
+    # role - they emit `SET LOCAL app.system = 'on'`, which the RLS policies
+    # grant - so this is defense in depth, e.g. a BYPASSRLS role in hosted.
     system_database_dsn: SecretStr | None = Field(
         default=None, validation_alias="RUNWAY_SYSTEM_DATABASE_URL"
     )
@@ -490,7 +491,7 @@ class Settings(BaseSettings):
 
     @property
     def system_database_url(self) -> str | None:
-        """URL for bypass-RLS system sessions, or None to reuse the app role."""
+        """URL for a dedicated system-session role, or None to reuse the app role."""
         return self._dsn(self.system_database_dsn)
 
     def _sqlite_database_url(self) -> str:
