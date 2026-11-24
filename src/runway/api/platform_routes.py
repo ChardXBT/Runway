@@ -8,7 +8,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import RedirectResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -650,7 +651,11 @@ def build_platform_router(
             # persisted connection stores its own token.
             if token_ref:
                 registry.token_store.delete(token_ref)
-        return {"status": "connected", "account": _account_view(database, settings, account)}
+        return JSONResponse(
+            jsonable_encoder(
+                {"status": "connected", "account": _account_view(database, settings, account)}
+            )
+        )
 
     @router.get("/platforms/{platform}/oauth/callback")
     def oauth_callback(
