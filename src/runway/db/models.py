@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column
@@ -1739,7 +1740,7 @@ class ContentDraft(Base, WorkspaceScoped, TimestampMixin):
     # Added in 0017_publishing_engine.
     source: Mapped[str] = mapped_column(String(20), default="human", server_default="human")
     source_ref: Mapped[str | None] = mapped_column(String(200))
-    ai_generated: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sql_text("0"))
+    ai_generated: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     version: Mapped[int] = mapped_column(Integer, default=1, server_default=sql_text("1"))
     created_by: Mapped[str | None] = mapped_column(String(200))
 
@@ -1915,7 +1916,7 @@ class PublishingControl(Base, WorkspaceScoped):
     workspace_id: Mapped[int] = mapped_column(
         ForeignKey("workspaces.id", name="fk_publishing_controls_workspace"), primary_key=True
     )
-    paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sql_text("0"))
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     reason: Mapped[str | None] = mapped_column(Text)
     updated_by: Mapped[str | None] = mapped_column(String(200))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

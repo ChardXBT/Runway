@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 from runway.db import models  # noqa: F401
 from runway.db.base import Base
 
@@ -33,12 +33,27 @@ NEW_TABLES = (
 )
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _table_names() -> set[str]:
+    if _offline():
+        return set()
     return set(sa.inspect(op.get_bind()).get_table_names())
 
 
 def _column_names(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table)}
+
+
+def _index_names(table: str) -> set[str]:
+    if _offline():
+        return set()
+    return {item["name"] for item in sa.inspect(op.get_bind()).get_indexes(table)}
 
 
 def _has_sqlite_foreign_key(
@@ -46,6 +61,8 @@ def _has_sqlite_foreign_key(
     column: str,
     referred_table: str,
 ) -> bool:
+    if _offline():
+        return False
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
         rows = bind.exec_driver_sql(f'PRAGMA foreign_key_list("{table}")').mappings()
@@ -72,7 +89,8 @@ def upgrade() -> None:
         "caption_slates",
     )
     if not column_exists or not foreign_key_exists:
-        with op.batch_alter_table("proposals", recreate="always") as batch:
+        # SQLite cannot ADD CONSTRAINT; Postgres takes plain ALTERs.
+        with op.batch_alter_table("proposals", recreate="auto") as batch:
             if not column_exists:
                 batch.add_column(
                     sa.Column(
@@ -88,8 +106,7 @@ def upgrade() -> None:
                     ["caption_slate_id"],
                     ["id"],
                 )
-    indexes = {item["name"] for item in sa.inspect(bind).get_indexes("proposals")}
-    if "ix_proposals_caption_slate_id" not in indexes:
+    if "ix_proposals_caption_slate_id" not in _index_names("proposals"):
         op.create_index(
             "ix_proposals_caption_slate_id",
             "proposals",
@@ -98,14 +115,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    if "caption_slate_id" in _column_names("proposals"):
-        indexes = {item["name"] for item in sa.inspect(op.get_bind()).get_indexes("proposals")}
-        if "ix_proposals_caption_slate_id" in indexes:
+    if _offline() or "caption_slate_id" in _column_names("proposals"):
+        if _offline() or "ix_proposals_caption_slate_id" in _index_names("proposals"):
             op.drop_index("ix_proposals_caption_slate_id", table_name="proposals")
-        with op.batch_alter_table("proposals", recreate="always") as batch:
+        with op.batch_alter_table("proposals", recreate="auto") as batch:
             batch.drop_column("caption_slate_id")
 
     existing = _table_names()
     for table_name in reversed(NEW_TABLES):
-        if table_name in existing:
+        if _offline() or table_name in existing:
             op.drop_table(table_name)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0009_editorial_diversity"
 down_revision = "0008_intelligence_data_flywheel"
@@ -20,15 +20,26 @@ def _inspector() -> sa.Inspector:
     return sa.inspect(op.get_bind())
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _tables() -> set[str]:
+    if _offline():
+        return set()
     return set(_inspector().get_table_names())
 
 
 def _columns(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {str(column["name"]) for column in _inspector().get_columns(table)}
 
 
 def _indexes(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {str(index["name"]) for index in _inspector().get_indexes(table)}
 
 
@@ -124,16 +135,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    if "shadow_editorial_decisions" in _tables():
+    if _offline() or "shadow_editorial_decisions" in _tables():
         op.drop_table("shadow_editorial_decisions")
-    if "ix_candidate_images_diversity_cluster_key" in _indexes("candidate_images"):
+    if _offline() or "ix_candidate_images_diversity_cluster_key" in _indexes("candidate_images"):
         op.drop_index(
             "ix_candidate_images_diversity_cluster_key",
             table_name="candidate_images",
         )
     candidate_columns = _columns("candidate_images")
     with op.batch_alter_table("candidate_images") as batch:
-        if "diversity_fingerprint_json" in candidate_columns:
+        if _offline() or "diversity_fingerprint_json" in candidate_columns:
             batch.drop_column("diversity_fingerprint_json")
-        if "diversity_cluster_key" in candidate_columns:
+        if _offline() or "diversity_cluster_key" in candidate_columns:
             batch.drop_column("diversity_cluster_key")

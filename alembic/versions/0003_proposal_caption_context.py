@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0003_proposal_caption_context"
 down_revision = "0002_candidate_provenance"
@@ -16,7 +16,14 @@ branch_labels = None
 depends_on = None
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _column_names() -> set[str]:
+    if _offline():
+        return set()
     inspector = sa.inspect(op.get_bind())
     return {column["name"] for column in inspector.get_columns("proposals")}
 
@@ -52,5 +59,5 @@ def downgrade() -> None:
         "caption_confidence",
         "caption_rationale",
     ):
-        if name in existing:
+        if _offline() or name in existing:
             op.drop_column("proposals", name)

@@ -10,7 +10,7 @@ from collections.abc import Iterable
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0008_intelligence_data_flywheel"
 down_revision = "0007_canonical_intelligence"
@@ -41,19 +41,32 @@ def _inspector() -> sa.Inspector:
     return sa.inspect(op.get_bind())
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _table_names() -> set[str]:
+    if _offline():
+        return set()
     return set(_inspector().get_table_names())
 
 
 def _column_names(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {str(column["name"]) for column in _inspector().get_columns(table)}
 
 
 def _index_names(table: str) -> set[str]:
+    if _offline():
+        return set()
     return {str(index["name"]) for index in _inspector().get_indexes(table)}
 
 
 def _unique_columns(table: str) -> set[tuple[str, ...]]:
+    if _offline():
+        return set()
     return {
         tuple(str(value) for value in constraint.get("column_names", []))
         for constraint in _inspector().get_unique_constraints(table)
@@ -61,6 +74,8 @@ def _unique_columns(table: str) -> set[tuple[str, ...]]:
 
 
 def _has_foreign_key(table: str, column: str, referred_table: str) -> bool:
+    if _offline():
+        return False
     return any(
         tuple(foreign_key.get("constrained_columns", [])) == (column,)
         and foreign_key.get("referred_table") == referred_table
@@ -780,7 +795,7 @@ def _upgrade_retrieval_runs() -> None:
         )
         with op.batch_alter_table(
             "intelligence_retrieval_runs",
-            recreate="always",
+            recreate="auto",
         ) as batch:
             batch.alter_column(
                 "representation_sets_json",
@@ -848,7 +863,7 @@ def _upgrade_caption_candidates() -> None:
     if needs_batch:
         with op.batch_alter_table(
             "caption_candidate_records",
-            recreate="always",
+            recreate="auto",
         ) as batch:
             batch.alter_column(
                 "origin",
@@ -988,7 +1003,7 @@ def _upgrade_pairwise_preferences() -> None:
     if needs_batch:
         with op.batch_alter_table(
             "pairwise_preferences",
-            recreate="always",
+            recreate="auto",
         ) as batch:
             for column, existing_type in (
                 ("target", sa.String(length=40)),
@@ -1100,7 +1115,7 @@ def _upgrade_feedback_signals() -> None:
     if needs_batch:
         with op.batch_alter_table(
             "feedback_signals",
-            recreate="always",
+            recreate="auto",
         ) as batch:
             batch.alter_column(
                 "derivation_version",
@@ -1158,7 +1173,7 @@ def _upgrade_generation_lineage() -> None:
     ):
         with op.batch_alter_table(
             "image_generation_runs",
-            recreate="always",
+            recreate="auto",
         ) as batch:
             if not _has_foreign_key(
                 "image_generation_runs",
@@ -1201,7 +1216,7 @@ def _upgrade_generation_lineage() -> None:
     if needs_batch:
         with op.batch_alter_table(
             "generated_asset_lineage",
-            recreate="always",
+            recreate="auto",
         ) as batch:
             batch.alter_column(
                 "review_status",
@@ -1229,7 +1244,7 @@ def _upgrade_generation_lineage() -> None:
 
 def _normalize_legacy_server_defaults() -> None:
     """Converge historical upgrades with the current 0001 bootstrap schema."""
-    with op.batch_alter_table("proposals", recreate="always") as batch:
+    with op.batch_alter_table("proposals", recreate="auto") as batch:
         batch.alter_column(
             "caption_rationale",
             existing_type=sa.Text(),
@@ -1242,14 +1257,14 @@ def _normalize_legacy_server_defaults() -> None:
             existing_nullable=False,
             server_default=None,
         )
-    with op.batch_alter_table("caption_feedback", recreate="always") as batch:
+    with op.batch_alter_table("caption_feedback", recreate="auto") as batch:
         batch.alter_column(
             "reason_codes_json",
             existing_type=sa.Text(),
             existing_nullable=False,
             server_default=None,
         )
-    with op.batch_alter_table("publish_attempts", recreate="always") as batch:
+    with op.batch_alter_table("publish_attempts", recreate="auto") as batch:
         batch.alter_column(
             "screenshot_paths_json",
             existing_type=sa.Text(),
@@ -1275,7 +1290,7 @@ def upgrade() -> None:
 def _drop_indexes(table: str, names: Iterable[str]) -> None:
     existing = _index_names(table)
     for name in names:
-        if name in existing:
+        if _offline() or name in existing:
             op.drop_index(name, table_name=table)
 
 
@@ -1286,24 +1301,26 @@ def _drop_columns(
     unique_constraints: Iterable[str] = (),
 ) -> None:
     existing = _column_names(table)
-    selected = [column for column in columns if column in existing]
+    selected = [column for column in columns if _offline() or column in existing]
     if not selected:
         return
-    existing_uniques = {
-        str(constraint["name"])
-        for constraint in _inspector().get_unique_constraints(table)
-        if constraint.get("name")
-    }
-    with op.batch_alter_table(table, recreate="always") as batch:
+    existing_uniques: set[str] = set()
+    if not _offline():
+        existing_uniques = {
+            str(constraint["name"])
+            for constraint in _inspector().get_unique_constraints(table)
+            if constraint.get("name")
+        }
+    with op.batch_alter_table(table, recreate="auto") as batch:
         for constraint in unique_constraints:
-            if constraint in existing_uniques:
+            if _offline() or constraint in existing_uniques:
                 batch.drop_constraint(constraint, type_="unique")
         for column in selected:
             batch.drop_column(column)
 
 
 def _restore_legacy_server_defaults() -> None:
-    with op.batch_alter_table("proposals", recreate="always") as batch:
+    with op.batch_alter_table("proposals", recreate="auto") as batch:
         batch.alter_column(
             "caption_rationale",
             existing_type=sa.Text(),
@@ -1316,14 +1333,14 @@ def _restore_legacy_server_defaults() -> None:
             existing_nullable=False,
             server_default=sa.text("'[]'"),
         )
-    with op.batch_alter_table("caption_feedback", recreate="always") as batch:
+    with op.batch_alter_table("caption_feedback", recreate="auto") as batch:
         batch.alter_column(
             "reason_codes_json",
             existing_type=sa.Text(),
             existing_nullable=False,
             server_default=sa.text("'[]'"),
         )
-    with op.batch_alter_table("publish_attempts", recreate="always") as batch:
+    with op.batch_alter_table("publish_attempts", recreate="auto") as batch:
         batch.alter_column(
             "screenshot_paths_json",
             existing_type=sa.Text(),
@@ -1445,6 +1462,6 @@ def downgrade() -> None:
 
     existing = _table_names()
     for table in reversed(NEW_TABLES):
-        if table in existing:
+        if _offline() or table in existing:
             op.drop_table(table)
     _restore_legacy_server_defaults()

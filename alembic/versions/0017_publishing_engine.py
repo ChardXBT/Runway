@@ -49,7 +49,7 @@ def _post_columns() -> list[sa.Column[object]]:
     return [
         sa.Column("source", sa.String(length=20), nullable=False, server_default="human"),
         sa.Column("source_ref", sa.String(length=200), nullable=True),
-        sa.Column("ai_generated", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("ai_generated", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("version", sa.Integer(), nullable=False, server_default=sa.text("1")),
         sa.Column("created_by", sa.String(length=200), nullable=True),
     ]
@@ -224,7 +224,7 @@ def _create_publishing_controls() -> None:
     op.create_table(
         "publishing_controls",
         sa.Column("workspace_id", sa.Integer(), nullable=False),
-        sa.Column("paused", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("paused", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("reason", sa.Text(), nullable=True),
         sa.Column("updated_by", sa.String(length=200), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
