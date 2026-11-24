@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 
 from runway.api.app import create_app
 from runway.config import Settings
+from runway.db import initialize_database
 from runway.db.base import Database
 from runway.db.models import CommentRecord, ConnectedAccount, PlatformAction
 from runway.operations import instance_lease
@@ -71,6 +72,7 @@ def test_standby_disconnect_is_refused_before_revoking(
     monkeypatch.setattr(MockPlatformProvider, "revoke", record_revoke)
     settings = _instance_settings(tmp_path, platform_provider="mock")
     _hold(settings, "this-machine")  # active while the mock accounts are seeded
+    initialize_database(settings).engine.dispose()
     app = create_app(settings)
     with TestClient(app, base_url="http://127.0.0.1:8000") as client:
         account = client.get("/api/platforms/accounts").json()[0]
@@ -103,6 +105,7 @@ def test_standby_connect_is_refused(tmp_path: Path) -> None:
         youtube_client_secret="yt-fixture",
     )
     _hold(settings, "other-machine")
+    initialize_database(settings).engine.dispose()
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
         response = client.post("/api/platforms/youtube/connect")
         assert response.status_code == 409
@@ -112,6 +115,7 @@ def test_standby_connect_is_refused(tmp_path: Path) -> None:
 def test_standby_inbox_reply_is_refused_before_anything_is_sent(tmp_path: Path) -> None:
     settings = _instance_settings(tmp_path, platform_provider="mock", inbox_replies_enabled=True)
     _hold(settings, "this-machine")
+    initialize_database(settings).engine.dispose()
     app = create_app(settings)
     with TestClient(app, base_url="http://127.0.0.1:8000") as client:
         assert client.get("/api/platforms/accounts").json(), "mock accounts are seeded"
@@ -154,12 +158,14 @@ def test_lease_heartbeat_runs_only_for_a_private_instance(
         return [t for t in threading.enumerate() if t.name == "runway-lease-heartbeat"]
 
     local = Settings(data_dir=tmp_path / "local-data", platform_provider="mock")
+    initialize_database(local).engine.dispose()
     with TestClient(create_app(local), base_url="http://127.0.0.1:8000"):
         assert heartbeat_threads() == []
     assert beats == []
 
     settings = _instance_settings(tmp_path, platform_provider="mock")
     _hold(settings, "this-machine")
+    initialize_database(settings).engine.dispose()
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000"):
         assert len(heartbeat_threads()) == 1
     assert beats, "the heartbeat beats once at start"

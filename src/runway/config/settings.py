@@ -220,13 +220,6 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("host")
-    @classmethod
-    def loopback_only(cls, value: str) -> str:
-        if value not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError("Runway may only bind to a loopback host")
-        return value
-
     @field_validator(
         "codex_cli_path",
         "publisher_chrome_path",

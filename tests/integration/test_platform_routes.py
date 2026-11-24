@@ -186,6 +186,7 @@ def test_oauth_callback_gates_standby_before_exchanging_the_code(
         return original(self, platform)
 
     monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    initialize_database(settings).engine.dispose()
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
         connect = web.post("/api/platforms/youtube/connect")
         assert connect.status_code == 200
