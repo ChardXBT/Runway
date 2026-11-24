@@ -38,6 +38,11 @@ def _offline() -> bool:
     return context.is_offline_mode()
 
 
+def _recreate() -> str:
+    """SQLite rebuilds the table (keeps the declared foreign keys); Postgres alters in place."""
+    return "always" if op.get_context().dialect.name == "sqlite" else "auto"
+
+
 def _table_names() -> set[str]:
     if _offline():
         return set()
@@ -90,7 +95,7 @@ def upgrade() -> None:
     )
     if not column_exists or not foreign_key_exists:
         # SQLite cannot ADD CONSTRAINT; Postgres takes plain ALTERs.
-        with op.batch_alter_table("proposals", recreate="auto") as batch:
+        with op.batch_alter_table("proposals", recreate=_recreate()) as batch:
             if not column_exists:
                 batch.add_column(
                     sa.Column(
@@ -118,7 +123,7 @@ def downgrade() -> None:
     if _offline() or "caption_slate_id" in _column_names("proposals"):
         if _offline() or "ix_proposals_caption_slate_id" in _index_names("proposals"):
             op.drop_index("ix_proposals_caption_slate_id", table_name="proposals")
-        with op.batch_alter_table("proposals", recreate="auto") as batch:
+        with op.batch_alter_table("proposals", recreate=_recreate()) as batch:
             batch.drop_column("caption_slate_id")
 
     existing = _table_names()
