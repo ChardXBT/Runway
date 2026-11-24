@@ -21,7 +21,7 @@ from sqlalchemy import select
 from runway.config import Settings
 from runway.db import initialize_database
 from runway.db.base import Database
-from runway.db.models import ConnectedAccount, PublishJob
+from runway.db.models import ConnectedAccount, EventRecord, PublishJob
 from runway.jobs.queue import Job, JobQueue
 from runway.jobs.runtime import build_worker
 from runway.platforms.base import (
@@ -85,11 +85,12 @@ def _account(
     token_ref: str | None = "ref-1",
     status: str = "connected",
     platform: str = "instagram",
+    external_id: str = "ext-1",
 ) -> int:
     with database.session() as session:
         account = ConnectedAccount(
             platform=platform,
-            external_account_id="ext-1",
+            external_account_id=external_id,
             status=status,
             granted_scopes_json="[]",
             token_ref=token_ref,
@@ -349,5 +350,197 @@ def test_refresh_token_is_registered_with_the_worker(tmp_path: Path) -> None:
     try:
         worker = build_worker(settings, database)
         assert REFRESH_TOKEN_JOB in worker.handlers
+    finally:
+        database.engine.dispose()
+
+
+# ------------------------------------------------- refresh-expiry warning
+#
+# Spec 04 section 2 (RT3 item 4): an account whose refresh token has a
+# known end (`extra["refresh_expires_at"]`, TikTok records it) gets one
+# `account.updated` event {"warning": "refresh_token_expiring",
+# "days_left": n} once 14 days or fewer remain - at most once per account
+# per day, and only while the token is still alive.
+
+
+def _events(database: Database) -> list[tuple[str | None, dict]]:
+    with database.session() as session:
+        rows = session.scalars(
+            select(EventRecord).where(EventRecord.type == "account.updated")
+        ).all()
+        return [(row.subject_id, json.loads(row.payload_json or "{}")) for row in rows]
+
+
+def _tiktok_token(*, refresh_expires_at: datetime | None) -> TokenSet:
+    extra = (
+        {"refresh_expires_at": refresh_expires_at.isoformat()}
+        if refresh_expires_at is not None
+        else {}
+    )
+    return TokenSet(
+        access_token="tt-access",
+        refresh_token="tt-refresh",
+        expires_at=NOW + timedelta(hours=12),
+        extra=extra,
+    )
+
+
+def test_a_refresh_token_inside_14_days_warns(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    registry = ProviderRegistry(database, settings)
+    try:
+        account_id = _account(database, token_ref="ref-1", platform="tiktok")
+        _store(registry, "ref-1", _tiktok_token(refresh_expires_at=NOW + timedelta(days=13)))
+        scheduler = TokenUpkeepScheduler(
+            database, registry, JobQueue(database), interval=timedelta(0)
+        )
+
+        scheduler.produce(NOW)
+
+        events = _events(database)
+        assert events == [
+            (
+                str(account_id),
+                {"warning": "refresh_token_expiring", "days_left": 13},
+            )
+        ]
+    finally:
+        database.engine.dispose()
+
+
+def test_a_refresh_token_outside_14_days_warns_nothing(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    registry = ProviderRegistry(database, settings)
+    try:
+        _account(database, token_ref="ref-1", platform="tiktok")
+        _store(registry, "ref-1", _tiktok_token(refresh_expires_at=NOW + timedelta(days=15)))
+        scheduler = TokenUpkeepScheduler(
+            database, registry, JobQueue(database), interval=timedelta(0)
+        )
+
+        scheduler.produce(NOW)
+
+        assert _events(database) == []
+    finally:
+        database.engine.dispose()
+
+
+def test_a_dead_refresh_token_warns_nothing(tmp_path: Path) -> None:
+    """An already-expired refresh grant shows as needs_reauth, not a warning."""
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    registry = ProviderRegistry(database, settings)
+    try:
+        _account(database, token_ref="ref-1", platform="tiktok")
+        _store(registry, "ref-1", _tiktok_token(refresh_expires_at=NOW - timedelta(hours=1)))
+        scheduler = TokenUpkeepScheduler(
+            database, registry, JobQueue(database), interval=timedelta(0)
+        )
+
+        scheduler.produce(NOW)
+
+        assert _events(database) == []
+    finally:
+        database.engine.dispose()
+
+
+def test_the_warning_fires_at_most_once_per_account_per_day(tmp_path: Path) -> None:
+    """A warning younger than 24 h suppresses; an older one does not."""
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    registry = ProviderRegistry(database, settings)
+    try:
+        fresh = _account(database, token_ref="ref-1", platform="tiktok", external_id="tt-a")
+        stale = _account(database, token_ref="ref-2", platform="tiktok", external_id="tt-b")
+        _store(registry, "ref-1", _tiktok_token(refresh_expires_at=NOW + timedelta(days=13)))
+        _store(registry, "ref-2", _tiktok_token(refresh_expires_at=NOW + timedelta(days=13)))
+        with database.session() as session:
+            session.add_all(
+                [
+                    EventRecord(
+                        workspace_id=1,
+                        type="account.updated",
+                        subject_type="account",
+                        subject_id=str(fresh),
+                        payload_json=json.dumps({"warning": "refresh_token_expiring"}),
+                        created_at=NOW - timedelta(hours=1),
+                    ),
+                    EventRecord(
+                        workspace_id=1,
+                        type="account.updated",
+                        subject_type="account",
+                        subject_id=str(stale),
+                        payload_json=json.dumps({"warning": "refresh_token_expiring"}),
+                        created_at=NOW - timedelta(hours=25),
+                    ),
+                ]
+            )
+        scheduler = TokenUpkeepScheduler(
+            database, registry, JobQueue(database), interval=timedelta(0)
+        )
+
+        scheduler.produce(NOW)
+
+        # The account warned an hour ago stays quiet; the one warned 25 h ago
+        # warns again (the client may have missed the first).
+        events = _events(database)
+        fresh_count = sum(1 for s, p in events if s == str(fresh) and p.get("warning"))
+        stale_count = sum(1 for s, p in events if s == str(stale) and p.get("warning"))
+        assert fresh_count == 1  # only the seed
+        assert stale_count == 2  # seed + the repeat warning
+    finally:
+        database.engine.dispose()
+
+
+def test_the_warning_is_per_account(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    registry = ProviderRegistry(database, settings)
+    try:
+        first = _account(database, token_ref="ref-1", platform="tiktok", external_id="tt-a")
+        second = _account(database, token_ref="ref-2", platform="tiktok", external_id="tt-b")
+        _store(registry, "ref-1", _tiktok_token(refresh_expires_at=NOW + timedelta(days=13)))
+        _store(registry, "ref-2", _tiktok_token(refresh_expires_at=NOW + timedelta(days=5)))
+        scheduler = TokenUpkeepScheduler(
+            database, registry, JobQueue(database), interval=timedelta(0)
+        )
+
+        scheduler.produce(NOW)
+
+        events = dict(_events(database))
+        assert events[str(first)]["days_left"] == 13
+        assert events[str(second)]["days_left"] == 5
+    finally:
+        database.engine.dispose()
+
+
+def test_other_account_events_do_not_suppress_the_warning(tmp_path: Path) -> None:
+    """An unrelated account.updated event is not the refresh warning."""
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    registry = ProviderRegistry(database, settings)
+    try:
+        account_id = _account(database, token_ref="ref-1", platform="tiktok")
+        _store(registry, "ref-1", _tiktok_token(refresh_expires_at=NOW + timedelta(days=13)))
+        with database.session() as session:
+            session.add(
+                EventRecord(
+                    workspace_id=1,
+                    type="account.updated",
+                    subject_type="account",
+                    subject_id=str(account_id),
+                    payload_json=json.dumps({"status": "needs_reauth"}),
+                )
+            )
+        scheduler = TokenUpkeepScheduler(
+            database, registry, JobQueue(database), interval=timedelta(0)
+        )
+
+        scheduler.produce(NOW)
+
+        warnings = [p for _s, p in _events(database) if p.get("warning")]
+        assert warnings == [{"warning": "refresh_token_expiring", "days_left": 13}]
     finally:
         database.engine.dispose()

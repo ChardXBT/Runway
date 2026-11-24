@@ -14,14 +14,18 @@ token lock with every other refresh; a dead grant marks the account
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from runway.db.base import Database
-from runway.db.models import ConnectedAccount, utcnow
+from runway.db.models import ConnectedAccount, EventRecord, utcnow
+from runway.events.log import record_event
+from runway.events.types import ACCOUNT_UPDATED
 from runway.jobs.queue import Job, JobQueue
 from runway.jobs.worker import PermanentJobError
 from runway.platforms.base import AuthorizationExpired, TokenSet
@@ -32,6 +36,11 @@ from runway.realtime.subscriptions import mark_needs_reauth
 logger = logging.getLogger(__name__)
 
 REFRESH_TOKEN_JOB = "refresh_token"
+# An account whose refresh token has a known end (extra["refresh_expires_at"],
+# which TikTok records) gets one warning event inside this window...
+REFRESH_EXPIRY_WARNING_WINDOW = timedelta(days=14)
+# ...at most this often (the client may have missed the first one).
+WARNING_COOLDOWN = timedelta(hours=24)
 # Meta's long-lived Instagram Login grant lifetime.
 INSTAGRAM_TOKEN_LIFETIME = timedelta(days=60)
 # "About day 50": late enough that most refreshes still come from the
@@ -73,6 +82,83 @@ def instagram_refresh_due(token: TokenSet) -> datetime | None:
     return issued + INSTAGRAM_REFRESH_AT_AGE if issued is not None else None
 
 
+def token_refresh_expires_at(token: TokenSet) -> datetime | None:
+    """The recorded end of the refresh grant (``extra["refresh_expires_at"]``)."""
+    raw = token.extra.get("refresh_expires_at")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return _aware(parsed)
+
+
+def _recently_warned(session: Session, account_ids: set[int], now: datetime) -> set[int]:
+    """Accounts that already got the refresh-expiry warning within a day."""
+    if not account_ids:
+        return set()
+    cutoff = now - WARNING_COOLDOWN
+    rows = session.scalars(
+        select(EventRecord).where(
+            EventRecord.type == ACCOUNT_UPDATED,
+            EventRecord.subject_type == "account",
+            EventRecord.subject_id.in_([str(account_id) for account_id in account_ids]),
+            EventRecord.created_at >= cutoff,
+        )
+    ).all()
+    warned: set[int] = set()
+    for row in rows:
+        try:
+            payload = json.loads(row.payload_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(payload, dict)
+            and payload.get("warning") == "refresh_token_expiring"
+            and row.subject_id is not None
+        ):
+            try:
+                warned.add(int(row.subject_id))
+            except ValueError:
+                continue
+    return warned
+
+
+def _maybe_warn(
+    session: Session,
+    *,
+    account_id: int,
+    workspace_id: int,
+    token: TokenSet,
+    now: datetime,
+    warned: set[int],
+) -> None:
+    """Record the 14-day ``refresh_token_expiring`` warning at most once a day.
+
+    Only a live grant warns: an already-expired refresh token surfaces through
+    the account's ``needs_reauth`` state instead of a negative ``days_left``.
+    """
+    end = token_refresh_expires_at(token)
+    if end is None or account_id in warned:
+        return
+    remaining = end - now
+    if remaining <= timedelta(0) or remaining > REFRESH_EXPIRY_WARNING_WINDOW:
+        return
+    record_event(
+        session,
+        workspace_id,
+        ACCOUNT_UPDATED,
+        "account",
+        account_id,
+        {
+            "warning": "refresh_token_expiring",
+            "days_left": int(remaining.total_seconds() // 86400),
+        },
+    )
+    warned.add(account_id)
+
+
 class TokenUpkeepScheduler:
     """Producer of ``refresh_token`` jobs; scans the connected accounts hourly.
 
@@ -110,25 +196,43 @@ class TokenUpkeepScheduler:
                 select(
                     ConnectedAccount.id,
                     ConnectedAccount.workspace_id,
+                    ConnectedAccount.platform,
                     ConnectedAccount.token_ref,
                 ).where(
-                    ConnectedAccount.platform == Platform.instagram.value,
                     ConnectedAccount.status == "connected",
                     ConnectedAccount.token_ref.is_not(None),
                 )
             ).all()
-        for account_id, workspace_id, token_ref in rows:
-            token = self.registry.token_store.load(str(token_ref))
-            due = instagram_refresh_due(token) if token is not None else None
-            if due is None:
-                continue
-            self.queue.enqueue(
-                REFRESH_TOKEN_JOB,
-                idempotency_key=(f"{REFRESH_TOKEN_JOB}:{int(account_id)}:{int(due.timestamp())}"),
-                run_at=due if due > now else now,
-                payload={"account_id": int(account_id)},
-                workspace_id=int(workspace_id),
-            )
+            plan = [
+                (int(account_id), int(workspace_id), str(platform), str(token_ref))
+                for account_id, workspace_id, platform, token_ref in rows
+            ]
+            warned = _recently_warned(session, {account_id for account_id, *_ in plan}, now)
+            for account_id, workspace_id, platform, token_ref in plan:
+                token = self.registry.token_store.load(token_ref)
+                if token is None:
+                    continue
+                if platform == Platform.instagram.value:
+                    due = instagram_refresh_due(token)
+                    if due is not None:
+                        self.queue.enqueue_pending_job(
+                            session,
+                            REFRESH_TOKEN_JOB,
+                            idempotency_key=(
+                                f"{REFRESH_TOKEN_JOB}:{account_id}:{int(due.timestamp())}"
+                            ),
+                            run_at=due if due > now else now,
+                            payload={"account_id": account_id},
+                            workspace_id=workspace_id,
+                        )
+                _maybe_warn(
+                    session,
+                    account_id=account_id,
+                    workspace_id=workspace_id,
+                    token=token,
+                    now=now,
+                    warned=warned,
+                )
 
 
 def run_refresh_token_job(
