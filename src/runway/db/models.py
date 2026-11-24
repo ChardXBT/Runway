@@ -1522,6 +1522,10 @@ class OAuthState(Base, WorkspaceOwned):
     state: Mapped[str] = mapped_column(String(128), unique=True)
     code_verifier: Mapped[str | None] = mapped_column(Text)
     redirect_uri: Mapped[str] = mapped_column(Text)
+    # Set when the state was issued for an incremental-consent ceremony on an
+    # existing account (publishing enable): the callback must re-attach the
+    # grant to exactly this account, never to whoever authorized.
+    for_account_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -33,6 +35,26 @@ AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 API_BASE = "https://open.tiktokapis.com/v2"
 
 
+@dataclass(frozen=True, slots=True)
+class CreatorInfo:
+    """What `POST /v2/post/publish/creator_info/query/` returns about a creator.
+
+    Queried fresh before every post and by the mandatory posting screen: the
+    nickname shown to the person, the privacy options they may pick (never
+    preselected), which interactions the creator has disabled, and the longest
+    video their account may post.
+    """
+
+    creator_nickname: str | None
+    creator_username: str | None
+    creator_avatar_url: str | None
+    privacy_level_options: list[str] = field(default_factory=list)
+    comment_disabled: bool = False
+    duet_disabled: bool = False
+    stitch_disabled: bool = False
+    max_video_post_duration_sec: int | None = None
+
+
 def _int_or_none(value: object) -> int | None:
     if value is None:
         return None
@@ -63,10 +85,11 @@ class TikTokProvider(PlatformProvider):
         state: str,
         redirect_uri: str,
         code_challenge: str | None,
+        scopes: Sequence[str] | None = None,
     ) -> str:
         params = {
             "client_key": self.settings.tiktok_client_key or "",
-            "scope": ",".join(TIKTOK_SCOPES),
+            "scope": ",".join(scopes if scopes is not None else TIKTOK_SCOPES),
             "response_type": "code",
             "redirect_uri": redirect_uri,
             "state": state,
@@ -121,6 +144,10 @@ class TikTokProvider(PlatformProvider):
         # values an earlier response gave; nothing falls back to a constant.
         if refreshed.refresh_token is None:
             refreshed.refresh_token = token.refresh_token
+        if not isinstance(data.get("scope"), str) or not data["scope"].strip():
+            # A refresh that names no scopes grants exactly what the account
+            # already had — never the connect-time default list.
+            refreshed.scopes = list(token.scopes)
         refreshed.extra = {**token.extra, **refreshed.extra}
         return refreshed
 
@@ -241,6 +268,59 @@ class TikTokProvider(PlatformProvider):
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
         return self._json_or_raise(response)
+
+    def _api_post(
+        self,
+        token: TokenSet,
+        path: str,
+        body: dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = provider_request(
+            self.client,
+            "TikTok",
+            "POST",
+            f"{API_BASE}/{path.lstrip('/')}",
+            params=params,
+            json=body,
+            headers={
+                "Authorization": f"Bearer {token.access_token}",
+                "Content-Type": "application/json; charset=UTF-8",
+            },
+        )
+        return self._json_or_raise(response)
+
+    # ------------------------------------------------------------ publishing
+
+    def creator_info(self, token: TokenSet) -> CreatorInfo:
+        """The mandatory-screen facts about the creator, fetched fresh each call.
+
+        Required before every publish init: the privacy options the screen may
+        offer, the interactions the creator has disabled, and their maximum
+        video duration.
+        """
+        data = self._api_post(token, "post/publish/creator_info/query/", {})
+        payload = data.get("data")
+        payload = payload if isinstance(payload, dict) else {}
+        options = payload.get("privacy_level_options")
+        return CreatorInfo(
+            creator_nickname=(
+                str(payload["creator_nickname"]) if payload.get("creator_nickname") else None
+            ),
+            creator_username=(
+                str(payload["creator_username"]) if payload.get("creator_username") else None
+            ),
+            creator_avatar_url=(
+                str(payload["creator_avatar_url"]) if payload.get("creator_avatar_url") else None
+            ),
+            privacy_level_options=(
+                [str(option) for option in options] if isinstance(options, list) else []
+            ),
+            comment_disabled=bool(payload.get("comment_disabled", False)),
+            duet_disabled=bool(payload.get("duet_disabled", False)),
+            stitch_disabled=bool(payload.get("stitch_disabled", False)),
+            max_video_post_duration_sec=_int_or_none(payload.get("max_video_post_duration_sec")),
+        )
 
     # --------------------------------------------------------------- identity
 

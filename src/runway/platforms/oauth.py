@@ -36,6 +36,7 @@ class OAuthStateService:
         *,
         redirect_uri: str,
         use_pkce: bool,
+        for_account_id: int | None = None,
     ) -> IssuedState:
         verifier = pkce_verifier() if use_pkce else None
         state = secrets.token_urlsafe(32)
@@ -47,6 +48,7 @@ class OAuthStateService:
                     state=state,
                     code_verifier=verifier,
                     redirect_uri=redirect_uri,
+                    for_account_id=for_account_id,
                     created_at=now,
                     expires_at=now + STATE_TTL,
                 )

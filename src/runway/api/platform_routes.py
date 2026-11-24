@@ -281,9 +281,15 @@ def _enrich_token(
     return token.model_copy(update={"extra": extra})
 
 
-def build_platform_router(database: Database, settings: Settings) -> APIRouter:
+def build_platform_router(
+    database: Database,
+    settings: Settings,
+    *,
+    registry: ProviderRegistry | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["platforms"], dependencies=[Depends(get_principal)])
-    registry = ProviderRegistry(database, settings)
+    if registry is None:
+        registry = ProviderRegistry(database, settings)
     oauth_states = OAuthStateService(database)
     sync_service = SyncService(database, settings, registry)
     content_service = ContentService(database)
@@ -345,6 +351,45 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             assert persisted is not None
             session.expunge(persisted)
             return persisted
+
+    def _persist_consent(
+        platform: Platform,
+        account_id: int,
+        token: TokenSet,
+    ) -> bool:
+        """Attach an incremental-consent grant to the account that asked for it.
+
+        A state issued for publishing-enable names `for_account_id`; the
+        authorized token is written only when its platform identity is that
+        same account (spec 08 section 1: identity check before every write).
+        """
+        provider = registry.provider(platform)
+        identity = provider.fetch_identity(token)
+        with database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            if account is None or account.platform != platform.value:
+                return False
+            if identity.external_account_id != account.external_account_id:
+                return False
+            now = utcnow()
+            if account.token_ref is None:
+                account.token_ref = registry.token_store.new_token_ref()
+            token_ref = str(account.token_ref)
+            account.handle = identity.handle
+            account.display_name = identity.display_name
+            account.avatar_url = identity.avatar_url
+            account.profile_url = identity.profile_url
+            account.account_type = identity.account_type
+            account.status = "connected"
+            account.granted_scopes_json = json.dumps(list(token.scopes))
+            account.last_verified_at = now
+            account.last_error = None
+            account.metadata_json = json.dumps({"raw": identity.raw, "scopes_source": "granted"})
+        registry.token_store.store(
+            token_ref,
+            _enrich_token(platform, token, identity.raw, identity.external_account_id),
+        )
+        return True
 
     # ------------------------------------------------------------- read APIs
 
@@ -455,7 +500,15 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 redirect_uri=record.redirect_uri,
                 code_verifier=record.code_verifier,
             )
-            _persist_connection(parsed, token, token.scopes, workspace_id=principal.workspace_id)
+            if record.for_account_id is not None:
+                # Incremental consent for an existing account: the grant binds
+                # to that account's own identity or to nothing.
+                if not _persist_consent(parsed, record.for_account_id, token):
+                    return fail("account_mismatch")
+            else:
+                _persist_connection(
+                    parsed, token, token.scopes, workspace_id=principal.workspace_id
+                )
         except Problem as exc:
             # The workspace reached its connected-accounts quota meanwhile.
             return fail(exc.code)

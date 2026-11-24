@@ -114,12 +114,42 @@ class ProviderRegistry:
                 # Stored before the lock is released, so the next waiter
                 # re-reads the new token set instead of refreshing again.
                 self.token_store.store(token_ref, refreshed)
+                self._persist_granted_scopes(platform, token_ref, refreshed.scopes)
                 return refreshed
         except TokenRefreshBusy as exc:
             raise ProviderError(
                 "another process is still refreshing this account's token",
                 retryable=True,
             ) from exc
+
+    def _persist_granted_scopes(
+        self, platform: Platform, token_ref: str, scopes: list[str]
+    ) -> None:
+        """Record the scopes a refresh response reports on the owning account.
+
+        The granted-scopes column feeds every capability check; a provider can
+        widen or narrow the grant on any exchange or refresh, so the stored set
+        always mirrors what the platform last confirmed.
+        """
+        with self.database.session() as session:
+            account = session.scalar(
+                select(ConnectedAccount).where(
+                    ConnectedAccount.token_ref == token_ref,
+                    ConnectedAccount.platform == platform.value,
+                )
+            )
+            if account is None:
+                return
+            stored = json.loads(account.granted_scopes_json or "[]")
+            if stored == scopes:
+                return
+            account.granted_scopes_json = json.dumps(scopes)
+            try:
+                metadata = json.loads(account.metadata_json or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            metadata["scopes_source"] = "granted"
+            account.metadata_json = json.dumps(metadata)
 
     def platforms(self) -> list[Platform]:
         return list(Platform)
