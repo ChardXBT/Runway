@@ -20,6 +20,7 @@ from runway.agent.webhooks import (
     SIGNATURE_HEADER,
     WebhookCreate,
     WebhookDispatcher,
+    WebhookPatch,
     WebhookService,
     check_url,
     retry_delay,
@@ -28,7 +29,7 @@ from runway.agent.webhooks import (
 )
 from runway.api.app import create_app
 from runway.auth.api_keys import ApiKeyService
-from runway.auth.principal import local_owner
+from runway.auth.principal import Principal, local_owner
 from runway.auth.problems import Problem
 from runway.config import Settings
 from runway.db.base import Database
@@ -254,8 +255,6 @@ def test_failures_back_off_for_24_hours_then_the_endpoint_is_disabled(
     # A disabled endpoint gets no new deliveries; re-enabling starts from the newest event.
     _event(database)
     assert service.fan_out() == 0
-    from runway.agent.webhooks import WebhookPatch
-
     enabled = service.update(local_owner(), endpoint.id, WebhookPatch(state="active"))
     assert enabled.state == "active" and enabled.consecutive_failures == 0
     assert service.fan_out() == 0
@@ -322,7 +321,142 @@ def test_redirects_are_not_followed(database: Database, settings: Settings, cloc
     _event(database)
     service.fan_out()
     assert service.deliver(_delivery(database).id) == "pending"
-    assert seen == [RECEIVER]
+    # The request goes to the resolved IP, not the hostname (DNS is resolved
+    # once and pinned), and the redirect is still not followed.
+    assert seen == ["https://93.184.216.34/runway"]
+
+
+def test_webhook_administration_is_for_people_only(
+    client: TestClient, database: Database, settings: Settings
+) -> None:
+    """Outbount destinations and signing secrets are a person's to manage."""
+    agent = ApiKeyService(database, settings).create(local_owner(), name="Muse").secret
+    bearer = {"Authorization": f"Bearer {agent}"}
+    created = client.post("/api/v1/webhooks", json={"url": RECEIVER})
+    assert created.status_code == 201, created.text
+    endpoint_id = created.json()["id"]
+    for method, url, body in (
+        ("get", "/api/v1/webhooks", None),
+        ("post", "/api/v1/webhooks", {"url": RECEIVER}),
+        ("get", f"/api/v1/webhooks/{endpoint_id}", None),
+        ("patch", f"/api/v1/webhooks/{endpoint_id}", {"description": "x"}),
+        ("delete", f"/api/v1/webhooks/{endpoint_id}", None),
+        ("get", f"/api/v1/webhooks/{endpoint_id}/deliveries", None),
+    ):
+        response = client.request(method, url, json=body, headers=bearer)
+        assert response.status_code == 403, (method, url, response.text)
+        assert response.json()["code"] == "scope_missing"
+    # The owner still manages them.
+    assert client.get("/api/v1/webhooks").status_code == 200
+    assert client.get(f"/api/v1/webhooks/{endpoint_id}/deliveries").status_code == 200
+
+
+def test_delivery_pins_the_first_validated_address_and_keeps_the_host(
+    database: Database, settings: Settings, clock: Clock
+) -> None:
+    """DNS is resolved once, every answer is checked, and the request goes only
+    to the first address — a later answer cannot rebind the delivery."""
+    settings = settings.model_copy(update={"webhook_allow_private_targets": True})
+    resolved: list[tuple[str, int]] = []
+
+    def resolver(host: str, port: int) -> list[str]:
+        resolved.append((host, port))
+        return ["93.184.216.34", "127.0.0.1"]
+
+    receiver = Receiver()
+    service = WebhookService(
+        database, settings, transport=receiver.transport(), resolver=resolver, clock=clock
+    )
+    service.create(local_owner(), WebhookCreate(url=RECEIVER))
+    _event(database)
+    service.fan_out()
+    assert service.deliver(_delivery(database).id) == "delivered"
+    # Resolved exactly once, for the original host and port.
+    assert resolved == [("hooks.example.test", 443)]
+    request = receiver.requests[0]
+    assert str(request.url) == "https://93.184.216.34/runway"
+    assert request.headers["host"] == "hooks.example.test"
+    # TLS still proves the original hostname (SNI + certificate check).
+    assert request.extensions.get("sni_hostname") == "hooks.example.test"
+
+
+def test_a_non_default_port_is_kept_in_the_host_header_and_pinned_url(
+    database: Database, settings: Settings, clock: Clock
+) -> None:
+    settings = settings.model_copy(update={"webhook_allow_private_targets": True})
+    receiver = Receiver()
+    service = WebhookService(
+        database, settings, transport=receiver.transport(), resolver=_public, clock=clock
+    )
+    service.create(local_owner(), WebhookCreate(url="http://hooks.example.test:8123/hook"))
+    _event(database)
+    service.fan_out()
+    assert service.deliver(_delivery(database).id) == "delivered"
+    request = receiver.requests[0]
+    assert str(request.url) == "http://93.184.216.34:8123/hook"
+    assert request.headers["host"] == "hooks.example.test:8123"
+
+
+def test_an_endpoint_never_delivers_events_its_creator_could_not_read(
+    database: Database, service: WebhookService
+) -> None:
+    """The endpoint's stored creator scopes cap fan-out and updates forever."""
+    limited = Principal(
+        kind="user",
+        id="admin-no-inbox",
+        workspace_id=1,
+        role=None,
+        scopes=frozenset({"workspace:admin", "posts:read"}),
+        display="limited admin",
+    )
+    # Creating a subscription to an invisible family is refused outright.
+    with pytest.raises(Problem) as raised:
+        service.create(
+            limited, WebhookCreate(url=RECEIVER, event_types=[types.COMMENT_NEW])
+        )
+    assert raised.value.code == "validation_failed"
+    endpoint = service.create(limited, WebhookCreate(url=RECEIVER))
+    with database.session() as session:
+        stored = session.get(WebhookEndpoint, endpoint.id)
+        assert stored is not None
+        assert json.loads(stored.creator_scopes) == sorted(limited.scopes)
+    invisible = _event(database, types.COMMENT_NEW)
+    wanted = _event(database, types.TARGET_AWAITING_RELEASE)
+    assert service.fan_out() == 1
+    delivery = _delivery(database)
+    assert delivery.event_id == wanted != invisible
+    assert delivery.event_type == types.TARGET_AWAITING_RELEASE
+    # The stored ceiling binds updates too, whoever makes them.
+    with pytest.raises(Problem) as raised:
+        service.update(
+            local_owner(), endpoint.id, WebhookPatch(event_types=[types.COMMENT_NEW])
+        )
+    assert raised.value.code == "validation_failed"
+
+
+def test_an_undecryptable_secret_is_recorded_as_a_failed_attempt(
+    database: Database, service: WebhookService, receiver: Receiver
+) -> None:
+    """Setup failures (here: a secret that no longer decrypts) advance the
+    retry state instead of wedging the delivery as pending forever."""
+    endpoint = service.create(local_owner(), WebhookCreate(url=RECEIVER))
+    _event(database)
+    service.fan_out()
+    delivery_id = _delivery(database).id
+    with database.session() as session:
+        stored = session.get(WebhookEndpoint, endpoint.id)
+        assert stored is not None
+        stored.secret_encrypted = "not-a-fernet-token"
+    assert service.deliver(delivery_id) == "pending"
+    assert receiver.requests == []
+    row = _delivery(database)
+    assert row.attempts == 1
+    assert row.last_error is not None and "setup" in row.last_error
+    assert row.next_attempt_at > row.created_at
+    view = service.get(local_owner(), endpoint.id)
+    assert view.consecutive_failures == 1
+    assert view.last_failure_at is not None
+    assert view.last_error and "setup" in view.last_error
 
 
 def test_the_worker_producer_enqueues_one_job_per_due_attempt(

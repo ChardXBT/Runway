@@ -2124,6 +2124,10 @@ class WebhookEndpoint(Base, WorkspaceOwned, TimestampMixin):
     state: Mapped[str] = mapped_column(String(20), default="active")
     description: Mapped[str | None] = mapped_column(String(200))
     created_by: Mapped[str | None] = mapped_column(String(200))
+    # JSON list of the creating principal's scopes: deliveries never cover an
+    # event family the creator could not read (spec 06 section 8). NULL for
+    # rows written before the column existed — those keep their stored filter.
+    creator_scopes: Mapped[str | None] = mapped_column(Text)
     cursor_event_id: Mapped[int] = mapped_column(Integer, default=0)
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     failing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

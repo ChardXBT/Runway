@@ -51,6 +51,7 @@ from runway.db.base import Database
 from runway.db.models import EventRecord, WebhookDelivery, WebhookEndpoint, utcnow
 from runway.events.log import Event
 from runway.events.types import EVENT_TYPES
+from runway.events.visibility import event_visible
 from runway.jobs.queue import Job, JobQueue
 from runway.platforms.tokens import TokenStore
 
@@ -248,6 +249,30 @@ def _stored_types(endpoint: WebhookEndpoint) -> list[str]:
     return [str(value) for value in values] if isinstance(values, list) else []
 
 
+def _creator_scopes(endpoint: WebhookEndpoint) -> frozenset[str] | None:
+    """The scopes the endpoint's creator held, or None for rows that predate the column."""
+    raw_text = endpoint.creator_scopes
+    if raw_text is None:
+        return None
+    try:
+        raw: Any = json.loads(raw_text)
+    except ValueError:
+        return None
+    if not isinstance(raw, list):
+        return None
+    return frozenset(str(scope) for scope in raw)
+
+
+def _check_event_visibility(types: Sequence[str], scopes: frozenset[str]) -> None:
+    """A webhook may not subscribe to an event family its creator cannot read."""
+    invisible = sorted(event_type for event_type in types if not event_visible(scopes, event_type))
+    if invisible:
+        raise _problem(
+            ProblemCode.VALIDATION_FAILED,
+            "these event types need scopes you do not hold: " + ", ".join(invisible[:5]),
+        )
+
+
 def _view(endpoint: WebhookEndpoint) -> WebhookView:
     return WebhookView(
         id=endpoint.id,
@@ -323,6 +348,9 @@ class WebhookService:
         url = data.url.strip()
         check_url(url, self.settings)
         types = _event_types(data.event_types)
+        # The endpoint may only ask for event families its creator may read;
+        # the stored scopes cap its deliveries forever (fan_out filters on it).
+        _check_event_visibility(types, principal.scopes)
         secret = SECRET_PREFIX + secrets.token_urlsafe(32)
         encrypted = self._cipher().encrypt(secret.encode("utf-8")).decode("ascii")
         now = self.clock()
@@ -335,6 +363,7 @@ class WebhookService:
                 state="active",
                 description=data.description,
                 created_by=f"{principal.kind}:{principal.id}",
+                creator_scopes=json.dumps(sorted(principal.scopes)),
                 cursor_event_id=_latest_event_id(session, principal.workspace_id),
                 consecutive_failures=0,
                 created_at=now,
@@ -375,6 +404,12 @@ class WebhookService:
         with self.database.session() as session:
             endpoint = self._load(session, principal, endpoint_id)
             if types is not None:
+                # The ceiling stays the creator's scopes; a row without them
+                # (predating the column) is checked against the updater's.
+                ceiling = _creator_scopes(endpoint)
+                _check_event_visibility(
+                    types, ceiling if ceiling is not None else principal.scopes
+                )
                 endpoint.event_types_json = json.dumps(types)
             if data.description is not None:
                 endpoint.description = data.description
@@ -430,6 +465,7 @@ class WebhookService:
             ).all()
             for endpoint in endpoints:
                 wanted = set(_stored_types(endpoint))
+                creator = _creator_scopes(endpoint)
                 events = session.scalars(
                     select(EventRecord)
                     .where(
@@ -440,20 +476,25 @@ class WebhookService:
                     .limit(FAN_OUT_BATCH)
                 ).all()
                 for event in events:
-                    if not wanted or event.type in wanted:
-                        session.add(
-                            WebhookDelivery(
-                                workspace_id=endpoint.workspace_id,
-                                endpoint_id=endpoint.id,
-                                event_id=event.id,
-                                event_type=event.type,
-                                state="pending",
-                                attempts=0,
-                                next_attempt_at=now,
-                                created_at=now,
-                            )
+                    if wanted and event.type not in wanted:
+                        continue
+                    if creator is not None and not event_visible(creator, event.type):
+                        # The creator could never read this family; the event is
+                        # skipped for this endpoint but the cursor still advances.
+                        continue
+                    session.add(
+                        WebhookDelivery(
+                            workspace_id=endpoint.workspace_id,
+                            endpoint_id=endpoint.id,
+                            event_id=event.id,
+                            event_type=event.type,
+                            state="pending",
+                            attempts=0,
+                            next_attempt_at=now,
+                            created_at=now,
                         )
-                        created += 1
+                    )
+                    created += 1
                 if events:
                     endpoint.cursor_event_id = events[-1].id
             session.flush()
@@ -481,7 +522,19 @@ class WebhookService:
 
     # ------------------------------------------------------------ delivery
 
-    def _check_resolved(self, host: str, port: int) -> None:
+    def _pinned_target(self, url: str) -> tuple[httpx.URL, str, dict[str, str]]:
+        """Resolve `url`'s host once and pin the request to the validated answer.
+
+        Every resolved address must pass the SSRF check; the request then goes
+        only to the first validated address, so a second DNS answer cannot
+        rebind the delivery to a private target (spec 06 section 8). Returns
+        the IP-literal request URL, the `Host` value to send and the httpcore
+        `sni_hostname` extension that keeps TLS verified for the original host.
+        """
+        check_url(url, self.settings)
+        original = httpx.URL(url)
+        host = original.host
+        port = original.port or (443 if original.scheme == "https" else 80)
         try:
             addresses = list(self.resolver(host, port))
         except OSError as exc:
@@ -491,6 +544,14 @@ class WebhookService:
         for address in addresses:
             if not _address_allowed(address, self.settings):
                 raise UnsafeTarget("the host resolves to a loopback or private address")
+        pinned = original.copy_with(host=addresses[0].split("%", 1)[0], port=port)
+        # An IPv6 literal is bracketed in Host; the port is sent only when it
+        # is not the scheme's default.
+        display_host = f"[{host}]" if ":" in host else host
+        default_port = 443 if original.scheme == "https" else 80
+        host_header = display_host if port == default_port else f"{display_host}:{port}"
+        extensions = {"sni_hostname": host} if original.scheme == "https" else {}
+        return pinned, host_header, extensions
 
     def body_for(self, event: EventRecord, delivery_id: int) -> bytes:
         data = Event.of(event).as_dict()
@@ -507,34 +568,44 @@ class WebhookService:
         )
 
     def deliver(self, delivery_id: int) -> str:
-        """One attempt for one delivery; returns the delivery's new state."""
-        with self.database.session() as session:
-            delivery = session.get(WebhookDelivery, delivery_id)
-            if delivery is None or delivery.state != "pending":
-                return delivery.state if delivery is not None else "missing"
-            endpoint = session.get(WebhookEndpoint, delivery.endpoint_id)
-            if endpoint is None or endpoint.state != "active":
-                delivery.state = "cancelled"
-                return delivery.state
-            event = session.get(EventRecord, delivery.event_id)
-            if event is None:
-                # Purged after 7 days; nothing left to send.
-                delivery.state = "expired"
-                return delivery.state
-            url = endpoint.url
-            body = self.body_for(event, delivery.id)
-            secret = self._cipher().decrypt(endpoint.secret_encrypted.encode("ascii")).decode()
-            event_type = event.type
-            endpoint_id = endpoint.id
+        """One attempt for one delivery; returns the delivery's new state.
+
+        Everything that can fail — loading the rows, decrypting the secret,
+        building the body, resolving DNS and the request itself — sits inside
+        one try, so any failure is recorded as a failed attempt with its
+        backoff, never left as a wedged `pending` row.
+        """
+        endpoint_id: int | None = None
         status_code: int | None = None
         error: str | None = None
+        setup_error: Exception | None = None
         try:
-            host, port = check_url(url, self.settings)
-            self._check_resolved(host, port)
+            with self.database.session() as session:
+                delivery = session.get(WebhookDelivery, delivery_id)
+                if delivery is None or delivery.state != "pending":
+                    return delivery.state if delivery is not None else "missing"
+                endpoint = session.get(WebhookEndpoint, delivery.endpoint_id)
+                if endpoint is None or endpoint.state != "active":
+                    delivery.state = "cancelled"
+                    return delivery.state
+                event = session.get(EventRecord, delivery.event_id)
+                if event is None:
+                    # Purged after 7 days; nothing left to send.
+                    delivery.state = "expired"
+                    return delivery.state
+                endpoint_id = endpoint.id
+                url = endpoint.url
+                event_type = event.type
+                body = self.body_for(event, delivery.id)
+                secret = self._cipher().decrypt(
+                    endpoint.secret_encrypted.encode("ascii")
+                ).decode()
+            pinned, host_header, extensions = self._pinned_target(url)
             now_ts = int(self.clock().timestamp())
             headers = {
                 "Content-Type": "application/json",
                 "User-Agent": USER_AGENT,
+                "Host": host_header,
                 SIGNATURE_HEADER: sign(secret, now_ts, body),
                 "Runway-Event": event_type,
                 "Runway-Delivery": str(delivery_id),
@@ -545,7 +616,9 @@ class WebhookService:
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
-                response = client.post(url, content=body, headers=headers)
+                response = client.post(
+                    pinned, content=body, headers=headers, extensions=extensions
+                )
             status_code = response.status_code
             if not 200 <= status_code < 300:
                 error = f"HTTP {status_code}"
@@ -555,6 +628,17 @@ class WebhookService:
             error = f"refused: {exc.detail}"[:300]
         except httpx.HTTPError as exc:
             error = type(exc).__name__
+        except Exception as exc:
+            # A setup failure (an undecryptable secret, an unbuildable body, a
+            # database error) is a failed attempt like any other.
+            setup_error = exc
+            error = f"setup: {type(exc).__name__}"
+            logger.exception("webhook delivery %s failed before the request", delivery_id)
+        if endpoint_id is None:
+            # The endpoint row was never reached, so there is nowhere to
+            # record; let the job fail and retry instead of wedging silently.
+            assert setup_error is not None  # noqa: S101 - unreachable on the early returns
+            raise setup_error
         return self._record(delivery_id, endpoint_id, status_code, error)
 
     def _record(
