@@ -22,7 +22,7 @@ from runway.platforms.publisher import Publisher, adapter_kind
 # The adapters a live (non-mock) build registers. Update this together with
 # `build_publisher_registry` when a real adapter is added; a test compares
 # them, and docs/PLATFORM_CAPABILITIES.md is generated from this set.
-LIVE_PUBLISHER_NAMES: frozenset[str] = frozenset({"assisted"})
+LIVE_PUBLISHER_NAMES: frozenset[str] = frozenset({"assisted", "tiktok_direct", "tiktok_inbox"})
 
 
 class DuplicatePublisher(ValueError):
@@ -84,7 +84,17 @@ def build_publisher_registry(
         for publisher in mock_publishers(settings, clock=clock):
             registry.register(publisher)
         return registry
-    # Live direct adapters (youtube_direct, youtube_post, instagram_direct,
-    # tiktok_direct, tiktok_inbox) register here as they are built, e.g.:
-    #     registry.register(YouTubeDirectPublisher(settings, database))
+    # Live direct adapters register here as they are built. The TikTok pair is
+    # always registered: the capability layer, not the registry, decides whether
+    # they are offered for an account (`tiktok_direct` only when audited).
+    from runway.platforms.tiktok import TikTokProvider
+    from runway.platforms.tiktok_publisher import (
+        TikTokDirectPublisher,
+        TikTokInboxPublisher,
+    )
+
+    provider = TikTokProvider(settings)
+    registry.register(TikTokInboxPublisher(settings, provider=provider, clock=clock))
+    registry.register(TikTokDirectPublisher(settings, provider=provider, clock=clock))
+    # e.g.: registry.register(YouTubeDirectPublisher(settings, database))
     return registry
