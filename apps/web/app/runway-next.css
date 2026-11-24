@@ -1493,6 +1493,39 @@ label > span,
   transform: translateY(-2px);
 }
 
+.lineup-day > a.lineup-post-target {
+  z-index: 1;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 7px;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.lineup-day > a.lineup-post-target > span {
+  overflow: hidden;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lineup-day > a.lineup-post-target > small {
+  font-size: 0.62rem;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
 .lineup-drop-label,
 .lineup-conflict {
   z-index: 2;

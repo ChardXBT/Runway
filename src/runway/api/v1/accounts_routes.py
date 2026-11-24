@@ -63,6 +63,13 @@ from runway.platforms.post_settings import TikTokVideoSettings, release_notice
 from runway.platforms.publish_capability import (
     INSTAGRAM_PUBLISH_SCOPE,
     YOUTUBE_UPLOAD_SCOPE,
+    AccountFacts,
+    AppStatus,
+    account_publishing_capabilities,
+)
+from runway.platforms.publisher_registry import (
+    PublisherRegistry,
+    build_publisher_registry,
 )
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.tiktok import TikTokProvider
@@ -116,11 +123,14 @@ def build_accounts_router(
     settings: Settings,
     *,
     registry: ProviderRegistry | None = None,
+    publishers: PublisherRegistry | None = None,
     oauth_states: OAuthStateService | None = None,
 ) -> APIRouter:
     router = build_v1_router(tags=["accounts"], prefix="/accounts")
     if registry is None:
         registry = ProviderRegistry(database, settings)
+    if publishers is None:
+        publishers = build_publisher_registry(settings, database)
     if oauth_states is None:
         oauth_states = OAuthStateService(database)
 
@@ -287,6 +297,37 @@ def build_accounts_router(
             f"publishing enable for {platform.value} is not built yet",
             platform=platform.value,
         )
+
+    @router.get("/{account_id}/publishing/capability")
+    def publishing_capability_view(
+        account_id: int, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
+        """Per-post-type capability in words (`accounts:read`; spec 08 section 5).
+
+        The same rule the post service applies to a target, listed for every
+        post type of the account's platform so the owner sees what an "Enable
+        publishing" consent would unlock before opening the editor.
+        """
+        require(principal, ACCOUNTS_READ)
+        with database.session() as session:
+            account = _account(session, principal, account_id)
+        items = account_publishing_capabilities(
+            Platform(account.platform),
+            account=AccountFacts(
+                status=account.status,
+                granted_scopes=tuple(_granted_scopes(account)),
+            ),
+            app=AppStatus.from_settings(settings),
+            profile=settings.profile,
+            implemented=publishers.names(),
+            media_host_available=settings.r2_configured,
+            mock=publishers.mock_mode,
+        )
+        return {
+            "account_id": account.id,
+            "platform": account.platform,
+            "items": [item.as_dict() for item in items],
+        }
 
     @router.get("/{account_id}/youtube/categories")
     def youtube_categories(

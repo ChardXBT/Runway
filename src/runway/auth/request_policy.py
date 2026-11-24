@@ -51,6 +51,8 @@ LEGACY_WRITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/hooks/instagram"),
         ("POST", "/hooks/tiktok"),
         ("POST", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
+        # Instagram Unified Login account pick (the owner's browser, mid-connect).
+        ("POST", "/api/platforms/instagram/unified/select"),
         ("POST", "/api/analysis/history"),
         ("PATCH", "/api/annotations/{post_id}"),
         ("POST", "/api/candidates/{candidate_id}/block-domain"),

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
 import { ApiError, actionError, readApiJson } from "@/lib/client-api";
+import { AccountFreshness } from "@/components/account-freshness";
 import { AvatarImage } from "@/components/account-avatar";
 import { PlatformBadge, platformLabel } from "@/components/platform-badge";
 import { StatePanel } from "@/components/state-panel";
@@ -508,6 +509,7 @@ function AccountCard({
       </div>
 
       <SyncHistory accountId={account.id} />
+      <AccountFreshness account={account} />
     </article>
   );
 }
