@@ -87,12 +87,13 @@ class InstagramProvider(PlatformProvider):
         state: str,
         redirect_uri: str,
         code_challenge: str | None,
+        scopes: list[str] | tuple[str, ...] | None = None,
     ) -> str:
         params = {
             "client_id": self.settings.instagram_app_id or "",
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": ",".join(INSTAGRAM_SCOPES),
+            "scope": ",".join(scopes if scopes is not None else INSTAGRAM_SCOPES),
             "state": state,
         }
         return f"{AUTH_URL}?{httpx.QueryParams(params)}"
@@ -103,6 +104,7 @@ class InstagramProvider(PlatformProvider):
         code: str,
         redirect_uri: str,
         code_verifier: str | None,
+        requested_scopes: list[str] | tuple[str, ...] | None = None,
     ) -> TokenSet:
         response = provider_request(
             self.client,
@@ -118,10 +120,14 @@ class InstagramProvider(PlatformProvider):
             },
         )
         data = self._json_or_raise(response)
-        token = self._short_token_from_response(data)
+        token = self._short_token_from_response(data, requested_scopes)
         return self.exchange_long_lived(token)
 
-    def _short_token_from_response(self, data: dict[str, Any]) -> TokenSet:
+    def _short_token_from_response(
+        self,
+        data: dict[str, Any],
+        requested_scopes: list[str] | tuple[str, ...] | None = None,
+    ) -> TokenSet:
         payload: dict[str, Any] = data
         wrapped = data.get("data")
         if isinstance(wrapped, list) and wrapped:
@@ -136,15 +142,40 @@ class InstagramProvider(PlatformProvider):
         if user_id is not None:
             extra["user_id"] = str(user_id)
         permissions = payload.get("permissions")
-        scopes = (
-            [str(item) for item in permissions]
-            if isinstance(permissions, list)
-            else list(INSTAGRAM_SCOPES)
-        )
+        if isinstance(permissions, list):
+            scopes = [str(item) for item in permissions]
+        elif requested_scopes is not None:
+            # Meta omits `permissions` in some responses; the consent screen
+            # listed exactly what we asked for, which is what was granted.
+            scopes = [str(item) for item in requested_scopes]
+        else:
+            scopes = list(INSTAGRAM_SCOPES)
         return TokenSet(
             access_token=access_token,
             scopes=scopes,
             extra=extra,
+        )
+
+    def _long_lived(self, token: TokenSet, data: dict[str, Any], *, what: str) -> TokenSet:
+        access_token = data.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise ProviderError(f"Instagram {what} returned no token")
+        expires_in = _int_or_none(data.get("expires_in"))
+        issued_at = datetime.now(UTC)
+        extra = dict(token.extra)
+        # Token upkeep reads issued_at/expires_in to decide when a long-lived
+        # token is old enough for ig_refresh_token (never before 24 hours).
+        extra["issued_at"] = issued_at.isoformat()
+        if expires_in is not None:
+            extra["expires_in"] = str(expires_in)
+        return token.model_copy(
+            update={
+                "access_token": access_token,
+                "expires_at": (
+                    issued_at + timedelta(seconds=expires_in) if expires_in is not None else None
+                ),
+                "extra": extra,
+            }
         )
 
     def exchange_long_lived(self, token: TokenSet) -> TokenSet:
@@ -162,20 +193,7 @@ class InstagramProvider(PlatformProvider):
             },
         )
         data = self._json_or_raise(response)
-        access_token = data.get("access_token")
-        if not isinstance(access_token, str) or not access_token:
-            raise ProviderError("Instagram long-lived exchange returned no token")
-        expires_in = _int_or_none(data.get("expires_in"))
-        return token.model_copy(
-            update={
-                "access_token": access_token,
-                "expires_at": (
-                    datetime.now(UTC) + timedelta(seconds=expires_in)
-                    if expires_in is not None
-                    else None
-                ),
-            }
-        )
+        return self._long_lived(token, data, what="long-lived exchange")
 
     def refresh(self, token: TokenSet) -> TokenSet:
         # ig_refresh_token accepts Authorization: Bearer, so the held token stays
@@ -194,17 +212,7 @@ class InstagramProvider(PlatformProvider):
             # A success response without a token is a platform fault, not a
             # revoked grant; the current token stays usable until it expires.
             raise ProviderError("Instagram refresh returned no token", retryable=True)
-        expires_in = _int_or_none(data.get("expires_in"))
-        return token.model_copy(
-            update={
-                "access_token": access_token,
-                "expires_at": (
-                    datetime.now(UTC) + timedelta(seconds=expires_in)
-                    if expires_in is not None
-                    else None
-                ),
-            }
-        )
+        return self._long_lived(token, data, what="refresh")
 
     def revoke(self, token: TokenSet) -> bool:
         return False

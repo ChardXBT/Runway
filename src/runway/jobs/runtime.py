@@ -16,6 +16,11 @@ from runway.platforms.sync import (
     SyncService,
     run_sync_account_job,
 )
+from runway.platforms.token_upkeep import (
+    REFRESH_TOKEN_JOB,
+    TokenUpkeepScheduler,
+    run_refresh_token_job,
+)
 
 __all__ = ["build_worker", "worker_lock_path"]
 
@@ -34,10 +39,16 @@ def build_worker(settings: Settings, database: Database) -> Worker:
     handlers: dict[str, Handler] = {
         SYNC_ACCOUNT_JOB: partial(run_sync_account_job, sync_service),
         PURGE_JOB: partial(run_purge_job, database, settings),
+        REFRESH_TOKEN_JOB: partial(run_refresh_token_job, database, settings),
         **publishing.handlers(),
         PROBE_MEDIA_JOB: media.run_probe_job,
     }
-    producers: list[JobProducer] = [RetentionPurgeScheduler(queue)]
+    # Instagram long-lived tokens die at day 60 when nothing syncs; upkeep
+    # renews them from a job instead (spec 08 section 3).
+    producers: list[JobProducer] = [
+        RetentionPurgeScheduler(queue),
+        TokenUpkeepScheduler(database, queue, settings),
+    ]
     if settings.platform_sync_interval_minutes > 0:
         producers.append(
             PlatformSyncScheduler(database, queue, settings.platform_sync_interval_minutes)

@@ -36,8 +36,17 @@ class OAuthStateService:
         *,
         redirect_uri: str,
         use_pkce: bool,
+        payload: str | None = None,
     ) -> IssuedState:
+        """Issue a state; `payload` rides on it when the flow uses no PKCE.
+
+        The states table has no payload column, so a non-PKCE state carries
+        its payload (e.g. the scope list of an incremental-consent request)
+        in `code_verifier`, which is empty there anyway. `read_state_storage`
+        splits the column back into verifier and payload.
+        """
         verifier = pkce_verifier() if use_pkce else None
+        stored = verifier if verifier is not None else payload
         state = secrets.token_urlsafe(32)
         now = utcnow()
         with self.database.session() as session:
@@ -45,7 +54,7 @@ class OAuthStateService:
                 OAuthState(
                     platform=platform.value,
                     state=state,
-                    code_verifier=verifier,
+                    code_verifier=stored,
                     redirect_uri=redirect_uri,
                     created_at=now,
                     expires_at=now + STATE_TTL,
@@ -87,3 +96,15 @@ class OAuthStateService:
             assert record is not None
             session.expunge(record)
             return record
+
+
+def read_state_storage(record: OAuthState) -> tuple[str | None, str | None]:
+    """Split a consumed state's stored text into (code_verifier, payload).
+
+    PKCE verifiers are base64url and never start with `{`; a `{`-prefixed
+    value is the JSON payload a non-PKCE flow stored in that column.
+    """
+    text = record.code_verifier
+    if text is not None and text.lstrip().startswith("{"):
+        return None, text
+    return text, None

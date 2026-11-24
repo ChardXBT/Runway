@@ -17,7 +17,11 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from runway.config import Settings
-from runway.platforms.capabilities import YOUTUBE_ENGAGE_SCOPE, Platform
+from runway.platforms.capabilities import (
+    YOUTUBE_ENGAGE_SCOPE,
+    Platform,
+    equivalent_scopes,
+)
 from runway.posts.types import TargetPostType, platform_of
 
 PublishingState = Literal[
@@ -214,7 +218,8 @@ def publishing_capability(
     if account.status != "connected":
         return result("needs_scope", f"the account is {account.status}; reconnect it")
     wanted = REQUIRED_SCOPES[kind]
-    if not set(wanted) & set(account.granted_scopes):
+    # Unified Login grants the same permission under the non-`business` name.
+    if not set(wanted) & equivalent_scopes(account.granted_scopes):
         return result(
             "needs_scope",
             f"turn on publishing for this account to grant {wanted[0]}",

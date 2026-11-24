@@ -19,6 +19,7 @@ from runway.db.models import (
     AccountMetricDay,
     AccountMetricSnapshot,
     ConnectedAccount,
+    OAuthState,
     PlatformContent,
     SyncRun,
     utcnow,
@@ -40,7 +41,7 @@ from runway.platforms.content import ContentService
 from runway.platforms.drafts import DraftService, DuplicateDraftTarget
 from runway.platforms.inbox import InboxReplyForbidden, InboxService
 from runway.platforms.instagram import InstagramProvider
-from runway.platforms.oauth import OAuthStateError, OAuthStateService
+from runway.platforms.oauth import OAuthStateError, OAuthStateService, read_state_storage
 from runway.platforms.overview import OverviewService, account_freshness, metric_window_start
 from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncAccountDisconnected, SyncRunInProgress, SyncService
@@ -281,10 +282,31 @@ def _enrich_token(
     return token.model_copy(update={"extra": extra})
 
 
-def build_platform_router(database: Database, settings: Settings) -> APIRouter:
+def _state_requested_scopes(record: OAuthState) -> list[str] | None:
+    """The scope list an incremental-consent state stored, when it has one."""
+    _verifier, payload = read_state_storage(record)
+    if payload is None:
+        return None
+    try:
+        meta = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    scopes = meta.get("scopes") if isinstance(meta, dict) else None
+    if not isinstance(scopes, list):
+        return None
+    return [str(scope) for scope in scopes]
+
+
+def build_platform_router(
+    database: Database,
+    settings: Settings,
+    *,
+    registry: ProviderRegistry | None = None,
+    oauth_states: OAuthStateService | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["platforms"], dependencies=[Depends(get_principal)])
-    registry = ProviderRegistry(database, settings)
-    oauth_states = OAuthStateService(database)
+    registry = registry or ProviderRegistry(database, settings)
+    oauth_states = oauth_states or OAuthStateService(database)
     sync_service = SyncService(database, settings, registry)
     content_service = ContentService(database)
     inbox_service = InboxService(database, settings, registry)
@@ -449,12 +471,24 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         except OAuthStateError as exc:
             return fail(str(exc))
         provider = registry.provider(parsed)
+        verifier, _payload = read_state_storage(record)
+        requested_scopes = _state_requested_scopes(record)
         try:
-            token = provider.exchange_code(
-                code=code,
-                redirect_uri=record.redirect_uri,
-                code_verifier=record.code_verifier,
-            )
+            if requested_scopes and isinstance(provider, InstagramProvider):
+                # Incremental consent: the state named the scopes the consent
+                # screen showed; Meta may omit `permissions` in its response.
+                token = provider.exchange_code(
+                    code=code,
+                    redirect_uri=record.redirect_uri,
+                    code_verifier=verifier,
+                    requested_scopes=requested_scopes,
+                )
+            else:
+                token = provider.exchange_code(
+                    code=code,
+                    redirect_uri=record.redirect_uri,
+                    code_verifier=verifier,
+                )
             _persist_connection(parsed, token, token.scopes, workspace_id=principal.workspace_id)
         except Problem as exc:
             # The workspace reached its connected-accounts quota meanwhile.
