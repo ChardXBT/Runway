@@ -195,6 +195,9 @@ export function newIdempotencyKey(): string {
 }
 
 const always = (): boolean => true;
+
+/** Routes with no JSON body (204 deletes): any payload passes. */
+const noContent = (_value: unknown): _value is void => true;
 const isAnyRecord = (value: unknown): value is Record<string, unknown> =>
   isRecord(value);
 const isKeyView = (value: unknown): value is ApiKeyView =>
@@ -351,7 +354,7 @@ export const V1 = {
       return `${API_URL}/api/v1/media/${assetId}/poster`;
     },
     remove(assetId: number): Promise<void> {
-      return v1Request(`/api/v1/media/${assetId}`, always as Validator<void>, {
+      return v1Request(`/api/v1/media/${assetId}`, noContent, {
         method: "DELETE",
       });
     },
@@ -464,7 +467,7 @@ export const V1 = {
       });
     },
     remove(endpointId: number): Promise<void> {
-      return v1Request(`/api/v1/webhooks/${endpointId}`, always as Validator<void>, {
+      return v1Request(`/api/v1/webhooks/${endpointId}`, noContent, {
         method: "DELETE",
       });
     },
