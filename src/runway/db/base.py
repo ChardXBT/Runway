@@ -87,13 +87,23 @@ def _guard_workspace_writes(session: Session, _flush_context: object, _instances
             continue
         row_workspace = obj.workspace_id
         if row_workspace is None:
-            if obj in session.new and workspace_id != DEFAULT_WORKSPACE_ID:
-                raise WorkspaceIsolationError(
-                    f"{type(obj).__name__} has no workspace_id set; in workspace "
-                    f"{workspace_id} it must be set explicitly (the column default "
-                    f"would write workspace {DEFAULT_WORKSPACE_ID})"
-                )
-            continue
+            if obj in session.deleted:
+                # A delete carries no destination workspace.
+                continue
+            if obj in session.new:
+                if workspace_id != DEFAULT_WORKSPACE_ID:
+                    raise WorkspaceIsolationError(
+                        f"{type(obj).__name__} has no workspace_id set; in workspace "
+                        f"{workspace_id} it must be set explicitly (the column default "
+                        f"would write workspace {DEFAULT_WORKSPACE_ID})"
+                    )
+                continue
+            # A persisted row nulled to None drops out of every workspace's
+            # filtered view - refuse it like any other cross-workspace move.
+            raise WorkspaceIsolationError(
+                f"{type(obj).__name__}.workspace_id was cleared; refusing to "
+                f"write a workspace-scoped row with no workspace"
+            )
         if row_workspace != workspace_id:
             raise WorkspaceIsolationError(
                 f"{type(obj).__name__} belongs to workspace {row_workspace}; "

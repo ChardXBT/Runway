@@ -308,6 +308,53 @@ def test_every_scoped_table_is_covered_by_the_rls_migration() -> None:
     )
 
 
+def test_nulled_workspace_on_a_dirty_row_is_rejected(two_workspaces: Database) -> None:
+    """Clearing workspace_id on a persisted row would drop it out of every
+    workspace's filtered view; the guard must refuse it like any other move."""
+    with two_workspaces.session(workspace_id=OTHER_WORKSPACE) as session:
+        account = _account(OTHER_WORKSPACE)
+        session.add(account)
+        session.flush()
+        account_id = account.id
+    with (
+        pytest.raises(WorkspaceIsolationError),
+        two_workspaces.session(workspace_id=OTHER_WORKSPACE) as session,
+    ):
+        row = session.get(ConnectedAccount, account_id)
+        assert row is not None
+        row.workspace_id = None
+        session.flush()
+    # The refusal rolled back: the row keeps its workspace.
+    with two_workspaces.session(workspace_id=OTHER_WORKSPACE) as session:
+        row = session.get(ConnectedAccount, account_id)
+        assert row is not None and row.workspace_id == OTHER_WORKSPACE
+
+
+def test_scoped_models_is_cached_and_returns_copies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`scoped_models()` runs for every ORM SELECT; the registry scan must be
+    cached, and callers must not be able to mutate the cached result."""
+    import builtins
+
+    scoped_models()  # warm the cache before the counter goes on
+    calls = 0
+    real_issubclass = builtins.issubclass
+
+    def counting(cls: type, classinfo: object) -> bool:
+        nonlocal calls
+        calls += 1
+        return real_issubclass(cls, classinfo)
+
+    monkeypatch.setattr(builtins, "issubclass", counting)
+    first = scoped_models()
+    assert calls == 0
+    assert first
+    first.clear()
+    # The poisoned copy must not reach the cache.
+    assert scoped_models()
+
+
 def test_hosted_session_without_context_refuses(
     two_workspaces: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:

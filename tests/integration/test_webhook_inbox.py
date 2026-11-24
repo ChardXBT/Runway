@@ -831,3 +831,46 @@ def test_rate_limit_keys_on_left_most_forwarded_for_only_via_the_edge(
     finally:
         database.engine.dispose()
         application.state.database.engine.dispose()
+
+
+def test_one_delivery_reaches_every_workspace_sharing_the_external_id(
+    client: TestClient, hook_app: tuple[FastAPI, Database, Settings]
+) -> None:
+    """Two workspaces can connect the same platform identity (spec 01
+    section 4); one delivery must update and enqueue for each account row,
+    not just the first match."""
+    database = hook_app[1]
+    with database.system_session() as session:
+        session.add(models.Workspace(id=2, slug="other", name="Other"))
+    first_id = _account(database, "tiktok", "openid-shared")
+    with database.session(workspace_id=2) as session:
+        other = ConnectedAccount(
+            platform="tiktok",
+            external_account_id="openid-shared",
+            status="connected",
+            granted_scopes_json="[]",
+            workspace_id=2,
+        )
+        session.add(other)
+        session.flush()
+        second_id = int(other.id)
+    body = json.dumps({"event": "user.profile.updated", "user_openid": "openid-shared"}).encode()
+    response = client.post(
+        "/hooks/tiktok",
+        content=body,
+        headers={"TikTok-Signature": _tiktok_signature(body)},
+    )
+    assert response.status_code == 200
+
+    _run_one_process_webhook(database, hook_app[2])
+
+    sync_jobs = _jobs(database, "sync_account")
+    assert len(sync_jobs) == 2
+    enqueued = {json.loads(job.payload_json)["account_id"]: job.workspace_id for job in sync_jobs}
+    assert enqueued == {first_id: 1, second_id: 2}
+    processed = _events(database)[0]
+    assert processed.processed_at is not None
+    assert processed.error is None
+    # The single delivery row can carry one workspace_id: the first match's.
+    assert processed.account_id == first_id
+    assert processed.workspace_id == 1

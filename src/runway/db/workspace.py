@@ -81,6 +81,13 @@ def workspace_context(workspace_id: int) -> Iterator[None]:
         _workspace_context.reset(token)
 
 
+# The SELECT criteria listener calls `scoped_models()` for every ORM
+# statement, so its result is cached. The key is the total mapper count:
+# registering another model (one defined later than the first query) rebuilds
+# it. Callers get a copy; mutating the result must not poison the cache.
+_scoped_models_cache: tuple[int, tuple[type[Base], ...]] | None = None
+
+
 def scoped_models() -> list[type[Base]]:
     """Every mapped class marked `WorkspaceScoped`, in table-name order."""
     # hosted_models lives outside models.py, so nothing else guarantees it is
@@ -89,17 +96,23 @@ def scoped_models() -> list[type[Base]]:
     from runway.db.base import Base
     from runway.db.models import WorkspaceScoped
 
+    global _scoped_models_cache
+    classes = [mapper.class_ for mapper in Base.registry.mappers if isinstance(mapper.class_, type)]
+    if _scoped_models_cache is not None and _scoped_models_cache[0] == len(classes):
+        return list(_scoped_models_cache[1])
     # Every WorkspaceScoped model also inherits Base, which the issubclass
     # narrowing does not tell mypy; cast to the ORM base explicitly.
     models = cast(
-        list[type[Base]],
-        [
-            mapper.class_
-            for mapper in Base.registry.mappers
-            if isinstance(mapper.class_, type) and issubclass(mapper.class_, WorkspaceScoped)
-        ],
+        tuple[type[Base], ...],
+        tuple(
+            sorted(
+                (cls for cls in classes if issubclass(cls, WorkspaceScoped)),
+                key=lambda model: model.__tablename__,
+            )
+        ),
     )
-    return sorted(models, key=lambda model: model.__tablename__)
+    _scoped_models_cache = (len(classes), models)
+    return list(models)
 
 
 def scoped_table_names() -> frozenset[str]:
