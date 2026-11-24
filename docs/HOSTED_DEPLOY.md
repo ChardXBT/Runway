@@ -26,7 +26,7 @@ Still required before a hosted deployment can start (other work packages):
 | Database token store, `RUNWAY_TOKEN_KEYS` | hosted tokens must not live in a file | spec 05 section 3 |
 | Clerk in the web app (sign-in pages, organization switcher, forwarding the session token) | the API accepts Clerk tokens; the web app does not obtain them yet | web work package |
 | API keys (`rwy_` bearers) | refused with `api_key_unsupported` until built | spec 06 |
-| Workspace scoping and scope checks on the platform routes (accounts, connect/disconnect, content, inbox, drafts, overview, analytics) | their queries read and write the global tables with no `workspace_id` filter and call no `require()`, so one workspace's member could read or disconnect another's accounts. Hosted therefore does **not mount** that router (404) | workspace tenancy (wave 4, spec 01 sections 4-5): add `workspace_id` filters and `require(ACCOUNTS_MANAGE / INBOX_REPLY / POSTS_WRITE ...)`, then mount it in hosted |
+| Workspace scoping and scope checks on the platform routes (accounts, disconnect, content, inbox, drafts, overview, analytics) | their queries read and write the global tables with no `workspace_id` filter and call no `require()`, so one workspace's member could read or disconnect another's accounts. Hosted mounts only the OAuth `connect` and `oauth/callback` routes (each state row carries the issuing workspace and the callback persists into it); the rest of that router stays unmounted (404) | workspace tenancy (wave 4, spec 01 sections 4-5): add `workspace_id` filters and `require(ACCOUNTS_MANAGE / INBOX_REPLY / POSTS_WRITE ...)`, then mount it in hosted |
 | `enforce_quota` call sites for storage (media upload) and posts per day (the publishing engine) | the quotas exist; connected accounts is enforced on connect, posts per day needs the engine's daily count, storage needs the upload path | media pipeline (spec 02) and publishing engine (spec 03) |
 
 ## 2. The pieces
@@ -63,7 +63,11 @@ Routes served in hosted today: `/health`, `/api/settings` (product switches
 only), the workspace-scoped `/api/v1` surface (`workspace`, `keys`,
 `approvals`, `webhooks`, `accounts` sync-status and publishing consent,
 `media`, `posts`, `policy`, `events/stream` - every route bound to
-`principal.workspace_id`), and the signed webhooks `/hooks/identity/clerk`
+`principal.workspace_id`), the platform OAuth routes
+`/api/platforms/{platform}/connect` and
+`/api/platforms/{platform}/oauth/callback` (the state row binds the flow to
+the principal's workspace and the callback refuses a state from another),
+and the signed webhooks `/hooks/identity/clerk`
 and the platform `/hooks/*` receivers. The local-only surfaces (capture,
 catalogue, discovery, intelligence, proposals, the browser-publisher routes
 under `/api/*`) stay unmounted - 404.

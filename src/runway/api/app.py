@@ -16,7 +16,7 @@ from runway.api.catalog_routes import build_catalog_router
 from runway.api.discovery_routes import build_discovery_router
 from runway.api.identity_hook_routes import build_identity_hook_router
 from runway.api.intelligence_routes import build_intelligence_router
-from runway.api.platform_routes import build_platform_router
+from runway.api.platform_routes import build_oauth_router, build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
 from runway.api.v1.accounts_routes import build_accounts_router
@@ -187,6 +187,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Web-origin CORS and origin guard, rate limits, security headers and
         # the identity provider (spec 05 sections 2 and 6).
         configure_hosted(application, active_settings)
+        # Only the OAuth connect + callback routes of the legacy platform
+        # surface: state rows carry the principal's workspace and the callback
+        # persists into it. The rest stays unmounted until it is scoped (404).
+        application.include_router(build_oauth_router(database, active_settings))
     else:
         web_origins = loopback_origins(active_settings.web_port)
         # Innermost: one audit row per successful mutation an API key makes (spec 06 section 5).

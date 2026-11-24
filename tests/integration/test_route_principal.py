@@ -215,6 +215,11 @@ HOSTED_ROUTES = {
     ("POST", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
     # Clerk webhook: authenticated by the Svix signature, not by a principal.
     ("POST", "/hooks/identity/clerk"),
+    # OAuth connect + callback (spec 08): the only hosted platform routes.
+    # State rows carry the principal's workspace and the callback persists
+    # into it, so a state never crosses workspaces.
+    ("POST", "/api/platforms/{platform}/connect"),
+    ("GET", "/api/platforms/{platform}/oauth/callback"),
 }
 
 
