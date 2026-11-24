@@ -27,7 +27,14 @@ from sqlalchemy.orm import Session
 
 from runway.auth.problems import Problem, ProblemCode
 from runway.db.base import Base
-from runway.db.models import ConnectedAccount, User, Workspace, WorkspaceMember
+from runway.db.models import (
+    ConnectedAccount,
+    MediaAssetV2,
+    PublishJob,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -446,15 +453,58 @@ def run_export_workspace_job(database: Any, settings: Any, job: Any, *, stores: 
         )
 
 
-def run_delete_workspace_job(database: Any, settings: Any, job: Any) -> None:
-    """Detach every grant, then purge the workspace's rows and files."""
+def _workspace_stored_objects(session: Session, workspace_id: int) -> list[tuple[str, str]]:
+    """(storage, key) for every object the workspace has in a media store.
+
+    Media assets name their store (`local` or `r2`); a non-local poster is a
+    second object under it (a local poster is a file, removed with the
+    poster root below). Export artifacts live in `r2`, where the export job
+    put them; the job payload carries the export id the key is built from.
+    """
+    pairs: list[tuple[str, str]] = []
+    assets = session.scalars(
+        select(MediaAssetV2).where(MediaAssetV2.workspace_id == workspace_id)
+    ).all()
+    for asset in assets:
+        pairs.append((asset.storage, asset.storage_key))
+        if asset.storage != "local" and asset.poster_key:
+            pairs.append((asset.storage, asset.poster_key))
+    export_jobs = session.scalars(
+        select(PublishJob).where(
+            PublishJob.workspace_id == workspace_id,
+            PublishJob.kind == EXPORT_WORKSPACE_JOB,
+        )
+    ).all()
+    for job_row in export_jobs:
+        try:
+            payload = json.loads(job_row.payload_json)
+        except ValueError:
+            continue
+        export_id = payload.get("export_id") if isinstance(payload, dict) else None
+        if isinstance(export_id, str) and export_id:
+            pairs.append(("r2", export_key(workspace_id, export_id)))
+    return pairs
+
+
+def run_delete_workspace_job(database: Any, settings: Any, job: Any, *, stores: Any = None) -> None:
+    """Detach every grant, delete the stored objects, then purge rows and files.
+
+    Object deletes run inside the session before `purge_workspace`: the keys
+    live on the rows the purge removes, and a store failure fails the job
+    with the rows intact so a retry can finish the cleanup.
+    """
     from runway.jobs.queue import JobQueue
     from runway.platforms.registry import ProviderRegistry
+    from runway.posts.media_service import poster_root
     from runway.realtime import standby
     from runway.realtime.lifecycle import disconnect_account
 
     standby.ensure_active(settings)
     workspace_id = int(job.payload["workspace_id"])
+    if stores is None:
+        from runway.posts.media import default_media_stores
+
+        stores = dict(default_media_stores(settings))
     registry = ProviderRegistry(database, settings)
     queue = JobQueue(database)
     with database.session() as session:
@@ -466,11 +516,19 @@ def run_delete_workspace_job(database: Any, settings: Any, job: Any) -> None:
         ).all()
         for account in accounts:
             disconnect_account(session, registry, queue, account)
+        for storage, key in _workspace_stored_objects(session, workspace_id):
+            store = stores.get(storage)
+            if store is None:
+                raise Problem.of(
+                    ProblemCode.CAPABILITY_NOT_READY,
+                    f"the {storage} media store is not configured",
+                )
+            store.delete(key, workspace_id=workspace_id)
         counts = purge_workspace(session, workspace_id)
         session.flush()
     for directory in (
         settings.resolved_data_dir / "exports" / f"ws{workspace_id}",
-        settings.resolved_data_dir / "media" / f"ws{workspace_id}",
+        poster_root(settings) / f"w{workspace_id}",
     ):
         shutil.rmtree(directory, ignore_errors=True)
     logger.info("workspace %s purged: %s", workspace_id, counts)
