@@ -226,6 +226,37 @@ def test_producing_twice_never_duplicates(tmp_path: Path) -> None:
         database.engine.dispose()
 
 
+def test_a_failed_scan_does_not_suppress_the_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_last_scan`` is stamped only after the scan succeeds: a session
+    that blows up leaves the scheduler due immediately, so the next
+    produce retries instead of sleeping the hourly interval away."""
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    registry = ProviderRegistry(database, settings)
+    try:
+        _account(database)
+        _store(registry, "ref-1", _token())
+        scheduler = TokenUpkeepScheduler(database, registry, JobQueue(database))
+        real_session = database.session
+
+        def _broken_session() -> None:
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(database, "session", _broken_session)
+        with pytest.raises(RuntimeError):
+            scheduler.produce(NOW)
+        assert scheduler._last_scan is None
+        assert scheduler.next_due(NOW) == NOW
+
+        monkeypatch.setattr(database, "session", real_session)
+        scheduler.produce(NOW + timedelta(minutes=5))
+        assert len(_pending(database, REFRESH_TOKEN_JOB)) == 1
+    finally:
+        database.engine.dispose()
+
+
 def test_disconnected_and_other_platforms_are_ignored(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     database = initialize_database(settings)

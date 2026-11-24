@@ -19,9 +19,11 @@ Runway-authored rows (drafts, targets, proposals) are never touched.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -35,14 +37,20 @@ from runway.db.models import (
     ConnectedAccount,
     ContentDraft,
     ContentMetricSnapshot,
+    DraftTarget,
     PlatformContent,
     PlatformSubscription,
+    PublishJob,
+    ReplyDraft,
+    WebhookEvent,
     utcnow,
 )
+from runway.jobs.queue import Job
 from runway.jobs.retention import (
     DEAD_ACCOUNT_DATA_DELAY,
     purge_dead_account_data,
     purge_youtube_api_data,
+    run_purge_job,
 )
 from runway.platforms.base import TokenSet
 from runway.platforms.tokens import TokenStore
@@ -124,6 +132,25 @@ def _comment(
 
 def _count(session: Session, model: type) -> int:
     return int(session.scalar(select(func.count()).select_from(model)) or 0)
+
+
+def _purge_job() -> Job:
+    """A `purge` job row as the worker would claim it."""
+    return Job.of(
+        PublishJob(
+            id=1,
+            kind="purge",
+            workspace_id=1,
+            target_id=None,
+            state="running",
+            attempts=1,
+            max_attempts=1,
+            run_at=utcnow(),
+            idempotency_key="test:purge",
+            payload_json=json.dumps({}),
+            last_error=None,
+        )
+    )
 
 
 # ----------------------------------------------------- 30-day YouTube rule
@@ -404,6 +431,70 @@ def test_a_revoked_account_gets_the_same_deletion_path(tmp_path: Path) -> None:
         database.engine.dispose()
 
 
+def test_a_dead_accounts_webhook_events_die_with_its_subscriptions(tmp_path: Path) -> None:
+    """The dead-account purge also removes the account's webhook inbox rows -
+    by account_id, and by the subscription ids collected before the
+    subscriptions themselves are deleted (a raw delivery whose account was
+    never resolved keeps only its subscription link)."""
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    try:
+        dead = _account(
+            database,
+            status="disconnected",
+            token_ref=None,
+            updated_at=NOW - DEAD_ACCOUNT_DATA_DELAY - timedelta(days=1),
+        )
+        live = _account(database, external_id="live-1", token_ref="ref-2")
+        with database.session() as session:
+            dead_sub = PlatformSubscription(
+                account_id=dead, provider="youtube", topic="t-dead", state="unsubscribed"
+            )
+            live_sub = PlatformSubscription(
+                account_id=live, provider="youtube", topic="t-live", state="active"
+            )
+            session.add_all([dead_sub, live_sub])
+            session.flush()
+            session.add_all(
+                [
+                    # Found by account_id.
+                    WebhookEvent(
+                        provider="youtube",
+                        signature_ok=True,
+                        body=b"by-account",
+                        account_id=dead,
+                    ),
+                    # Account never resolved: only the subscription links it.
+                    WebhookEvent(
+                        provider="youtube",
+                        signature_ok=False,
+                        body=b"by-subscription",
+                        subscription_id=int(dead_sub.id),
+                    ),
+                    # The live account's event must survive.
+                    WebhookEvent(
+                        provider="youtube",
+                        signature_ok=True,
+                        body=b"live",
+                        account_id=live,
+                        subscription_id=int(live_sub.id),
+                    ),
+                ]
+            )
+            session.flush()
+
+            purge_dead_account_data(
+                session,
+                TokenStore(settings.resolved_data_dir / "secrets"),
+                now=NOW,
+            )
+
+            assert _count(session, WebhookEvent) == 1
+            assert _count(session, PlatformSubscription) == 1
+    finally:
+        database.engine.dispose()
+
+
 def test_runway_drafts_survive_the_dead_account_purge(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     database = initialize_database(settings)
@@ -433,12 +524,6 @@ def test_runway_drafts_survive_the_dead_account_purge(tmp_path: Path) -> None:
 
 def test_the_purge_job_runs_both_duties(tmp_path: Path) -> None:
     """run_purge_job wires the duties in; call it end to end."""
-    import json as json_module
-
-    from runway.db.models import PublishJob
-    from runway.jobs.queue import Job
-    from runway.jobs.retention import run_purge_job
-
     settings = _settings(tmp_path)
     database = initialize_database(settings)
     try:
@@ -450,25 +535,147 @@ def test_the_purge_job_runs_both_duties(tmp_path: Path) -> None:
         )
         with database.session() as session:
             _content(session, dead, last_seen_at=utcnow() - timedelta(days=1))
-        job = Job.of(
-            PublishJob(
-                id=1,
-                kind="purge",
-                workspace_id=1,
-                target_id=None,
-                state="running",
-                attempts=1,
-                max_attempts=1,
-                run_at=utcnow(),
-                idempotency_key="test:purge",
-                payload_json=json_module.dumps({}),
-                last_error=None,
-            )
-        )
 
-        run_purge_job(database, settings, job)
+        run_purge_job(database, settings, _purge_job())
 
         with database.session() as session:
             assert _count(session, PlatformContent) == 0
+    finally:
+        database.engine.dispose()
+
+
+# -------------------------------------------- FK safety and duty isolation
+
+
+def test_a_stale_comment_with_a_reply_draft_purges_and_other_duties_still_run(
+    tmp_path: Path,
+) -> None:
+    """reply_drafts.comment_id has no ON DELETE rule: deleting the comment
+    without the draft raises IntegrityError, which used to roll back the
+    whole purge job. A reply draft to a deleted comment can never be sent,
+    so it dies with the comment - and the other duties still run."""
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    try:
+        account_id = _account(database)
+        with database.session() as session:
+            stale_comment = _comment(
+                session,
+                account_id,
+                external_id="stale-comment",
+                last_seen_at=utcnow() - timedelta(days=40),
+            )
+            session.add(ReplyDraft(comment_id=stale_comment, text="draft reply"))
+            # Another duty's evidence: a finished job older than 14 days.
+            old_job = PublishJob(
+                kind="sync",
+                workspace_id=1,
+                state="completed",
+                run_at=utcnow() - timedelta(days=20),
+                idempotency_key="test:finished",
+                payload_json="{}",
+            )
+            old_job.updated_at = utcnow() - timedelta(days=20)
+            session.add(old_job)
+
+        run_purge_job(database, settings, _purge_job())
+
+        with database.session() as session:
+            assert _count(session, CommentRecord) == 0
+            assert _count(session, ReplyDraft) == 0
+            # The finished-jobs duty ran too: the purge was not rolled back.
+            assert _count(session, PublishJob) == 0
+    finally:
+        database.engine.dispose()
+
+
+def test_a_dead_accounts_published_target_survives_the_purge(tmp_path: Path) -> None:
+    """draft_targets.published_content_id has no ON DELETE rule: the delete
+    must NULL the link instead of dying. The target is a Runway-authored row -
+    it keeps its state and its published URL; only the FK is cleared."""
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    try:
+        dead = _account(
+            database,
+            status="disconnected",
+            token_ref=None,
+            updated_at=NOW - DEAD_ACCOUNT_DATA_DELAY - timedelta(days=1),
+        )
+        with database.session() as session:
+            doomed = _content(session, dead, last_seen_at=NOW)
+            draft = ContentDraft(title="clip", body="b")
+            session.add(draft)
+            session.flush()
+            session.add(
+                DraftTarget(
+                    draft_id=int(draft.id),
+                    platform="youtube",
+                    account_id=dead,
+                    status="published",
+                    published_content_id=doomed,
+                    published_url="https://video.example/watch?v=1",
+                    published_at=NOW - timedelta(days=30),
+                )
+            )
+            session.flush()
+
+            purge_dead_account_data(
+                session,
+                TokenStore(settings.resolved_data_dir / "secrets"),
+                now=NOW,
+            )
+
+            target = session.scalar(select(DraftTarget))
+            assert target is not None
+            assert target.status == "published"
+            assert target.published_content_id is None
+            assert target.published_url == "https://video.example/watch?v=1"
+            assert _count(session, PlatformContent) == 0
+    finally:
+        database.engine.dispose()
+
+
+def test_a_failing_duty_does_not_stop_the_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each duty runs in its own savepoint: an injected failure rolls back
+    only that duty and is logged, while every other duty still commits."""
+    import runway.jobs.retention as retention
+
+    settings = _settings(tmp_path)
+    database = initialize_database(settings)
+    try:
+        account_id = _account(database)
+        with database.session() as session:
+            _comment(
+                session,
+                account_id,
+                external_id="stale-comment",
+                last_seen_at=utcnow() - timedelta(days=40),
+            )
+            old_job = PublishJob(
+                kind="sync",
+                workspace_id=1,
+                state="completed",
+                run_at=utcnow() - timedelta(days=20),
+                idempotency_key="test:finished",
+                payload_json="{}",
+            )
+            old_job.updated_at = utcnow() - timedelta(days=20)
+            session.add(old_job)
+
+        def _boom(_session: Session, *, now: datetime) -> int:
+            raise RuntimeError("injected failure")
+
+        monkeypatch.setattr(retention, "purge_youtube_api_data", _boom)
+
+        run_purge_job(database, settings, _purge_job())
+
+        with database.session() as session:
+            # The injected failure killed the youtube duty only: its stale
+            # comment survives this run, but the finished-jobs duty still ran.
+            assert _count(session, CommentRecord) == 1
+            assert _count(session, PublishJob) == 0
     finally:
         database.engine.dispose()
