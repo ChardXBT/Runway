@@ -352,6 +352,25 @@ class InstagramProvider(PlatformProvider):
             raw=data,
         )
 
+    # ---------------------------------------------------------- subscription
+
+    def subscribe_apps(self, token: TokenSet, *, ig_user_id: str) -> None:
+        """Turn this app's comment/mention webhooks on for the account.
+
+        `POST /{ig-user-id}/subscribed_apps` only succeeds while the app is
+        Live with Advanced Access (spec 04 section 2); the caller gates on
+        ``instagram_app_status == "live_advanced"``.
+        """
+        response = provider_request(
+            self.client,
+            "Instagram",
+            "POST",
+            f"{GRAPH_BASE}/{ig_user_id}/subscribed_apps",
+            params={"subscribed_fields": "comments,mentions"},
+            headers={"Authorization": f"Bearer {token.access_token}"},
+        )
+        self._json_or_raise(response)
+
     def fetch_account_totals(self, token: TokenSet) -> dict[str, int | float | None]:
         """Total-value insights for the account snapshot; failures are warnings."""
         data = self._graph_get(

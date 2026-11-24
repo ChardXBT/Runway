@@ -336,3 +336,7 @@ class PlatformProvider(ABC):
         comment_external_id: str,
         text: str,
     ) -> ReplyResult: ...
+
+    def subscribe_apps(self, token: TokenSet, *, ig_user_id: str) -> None:
+        """Subscribe the app to the account's push fields (Instagram only)."""
+        raise CapabilityUnsupported("push subscriptions are not supported by this provider")

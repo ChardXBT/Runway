@@ -31,7 +31,11 @@ from runway.jobs.worker import PermanentJobError, Worker
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.sync import SYNC_ACCOUNT_JOB, PlatformSyncScheduler
 from runway.realtime.processing import PROCESS_WEBHOOK_JOB
-from runway.realtime.subscriptions import RENEW_SUBSCRIPTION_JOB, SubscriptionScheduler
+from runway.realtime.subscriptions import (
+    RENEW_SUBSCRIPTION_JOB,
+    SUBSCRIBE_APPS_JOB,
+    SubscriptionScheduler,
+)
 
 START = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
 
@@ -418,6 +422,7 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
         PURGE_JOB,
         PROCESS_WEBHOOK_JOB,
         RENEW_SUBSCRIPTION_JOB,
+        SUBSCRIBE_APPS_JOB,
     }
 
 

@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     # Secret like instagram_app_secret: Meta's webhook handshake token. Never
     # logged or returned by the API.
     instagram_webhook_verify_token: str | None = None
+    # Meta app review state (spec 04 section 2): only a Live app with Advanced
+    # Access may call POST /{ig-user-id}/subscribed_apps; below that the
+    # capability matrix says the account polls instead.
+    instagram_app_status: Literal["development", "live_standard", "live_advanced"] = "development"
     tiktok_client_key: str | None = None
     tiktok_client_secret: str | None = None
     # Per-(provider, source) sliding-window cap on webhook POSTs.

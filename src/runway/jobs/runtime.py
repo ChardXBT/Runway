@@ -10,6 +10,7 @@ from runway.jobs.queue import JobQueue
 from runway.jobs.retention import PURGE_JOB, RetentionPurgeScheduler, run_purge_job
 from runway.jobs.worker import Handler, JobProducer, Worker
 from runway.operations.runtime_files import worker_lock_path
+from runway.platforms.registry import ProviderRegistry
 from runway.platforms.sync import (
     SYNC_ACCOUNT_JOB,
     PlatformSyncScheduler,
@@ -20,8 +21,10 @@ from runway.realtime.processing import PROCESS_WEBHOOK_JOB, run_process_webhook_
 from runway.realtime.schedule import AdaptiveSyncScheduler
 from runway.realtime.subscriptions import (
     RENEW_SUBSCRIPTION_JOB,
+    SUBSCRIBE_APPS_JOB,
     SubscriptionScheduler,
     run_renew_subscription_job,
+    run_subscribe_apps_job,
 )
 
 __all__ = ["build_worker", "worker_lock_path"]
@@ -30,11 +33,15 @@ __all__ = ["build_worker", "worker_lock_path"]
 def build_worker(settings: Settings, database: Database) -> Worker:
     queue = JobQueue(database)
     sync_service = SyncService(database, settings)
+    registry = ProviderRegistry(database, settings)
     handlers: dict[str, Handler] = {
         SYNC_ACCOUNT_JOB: partial(run_sync_account_job, sync_service),
         PURGE_JOB: partial(run_purge_job, database, settings),
         PROCESS_WEBHOOK_JOB: partial(run_process_webhook_job, database, settings, queue),
         RENEW_SUBSCRIPTION_JOB: partial(run_renew_subscription_job, database, settings, queue),
+        # Instagram push gating: only ever enqueued while the Meta app is
+        # Live with Advanced Access (spec 04 section 2).
+        SUBSCRIBE_APPS_JOB: partial(run_subscribe_apps_job, registry),
     }
     producers: list[JobProducer] = [
         RetentionPurgeScheduler(queue),

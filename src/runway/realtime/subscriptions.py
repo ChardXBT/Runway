@@ -40,11 +40,14 @@ from runway.db.models import (
 )
 from runway.jobs.queue import JOB_STATE_MACHINE, Job, JobQueue, JobState
 from runway.jobs.worker import PermanentJobError
-from runway.platforms.base import ProviderError, safe_error_summary
+from runway.platforms.base import AuthorizationExpired, ProviderError, safe_error_summary
+from runway.platforms.capabilities import Platform
+from runway.platforms.registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 
 RENEW_SUBSCRIPTION_JOB = "renew_subscription"
+SUBSCRIBE_APPS_JOB = "subscribe_apps"
 WEBSUB_HUB_URL = "https://pubsubhubbub.appspot.com/subscribe"
 # Google's hub grants about five days whatever is asked (recheck-20261122
 # section 1); ask for it explicitly and renew once 80% has passed.
@@ -100,6 +103,9 @@ def on_account_connected(
     subscribe form. Without a public callback base nothing is created - the
     install simply polls (spec 04 section 6).
     """
+    if account.platform == "instagram":
+        _on_instagram_connected(session, queue, settings, account)
+        return None
     if account.platform != "youtube":
         return None
     if _callback_base(settings) is None:
@@ -345,3 +351,75 @@ def run_renew_subscription_job(
                 subscription.last_error = failure
     if failure is not None:
         raise ProviderError(f"WebSub {mode} failed: {failure}", retryable=True)
+
+
+# ---------------------------------------------------------- instagram
+
+
+def _on_instagram_connected(
+    session: Session,
+    queue: JobQueue,
+    settings: Settings,
+    account: ConnectedAccount,
+) -> None:
+    """Enqueue ``subscribe_apps`` only for a Live-with-Advanced-Access app.
+
+    `POST /{ig-user-id}/subscribed_apps` is what turns an Instagram account's
+    comment/mention webhooks on, but Meta refuses it until the app is Live
+    with Advanced Access (spec 04 section 2). Below that the capability
+    matrix says the account polls, so nothing is enqueued. The key carries
+    the connect instant so reconnecting always re-subscribes while producing
+    twice never duplicates.
+    """
+    if settings.instagram_app_status != "live_advanced":
+        return
+    queue.enqueue_pending_job(
+        session,
+        SUBSCRIBE_APPS_JOB,
+        idempotency_key=(
+            f"{SUBSCRIBE_APPS_JOB}:{account.id}:{int(account.connected_at.timestamp())}"
+        ),
+        run_at=utcnow(),
+        payload={"account_id": int(account.id)},
+        workspace_id=int(account.workspace_id),
+    )
+
+
+def mark_needs_reauth(database: Database, account_id: int, exc: BaseException) -> None:
+    """Relabel an account whose grant is gone; the same relabel sync uses."""
+    with database.session() as session:
+        account = session.get(ConnectedAccount, account_id)
+        if account is not None:
+            account.status = "needs_reauth"
+            account.last_error = safe_error_summary(exc)
+
+
+def run_subscribe_apps_job(registry: ProviderRegistry, job: Job) -> None:
+    """Worker handler for ``subscribe_apps``: subscribe the app to webhooks.
+
+    Only ever enqueued for Instagram accounts while ``instagram_app_status``
+    is ``live_advanced``. A missing or disconnected account is a no-op - the
+    connect that queued the job may already have been undone. A dead grant
+    marks the account ``needs_reauth``; every other provider error propagates
+    so the queue retries the transient failures.
+    """
+    account_id = job.payload.get("account_id")
+    if not isinstance(account_id, int):
+        raise PermanentJobError("subscribe_apps job needs an account_id")
+    with registry.database.session() as session:
+        account = session.get(ConnectedAccount, account_id)
+        if (
+            account is None
+            or account.platform != Platform.instagram.value
+            or account.status != "connected"
+            or not account.token_ref
+        ):
+            return
+        token_ref = str(account.token_ref)
+        ig_user_id = str(account.external_account_id)
+    try:
+        token = registry.fresh_token(Platform.instagram, token_ref)
+    except AuthorizationExpired as exc:
+        mark_needs_reauth(registry.database, account_id, exc)
+        return
+    registry.provider(Platform.instagram).subscribe_apps(token, ig_user_id=ig_user_id)
