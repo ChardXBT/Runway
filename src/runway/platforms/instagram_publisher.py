@@ -907,7 +907,11 @@ class InstagramDirectPublisher:
                 logger.warning("temporary R2 copy %s could not be deleted: %s", key, exc)
                 remaining.append(key)
         state["r2_keys"] = remaining
-        ctx.save_resumable(state)
+        if ctx.attempt_id is not None:
+            # Only a send context has an open attempt to persist on; poll,
+            # verify and reconcile contexts refuse save_resumable — the
+            # deletion itself already happened either way.
+            ctx.save_resumable(state)
 
 
 _RUPLOAD_BASE = "https://rupload.facebook.com/ig-api-upload"

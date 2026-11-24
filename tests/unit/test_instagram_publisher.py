@@ -289,6 +289,17 @@ def _context(
     )
 
 
+def _read_context(**kwargs: object) -> tuple[PublishContext, dict[str, int], list[dict]]:
+    """A poll/verify/reconcile context: persisting hooks refuse (no attempt)."""
+    ctx, marks, saves = _context(**kwargs)
+
+    def refuse(*_args: object, **_kw: object) -> None:
+        raise RuntimeError("save_resumable is only available to the worker while sending")
+
+    ctx._save_resumable = refuse
+    return ctx, marks, saves
+
+
 class FakeClock:
     def __init__(self, start: datetime = NOW) -> None:
         self.now = start
@@ -747,6 +758,26 @@ def test_reconcile_is_uncertain_without_a_container_record() -> None:
     result = publisher.reconcile(ctx)
     assert result.status == "uncertain"
     assert result.checked
+
+
+def test_reconcile_deletes_the_r2_copy_on_a_read_context() -> None:
+    for status in ("FINISHED", "EXPIRED", "ERROR"):
+        graph = FakeGraph()
+        graph.containers["c1"] = {"status_code": status, "params": {}}
+        graph.next_container = 1
+        r2 = FakeR2()
+        publisher = _publisher(graph, r2=r2)
+        key = "w/1/igpub7p0/" + "e" * 16 + ".mp4"
+        # A reconcile context has no open attempt: save_resumable refuses.
+        ctx, _m, _s = _read_context(
+            resumable={
+                "containers": [{"id": "c1", "position": 0, "role": "main"}],
+                "r2_keys": [key],
+            }
+        )
+        result = publisher.reconcile(ctx)
+        assert result.status == "absent"
+        assert r2.deleted == [key]
 
 
 # ------------------------------------------------------------- rate guards
