@@ -3,6 +3,10 @@
 - idempotency keys after 24 hours and events after 7 days;
 - webhook inbox rows after 30 days;
 - finished `publish_jobs` after 14 days, `send`/`reconcile` history after 90;
+- YouTube-imported rows 30 days old and never refreshed (the platform's
+  refresh-or-delete rule, spec 04 section 3);
+- every stored platform row of accounts disconnected or revoked for more
+  than 7 days, plus their tokens (spec 05 section 5);
 - lock files of accounts and token references that no longer exist, when no
   process holds them.
 """
@@ -14,12 +18,23 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session
 
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import ConnectedAccount, PublishJob, WebhookEvent, utcnow
+from runway.db.models import (
+    AccountMetricDay,
+    AccountMetricSnapshot,
+    CommentRecord,
+    ConnectedAccount,
+    ContentMetricSnapshot,
+    PlatformContent,
+    PlatformSubscription,
+    PublishJob,
+    WebhookEvent,
+    utcnow,
+)
 from runway.events.log import purge_expired_events
 from runway.jobs.queue import RECONCILE, SEND, Job, JobQueue, JobState
 from runway.locks import LockTimeout, exclusive_file_lock
@@ -35,6 +50,16 @@ FINISHED_JOB_RETENTION = timedelta(days=14)
 PUBLISHING_JOB_RETENTION = timedelta(days=90)
 # Raw webhook bodies are debugging evidence, not history; 30 days is plenty.
 WEBHOOK_EVENT_RETENTION = timedelta(days=30)
+# YouTube's authorized-data rule: every stored copy is deleted 30 days after
+# a sync last refreshed it (spec 04 section 3).
+YOUTUBE_DATA_RETENTION = timedelta(days=30)
+# Disconnect revokes at the platform; the stored platform data then dies
+# inside the policy window (7 days for YouTube Authorized Data).
+DEAD_ACCOUNT_DATA_DELAY = timedelta(days=7)
+# `needs_reauth` is what platform-side revocation becomes (failed refresh,
+# TikTok authorization.removed, Meta deauthorize) - it takes the same
+# deletion path as an explicit disconnect.
+DEAD_ACCOUNT_STATES = ("disconnected", "needs_reauth")
 FINISHED_JOB_STATES = (
     JobState.COMPLETED.value,
     JobState.FAILED.value,
@@ -112,27 +137,157 @@ def remove_stale_lock_files(directory: Path, keep: Iterable[str]) -> int:
     return removed
 
 
+def _rowcount(result: object) -> int:
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
+def purge_youtube_api_data(session: Session, *, now: datetime) -> int:
+    """Delete YouTube-imported rows 30 days old and not refreshed since.
+
+    YouTube's authorized-data policy gives each stored copy 30 days of life,
+    renewed by every sync that re-fetches it (spec 04 section 3). Each row
+    kind carries the instant it was last refreshed: content ``last_seen_at``
+    (inventory) and ``metrics_fetched_at`` (metrics), comments
+    ``last_seen_at``, metric days ``fetched_at``. Snapshots are append-only -
+    their refresh is a newer snapshot - so age alone retires them, and a
+    snapshot dies with the content it belongs to.
+    """
+    cutoff = now - YOUTUBE_DATA_RETENTION
+    removed = 0
+    # Comments first: a stale comment dies by its own refresh instant.
+    removed += _rowcount(
+        session.execute(
+            delete(CommentRecord).where(
+                CommentRecord.platform == "youtube",
+                CommentRecord.last_seen_at < cutoff,
+            )
+        )
+    )
+    youtube_content = select(PlatformContent.id).where(PlatformContent.platform == "youtube")
+    doomed_content = select(PlatformContent.id).where(
+        PlatformContent.platform == "youtube",
+        PlatformContent.last_seen_at < cutoff,
+        or_(
+            PlatformContent.metrics_fetched_at.is_(None),
+            PlatformContent.metrics_fetched_at < cutoff,
+        ),
+    )
+    removed += _rowcount(
+        session.execute(
+            delete(ContentMetricSnapshot).where(
+                or_(
+                    # Orphaned by the content delete below.
+                    ContentMetricSnapshot.content_id.in_(doomed_content),
+                    and_(
+                        ContentMetricSnapshot.captured_at < cutoff,
+                        ContentMetricSnapshot.content_id.in_(youtube_content),
+                    ),
+                )
+            )
+        )
+    )
+    youtube_accounts = select(ConnectedAccount.id).where(ConnectedAccount.platform == "youtube")
+    removed += _rowcount(
+        session.execute(
+            delete(AccountMetricDay).where(
+                AccountMetricDay.account_id.in_(youtube_accounts),
+                AccountMetricDay.fetched_at < cutoff,
+            )
+        )
+    )
+    removed += _rowcount(
+        session.execute(
+            delete(AccountMetricSnapshot).where(
+                AccountMetricSnapshot.account_id.in_(youtube_accounts),
+                AccountMetricSnapshot.captured_at < cutoff,
+            )
+        )
+    )
+    removed += _rowcount(
+        session.execute(delete(PlatformContent).where(PlatformContent.id.in_(doomed_content)))
+    )
+    return removed
+
+
+def purge_dead_account_data(session: Session, token_store: TokenStore, *, now: datetime) -> int:
+    """Delete every stored platform row of accounts dead for over 7 days.
+
+    ``disconnected`` is an explicit disconnect; ``needs_reauth`` is a
+    platform-side revocation - both take the same deletion path (spec 05
+    section 5) once ``updated_at`` is more than 7 days old. A surviving
+    token ref is deleted through the token store. The account row itself
+    stays (it is the reconnect and audit record), and Runway-authored rows
+    - drafts, targets, proposals - are never touched.
+    """
+    cutoff = now - DEAD_ACCOUNT_DATA_DELAY
+    rows = session.execute(
+        select(ConnectedAccount.id, ConnectedAccount.token_ref).where(
+            ConnectedAccount.status.in_(DEAD_ACCOUNT_STATES),
+            ConnectedAccount.updated_at < cutoff,
+        )
+    ).all()
+    account_ids = [int(account_id) for account_id, _ref in rows]
+    if not account_ids:
+        return 0
+    removed = 0
+    content_ids = select(PlatformContent.id).where(PlatformContent.account_id.in_(account_ids))
+    removed += _rowcount(
+        session.execute(
+            delete(ContentMetricSnapshot).where(ContentMetricSnapshot.content_id.in_(content_ids))
+        )
+    )
+    removed += _rowcount(
+        session.execute(delete(CommentRecord).where(CommentRecord.account_id.in_(account_ids)))
+    )
+    removed += _rowcount(
+        session.execute(delete(PlatformContent).where(PlatformContent.account_id.in_(account_ids)))
+    )
+    removed += _rowcount(
+        session.execute(
+            delete(AccountMetricDay).where(AccountMetricDay.account_id.in_(account_ids))
+        )
+    )
+    removed += _rowcount(
+        session.execute(
+            delete(AccountMetricSnapshot).where(AccountMetricSnapshot.account_id.in_(account_ids))
+        )
+    )
+    removed += _rowcount(
+        session.execute(
+            delete(PlatformSubscription).where(PlatformSubscription.account_id.in_(account_ids))
+        )
+    )
+    for _account_id, token_ref in rows:
+        if token_ref:
+            token_store.delete(str(token_ref))
+    return removed
+
+
 def run_purge_job(database: Database, settings: Settings, _job: Job) -> None:
     # Imported here: runway.api.v1 is an API package, the worker only needs its store.
     from runway.api.v1.idempotency import IdempotencyStore
 
+    token_store = TokenStore(settings.resolved_data_dir / "secrets")
     with database.session() as session:
         keys = IdempotencyStore(database).purge_expired(session)
         events = purge_expired_events(session)
         webhook_events = purge_webhook_events(session)
         jobs = purge_finished_jobs(session)
+        youtube_rows = purge_youtube_api_data(session, now=utcnow())
+        dead_account_rows = purge_dead_account_data(session, token_store, now=utcnow())
         accounts = session.execute(select(ConnectedAccount.id, ConnectedAccount.token_ref)).all()
     token_refs = {str(token_ref) for _id, token_ref in accounts if token_ref}
     sync_names = {sync_lock_path(settings, int(account_id)).stem for account_id, _ in accounts}
-    refresh_dir = TokenStore(settings.resolved_data_dir / "secrets").refresh_lock_dir
-    locks = remove_stale_lock_files(refresh_dir, token_refs)
+    locks = remove_stale_lock_files(token_store.refresh_lock_dir, token_refs)
     locks += remove_stale_lock_files(sync_lock_path(settings, 0).parent, sync_names)
     logger.info(
         "retention purge removed %s idempotency keys, %s events, %s webhook events, "
-        "%s jobs and %s lock files",
+        "%s jobs, %s stale youtube rows, %s dead-account rows and %s lock files",
         keys,
         events,
         webhook_events,
         jobs,
+        youtube_rows,
+        dead_account_rows,
         locks,
     )
