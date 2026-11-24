@@ -261,6 +261,46 @@ class JobQueue:
                     raise
                 return Job.of(existing)
 
+    def enqueue_pending_job(
+        self,
+        session: Session,
+        kind: str,
+        *,
+        idempotency_key: str,
+        run_at: datetime | None = None,
+        payload: dict[str, Any] | None = None,
+        target_id: int | None = None,
+        workspace_id: int = DEFAULT_WORKSPACE_ID,
+        max_attempts: int = 3,
+    ) -> PublishJob | None:
+        """Insert a pending job inside the caller's transaction.
+
+        Same fields as `enqueue`, but no separate session: the row commits or
+        rolls back with whatever the caller is doing. Returns None when a job
+        with the idempotency key already exists.
+        """
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        existing = session.scalar(
+            select(PublishJob).where(PublishJob.idempotency_key == idempotency_key)
+        )
+        if existing is not None:
+            return None
+        row = PublishJob(
+            workspace_id=workspace_id,
+            target_id=target_id,
+            kind=kind,
+            run_at=run_at or self.clock(),
+            state=JOB_STATE_MACHINE.start(JobState.PENDING),
+            attempts=0,
+            max_attempts=max_attempts,
+            idempotency_key=idempotency_key,
+            payload_json=json.dumps(payload or {}, sort_keys=True),
+        )
+        session.add(row)
+        session.flush()
+        return row
+
     # ------------------------------------------------------------------ claim
 
     def claim(

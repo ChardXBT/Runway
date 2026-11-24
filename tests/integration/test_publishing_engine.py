@@ -152,6 +152,41 @@ class FakePublisher:
 
 
 @dataclass
+class FakeResumablePublisher(FakePublisher):
+    """A TikTok-style adapter: a saved upload session resumes without marking.
+
+    `send` only calls `ctx.mark_request_sent()` when it opens a new publish
+    session (the init); a live `upload_url` in `ctx.resumable` resumes the
+    chunk upload instead, so the engine must carry the first attempt's marker
+    forward or a mid-upload failure reads as "not sent".
+    """
+
+    name: str = "fake_resumable"
+    session_expired: bool = False
+    inits: int = 0
+
+    def send(self, ctx: PublishContext, progress: Progress) -> SendResult:
+        self.calls.append("send")
+        self.resumed_from.append(dict(ctx.resumable))
+        if ctx.resumable.get("upload_url") and not self.session_expired:
+            self.calls.append("resume")
+            # The dropped upload also expired the session URL: a re-run from
+            # here would have to open a new publish session (a second post).
+            self.session_expired = True
+            raise httpx.ReadTimeout("the upload connection dropped mid-chunk")
+        self.inits += 1
+        ctx.mark_request_sent()
+        ctx.save_resumable(
+            {
+                "payload_hash": ctx.payload_hash,
+                "upload_url": f"https://uploads/session-{self.inits}",
+                "publish_id": f"pub-{self.inits}",
+            }
+        )
+        raise httpx.ReadTimeout("the upload connection dropped mid-chunk")
+
+
+@dataclass
 class Harness:
     database: Database
     settings: Settings
@@ -512,6 +547,54 @@ def test_a_worker_that_dies_repeatedly_before_sending_stops_rerunning(harness: H
     worker.run_once()
     assert harness.target(target_id).state == "failed_retryable"
     assert harness.fake.platform_state.creates == []
+
+
+def test_a_resumed_send_inherits_the_first_attempts_marker(harness: Harness) -> None:
+    """Attempt 2 resumes the saved session; a mid-upload failure is uncertain.
+
+    TikTok's `send` skips `mark_request_sent` on a resumed session, so without
+    the carried-over marker its mid-upload failure classified as `not_sent`,
+    retried automatically, and opened a second publish session.
+    """
+    fake = FakeResumablePublisher(FakePlatform())
+    harness.fake = fake
+    target_id = harness.release()
+    harness.drain()  # the first send marked, saved its session, then timed out
+    assert harness.attempts(target_id) == [
+        ("send", "uncertain"),
+        ("reconcile", "absent"),
+    ]
+    assert harness.target(target_id).state == "failed_retryable"
+
+    # A person releases the same payload again; the new send resumes the saved
+    # upload session instead of starting a second one.
+    target = harness.target(target_id)
+    harness.service().release_target(
+        local_owner(),
+        target.draft_id,
+        target_id,
+        ReleaseRequest(payload_hash=str(target.payload_hash), confirmed=True),
+    )
+    worker, _ = harness.worker()
+    assert worker.run_once()
+
+    assert fake.calls.count("send") == 2
+    assert "resume" in fake.calls
+    assert fake.inits == 1, "no second publish session may be opened"
+    assert harness.attempts(target_id)[-1] == ("send", "uncertain")
+    assert harness.target(target_id).state == "uncertain"
+    with harness.database.session() as session:
+        sends = session.scalars(
+            select(TargetAttempt)
+            .where(TargetAttempt.target_id == target_id, TargetAttempt.kind == "send")
+            .order_by(TargetAttempt.id)
+        ).all()
+        assert sends[1].request_sent_at is not None
+        assert sends[1].request_sent_at == sends[0].request_sent_at
+        pending_sends = session.scalars(
+            select(PublishJob).where(PublishJob.kind == "send", PublishJob.state == "pending")
+        ).all()
+    assert pending_sends == []
 
 
 # ------------------------------------------------------------- mock publishers

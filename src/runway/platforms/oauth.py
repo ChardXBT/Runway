@@ -37,11 +37,19 @@ class OAuthStateService:
         redirect_uri: str,
         use_pkce: bool,
         payload: str | None = None,
+        purpose: str = "connect",
+        account_id: int | None = None,
+        workspace_id: int = 1,
     ) -> IssuedState:
-        """Issue a state; `payload` rides on it when the flow uses no PKCE.
+        """A single-use state row for one OAuth flow.
+
+        `purpose` records why the flow was started ("connect", "reconnect" or
+        "enable_publishing"); `account_id` binds it to the connected account it
+        was issued for, so the callback can refuse a token for a different
+        channel (spec 08 section 1: identity check before every write).
 
         The states table has no payload column, so a non-PKCE state carries
-        its payload (e.g. the scope list of an incremental-consent request)
+        its `payload` (e.g. the scope list of an incremental-consent request)
         in `code_verifier`, which is empty there anyway. `read_state_storage`
         splits the column back into verifier and payload.
         """
@@ -56,6 +64,9 @@ class OAuthStateService:
                     state=state,
                     code_verifier=stored,
                     redirect_uri=redirect_uri,
+                    purpose=purpose,
+                    account_id=account_id,
+                    workspace_id=workspace_id,
                     created_at=now,
                     expires_at=now + STATE_TTL,
                 )

@@ -178,6 +178,7 @@ WORKSPACE_SCOPED_TABLES = (
     "content_drafts",
     "draft_targets",
     "publish_jobs",
+    "platform_subscriptions",
 )
 
 

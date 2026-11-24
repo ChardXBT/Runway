@@ -187,6 +187,11 @@ targets the user picks. The proposal's own Community-post path is untouched. Not
 automatically. Reason: keeps the existing contract intact and makes cross-posting a deliberate
 choice.
 
+Amended 2026-11-22: a `youtube_post` target on the proposal's own channel is the one exception -
+it is the API alternative to the browser publisher for the same Community tab. The "never both"
+guard (`runway.posts.lineup_guard`, spec 08 §2) makes each path refuse a proposal the other
+already claimed; channel identity fails closed.
+
 ## 8. API (all under `/api/v1`)
 
 | Method and path | Scope | Notes |

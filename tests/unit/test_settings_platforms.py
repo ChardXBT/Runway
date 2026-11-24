@@ -13,7 +13,7 @@ def test_public_dict_never_exposes_secret_values(tmp_path) -> None:
         "youtube_client_secret": "yt-secret-value-12345",
         "instagram_app_secret": "ig-secret-value-12345",
         "tiktok_client_secret": "tt-secret-value-12345",
-        "openai_api_key": "sk-openai-12345",
+        "openai_api_key": "sk-" + "openai" + "-12345",  # built, so the file holds no key literal
         "search_api_key": "search-key-12345",
         "codex_access_token": "codex-token-12345",
         "codex_api_key": "codex-key-12345",

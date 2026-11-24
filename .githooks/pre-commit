@@ -1,0 +1,18 @@
+#!/bin/sh
+# Refuse private instance files and token-shaped strings before they are committed.
+# Enable once per clone: powershell -File scripts/install_hooks.ps1
+# (or: git config core.hooksPath .githooks).
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+for candidate in "$repo_root/.venv/Scripts/python.exe" "$repo_root/.venv/bin/python"; do
+    if [ -x "$candidate" ]; then
+        exec "$candidate" "$repo_root/scripts/secret_scan.py" --staged
+    fi
+done
+for candidate in python3 python py; do
+    # Probe it: on Windows python3 can be the Microsoft Store stub, which only prints a hint.
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "import sys" >/dev/null 2>&1; then
+        exec "$candidate" "$repo_root/scripts/secret_scan.py" --staged
+    fi
+done
+echo "secret scan: no Python found; the commit is refused" >&2
+exit 1

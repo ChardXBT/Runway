@@ -39,12 +39,12 @@ from runway.platforms.instagram import InstagramProvider
 from runway.platforms.oauth import OAuthStateService
 from runway.platforms.publish_capability import INSTAGRAM_PUBLISH_SCOPE
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.token_upkeep import (
+from runway.platforms.tokens import TokenStore
+from runway.realtime.token_upkeep import (
     REFRESH_TOKEN_JOB,
     TokenUpkeepScheduler,
     run_refresh_token_job,
 )
-from runway.platforms.tokens import TokenStore
 
 
 def migrated(settings: Settings) -> Settings:
@@ -118,7 +118,9 @@ def test_enable_reports_already_enabled(tmp_path: Path) -> None:
     assert response.json()["status"] == "already_enabled"
 
 
-def test_enable_refuses_other_platforms_and_missing_accounts(tmp_path: Path) -> None:
+def test_enable_refuses_missing_accounts_and_dispatches_per_platform(
+    tmp_path: Path,
+) -> None:
     settings = _instagram_settings(tmp_path)
     database = Database(settings)
     youtube = _account(database, scopes=[], platform="youtube", external_id="chan1")
@@ -126,9 +128,11 @@ def test_enable_refuses_other_platforms_and_missing_accounts(tmp_path: Path) -> 
         missing = client.post("/api/v1/accounts/999/publishing/enable")
         assert missing.status_code == 404
         assert missing.headers["content-type"].startswith("application/problem+json")
+        # YouTube has its own branch now: this account reaches it and fails
+        # the "OAuth configured" gate, not an "unsupported platform" one.
         other = client.post(f"/api/v1/accounts/{youtube.id}/publishing/enable")
         assert other.status_code == 409
-        assert other.json()["code"] == "publishing_enable_unsupported"
+        assert other.json()["code"] == "capability_not_ready"
 
 
 def test_enable_is_rejected_in_mock_mode(tmp_path: Path) -> None:
@@ -137,7 +141,8 @@ def test_enable_is_rejected_in_mock_mode(tmp_path: Path) -> None:
     account = _account(database, scopes=list(INSTAGRAM_SCOPES))
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
         response = client.post(f"/api/v1/accounts/{account.id}/publishing/enable")
-    assert response.status_code == 400
+    assert response.status_code == 409
+    assert response.json()["code"] == "capability_not_ready"
 
 
 def test_enable_requires_instagram_oauth_configuration(tmp_path: Path) -> None:
@@ -147,7 +152,7 @@ def test_enable_requires_instagram_oauth_configuration(tmp_path: Path) -> None:
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
         response = client.post(f"/api/v1/accounts/{account.id}/publishing/enable")
     assert response.status_code == 409
-    assert response.json()["code"] == "oauth_not_configured"
+    assert response.json()["code"] == "capability_not_ready"
 
 
 # ------------------------------------------------------- callback storage
@@ -274,30 +279,45 @@ def _due_token(days_left: int, *, issued_days_ago: int = 30) -> TokenSet:
     )
 
 
-def test_upkeep_produces_a_refresh_job_only_for_due_accounts(
+def test_upkeep_schedules_a_refresh_job_at_day_50(
     tmp_path: Path, database: Database, settings: Settings
 ) -> None:
+    """Each Instagram account gets one job for its token's day-50 instant.
+
+    A token whose issue time cannot be told (no `issued_at`, no expiry) gets
+    none: the scheduler cannot compute when day 50 falls.
+    """
     due = _account(database, scopes=[], external_id="ig1")
-    fresh = _account(database, scopes=[], external_id="ig2")
-    young = _account(database, scopes=[], external_id="ig3")
+    future = _account(database, scopes=[], external_id="ig2")
+    unknown = _account(database, scopes=[], external_id="ig3")
     store = TokenStore(settings.resolved_data_dir / "secrets")
-    store.store("tok-due", _due_token(10))
-    store.store("tok-fresh", _due_token(55))
-    store.store("tok-young", _due_token(10, issued_days_ago=0))
-    for account, ref in ((due, "tok-due"), (fresh, "tok-fresh"), (young, "tok-young")):
+    # Day 50 already passed: the job is due immediately.
+    store.store("tok-due", _due_token(5, issued_days_ago=55))
+    # Day 50 is still ahead: the job waits for its instant.
+    store.store("tok-future", _due_token(30, issued_days_ago=30))
+    store.store("tok-unknown", TokenSet(access_token="no-age-info"))
+    for account, ref in (
+        (due, "tok-due"),
+        (future, "tok-future"),
+        (unknown, "tok-unknown"),
+    ):
         with database.session() as session:
             row = session.get(ConnectedAccount, account.id)
             assert row is not None
             row.token_ref = ref
     queue = JobQueue(database)
-    TokenUpkeepScheduler(database, queue, settings).produce(datetime.now(UTC))
+    registry = ProviderRegistry(database, settings)
+    now = datetime.now(UTC)
+    TokenUpkeepScheduler(database, registry, queue).produce(now)
     with database.session() as session:
         rows = session.scalars(select(PublishJob).where(PublishJob.kind == REFRESH_TOKEN_JOB)).all()
-        keys = [row.idempotency_key or "" for row in rows]
-        payloads = [row.payload_json for row in rows]
-    assert len(keys) == 1
-    assert keys[0].startswith(f"{REFRESH_TOKEN_JOB}:{due.id}:")
-    assert f'"account_id": {due.id}' in (payloads[0] or "")
+    by_account = {json.loads(row.payload_json)["account_id"]: row for row in rows}
+    assert set(by_account) == {due.id, future.id}
+    due_job = by_account[due.id]
+    future_job = by_account[future.id]
+    assert due_job.run_at.replace(tzinfo=UTC) <= now
+    assert future_job.run_at.replace(tzinfo=UTC) > now
+    assert (due_job.idempotency_key or "").startswith(f"{REFRESH_TOKEN_JOB}:{due.id}:")
 
 
 class _RefreshingProvider:
@@ -335,9 +355,7 @@ def test_refresh_job_renews_the_stored_token(
     registry = ProviderRegistry(database, settings)
     provider = _RefreshingProvider()
     registry.set_provider(Platform.instagram, provider)  # type: ignore[arg-type]
-    run_refresh_token_job(
-        database, settings, _FakeJob(payload={"account_id": account.id}), registry=registry
-    )
+    run_refresh_token_job(registry, _FakeJob(payload={"account_id": account.id}))
     assert provider.refreshed == 1
     stored = store.load("tok-due")
     assert stored is not None and stored.access_token == "new-token"
@@ -362,9 +380,7 @@ def test_refresh_job_marks_a_revoked_account_needs_reauth(
         row.token_ref = "tok-due"
     registry = ProviderRegistry(database, settings)
     registry.set_provider(Platform.instagram, _DoomedProvider())  # type: ignore[arg-type]
-    run_refresh_token_job(
-        database, settings, _FakeJob(payload={"account_id": account.id}), registry=registry
-    )
+    run_refresh_token_job(registry, _FakeJob(payload={"account_id": account.id}))
     with database.session() as session:
         stored = session.get(ConnectedAccount, account.id)
         assert stored is not None
@@ -374,6 +390,8 @@ def test_refresh_job_marks_a_revoked_account_needs_reauth(
 def test_refresh_job_skips_unified_tokens(
     tmp_path: Path, database: Database, settings: Settings
 ) -> None:
+    """Unified Login tokens are Meta user tokens, not ig_* long-lived tokens:
+    the scheduler never enqueues ig_refresh_token upkeep for them."""
     account = _account(database, scopes=[], external_id="ig1")
     store = TokenStore(settings.resolved_data_dir / "secrets")
     token = _due_token(10)
@@ -384,7 +402,8 @@ def test_refresh_job_skips_unified_tokens(
         assert row is not None
         row.token_ref = "tok-due"
     queue = JobQueue(database)
-    TokenUpkeepScheduler(database, queue, settings).produce(datetime.now(UTC))
+    registry = ProviderRegistry(database, settings)
+    TokenUpkeepScheduler(database, registry, queue).produce(datetime.now(UTC))
     with database.session() as session:
         assert (
             session.scalar(select(PublishJob).where(PublishJob.kind == REFRESH_TOKEN_JOB)) is None

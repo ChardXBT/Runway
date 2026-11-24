@@ -1,11 +1,14 @@
 param(
-    [string]$TargetSha = ""
+    [string]$TargetSha = "",
+    # Where the release goes. Defaults to the private instance repository
+    # (RUNWAY_INSTANCE_REPOSITORY / instance_repository), else the code repository.
+    [string]$Repository = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$repository = "ChardXBT/Runway"
+$codeRepository = "ChardXBT/Runway"
 $releaseTag = "database-latest"
 $databaseAssetName = "runway-database.db.gz"
 $mediaAssetName = "runway-operational-media.zip"
@@ -46,6 +49,49 @@ function Assert-ReleaseAsset {
     if ($asset.digest -and $asset.digest -ne $expectedDigest) {
         throw "Uploaded release asset $Name has the wrong GitHub digest."
     }
+}
+
+function Get-InstanceRepositorySetting {
+    param([Parameter(Mandatory = $true)][string]$Python)
+
+    $value = & $Python -c "from runway.config import get_settings; print(get_settings().instance_repository or '')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Database sync refused: Runway settings could not be loaded to find the instance repository."
+    }
+    return ([string]$value).Trim()
+}
+
+function Resolve-TargetRepository {
+    param(
+        [string]$Explicit,
+        [Parameter(Mandatory = $true)][string]$Python
+    )
+
+    $name = $Explicit
+    if (-not $name) {
+        $name = Get-InstanceRepositorySetting -Python $Python
+    }
+    if (-not $name) {
+        $name = $codeRepository
+    }
+    if ($name -notmatch "^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$") {
+        throw "Database sync refused: '$name' is not a GitHub repository in owner/name form."
+    }
+    return $name
+}
+
+function Assert-PrivateRepository {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $json = gh repo view $Name --json "visibility,nameWithOwner"
+    if ($LASTEXITCODE -ne 0 -or -not $json) {
+        throw "Database sync refused: $Name is not confirmed private."
+    }
+    $state = $json | ConvertFrom-Json
+    if ($state.visibility -ne "PRIVATE") {
+        throw "Database sync refused: $Name is not confirmed private."
+    }
+    return [string]$state.nameWithOwner
 }
 
 $repoRoot = (git rev-parse --show-toplevel).Trim()
@@ -96,11 +142,9 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     $python = $pythonCommand.Source
 }
 
+$targetRepository = Resolve-TargetRepository -Explicit $Repository -Python $python
 Invoke-Native gh auth status --hostname github.com
-$repositoryState = gh repo view $repository --json visibility | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or $repositoryState.visibility -ne "PRIVATE") {
-    throw "Database sync refused: $repository is not confirmed private."
-}
+$targetRepository = Assert-PrivateRepository -Name $targetRepository
 
 $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $workDirectory = Join-Path $tempBase ("runway-db-sync-" + [guid]::NewGuid().ToString("N"))
@@ -139,7 +183,7 @@ try {
         }
     }
 
-    & gh release view $releaseTag --repo $repository *> $null
+    & gh release view $releaseTag --repo $targetRepository *> $null
     $releaseExists = $LASTEXITCODE -eq 0
     if (-not $releaseExists) {
         $notes = @"
@@ -147,9 +191,15 @@ Rolling private recovery snapshot of Runway's canonical Qlob intelligence databa
 
 The database uses SQLite's online backup API. A companion archive contains every media file referenced by the canonical database, including historical, candidate, review, Lineup, and published records. Browser profiles, authentication state, orphan media, logs, and WAL/SHM files are excluded. Every asset is restored and hash-verified before this release is accepted.
 "@
+        # --target names a commit of the code repository; an instance repository
+        # has its own history, so its release tags that repository's default branch.
+        $targetArguments = @()
+        if ($targetRepository -eq $codeRepository) {
+            $targetArguments = @("--target", "main")
+        }
         Invoke-Native gh release create $releaseTag `
-            --repo $repository `
-            --target main `
+            --repo $targetRepository `
+            @targetArguments `
             --title "Runway database snapshot" `
             --notes $notes `
             --prerelease
@@ -160,9 +210,9 @@ The database uses SQLite's online backup API. A companion archive contains every
         "$mediaArchive#$mediaAssetName" `
         "$manifestPath#$manifestAssetName" `
         --clobber `
-        --repo $repository
+        --repo $targetRepository
 
-    $release = gh api "repos/$repository/releases/tags/$releaseTag" | ConvertFrom-Json
+    $release = gh api "repos/$targetRepository/releases/tags/$releaseTag" | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to inspect the updated database release."
     }
@@ -185,7 +235,7 @@ The database uses SQLite's online backup API. A companion archive contains every
 
     New-Item -ItemType Directory -Path $downloadDirectory | Out-Null
     Invoke-Native gh release download $releaseTag `
-        --repo $repository `
+        --repo $targetRepository `
         --pattern $databaseAssetName `
         --pattern $mediaAssetName `
         --pattern $manifestAssetName `

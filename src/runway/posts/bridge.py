@@ -12,14 +12,22 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 
+from runway.auth.key_limits import acquire_cap_lock
 from runway.auth.principal import POSTS_WRITE, Principal, require
 from runway.auth.problems import Problem, ProblemCode
-from runway.db.models import CandidateImage, Channel, MediaAsset, Proposal
+from runway.db.models import (
+    CandidateImage,
+    Channel,
+    ConnectedAccount,
+    MediaAsset,
+    Proposal,
+)
 from runway.domain.enums import ProposalStatus
+from runway.posts.lineup_guard import browser_path_claimed, channel_conflict
 from runway.posts.media_service import MediaService
 from runway.posts.schemas import CrossPostRequest, PostCreate, PostOut
 from runway.posts.service import PostService, post_view
-from runway.posts.types import PostSource
+from runway.posts.types import PostSource, TargetPostType
 
 # "Accepted into the Lineup": approved, or anything after it except cancelled.
 ACCEPTED_PROPOSAL_STATUSES = frozenset(
@@ -45,6 +53,12 @@ class ProposalBridge:
         require(principal, POSTS_WRITE)
         database = self.posts.database
         with database.session() as session:
+            agent = principal.kind == "agent"
+            if agent:
+                # The daily post cap is enforced in create_post_in below; the
+                # lock that makes its check-then-act atomic must be taken
+                # before this transaction's first statement.
+                acquire_cap_lock(session, principal)
             proposal = session.get(Proposal, proposal_id)
             channel = session.get(Channel, proposal.channel_id) if proposal is not None else None
             if (
@@ -58,6 +72,31 @@ class ProposalBridge:
                     ProblemCode.INVALID_STATE,
                     "only a proposal accepted into the Lineup can be posted elsewhere",
                 )
+            # Never both (spec 08 section 2): a proposal the browser publisher
+            # already sent to its Community tab cannot also go out by the
+            # posts API. Channel identity fails closed.
+            api_targets = [
+                target
+                for target in data.targets
+                if target.post_type == TargetPostType.YOUTUBE_POST.value
+            ]
+            if api_targets and browser_path_claimed(session, proposal):
+                for target in api_targets:
+                    account = (
+                        session.get(ConnectedAccount, target.account_id)
+                        if target.account_id is not None
+                        else None
+                    )
+                    if channel_conflict(
+                        account.external_account_id if account is not None else None,
+                        self.posts.settings.publisher_channel_id,
+                    ):
+                        raise Problem.of(
+                            ProblemCode.INVALID_STATE,
+                            "this proposal is already on its way to its Community tab "
+                            "through the browser publisher; the posts API cannot "
+                            "publish it a second time",
+                        )
             media_ids: list[int] = []
             candidate = session.get(CandidateImage, proposal.candidate_image_id)
             image = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
@@ -89,11 +128,16 @@ class ProposalBridge:
                     body=caption,
                     media_ids=media_ids,
                     targets=data.targets,
-                    # The Lineup image is a found photo, not synthetic media; the
-                    # person sets the AI label if it applies.
-                    ai_generated=False,
+                    # A person's cross-post keeps the proposal's judgement:
+                    # the Lineup image is a found photo, not synthetic media.
+                    # A key's post leaves the label unset so the agent
+                    # default (spec 06 section 4) applies, not a forced "no".
+                    ai_generated=None if agent else False,
                 ),
-                source=PostSource.PROPOSAL,
+                # A key's cross-post is the key's own post: source 'agent' puts
+                # its ready targets in the approval queue. A person's stays a
+                # proposal cross-post, releasable like any human post.
+                source=PostSource.AGENT if agent else PostSource.PROPOSAL,
                 source_ref=str(proposal.id),
             )
             return post_view(session, self.posts.sources, post)

@@ -44,6 +44,8 @@ from runway.domain.state_machine import (
     transition_attempt,
 )
 from runway.hosted.quotas import require_send_allowed
+from runway.operations.instance_lease import ensure_active_or_raise
+from runway.posts.lineup_guard import api_path_claimed
 from runway.publishing.base import (
     AssistedPost,
     AssistedPreparation,
@@ -1430,6 +1432,7 @@ class YouTubeBrowserPublisher:
         confirmation_phrase: str,
     ) -> PublishResult:
         self._require_enabled()
+        ensure_active_or_raise(self.settings)
         if not self._confirm_lock.acquire(blocking=False):
             raise ValueError("another YouTube scheduling confirmation is already running")
         try:
@@ -1501,6 +1504,18 @@ class YouTubeBrowserPublisher:
     ) -> PublishAttempt:
         proposal_id = preflight.post.proposal_id
         self.recover_interrupted_attempts(session)
+        # Never both (spec 08 section 2): same check as `_publishing_preflight`,
+        # re-read inside this transaction in case a `youtube_post` target was
+        # released between the preflight and now.
+        if api_path_claimed(
+            session,
+            proposal_id,
+            channel_external_id=self.settings.publisher_channel_id,
+        ):
+            raise ValueError(
+                "the posts API already claimed this proposal; publishing it "
+                "through the browser would double-post"
+            )
         unsettled = session.scalars(
             select(PublishAttempt)
             .where(
@@ -1705,6 +1720,7 @@ class YouTubeBrowserPublisher:
     async def process_queued_attempt(self, attempt_id: int) -> PublishResult:
         """Schedule one explicitly queued Lineup item; callers serialize the queue."""
         self._require_enabled()
+        ensure_active_or_raise(self.settings)
         await asyncio.to_thread(self._confirm_lock.acquire)
         try:
             with self.database.session() as session:
@@ -2238,6 +2254,18 @@ class YouTubeBrowserPublisher:
                 raise LookupError(f"proposal {proposal_id} not found")
             if proposal.status not in statuses:
                 raise ValueError("external scheduling requires an internally scheduled proposal")
+            # Never both (spec 08 section 2): a proposal a released
+            # `youtube_post` target claimed cannot also go out through the
+            # browser; channel identity fails closed.
+            if api_path_claimed(
+                session,
+                proposal.id,
+                channel_external_id=self.settings.publisher_channel_id,
+            ):
+                raise ValueError(
+                    "the posts API already claimed this proposal; publishing it "
+                    "through the browser would double-post"
+                )
             candidate = session.get(CandidateImage, proposal.candidate_image_id)
             media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
             if media is None:
@@ -2426,6 +2454,16 @@ class YouTubeBrowserPublisher:
                 if not hmac.compare_digest(attempt.payload_hash, current_payload_hash):
                     transition_attempt(attempt, PublishAttemptStatus.INVALIDATED, now=now)
                     terminal_error = "proposal changed after preparation; prepare a new attempt"
+                elif api_path_claimed(
+                    session,
+                    proposal.id,
+                    channel_external_id=self.settings.publisher_channel_id,
+                ):
+                    transition_attempt(attempt, PublishAttemptStatus.INVALIDATED, now=now)
+                    terminal_error = (
+                        "the posts API already claimed this proposal; publishing it "
+                        "through the browser would double-post"
+                    )
                 else:
                     require_transition(proposal.status, ProposalStatus.PUBLISHING)
                     old_status = proposal.status
@@ -2490,6 +2528,15 @@ class YouTubeBrowserPublisher:
                 attempt.payload_hash, current_payload_hash
             ):
                 terminal_error = "proposal changed after it entered the scheduling queue"
+            if terminal_error is None and api_path_claimed(
+                session,
+                proposal.id,
+                channel_external_id=self.settings.publisher_channel_id,
+            ):
+                terminal_error = (
+                    "the posts API already claimed this proposal; publishing it "
+                    "through the browser would double-post"
+                )
             if terminal_error is not None:
                 transition_attempt(
                     attempt,

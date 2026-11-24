@@ -19,6 +19,16 @@ def worker_lock_path(settings: Settings) -> Path:
     return runtime_directory(settings) / "worker.lock"
 
 
+def api_lock_path(settings: Settings) -> Path:
+    """Held by the API process for its lifetime.
+
+    ``runway instance pull`` probes it (and the worker's lock) so it never
+    replaces the database underneath a running Runway. It is separate from the
+    worker's lock so the API never stops a worker from starting.
+    """
+    return runtime_directory(settings) / "api.lock"
+
+
 def worker_pid_path(settings: Settings) -> Path:
     """`{"pid", "revision", "started_at"}` of the running worker; removed on exit."""
     return runtime_directory(settings) / "worker.pid"

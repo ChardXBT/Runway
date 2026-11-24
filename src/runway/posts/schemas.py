@@ -69,6 +69,9 @@ class ReleaseRequest(_Input):
     # The hash the person saw in the release dialog; must match the current one.
     payload_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     confirmed: bool
+    # TikTok's mandatory screen ends in an express consent: the request echoes
+    # the exact line the dialog showed (`release_notice` on the target).
+    consent: str | None = Field(default=None, max_length=2_000)
 
 
 class MarkPublishedRequest(_Input):

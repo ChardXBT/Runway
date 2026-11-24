@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from runway import __version__
+from runway.agent.webhooks import WebhookService
 from runway.api.catalog_routes import build_catalog_router
 from runway.api.discovery_routes import build_discovery_router
 from runway.api.identity_hook_routes import build_identity_hook_router
@@ -18,20 +19,28 @@ from runway.api.intelligence_routes import build_intelligence_router
 from runway.api.platform_routes import build_platform_router
 from runway.api.proposal_routes import build_proposal_router
 from runway.api.security import LocalRequestGuard, loopback_origins
-from runway.api.v1.accounts_routes import build_accounts_router
+from runway.api.v1.approvals_routes import build_approvals_router
 from runway.api.v1.errors import install_problem_handlers
 from runway.api.v1.events_routes import build_events_router
+from runway.api.v1.keys_routes import build_keys_router
 from runway.api.v1.media_routes import build_media_router
 from runway.api.v1.posts_routes import build_cross_post_router, build_posts_router
+from runway.api.v1.sync_status_routes import build_sync_status_router
+from runway.api.v1.webhooks_routes import build_webhooks_router
 from runway.api.workspace_routes import build_workspace_router
+from runway.auth.audit import AgentAuditMiddleware
 from runway.auth.principal import get_principal
 from runway.config import Settings, get_settings
 from runway.db.base import Database
 from runway.db.bootstrap import DatabaseNotCurrent, migration_head, require_database_at_head
 from runway.hosted.app_setup import configure_hosted, hosted_settings_view
+from runway.locks import FileLockTimeout, exclusive_file_lock
 from runway.logging import configure_logging
+from runway.operations.instance_lease import StandbyError, clear_stale_instance_transfer
 from runway.operations.revision import checkout_revision
+from runway.operations.runtime_files import api_lock_path
 from runway.platforms.sync import SyncService
+from runway.realtime.hooks_routes import build_hooks_router
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +81,36 @@ def _lifespan(
         # Scheduled platform sync is produced and run by `runway worker`; the
         # API process runs no timer thread (audit C8).
         try:
-            yield
-        finally:
-            logger.info("runway api stop", extra={"event_type": "api_stop"})
+            # A crashed push or handover leaves its transfer marker behind;
+            # drop it before the first request would read it as standby.
+            clear_stale_instance_transfer(settings)
+        except Exception:  # noqa: BLE001
+            logger.exception("stale instance-transfer cleanup failed during startup")
+        lease_heartbeat = None
+        if settings.instance_dir is not None:
+            # Private instance only: keep this machine's lease heartbeat fresh while it runs.
+            from runway.operations.instance import LeaseHeartbeat
+
+            lease_heartbeat = LeaseHeartbeat(settings)
+            lease_heartbeat.start()
+        with ExitStack() as locks:
+            try:
+                # A running API holds this lock for its lifetime: 'runway
+                # instance pull' checks it (and the worker's lock) and refuses
+                # before replacing the database under a live process.
+                locks.enter_context(exclusive_file_lock(api_lock_path(settings), timeout=0))
+            except FileLockTimeout:
+                logger.warning(
+                    "another Runway process already holds %s; "
+                    "'runway instance pull' will refuse while it runs",
+                    api_lock_path(settings),
+                )
+            try:
+                yield
+            finally:
+                if lease_heartbeat is not None:
+                    lease_heartbeat.stop()
+                logger.info("runway api stop", extra={"event_type": "api_stop"})
 
     return lifespan
 
@@ -125,12 +161,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.settings = active_settings
     install_problem_handlers(application)
     application.state.database = database
+
+    @application.exception_handler(StandbyError)
+    async def standby_error(_request: Request, exc: StandbyError) -> JSONResponse:
+        # A platform write or token use reached on a machine without the instance lease.
+        return JSONResponse(status_code=409, content={"detail": exc.detail})
+
     if hosted:
         # Web-origin CORS and origin guard, rate limits, security headers and
         # the identity provider (spec 05 sections 2 and 6).
         configure_hosted(application, active_settings)
     else:
         web_origins = loopback_origins(active_settings.web_port)
+        # Innermost: one audit row per successful mutation an API key makes (spec 06 section 5).
+        application.add_middleware(AgentAuditMiddleware, database=database)
         application.add_middleware(
             CORSMiddleware,
             allow_origins=web_origins,
@@ -141,7 +185,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             expose_headers=["ETag", "Idempotent-Replayed"],
         )
         # Added last so it runs first, before CORS handling and every route.
-        application.add_middleware(LocalRequestGuard, allowed_origins=web_origins)
+        # The public edge host (spec 04 section 6) reaches only /hooks/ and the
+        # OAuth callback; forwarded (tunnel) traffic is detected by its headers.
+        application.add_middleware(
+            LocalRequestGuard,
+            allowed_origins=web_origins,
+            edge_host=active_settings.public_edge_host,
+            edge_port=active_settings.public_edge_port,
+        )
         # Local-only surfaces (spec 01 section 7): media on local disk, capture,
         # catalogue, discovery, intelligence, the proposal/Lineup flow and the
         # browser publisher with its connector. Hosted does not mount them (404).
@@ -160,10 +211,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Hosted serves none of it (404) until the workspace-tenancy work
         # scopes every query by principal.workspace_id and calls require().
         application.include_router(build_platform_router(database, active_settings))
-        # Incremental consent ("turn on publishing"). Workspace-scoped, but it
-        # shares the platform accounts' local-only lifecycle, so it mounts with
-        # them rather than on the hosted surface.
-        application.include_router(build_accounts_router(database, active_settings))
+        # Signature-authenticated platform webhooks (spec 04 section 2) and the
+        # per-account sync status; local only until tenancy covers them.
+        application.include_router(build_hooks_router(database, active_settings))
+        application.include_router(build_sync_status_router(database, active_settings))
+        # Agent interface (spec 06): keys, approvals and outbound webhooks; local
+        # only until tenancy proves these routes isolated on Postgres too.
+        application.include_router(build_keys_router(database, active_settings))
+        application.include_router(build_approvals_router(database, active_settings))
+        application.include_router(build_webhooks_router(WebhookService(database, active_settings)))
         # Spec 03 section 8. Nothing here publishes: a release only queues a job
         # for the separate `runway worker` process. Local only until the tenancy
         # work proves workspace isolation on Postgres for these routes too.
@@ -179,6 +235,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         application.state.post_service = post_service
         application.state.media_service = media_service
+        # Account-scoped v1 routes (spec 08): incremental publishing consent,
+        # YouTube categories and the TikTok mandatory screen's fresh
+        # creator-info read (spec 08 section 1, section 4). Local only, like
+        # the OAuth callback they feed into; hosted gets them when the
+        # tenancy work scopes the platform tables per workspace.
+        from runway.api.v1.accounts_routes import build_accounts_router
+
+        application.include_router(build_accounts_router(database, active_settings))
         application.include_router(build_posts_router(post_service))
         application.include_router(build_media_router(media_service))
         application.include_router(

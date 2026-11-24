@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -31,6 +33,9 @@ from runway.platforms.capabilities import (
     Platform,
     capability_matrix,
 )
+from runway.realtime.quota import YOUTUBE_METHOD_COSTS, QuotaCallRecorder
+
+logger = logging.getLogger(__name__)
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -38,9 +43,11 @@ REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 API_BASE = "https://www.googleapis.com/youtube/v3"
 ANALYTICS_BASE = "https://youtubeanalytics.googleapis.com/v2"
 
+# Every component is optional (YouTube sends "PT1M" for a one-minute video),
+# but at least one must be present and "T" must be followed by a time part.
 _DURATION_PATTERN = re.compile(
-    r"^P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?"
-    r"(?P<seconds>\d+(?:\.\d+)?)S)?$"
+    r"^P(?!$)(?:(?P<days>\d+)D)?(?:T(?=\d)(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?"
+    r"(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?$"
 )
 SHORT_MAX_SECONDS = 180
 
@@ -86,10 +93,24 @@ def _as_str_or_none(value: object) -> str | None:
 
 class YouTubeProvider(PlatformProvider):
     platform = Platform.youtube
+    # videoCategories.list barely changes; one cached read per region per day.
+    CATEGORY_CACHE_TTL = timedelta(hours=24)
 
-    def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.Client | None = None,
+        quota_recorder: QuotaCallRecorder | None = None,
+    ) -> None:
         self.settings = settings
         self.client = client or httpx.Client(timeout=20.0)
+        # Every Data API call the provider makes is charged to the project's
+        # quota ledger (spec 04 section 3): `quota_calls` is the always-on
+        # in-memory record, `quota_recorder` the persisting seam the registry
+        # attaches (QuotaRecorder).
+        self.quota_calls: list[tuple[str, str, int]] = []
+        self.quota_recorder = quota_recorder
+        self._categories_cache: dict[str, tuple[datetime, list[dict[str, Any]]]] = {}
 
     def capabilities(self) -> list[CapabilityEntry]:
         return capability_matrix(
@@ -115,12 +136,17 @@ class YouTubeProvider(PlatformProvider):
         state: str,
         redirect_uri: str,
         code_challenge: str | None,
+        extra_scopes: Sequence[str] = (),
     ) -> str:
+        # The base scopes are sent again alongside the incremental ones so the
+        # consent screen re-asks for them; a deselected base scope can then be
+        # re-granted instead of silently breaking reads (spec 08 section 1).
+        scopes = list(dict.fromkeys([*self._scopes(), *extra_scopes]))
         params: dict[str, str] = {
             "client_id": self.settings.youtube_client_id or "",
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": " ".join(self._scopes()),
+            "scope": " ".join(scopes),
             "access_type": "offline",
             "prompt": "consent",
             "include_granted_scopes": "true",
@@ -262,13 +288,27 @@ class YouTubeProvider(PlatformProvider):
             raise PermissionMissing(detail, status=403)
         raise ProviderError(message, retryable=status_code >= 500, status=status_code)
 
+    def _record_quota(self, method: str) -> int:
+        """Charge `method`'s unit cost to the ledger; returns the units."""
+        bucket, units = YOUTUBE_METHOD_COSTS.get(method, ("default", 1))
+        self.quota_calls.append((method, bucket, units))
+        if self.quota_recorder is not None:
+            try:
+                self.quota_recorder(method, bucket, units)
+            except Exception:  # noqa: BLE001
+                # The platform call already spent the quota; bookkeeping
+                # must never make it look failed (a "failed" reply would be
+                # posted twice).
+                logger.warning("quota recording failed for %s", method, exc_info=True)
+        return units
+
     def _api_get(
         self,
         token: TokenSet,
         url: str,
         params: dict[str, Any],
         *,
-        quota_units: int,
+        method: str,
     ) -> tuple[dict[str, Any], int]:
         response = provider_request(
             self.client,
@@ -278,16 +318,52 @@ class YouTubeProvider(PlatformProvider):
             params=params,
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
-        return self._json_or_raise(response), quota_units
+        # A received response consumed quota whatever its status; a transport
+        # failure raised inside provider_request never left the machine.
+        units = self._record_quota(method)
+        return self._json_or_raise(response), units
 
     # --------------------------------------------------------------- identity
+
+    def list_video_categories(
+        self, token: TokenSet, *, region_code: str = "US"
+    ) -> list[dict[str, Any]]:
+        """Assignable `videoCategories.list` entries for one region, cached (spec 08 §2)."""
+        now = datetime.now(UTC)
+        cached = self._categories_cache.get(region_code)
+        if cached is not None and cached[0] > now:
+            return [dict(item) for item in cached[1]]
+        data, _ = self._api_get(
+            token,
+            f"{API_BASE}/videoCategories",
+            {"part": "snippet", "regionCode": region_code},
+            method="videoCategories.list",
+        )
+        items: list[dict[str, Any]] = []
+        raw_items = data.get("items")
+        for entry in raw_items if isinstance(raw_items, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            snippet = _as_dict(entry.get("snippet"))
+            category_id = str(entry.get("id") or "")
+            if not category_id:
+                continue
+            items.append(
+                {
+                    "id": category_id,
+                    "title": str(snippet.get("title") or ""),
+                    "assignable": bool(snippet.get("assignable", True)),
+                }
+            )
+        self._categories_cache[region_code] = (now + self.CATEGORY_CACHE_TTL, items)
+        return [dict(item) for item in items]
 
     def fetch_identity(self, token: TokenSet) -> AccountIdentity:
         data, _ = self._api_get(
             token,
             f"{API_BASE}/channels",
             {"part": "snippet,statistics,contentDetails", "mine": "true"},
-            quota_units=1,
+            method="channels.list",
         )
         items = data.get("items")
         if not isinstance(items, list) or not items:
@@ -340,7 +416,9 @@ class YouTubeProvider(PlatformProvider):
         }
         if cursor and cursor.get("page_token"):
             params["pageToken"] = str(cursor["page_token"])
-        data, units = self._api_get(token, f"{API_BASE}/playlistItems", params, quota_units=1)
+        data, units = self._api_get(
+            token, f"{API_BASE}/playlistItems", params, method="playlistItems.list"
+        )
         items = data.get("items")
         video_ids: list[str] = []
         for item in items if isinstance(items, list) else []:
@@ -371,7 +449,7 @@ class YouTubeProvider(PlatformProvider):
                     "part": "snippet,contentDetails,statistics,status",
                     "id": ",".join(batch),
                 },
-                quota_units=1,
+                method="videos.list",
             )
             items = data.get("items")
             if isinstance(items, list):
@@ -452,7 +530,7 @@ class YouTubeProvider(PlatformProvider):
                 "dimensions": "day",
                 "sort": "day",
             },
-            quota_units=1,
+            method="analytics.reports",
         )
         headers = data.get("columnHeaders")
         names = (
@@ -512,7 +590,9 @@ class YouTubeProvider(PlatformProvider):
         if cursor and cursor.get("page_token"):
             params["pageToken"] = str(cursor["page_token"])
         try:
-            data, units = self._api_get(token, f"{API_BASE}/commentThreads", params, quota_units=1)
+            data, units = self._api_get(
+                token, f"{API_BASE}/commentThreads", params, method="commentThreads.list"
+            )
         except PermissionMissing as exc:
             if "commentsDisabled" in exc.detail:
                 return Page(items=[], next_cursor=None, quota_units=1)
@@ -623,6 +703,7 @@ class YouTubeProvider(PlatformProvider):
             json={"snippet": {"parentId": comment_external_id, "textOriginal": text}},
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
+        self._record_quota("comments.insert")
         data = self._json_or_raise(response)
         reply_id = str(data.get("id") or "")
         verified = False
@@ -635,7 +716,7 @@ class YouTubeProvider(PlatformProvider):
                     token,
                     f"{API_BASE}/comments",
                     {"part": "snippet", "id": reply_id},
-                    quota_units=1,
+                    method="comments.list",
                 )
             except ProviderError:
                 check = {}

@@ -65,3 +65,8 @@ def exclusive_file_lock(path: Path, *, timeout: float | None) -> Iterator[None]:
                 yield
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+# The private-instance code (runway.operations.instance) was written against
+# this name; it is the same exception.
+FileLockTimeout = LockTimeout
