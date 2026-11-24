@@ -155,11 +155,13 @@ def test_forged_expired_and_wrong_issuer_tokens_are_401(hosted: Hosted) -> None:
     assert hosted.count(WorkspaceIdentityLink) == 0
 
 
-def test_an_api_key_bearer_still_reaches_the_api_key_seam(hosted: Hosted) -> None:
+def test_an_api_key_bearer_is_resolved_as_a_key_never_as_a_session(hosted: Hosted) -> None:
+    # An `rwy_` bearer goes to API-key resolution (spec 06 section 2), never to
+    # the identity provider; an unknown key is refused like any bad credential.
     response = hosted.client.get(
         "/api/v1/workspace", headers={"Authorization": "Bearer rwy_live_abc_secret"}
     )
-    _problem(response, 401, "api_key_unsupported")
+    _problem(response, 401, "authentication_required")
 
 
 def test_identity_provider_outage_is_503_not_401(tmp_path: Path) -> None:
