@@ -5,9 +5,9 @@ Everything below is a numbered list of things to do in order. Steps only you can
 developer apps, accepting terms, running consoles — are marked **[You]**.
 
 At any point, `runway doctor platforms` tells you what is set, what each connected account can
-do, and exactly what is still missing. It never prints secrets and makes no network call unless
-you pass `--check-edge`. It exits `0` when everything is ready and `1` while the "What is
-missing" list is not empty.
+do, and exactly what is still missing. It never prints secrets, makes no network call unless
+you pass `--check-edge`, and writes nothing to disk. It exits `0` when everything is ready and
+`1` while the "What is missing" list is not empty.
 
 ```powershell
 .\.venv\Scripts\runway.exe doctor platforms
@@ -15,7 +15,8 @@ missing" list is not empty.
 .\.venv\Scripts\runway.exe doctor platforms --check-edge  # also pings your public edge
 ```
 
-Facts here come from `docs/expansion/research/` (dated 2026-11-14 and 2026-11-22). Console
+Facts here come from `docs/expansion/research/` (dated 2026-11-14, plus the
+`recheck-20261122.md` and `recheck-20261123.md` passes). Console
 labels are quoted as recorded there; where the research did not record a label this runbook
 says "the console's credentials page" instead of guessing. Re-check each console before you
 trust the wording — these pages change.
@@ -39,13 +40,20 @@ trust the wording — these pages change.
    equivalent works the same way. **[You]** For example, with the API on port 8000:
 
    ```powershell
-   tailscale serve --bg --set-path=/hooks http://127.0.0.1:8000
-   tailscale serve --bg --set-path=/api/platforms http://127.0.0.1:8000
+   tailscale serve --bg --set-path=/hooks http://127.0.0.1:8000/hooks
+   tailscale serve --bg --set-path=/api/platforms http://127.0.0.1:8000/api/platforms
    tailscale funnel on
+   tailscale serve status
    ```
 
-   Check `tailscale serve status`: only those two mounts should appear. Then set both
-   settings to the same host:
+   Each target URL repeats the mount path because Serve strips the `--set-path`
+   prefix before proxying and appends what is left to the target URL — the prefix
+   has to live on the target for the request to reach the real route. One
+   `/api/platforms` mount is enough: Runway's edge guard still serves edge traffic
+   only the exact `/api/platforms/{platform}/oauth/callback` pattern. Never mount
+   `/` — the public edge must offer only these two prefixes. The status command
+   should list exactly the two mounts above. Then set both settings to the same
+   host:
 
    ```dotenv
    RUNWAY_PUBLIC_EDGE_URL=https://<machine>.<tailnet>.ts.net
@@ -81,9 +89,10 @@ trust the wording — these pages change.
 4. Set the publishing status to **In production** but **do not** submit for verification.
    Why: a project left in **Testing** issues refresh tokens that die after **7 days** —
    you would reconnect every week. "In production" without verification shows an
-   "unverified app" warning once at consent and caps the app at 100 users — fine for your
-   own account. (Whether unverified "In production" really avoids the 7-day expiry is
-   acceptance test Y-1; the research flags it as likely-but-unproven.)
+   "unverified app" warning once at consent, and Google documents a 100-user cap
+   for unverified apps — fine for your own account. (Whether unverified "In
+   production" really avoids the 7-day expiry — and how the documented cap
+   applies — is acceptance test Y-1; the research flags it as likely-but-unproven.)
 5. On the console's credentials page create an OAuth client of type **Web application**.
 6. Add the redirect URI `runway doctor platforms` prints for `youtube` — by default
    `http://127.0.0.1:8000/api/platforms/youtube/oauth/callback`. Google exempts loopback
@@ -137,8 +146,9 @@ Business). Switch it in the Instagram app first if it is still personal.
    Instagram use case — the research records the path as *Use cases > Manage messaging &
    content on Instagram > Customize > API setup with Unified login*). This is the Facebook
    Login for Business path: it needs a free business portfolio and gives Business scope
-   names without `_business` and resumable upload from disk. Connect it with the Connect
-   button's `instagram_unified` adapter and set:
+   names without `_business` and resumable upload from disk. Connect it with
+   **Connect with Facebook Login (Unified)** on the Accounts page (the
+   `instagram_unified` adapter) and set:
 
    ```dotenv
    RUNWAY_META_APP_ID=
@@ -168,8 +178,10 @@ in §1 first.
 
 **[You]** In the TikTok developer portal (<https://developers.tiktok.com>):
 
-1. Create a developer app. Add **Login Kit** and the **Content Posting API** with the
-   **upload (inbox)** configuration.
+1. Create a developer app. Add all three products: **Login Kit** and **Display
+   API** (the connect scopes `user.info.*` and `video.list` are Display API
+   scopes — Login Kit alone does not grant them), plus the **Content Posting
+   API** with the **upload (inbox)** configuration for publishing.
 2. Create a **sandbox** on the app and add your TikTok account as a **target user** (up to
    5 sandboxes, 10 target users each; no review needed).
 3. Register the redirect URI the doctor prints for `tiktok`:
@@ -202,18 +214,22 @@ says `refresh_expired` when the 180 days are gone.
 1. Start Runway: `powershell -NoProfile -ExecutionPolicy Bypass -File .\run-runway.ps1`.
 2. Open the Accounts page: <http://127.0.0.1:3000/accounts>.
 3. Click **Connect YouTube** / **Connect Instagram** / **Connect TikTok**, complete the
-   consent on the platform's site, and land back on Accounts. For Unified Login connect,
-   use the Unified option (the `instagram_unified` adapter).
+   consent on the platform's site, and land back on Accounts. For Unified Login use
+   **Connect with Facebook Login (Unified)** (the `instagram_unified` adapter); when the
+   token covers several Instagram accounts the page asks which one to connect.
 4. On each connected account open **Freshness & publishing** and click
    **Enable publishing** — that runs the second, incremental consent that adds the upload
    scope. Without it the account syncs but cannot post.
 5. `runway doctor platforms` after each step. It lists, per platform: each credential
    (set? from environment / `.env` / `instance.toml` / `secrets.enc.env` — never the
-   value), the redirect URI to register, the requested scopes versus the scopes each
-   account actually holds, the token state (`valid`, `refreshable`, `expired`,
-   `refresh_expired`, `missing`), the app-status setting, the per-post-type capability
-   with its reason, and a "What is missing" to-do list. Exit code is `1` until the list
-   is empty.
+   value; `RUNWAY_INSTAGRAM_WEBHOOK_VERIFY_TOKEN` is reported set/unset only, it never
+   gates "configured"), the redirect URI to register, the requested scopes versus the
+   scopes each account actually holds, the token state (`valid`, `refreshable`,
+   `expired`, `refresh_expired`, `unreadable`, `missing`), the app-status setting, the
+   per-post-type capability with its reason, and a "What is missing" to-do list. Exit
+   code is `1` until the list is empty. The token state `unreadable` means the stored
+   token could not be read (the reason is printed) — the doctor reads tokens but never
+   writes `token.key` or any other file to find out.
 6. The same report is available to the web app as `GET /api/v1/doctor/platforms`
    (read-only, owner only).
 
@@ -236,9 +252,9 @@ Publishing has several deliberate gates; the doctor's "Publishing" line shows th
 | `RUNWAY_INBOX_REPLIES_ENABLED` | `false` (default) / `true` | Comment replies (each account still needs its engage scope). |
 | `RUNWAY_YOUTUBE_ENGAGE_SCOPES` | `false` (default) / `true` | Adds `youtube.force-ssl` at connect so replies can post. |
 
-The per-post-type capability on each account (`ready`, `needs_scope`,
-`needs_app_approval`, `needs_media_host`, `needs_account`, `mock`) is documented in
-`docs/PLATFORM_CAPABILITIES.md` and shown by the doctor.
+The per-post-type capability on each account (`ready`, `ready_draft_only`,
+`needs_scope`, `needs_media_host`, `needs_app_approval`, `assisted_only`) is documented
+in `docs/PLATFORM_CAPABILITIES.md` and shown by the doctor.
 
 ---
 
