@@ -14,6 +14,15 @@ When ``public_edge_url`` is configured (spec 04 section 6), exactly one edge
 hostname is also served - and only the paths that must be publicly reachable:
 ``/hooks/`` for platform webhooks and the OAuth callback. Anything else from
 that host gets the same refusal as every foreign host.
+
+The Host header is never proof that a request is local (recheck-20261123.md
+section 4): Tailscale Funnel preserves whatever Host the public client sent,
+which can be a loopback name. Edge traffic is therefore recognized by what a
+forwarder must add - ``Tailscale-Funnel-Request``, ``X-Forwarded-For``,
+``X-Forwarded-Host``, ``X-Forwarded-Proto``, ``Forwarded`` or ``X-Real-IP`` -
+or by the configured edge hostname itself, and it is served only on the
+allow-listed paths (with cookies and Authorization refused). Without
+``public_edge_url`` such traffic is refused entirely.
 """
 
 from __future__ import annotations
@@ -34,6 +43,20 @@ EDGE_OAUTH_CALLBACK = re.compile(r"^/api/platforms/[^/]+/oauth/callback$")
 # Raw-path smuggling markers: dot segments, double slashes and their encoded
 # forms must never reach the router via the edge host.
 _EDGE_RAW_BANNED = (b"..", b"//", b"%2e", b"%2f")
+# A request carrying any of these arrived through a forwarder: it is edge
+# traffic no matter what Host it claims (recheck-20261123.md section 4 -
+# Tailscale Funnel preserves the client Host, marks the request with
+# Tailscale-Funnel-Request and overwrites X-Forwarded-For).
+EDGE_MARKER_HEADERS: frozenset[str] = frozenset(
+    {
+        "tailscale-funnel-request",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "forwarded",
+        "x-real-ip",
+    }
+)
 
 
 def loopback_origins(port: int) -> list[str]:
@@ -75,13 +98,17 @@ class LocalRequestGuard:
             await self.app(scope, receive, send)
             return
         headers = Headers(scope=scope)
-        host = _hostname(headers.get("host", ""))
-        if host in LOOPBACK_HOSTNAMES:
-            pass
-        elif self.edge_host is not None and host == self.edge_host:
-            if not self._edge_allowed(scope, headers):
+        if self._is_edge(headers):
+            # Marked before the allow-list decision so served edge requests
+            # stay distinguishable from local ones downstream (the webhook
+            # rate limit keys on XFF only for these, and they must never
+            # refresh workspaces.last_seen_at).
+            scope.setdefault("state", {})["runway_edge"] = True
+            if self.edge_host is None or not self._edge_allowed(scope, headers):
                 await self._reject(scope, receive, send, 421, "Runway only serves loopback hosts.")
                 return
+        elif _hostname(headers.get("host", "")) in LOOPBACK_HOSTNAMES:
+            pass
         else:
             await self._reject(scope, receive, send, 421, "Runway only serves loopback hosts.")
             return
@@ -94,6 +121,18 @@ class LocalRequestGuard:
                 await self._reject(scope, receive, send, 403, "Cross-site request refused.")
                 return
         await self.app(scope, receive, send)
+
+    def _is_edge(self, headers: Headers) -> bool:
+        """True when the request is public edge traffic, whatever Host claims.
+
+        The client controls Host (the funnel preserves it), so the edge is
+        recognized by the forwarding markers a reverse proxy adds - or by
+        the configured edge hostname itself, which covers a hypothetical
+        marker-less forwarder.
+        """
+        if any(marker in headers for marker in EDGE_MARKER_HEADERS):
+            return True
+        return host_is_edge(headers.get("host", ""), self.edge_host)
 
     def _edge_allowed(self, scope: Scope, headers: Headers) -> bool:
         """True only for the webhooks and OAuth-callback paths, credential-free."""

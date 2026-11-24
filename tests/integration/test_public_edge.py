@@ -6,6 +6,13 @@ the process - and only the webhook and OAuth-callback paths that must be
 publicly reachable. Everything else from that host is refused like any
 foreign host, and edge requests carrying a session cookie or an
 Authorization header are refused outright.
+
+The Host header is never proof of a local caller (recheck-20261123.md
+section 4): Tailscale Funnel preserves whatever Host the public client sent,
+which can be ``127.0.0.1``. Any forwarding marker - ``Tailscale-Funnel-Request``,
+``X-Forwarded-For``, ``X-Forwarded-Host``, ``X-Forwarded-Proto``, ``Forwarded``
+or ``X-Real-IP`` - makes the request edge traffic, restricted to the
+allow-list even when it arrives on a loopback Host.
 """
 
 from __future__ import annotations
@@ -149,6 +156,116 @@ def test_the_edge_host_without_the_setting_is_a_foreign_host(tmp_path: Path) -> 
     client = _client(tmp_path)  # no public_edge_url
     assert client.get("/hooks/health").status_code == 421
     assert client.get("/api/platforms/youtube/oauth/callback").status_code == 421
+
+
+# ------------------------------------------------- Host is not proof of local
+
+
+def test_forwarding_markers_make_a_loopback_request_edge_traffic(
+    tmp_path: Path,
+) -> None:
+    """A forwarded request on a loopback Host is edge traffic, never local.
+
+    Tailscale Funnel preserves the client's Host header - which a hostile
+    client can set to ``127.0.0.1`` - and marks the request with
+    ``Tailscale-Funnel-Request`` plus ``X-Forwarded-*``. Any of those markers
+    means public edge traffic, served only on the allow-listed paths.
+    """
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="mock",
+        public_edge_url=EDGE_URL,
+    )
+    initialize_database(settings)  # webhook stores write before the app runs
+    client = TestClient(create_app(settings), base_url="http://127.0.0.1:8000")
+
+    funnel = {"Tailscale-Funnel-Request": "?1", "X-Forwarded-For": "203.0.113.7"}
+    assert client.get("/api/settings", headers=funnel).status_code == 421
+    assert (
+        client.get("/api/settings", headers={"X-Forwarded-For": "203.0.113.7"}).status_code == 421
+    )
+    # Every forwarding marker marks edge traffic, whatever its value.
+    for header in (
+        "X-Forwarded-Host",
+        "X-Forwarded-Proto",
+        "Forwarded",
+        "X-Real-IP",
+    ):
+        assert client.get("/api/settings", headers={header: "x"}).status_code == 421, header
+
+    # The allow-listed paths still reach their routes through the funnel
+    # (403 is the signature refusal, 200 the health probe - neither a 421).
+    assert client.get("/hooks/health", headers=funnel).status_code == 200
+    assert client.post("/hooks/tiktok", content=b"{}", headers=funnel).status_code == 403
+
+    # Credentials are refused exactly like on the edge host.
+    assert (
+        client.get("/hooks/health", headers={**funnel, "Cookie": "runway_session=1"}).status_code
+        == 421
+    )
+    assert (
+        client.get("/hooks/health", headers={**funnel, "Authorization": "Bearer x"}).status_code
+        == 421
+    )
+
+    # Plain loopback traffic keeps full access.
+    assert client.get("/api/settings").status_code == 200
+
+
+def test_edge_traffic_without_the_setting_is_refused_entirely(tmp_path: Path) -> None:
+    """Without ``public_edge_url`` even /hooks/ is closed to edge traffic."""
+    settings = Settings(data_dir=tmp_path / "data", platform_provider="mock")
+    client = TestClient(create_app(settings), base_url="http://127.0.0.1:8000")
+
+    funnel = {"Tailscale-Funnel-Request": "?1", "X-Forwarded-For": "203.0.113.7"}
+    assert client.get("/hooks/health", headers=funnel).status_code == 421
+    assert client.post("/hooks/tiktok", content=b"{}", headers=funnel).status_code == 421
+    assert client.get("/api/settings", headers=funnel).status_code == 421
+    # Plain loopback requests are unaffected.
+    assert client.get("/api/settings").status_code == 200
+
+
+def test_edge_requests_are_marked_in_the_scope_state(tmp_path: Path) -> None:
+    """The guard marks edge traffic so later code can tell it from local."""
+    marked: list[object] = []
+
+    async def sentinel(scope, receive, send):  # type: ignore[no-untyped-def]
+        marked.append(scope.get("state", {}).get("runway_edge"))
+
+    guard = LocalRequestGuard(sentinel, allowed_origins=[], edge_host=EDGE_HOST)
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request"}
+
+    async def send(message: dict[str, object]) -> None:
+        pass
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/hooks/health",
+        "raw_path": b"/hooks/health",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"127.0.0.1"),
+            (b"tailscale-funnel-request", b"?1"),
+        ],
+    }
+    asyncio.run(guard(scope, receive, send))
+    assert marked == [True]
+
+    # A plain loopback request is not marked.
+    marked.clear()
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/settings",
+        "raw_path": b"/api/settings",
+        "query_string": b"",
+        "headers": [(b"host", b"127.0.0.1")],
+    }
+    asyncio.run(guard(scope, receive, send))
+    assert marked == [None]
 
 
 def test_loopback_behaviour_is_unchanged(tmp_path: Path) -> None:

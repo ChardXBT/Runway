@@ -131,17 +131,19 @@ async def _capped_body(request: Request) -> bytes | None:
 def _source(request: Request, edge_host: str | None) -> str:
     """The rate-limit source: the direct peer, or the real client behind the edge.
 
-    The left-most X-Forwarded-For entry is trusted only when the request
-    arrived through the configured edge host AND the direct peer is loopback —
-    the shape of a local forwarder like Tailscale Funnel, which terminates the
-    public request and connects from 127.0.0.1 with XFF set. In every other
-    case the header is trivially spoofable and ignored.
+    The left-most X-Forwarded-For entry is trusted only when the request is
+    edge traffic AND the direct peer is loopback — the shape of a local
+    forwarder like Tailscale Funnel, which terminates the public request and
+    connects from 127.0.0.1 with XFF overwritten to the real source. Edge
+    traffic is what ``LocalRequestGuard`` marked on the scope (Host is
+    client-controlled and can name a loopback address); the Host match stays
+    as the fallback for a stack without the guard. In every other case the
+    header is trivially spoofable and ignored.
     """
     peer = request.client.host if request.client is not None else "unknown"
-    if (
-        edge_host is not None
-        and peer in _LOOPBACK_PEERS
-        and host_is_edge(request.headers.get("host", ""), edge_host)
+    marked_edge = bool(getattr(request.state, "runway_edge", False))
+    if peer in _LOOPBACK_PEERS and (
+        marked_edge or host_is_edge(request.headers.get("host", ""), edge_host)
     ):
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
