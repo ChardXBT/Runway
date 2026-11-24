@@ -65,6 +65,45 @@ def test_public_edge_url_must_be_https_host_only(tmp_path: Path) -> None:
             Settings(data_dir=tmp_path / "data", platform_provider="mock", public_edge_url=bad)
 
 
+# ------------------------------------------------------------------ the port
+
+
+def test_an_edge_url_without_a_port_matches_443_or_none(tmp_path: Path) -> None:
+    """No explicit port configured: Host matches on no port or the https
+    default only."""
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="mock",
+        public_edge_url="https://edge.example",
+    )
+    assert settings.public_edge_port is None
+    initialize_database(settings)
+    application = create_app(settings)
+    client = TestClient(application, base_url="https://edge.example")
+
+    assert client.get("/hooks/health").status_code == 200
+    assert client.get("/hooks/health", headers={"Host": "edge.example:443"}).status_code == 200
+    assert client.get("/hooks/health", headers={"Host": "edge.example:8443"}).status_code == 421
+
+
+def test_edge_host_matching_requires_an_explicit_configured_port(tmp_path: Path) -> None:
+    """An explicit port in public_edge_url must appear verbatim in Host."""
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="mock",
+        public_edge_url="https://edge.example:8443",
+    )
+    assert settings.public_edge_port == 8443
+    assert settings.public_edge_host == "edge.example"
+    initialize_database(settings)
+    application = create_app(settings)
+    client = TestClient(application, base_url="https://edge.example:8443")
+
+    assert client.get("/hooks/health").status_code == 200
+    for host in ("edge.example", "edge.example:443", "edge.example:444"):
+        assert client.get("/hooks/health", headers={"Host": host}).status_code == 421, host
+
+
 # ------------------------------------------------------------- the allow-list
 
 

@@ -294,6 +294,17 @@ class Settings(BaseSettings):
         return urlsplit(self.public_edge_url).hostname
 
     @property
+    def public_edge_port(self) -> int | None:
+        """The explicit port in ``public_edge_url``, for edge Host matching.
+
+        None means the URL carried no port; the guard then matches the
+        hostname on the https default (443 or no port in the Host header).
+        """
+        if not self.public_edge_url:
+            return None
+        return urlsplit(self.public_edge_url).port
+
+    @property
     def resolved_web_base_url(self) -> str:
         if self.web_base_url:
             return self.web_base_url.rstrip("/")

@@ -72,13 +72,38 @@ def _hostname(host_header: str) -> str:
     return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
 
 
-def host_is_edge(host_header: str, edge_host: str | None) -> bool:
-    """True when a Host header names the configured public edge hostname.
+def _host_port(host_header: str) -> tuple[str, int | None]:
+    """Split a Host header into (hostname, port); the port is None when absent
+    or non-numeric, and bracketed IPv6 literals keep their brackets."""
+    host = host_header.strip().casefold()
+    if host.startswith("["):
+        name, sep, rest = host.partition("]")
+        if not sep:
+            return host, None
+        port = rest[1:] if rest.startswith(":") else ""
+        return name + "]", int(port) if port.isdigit() else None
+    if host.count(":") == 1:
+        name, _, port = host.partition(":")
+        return name, int(port) if port.isdigit() else None
+    return host, None
+
+
+def host_is_edge(host_header: str, edge_host: str | None, edge_port: int | None = None) -> bool:
+    """True when a Host header names the configured public edge host.
 
     Shared by the guard and the webhook rate-limit source so both normalize a
-    host the same way (case-folded, bracketed IPv6 kept, one port dropped).
+    host the same way (case-folded, bracketed IPv6 kept). An explicit port in
+    ``public_edge_url`` must appear verbatim in the Host; without one the
+    hostname matches on the https default (443 or no port).
     """
-    return edge_host is not None and _hostname(host_header) == _hostname(edge_host)
+    if edge_host is None:
+        return False
+    hostname, port = _host_port(host_header)
+    if hostname != _hostname(edge_host):
+        return False
+    if edge_port is not None:
+        return port == edge_port
+    return port in (None, 443)
 
 
 class LocalRequestGuard:
@@ -88,12 +113,15 @@ class LocalRequestGuard:
         *,
         allowed_origins: Iterable[str],
         edge_host: str | None = None,
+        edge_port: int | None = None,
     ) -> None:
         self.app = app
         self.allowed_origins = frozenset(origin.casefold() for origin in allowed_origins)
-        # Matched on the DNS name only: the port in a Host header does not
-        # confer trust, and the edge path check still applies after a match.
+        # The configured edge port pins Host matching; without one the edge
+        # hostname matches only on the https default (443 or no port). The
+        # edge path check still applies after a match.
         self.edge_host = _hostname(edge_host) if edge_host else None
+        self.edge_port = edge_port
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -134,7 +162,7 @@ class LocalRequestGuard:
         """
         if any(marker in headers for marker in EDGE_MARKER_HEADERS):
             return True
-        return host_is_edge(headers.get("host", ""), self.edge_host)
+        return host_is_edge(headers.get("host", ""), self.edge_host, self.edge_port)
 
     def _edge_allowed(self, scope: Scope, headers: Headers) -> bool:
         """True only for the webhooks and OAuth-callback paths, credential-free."""

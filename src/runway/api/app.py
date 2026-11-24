@@ -136,6 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         LocalRequestGuard,
         allowed_origins=web_origins,
         edge_host=active_settings.public_edge_host,
+        edge_port=active_settings.public_edge_port,
     )
     application.mount(
         "/media",

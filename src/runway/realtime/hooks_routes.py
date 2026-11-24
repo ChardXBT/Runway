@@ -128,7 +128,7 @@ async def _capped_body(request: Request) -> bytes | None:
     return b"".join(parts)
 
 
-def _source(request: Request, edge_host: str | None) -> str:
+def _source(request: Request, edge_host: str | None, edge_port: int | None = None) -> str:
     """The rate-limit source: the direct peer, or the real client behind the edge.
 
     The left-most X-Forwarded-For entry is trusted only when the request is
@@ -143,7 +143,7 @@ def _source(request: Request, edge_host: str | None) -> str:
     peer = request.client.host if request.client is not None else "unknown"
     marked_edge = bool(getattr(request.state, "runway_edge", False))
     if peer in _LOOPBACK_PEERS and (
-        marked_edge or host_is_edge(request.headers.get("host", ""), edge_host)
+        marked_edge or host_is_edge(request.headers.get("host", ""), edge_host, edge_port)
     ):
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
@@ -285,6 +285,7 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
     queue = JobQueue(database)
     limiter = _SourceRateLimiter(settings.webhook_rate_limit_per_minute)
     edge_host = settings.public_edge_host
+    edge_port = settings.public_edge_port
 
     @router.get("/hooks/health")
     def hooks_health() -> dict[str, bool]:
@@ -334,7 +335,7 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
         body = await _capped_body(request)
         if body is None:
             return JSONResponse({"detail": "body too large"}, status_code=413)
-        source = _source(request, edge_host)
+        source = _source(request, edge_host, edge_port)
         if not limiter.allow(("youtube", source)):
             return JSONResponse({"detail": "rate limited"}, status_code=429)
         with database.session() as session:
@@ -372,7 +373,7 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
         body = await _capped_body(request)
         if body is None:
             return JSONResponse({"detail": "body too large"}, status_code=413)
-        source = _source(request, edge_host)
+        source = _source(request, edge_host, edge_port)
         if not limiter.allow(("instagram", source)):
             return JSONResponse({"detail": "rate limited"}, status_code=429)
         signature_ok = _verify_hub_signature_256(
@@ -400,7 +401,7 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
         body = await _capped_body(request)
         if body is None:
             return JSONResponse({"detail": "body too large"}, status_code=413)
-        source = _source(request, edge_host)
+        source = _source(request, edge_host, edge_port)
         if not limiter.allow(("tiktok", source)):
             return JSONResponse({"detail": "rate limited"}, status_code=429)
         signature_ok = _verify_tiktok(
