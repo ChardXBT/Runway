@@ -26,6 +26,8 @@ from runway.auth.problems import Problem, ProblemCode
 from runway.db.models import ApiKey, AuditLogEntry, ContentDraft, DraftTarget, utcnow
 
 WINDOW_SECONDS = 60.0
+# How long a caller refused on a contended cap lock should wait before retrying.
+LOCK_RETRY_AFTER_SECONDS = 5.0
 
 
 class SlidingWindowLimiter:
@@ -97,8 +99,8 @@ def acquire_cap_lock(session: Session, principal: Principal) -> None:
     profile always uses keys). SQLite: `BEGIN IMMEDIATE` takes the database
     write lock up front; a session that already wrote already holds it, and a
     session that only read upgrades cleanly (WAL). Under contention the call
-    waits for `busy_timeout`, then fails honestly instead of letting two
-    creators both pass the cap.
+    waits for `busy_timeout`, then answers `rate_limited` (429) instead of
+    letting two creators both pass the cap or surfacing a raw 500.
     """
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
@@ -112,8 +114,13 @@ def acquire_cap_lock(session: Session, principal: Principal) -> None:
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
         except OperationalError as exc:
             # A transaction that already wrote is already holding the lock.
-            if "cannot start a transaction" not in str(exc):
-                raise
+            if "cannot start a transaction" in str(exc):
+                return
+            # The busy_timeout wait expired: the caller can retry once the
+            # other write finishes, the same answer a full cap window gives.
+            if "database is locked" in str(exc):
+                raise rate_limited(LOCK_RETRY_AFTER_SECONDS) from exc
+            raise
 
 
 def posts_created_today(session: Session, principal: Principal, now: datetime | None = None) -> int:

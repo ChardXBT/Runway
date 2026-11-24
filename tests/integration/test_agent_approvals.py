@@ -30,10 +30,12 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
     AuditLogEntry,
+    Channel,
     ConnectedAccount,
     ContentDraft,
     DraftTarget,
     EventRecord,
+    Proposal,
 )
 
 BASE_URL = "http://127.0.0.1:8000"
@@ -381,6 +383,72 @@ def test_the_queue_lists_only_agent_targets_in_ready_from_the_real_engine(
             str(agent_one["targets"][0]["id"]),
             str(second["id"]),
         }
+
+
+def test_a_key_cross_posting_a_proposal_queues_the_target_for_approval(
+    client: TestClient, database: Database, settings: Settings
+) -> None:
+    """A key's cross-post is the key's own post (source 'agent'): its ready
+    target waits for a person in the approval queue, like any agent post."""
+    youtube = _account(database, "youtube")
+    secret = _key(database, settings)
+    with database.session() as session:
+        # Same minimal accepted proposal as the cap test in test_agent_keys:
+        # a dangling candidate_image_id, so no media is copied.
+        session.connection().exec_driver_sql("PRAGMA foreign_keys=OFF")
+        channel_id = session.scalar(select(Channel.id).limit(1))
+        proposal = Proposal(
+            generation_run_id=1,
+            channel_id=channel_id,
+            candidate_image_id=1,
+            planned_publish_at="2026-12-01T09:00:00",
+            recommended_caption="cap",
+            alternative_captions_json="[]",
+            final_caption="Look at this",
+            status="approved",
+            selection_reason="r",
+            style_score=1.0,
+            novelty_score=1.0,
+            quality_score=1.0,
+        )
+        session.add(proposal)
+        session.flush()
+        proposal_id = proposal.id
+    crossed = client.post(
+        f"/api/v1/proposals/{proposal_id}/cross-post",
+        json={
+            "targets": [{"platform": "youtube", "account_id": youtube, "post_type": "youtube_post"}]
+        },
+        headers=_bearer(secret),
+    )
+    assert crossed.status_code == 201, crossed.text
+    post = crossed.json()
+    assert (post["source"], post["source_ref"]) == ("agent", str(proposal_id))
+    assert post["ai_generated"] is True  # the agent default, not a forced "no"
+    target_id = post["targets"][0]["id"]
+    assert post["targets"][0]["state"] == "ready"
+    items = client.get("/api/v1/approvals").json()["items"]
+    assert [item["target_id"] for item in items] == [target_id]
+    assert items[0]["source"] == "agent"
+    with database.session() as session:
+        waiting = session.scalars(
+            select(EventRecord).where(EventRecord.type == "target.awaiting_release")
+        ).all()
+        assert {event.subject_id for event in waiting} == {str(target_id)}
+    # A person's cross-post of the same proposal stays source 'proposal' and
+    # never enters the queue.
+    by_person = client.post(
+        f"/api/v1/proposals/{proposal_id}/cross-post",
+        json={
+            "targets": [{"platform": "youtube", "account_id": youtube, "post_type": "youtube_post"}]
+        },
+    )
+    assert by_person.status_code == 201, by_person.text
+    human_post = by_person.json()
+    assert (human_post["source"], human_post["ai_generated"]) == ("proposal", False)
+    assert [item["target_id"] for item in client.get("/api/v1/approvals").json()["items"]] == [
+        target_id
+    ]
 
 
 class _FakePosts(UnconnectedPostService):

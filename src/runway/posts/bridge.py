@@ -46,7 +46,8 @@ class ProposalBridge:
         require(principal, POSTS_WRITE)
         database = self.posts.database
         with database.session() as session:
-            if principal.kind == "agent":
+            agent = principal.kind == "agent"
+            if agent:
                 # The daily post cap is enforced in create_post_in below; the
                 # lock that makes its check-then-act atomic must be taken
                 # before this transaction's first statement.
@@ -95,11 +96,16 @@ class ProposalBridge:
                     body=caption,
                     media_ids=media_ids,
                     targets=data.targets,
-                    # The Lineup image is a found photo, not synthetic media; the
-                    # person sets the AI label if it applies.
-                    ai_generated=False,
+                    # A person's cross-post keeps the proposal's judgement:
+                    # the Lineup image is a found photo, not synthetic media.
+                    # A key's post leaves the label unset so the agent
+                    # default (spec 06 section 4) applies, not a forced "no".
+                    ai_generated=None if agent else False,
                 ),
-                source=PostSource.PROPOSAL,
+                # A key's cross-post is the key's own post: source 'agent' puts
+                # its ready targets in the approval queue. A person's stays a
+                # proposal cross-post, releasable like any human post.
+                source=PostSource.AGENT if agent else PostSource.PROPOSAL,
                 source_ref=str(proposal.id),
             )
             return post_view(session, self.posts.sources, post)

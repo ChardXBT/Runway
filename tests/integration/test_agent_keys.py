@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from runway.api.app import create_app
 from runway.auth.api_keys import DEFAULT_AGENT_SCOPES, ApiKeyService, hash_key
-from runway.auth.key_limits import enforce_daily_post_cap
+from runway.auth.key_limits import acquire_cap_lock, enforce_daily_post_cap
 from runway.auth.principal import ALL_SCOPES, local_owner
 from runway.auth.problems import Problem
 from runway.cli import keys_commands
@@ -460,6 +460,26 @@ def test_the_daily_post_cap_covers_the_rest_and_cross_post_paths(
         # And the owner is unaffected by the key's cap.
         by_owner = client.post("/api/v1/posts", json={"title": "owner", "body": "b", "targets": []})
         assert by_owner.status_code == 201, by_owner.text
+
+
+def test_a_cap_lock_wait_that_times_out_is_429_not_500(
+    settings: Settings, database: Database
+) -> None:
+    """Another connection holds the write lock past busy_timeout: the loser
+    gets the same rate_limited problem a full cap gives, never a raw 500."""
+    service = ApiKeyService(database, settings)
+    secret = service.create(local_owner(), name="capped", scopes=["posts:write"]).secret
+    principal = service.authenticate(secret)
+    with database.session() as holder:
+        holder.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        with pytest.raises(Problem) as raised, database.session() as session:
+            # A tiny busy_timeout keeps the test fast (the pragma default
+            # here is 5s).
+            session.connection().exec_driver_sql("PRAGMA busy_timeout=50")
+            acquire_cap_lock(session, principal)
+    assert raised.value.status_code == 429
+    assert raised.value.code == "rate_limited"
+    assert int(raised.value.headers["Retry-After"]) >= 1
 
 
 # ----------------------------------------------------------------------- CLI

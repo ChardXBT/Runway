@@ -489,7 +489,8 @@ def release_target(context: ToolContext, principal: Principal, args: ReleaseArgs
     result = context.services.posts.release_target(
         principal, args.post_id, args.target_id, args.payload_hash
     )
-    # The audit row's platform feeds the per-platform daily release cap.
+    # Report the platform the grant check ran against; the daily cap itself
+    # counts draft_targets.released_* inside the release transaction.
     return {**result, "platform": platform}
 
 

@@ -111,16 +111,25 @@ def test_strict_mode_over_http(strict_client: TestClient, database: Database) ->
     # ...an exempt legacy write reaches its handler (404 for a missing draft, not 401)...
     legacy = strict_client.patch("/api/drafts/999999", json={"title": "x"})
     assert legacy.status_code == 404
-    # ...and a scoped key may write on /api/v1.
+    # ...a scoped key may write on /api/v1 (workspace:admin is never grantable,
+    # so a posts:write key proves the keyed-write path)...
     from runway.auth.api_keys import ApiKeyService
 
     service = ApiKeyService(database, strict_client.app.state.settings)  # type: ignore[attr-defined]
-    created = service.create(local_owner(), name="admin", scopes=["workspace:admin"])
-    other = service.create(local_owner(), name="old", scopes=["posts:read"])
-    revoked = strict_client.delete(
-        f"/api/v1/keys/{other.key.id}", headers={"Authorization": f"Bearer {created.secret}"}
-    )
-    assert revoked.status_code == 200
+    created = service.create(local_owner(), name="writer", scopes=["posts:write"])
+    headers = {"Authorization": f"Bearer {created.secret}"}
+    body = {"title": "Keyed write", "body": "b", "targets": []}
+    keyed = strict_client.post("/api/v1/posts", json=body, headers=headers)
+    assert keyed.status_code == 201
+    # ...the same write without a key is refused...
+    unkeyed = strict_client.post("/api/v1/posts", json=body)
+    assert unkeyed.status_code == 401
+    assert unkeyed.json()["code"] == "authentication_required"
+    # ...and once revoked, the key's write is 401 too.
+    service.revoke(local_owner(), created.key.id)
+    revoked = strict_client.post("/api/v1/posts", json=body, headers=headers)
+    assert revoked.status_code == 401
+    assert revoked.json()["code"] == "authentication_required"
 
 
 def test_the_switch_is_off_by_default(settings: Settings, database: Database) -> None:
