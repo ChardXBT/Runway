@@ -68,6 +68,7 @@ SCOPED_TABLES = (
     "webhook_deliveries",
     "webhook_endpoints",
     "webhook_events",
+    "workspace_limits",
     "workspace_members",
     "workspace_policies",
 )

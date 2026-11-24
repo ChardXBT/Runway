@@ -55,8 +55,8 @@ class WorkspaceScoped(WorkspaceOwned):
     (`before_flush`) and, on Postgres, mirrors the binding with
     `SET LOCAL app.workspace_id` so row-level security applies the same rule.
     Models that carry a `workspace_id` column but are deliberately NOT scoped
-    - the publish-job claim bucket, the pre-resolution webhook inbox,
-    directory tables like workspace members - do not use this mixin; see
+    - the publish-job claim bucket, the pre-resolution webhook inbox, the
+    org-to-workspace identity directory - do not use this mixin; see
     `runway.db.workspace.UNSCOPED_WORKSPACE_TABLES`.
     """
 
@@ -1907,7 +1907,7 @@ class AccountPublisher(Base, WorkspaceScoped):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class PublishingControl(Base):
+class PublishingControl(Base, WorkspaceScoped):
     """The per-workspace `publishing_paused` switch, checked before every send."""
 
     __tablename__ = "publishing_controls"
@@ -1953,7 +1953,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class WorkspaceMember(Base):
+class WorkspaceMember(Base, WorkspaceScoped):
     __tablename__ = "workspace_members"
     __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),)
 
@@ -1968,7 +1968,7 @@ class WorkspaceMember(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class ApiKey(Base):
+class ApiKey(Base, WorkspaceScoped):
     """An agent key; only the prefix and a SHA-256 hash of the secret are stored."""
 
     __tablename__ = "api_keys"
@@ -1992,7 +1992,7 @@ class ApiKey(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class AuditLogEntry(Base):
+class AuditLogEntry(Base, WorkspaceScoped):
     """Who did what in a workspace. `audit_events` keeps serving the activity feed."""
 
     __tablename__ = "audit_log"
@@ -2046,7 +2046,7 @@ class PublishJob(Base, TimestampMixin):
 # Shared v1 contracts (migration 0016)
 
 
-class IdempotencyKey(Base):
+class IdempotencyKey(Base, WorkspaceScoped):
     """A remembered v1 mutation (spec 06 section 5); kept 24 hours.
 
     `response_status` is null while the first request is still running, so a
@@ -2071,7 +2071,7 @@ class IdempotencyKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class EventRecord(Base):
+class EventRecord(Base, WorkspaceScoped):
     """One change Runway learned about, for the browser stream and agents (spec 04 section 4).
 
     AUTOINCREMENT keeps ids strictly increasing even after old rows are purged,
@@ -2100,7 +2100,7 @@ class EventRecord(Base):
 # Agent interface (migration 0019, spec 06)
 
 
-class WorkspacePolicy(Base):
+class WorkspacePolicy(Base, WorkspaceScoped):
     """Per-workspace agent policy. A workspace without a row uses the defaults."""
 
     __tablename__ = "workspace_policies"

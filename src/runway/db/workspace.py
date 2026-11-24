@@ -83,6 +83,9 @@ def workspace_context(workspace_id: int) -> Iterator[None]:
 
 def scoped_models() -> list[type[Base]]:
     """Every mapped class marked `WorkspaceScoped`, in table-name order."""
+    # hosted_models lives outside models.py, so nothing else guarantees it is
+    # imported before the mapper registry is read.
+    import runway.db.hosted_models  # noqa: F401
     from runway.db.base import Base
     from runway.db.models import WorkspaceScoped
 
@@ -110,16 +113,16 @@ def scoped_table_names() -> frozenset[str]:
 # test allows exactly this list and nothing more.
 UNSCOPED_WORKSPACE_TABLES = frozenset(
     {
-        # The publish-job claim bucket: workers claim whichever job is due,
-        # then scope themselves to that job's workspace. Raw SQL, not ORM.
+        # The publish-job claim bucket: workers claim whichever job is due
+        # across every workspace through a system session, then scope
+        # themselves to that job's workspace.
         "publish_jobs",
-        # Raw platform webhook bodies, stored before verification resolves
-        # the account; workspace_id stays NULL until process_webhook stamps it.
+        # Raw platform webhook bodies: the workspace is unknown until
+        # processing resolves the account, so workspace_id stays NULL until
+        # process_webhook stamps it.
         "webhook_events",
         # org -> workspace directory: consulted during hosted sign-in before
         # the caller's workspace is known.
         "workspace_identity_links",
-        # svix delivery dedupe for identity webhooks; not tenant data.
-        "identity_webhook_deliveries",
     }
 )

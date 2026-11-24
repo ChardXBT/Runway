@@ -25,6 +25,7 @@ from runway.db.models import (
 from runway.db.workspace import (
     SESSION_INFO_KEY,
     SYSTEM_INFO_KEY,
+    UNSCOPED_WORKSPACE_TABLES,
     WorkspaceContextError,
     WorkspaceIsolationError,
     scoped_models,
@@ -269,6 +270,25 @@ def test_sync_run_isolation_uses_foreign_account(two_workspaces: Database) -> No
         assert session.scalars(select(SyncRun)).all() == []
     with two_workspaces.session(workspace_id=OTHER_WORKSPACE) as session:
         assert [row.id for row in session.scalars(select(SyncRun)).all()] == [run_id]
+
+
+def test_every_workspace_id_table_is_classified() -> None:
+    """Every table with a workspace_id column is scoped or explicitly exempt."""
+    from runway.db.base import Base
+
+    scoped = {model.__tablename__ for model in scoped_models()}
+    classified = scoped | UNSCOPED_WORKSPACE_TABLES
+    unclassified = [
+        table.name
+        for table in Base.metadata.tables.values()
+        if "workspace_id" in table.c and table.name not in classified
+    ]
+    assert unclassified == []
+    # The exemption list stays honest: no scoped model in it, and every entry
+    # really does carry a workspace_id column (else it protects nothing).
+    assert not (scoped & UNSCOPED_WORKSPACE_TABLES)
+    for name in UNSCOPED_WORKSPACE_TABLES:
+        assert "workspace_id" in Base.metadata.tables[name].c, name
 
 
 def test_every_scoped_table_is_covered_by_the_rls_migration() -> None:
