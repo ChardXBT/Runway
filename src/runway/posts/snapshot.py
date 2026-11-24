@@ -90,6 +90,16 @@ def granted_scopes(account: ConnectedAccount) -> tuple[str, ...]:
     return tuple(str(scope) for scope in scopes) if isinstance(scopes, list) else ()
 
 
+def connection_kind(account: ConnectedAccount) -> str:
+    """The connection adapter that created the account ("" when unknown)."""
+    try:
+        metadata = json.loads(account.metadata_json or "{}")
+    except ValueError:
+        return ""
+    connection = metadata.get("connection") if isinstance(metadata, dict) else None
+    return str(connection) if connection else ""
+
+
 def stored_settings(target: DraftTarget) -> dict[str, Any]:
     try:
         raw = json.loads(target.settings_json or "{}")
@@ -177,7 +187,11 @@ def account_capability(
     account: ConnectedAccount | None,
 ) -> PublishCapability:
     facts = (
-        AccountFacts(status=account.status, granted_scopes=granted_scopes(account))
+        AccountFacts(
+            status=account.status,
+            granted_scopes=granted_scopes(account),
+            connection=connection_kind(account),
+        )
         if account is not None
         else None
     )

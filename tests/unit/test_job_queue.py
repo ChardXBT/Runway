@@ -441,6 +441,8 @@ def test_no_sync_producer_when_the_interval_is_zero(settings: Settings, database
     from runway.agent.webhooks import DELIVER_WEBHOOK_JOB, WebhookDispatcher
     from runway.posts.jobs import PUBLISHING_JOB_KINDS
 
+    # Retention purge always runs; token upkeep renews Instagram long-lived
+    # tokens whether or not scheduled sync is on (spec 04 section 2).
     assert [type(producer) for producer in worker.producers] == [
         RetentionPurgeScheduler,
         WebhookDispatcher,
