@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
@@ -20,7 +21,16 @@ from runway.db.base import Database
 from runway.db.bootstrap import initialize_database
 from runway.db.models import (
     AuditLogEntry,
+    CandidateImage,
+    CaptionCandidateRecord,
+    CaptionSlate,
+    Channel,
     ConnectedAccount,
+    GenerationRun,
+    MediaAsset,
+    Proposal,
+    ProposalEvent,
+    SearchRun,
     User,
     Workspace,
     WorkspaceMember,
@@ -153,6 +163,144 @@ def test_purge_workspace_removes_every_row(tmp_path: Path) -> None:
         assert session.scalar(ConnectedAccount.__table__.select()) is None
         assert not session.scalars(AuditLogEntry.__table__.select()).all()
         # The person is not workspace data; their users row survives.
+        assert session.scalars(User.__table__.select()).all()
+    database.engine.dispose()
+
+
+def _channel_graph(session, workspace: Workspace) -> Channel:
+    """The channel-scoped pipeline subgraph no workspace-owned row names directly."""
+    channel = Channel(
+        workspace_id=workspace.id,
+        name="ch",
+        handle=f"@{workspace.slug}",
+        timezone="UTC",
+        default_post_time="09:00",
+        planning_horizon_days=7,
+        duplicate_window_days=30,
+    )
+    session.add(channel)
+    session.flush()
+    run = GenerationRun(channel_id=channel.id, start_date=date(2025, 1, 1), days=7, status="done")
+    search = SearchRun(
+        channel_id=channel.id,
+        query_plan_json="{}",
+        provider="manual",
+        status="done",
+    )
+    asset = MediaAsset(
+        kind="image",
+        local_path="/tmp/x.jpg",
+        mime_type="image/jpeg",
+        width=4,
+        height=4,
+        file_size=10,
+        sha256=f"{workspace.id:064d}",
+        perceptual_hash="p" * 64,
+    )
+    session.add_all([run, search, asset])
+    session.flush()
+    candidate = CandidateImage(
+        search_run_id=search.id,
+        media_asset_id=asset.id,
+        search_query="q",
+        result_rank=1,
+        quality_score=1.0,
+        style_score=1.0,
+        novelty_score=1.0,
+        caption_potential_score=1.0,
+        source_risk_score=1.0,
+        final_rank_score=1.0,
+    )
+    session.add(candidate)
+    session.flush()
+    proposal = Proposal(
+        generation_run_id=run.id,
+        channel_id=channel.id,
+        candidate_image_id=candidate.id,
+        planned_publish_at="2025-01-01T09:00",
+        recommended_caption="c",
+        alternative_captions_json="[]",
+        final_caption="c",
+        status="pending",
+        selection_reason="r",
+        style_score=1.0,
+        novelty_score=1.0,
+        quality_score=1.0,
+    )
+    session.add(proposal)
+    session.flush()
+    slate = CaptionSlate(
+        channel_id=channel.id,
+        candidate_image_id=candidate.id,
+        proposal_id=proposal.id,
+        editorial_brief_json="{}",
+        raw_output_json="{}",
+        generation_configuration_json="{}",
+        configuration_hash=f"{workspace.id:064x}",
+        status="done",
+    )
+    session.add(slate)
+    session.flush()
+    # Close the proposals <-> caption_slates cycle and hang children off both.
+    proposal.caption_slate_id = slate.id
+    session.add(ProposalEvent(proposal_id=proposal.id, event_type="created"))
+    session.add(
+        CaptionCandidateRecord(
+            channel_id=channel.id,
+            caption_slate_id=slate.id,
+            text="cap",
+            structure="hook-line",
+            editorial_angle="angle",
+            rank=1,
+        )
+    )
+    session.flush()
+    return channel
+
+
+def test_purge_workspace_reaches_the_channel_subgraph_and_breaks_the_fk_cycle(
+    tmp_path: Path,
+) -> None:
+    """A workspace holding proposals and caption_slates purges cleanly.
+
+    The cycle tables carry no `workspace_id`; the purge must follow the
+    channel foreign keys, and `proposals`/`caption_slates` reference each
+    other through nullable columns no topological order can resolve.
+    """
+    database = _database(tmp_path)
+    with database.session() as session:
+        workspace = _workspace(session)
+        other = _workspace(session, "other")
+        _member(session, workspace, "purge@x.test", "owner")
+        channel = _channel_graph(session, workspace)
+        channel_id = channel.id
+        other_channel = _channel_graph(session, other)
+        other_channel_id = other_channel.id
+        purge_workspace(session, workspace.id)
+        session.flush()
+        # Every row of the deleted channel's subgraph is gone, whichever table
+        # held it; the other workspace's identical graph survives untouched.
+        for model in (
+            GenerationRun,
+            SearchRun,
+            CandidateImage,
+            Proposal,
+            CaptionSlate,
+            CaptionCandidateRecord,
+        ):
+            left = session.scalars(model.__table__.select()).all()
+            assert len(left) == 1, model.__tablename__
+        # The surviving proposal_event is the other workspace's (id 2).
+        assert session.scalars(ProposalEvent.__table__.select()).all() == [2]
+        assert not session.scalars(Channel.__table__.select().where(Channel.id == channel_id)).all()
+        assert session.scalars(
+            Channel.__table__.select().where(Channel.id == other_channel_id)
+        ).all()
+        # media_assets are content-addressed and never workspace-keyed.
+        assert len(session.scalars(MediaAsset.__table__.select()).all()) == 2
+        # Workspace 1 is the bootstrap workspace; `other` survives, `workspace` is gone.
+        remaining = session.scalars(Workspace.__table__.select()).all()
+        assert workspace.id not in remaining and other.id in remaining
         assert session.scalars(User.__table__.select()).all()
     database.engine.dispose()
 

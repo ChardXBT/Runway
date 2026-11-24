@@ -22,7 +22,7 @@ from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import delete, func, inspect, select
+from sqlalchemy import delete, func, inspect, select, tuple_
 from sqlalchemy.orm import Session
 
 from runway.auth.problems import Problem, ProblemCode
@@ -40,12 +40,191 @@ _USER_TABLES = ("workspace_members",)
 
 
 def _workspace_tables() -> list[Any]:
-    """Mapped tables carrying a `workspace_id` column, children first.
+    """Mapped tables carrying a `workspace_id` column (the export's row set)."""
+    return [table for table in Base.metadata.tables.values() if "workspace_id" in table.c]
 
-    `Base.metadata.sorted_tables` is topologically ordered by foreign-key
-    dependency, so deleting in reverse order never orphans a child row.
+
+# ------------------------------------------------------------- purge plan
+#
+# `workspace_id` only exists on the top-level tables; everything the
+# pipeline hangs below them (channels' proposals, slates, candidates, ...)
+# carries no workspace key of its own and is reached by following foreign
+# keys to a fixpoint. SQLite enforces FKs immediately, so the delete plan
+# orders children before parents, and the schema's one FK cycle -
+# `proposals.caption_slate_id` <-> `caption_slates.proposal_id`, both
+# nullable - is broken by clearing those links first.
+
+_BIND_CHUNK = 500  # well under SQLite's bound-parameter limit
+
+
+def _chunks(values: Any) -> Any:
+    items = list(values)
+    for start in range(0, len(items), _BIND_CHUNK):
+        yield items[start : start + _BIND_CHUNK]
+
+
+def _pk_filter(table: Any, ids: list[tuple[Any, ...]]) -> Any:
+    pk = list(table.primary_key.columns)
+    if len(pk) == 1:
+        return pk[0].in_([row[0] for row in ids])
+    return tuple_(*pk).in_(ids)
+
+
+def _owned_rows(session: Session, workspace_id: int) -> dict[str, set[tuple[Any, ...]]]:
+    """Primary keys of every row that belongs to the workspace.
+
+    Seeded from the tables carrying `workspace_id`, then expanded through
+    foreign keys until stable: a row that references an owned row is owned
+    as well - its parent could not be deleted while it survives anyway.
+    Only rounds where a parent set grew re-scan its children.
     """
-    return [table for table in reversed(Base.metadata.sorted_tables) if "workspace_id" in table.c]
+    tables = Base.metadata.tables
+    owned: dict[str, set[tuple[Any, ...]]] = {name: set() for name in tables}
+    for table in tables.values():
+        if "workspace_id" not in table.c:
+            continue
+        rows = session.execute(
+            select(*table.primary_key.columns).where(table.c.workspace_id == workspace_id)
+        ).all()
+        owned[table.name] = {tuple(row) for row in rows}
+    pending = {name for name, ids in owned.items() if ids}
+    while pending:
+        grown: set[str] = set()
+        for table in tables.values():
+            found: set[tuple[Any, ...]] = set()
+            for fk in table.foreign_keys:
+                parent = fk.column.table
+                if parent.name not in pending or fk.column not in list(parent.primary_key.columns):
+                    continue
+                keys = {key[0] for key in owned[parent.name]}
+                for chunk in _chunks(keys):
+                    rows = session.execute(
+                        select(*table.primary_key.columns).where(fk.parent.in_(chunk))
+                    ).all()
+                    found |= {tuple(row) for row in rows}
+            if found - owned[table.name]:
+                owned[table.name] |= found
+                grown.add(table.name)
+        pending = grown
+    return {name: ids for name, ids in owned.items() if ids}
+
+
+def _dependency_edges(names: set[str], nulled: set[tuple[str, str]]) -> dict[str, set[str]]:
+    """child -> parents that must outlive it inside the owned set.
+
+    Self references need no ordering (one statement removes the set), and a
+    link `purge_workspace` cleared no longer constrains the order.
+    """
+    tables = Base.metadata.tables
+    edges: dict[str, set[str]] = {}
+    for name in names:
+        parents = {
+            fk.column.table.name
+            for fk in tables[name].foreign_keys
+            if fk.column.table.name != name
+            and fk.column.table.name in names
+            and (name, fk.parent.name) not in nulled
+        }
+        if parents:
+            edges[name] = parents
+    return edges
+
+
+def _cycles(edges: dict[str, set[str]]) -> list[set[str]]:
+    """Strongly connected components of size > 1 - FK cycles no order resolves."""
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stacked: set[str] = set()
+    stack: list[str] = []
+    counter = 0
+    found: list[set[str]] = []
+
+    def visit(node: str) -> None:
+        nonlocal counter
+        index[node] = low[node] = counter
+        counter += 1
+        stack.append(node)
+        stacked.add(node)
+        for parent in edges.get(node, ()):
+            if parent not in index:
+                visit(parent)
+                low[node] = min(low[node], low[parent])
+            elif parent in stacked:
+                low[node] = min(low[node], index[parent])
+        if low[node] == index[node]:
+            component: set[str] = set()
+            while True:
+                member = stack.pop()
+                stacked.discard(member)
+                component.add(member)
+                if member == node:
+                    break
+            if len(component) > 1:
+                found.append(component)
+
+    for node in edges:
+        if node not in index:
+            visit(node)
+    return found
+
+
+def _break_cycles(session: Session, owned: dict[str, set[tuple[Any, ...]]]) -> set[tuple[str, str]]:
+    """Clear nullable owned->owned links inside FK cycles; return cleared (table, column)."""
+    tables = Base.metadata.tables
+    nulled: set[tuple[str, str]] = set()
+    while True:
+        cycles = _cycles(_dependency_edges(set(owned), nulled))
+        if not cycles:
+            return nulled
+        progress = False
+        for cycle in cycles:
+            for name in cycle:
+                table = tables[name]
+                for fk in table.foreign_keys:
+                    if (
+                        fk.column.table.name in cycle - {name}
+                        and fk.parent.nullable
+                        and (name, fk.parent.name) not in nulled
+                    ):
+                        column = table.c[fk.parent.name]
+                        for chunk in _chunks(owned[name]):
+                            session.execute(
+                                table.update()
+                                .where(_pk_filter(table, chunk))
+                                .where(column.is_not(None))
+                                .values({fk.parent.name: None})
+                            )
+                        nulled.add((name, fk.parent.name))
+                        progress = True
+        if not progress:
+            raise Problem.of(
+                ProblemCode.INVALID_STATE,
+                "workspace data has a foreign-key cycle no nullable link can break",
+            )
+
+
+def _delete_order(names: set[str], nulled: set[tuple[str, str]]) -> list[str]:
+    """Owned tables, children before parents (Kahn on child -> parent edges)."""
+    edges = _dependency_edges(names, nulled)
+    waiting: dict[str, int] = {name: 0 for name in names}
+    for parents in edges.values():
+        for parent in parents:
+            waiting[parent] += 1
+    ready = sorted(name for name, count in waiting.items() if count == 0)
+    order: list[str] = []
+    while ready:
+        name = ready.pop()
+        order.append(name)
+        for parent in edges.get(name, ()):
+            waiting[parent] -= 1
+            if waiting[parent] == 0:
+                ready.append(parent)
+    if len(order) != len(names):
+        raise Problem.of(
+            ProblemCode.INVALID_STATE,
+            "workspace data has a foreign-key cycle no nullable link can break",
+        )
+    return order
 
 
 def _json_value(value: Any) -> Any:
@@ -107,11 +286,22 @@ def export_workspace_data(session: Session, workspace_id: int) -> dict[str, Any]
 
 
 def purge_workspace(session: Session, workspace_id: int) -> dict[str, int]:
-    """Delete every workspace-owned row, then the workspace. Returns counts."""
+    """Delete every row the workspace owns, then the workspace. Returns counts.
+
+    Rows without a `workspace_id` of their own - the whole channel-scoped
+    subgraph - are reached by following foreign keys, children are deleted
+    before parents, and the proposals/caption_slates cycle is broken by
+    clearing its nullable links first (see the helpers above).
+    """
+    owned = _owned_rows(session, workspace_id)
+    nulled = _break_cycles(session, owned)
     counts: dict[str, int] = {}
-    for table in _workspace_tables():
-        result = session.execute(delete(table).where(table.c.workspace_id == workspace_id))
-        counts[table.name] = result.rowcount or 0
+    for name in _delete_order(set(owned), nulled):
+        table = Base.metadata.tables[name]
+        ids = sorted(owned[name])
+        for chunk in _chunks(ids):
+            session.execute(delete(table).where(_pk_filter(table, chunk)))
+        counts[name] = len(ids)
     deleted = session.get(Workspace, workspace_id)
     if deleted is not None:
         session.delete(deleted)
