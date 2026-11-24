@@ -287,6 +287,7 @@ class PublishingEngine:
         error_detail: str | None = None,
         external_id: str | None = None,
         resumable: Mapping[str, Any] | None = None,
+        request_sent_at: datetime | None = None,
     ) -> TargetAttempt:
         now = self.clock()
         row = TargetAttempt(
@@ -299,6 +300,7 @@ class PublishingEngine:
             started_at=now,
             finished_at=now if finished else None,
             outcome=outcome.value,
+            request_sent_at=request_sent_at,
             request_json=_json(request),
             response_json=_json(response),
             external_id=external_id,
@@ -473,6 +475,17 @@ class PublishingEngine:
                 return
             previous = self._send_attempt(session, target)
             resumable = _loads(previous.resumable_json) if previous is not None else {}
+            # An adapter that resumes the saved session (TikTok's upload) never
+            # re-marks: the new attempt inherits the point of no return the
+            # earlier one committed, or a mid-upload failure reads as "not
+            # sent" and blindly retries into a second publish session.
+            sent_at = (
+                utc(previous.request_sent_at)
+                if previous is not None
+                and resumable
+                and previous.request_sent_at is not None
+                else None
+            )
             lead = adapter_prepare_lead(publisher)
             prepare = (
                 lead is not None
@@ -502,9 +515,19 @@ class PublishingEngine:
                     finished=False,
                     request={"payload": snap.payload, "publisher": target.publisher},
                     resumable=resumable,
+                    request_sent_at=(
+                        previous.request_sent_at if sent_at is not None else None
+                    ),
                 )
                 set_target_state(session, target, _T.SENDING, post=post)
-            ctx = self._context(snap, target, attempt=attempt, job_id=job.id, resumable=resumable)
+            ctx = self._context(
+                snap,
+                target,
+                attempt=attempt,
+                job_id=job.id,
+                resumable=resumable,
+                request_sent_at=sent_at,
+            )
             progress = ThrottledProgress(self.database, target, interval=self.progress_interval)
             attempt_id = attempt.id
         if prepare:
