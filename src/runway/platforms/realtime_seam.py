@@ -26,6 +26,20 @@ from runway.posts.jobs import POLL_PROCESSING_JOB, enqueue_in, free_key
 logger = logging.getLogger(__name__)
 
 
+def boost(account_id: int, scope: str, minutes: int) -> None:
+    """Ask the realtime sync to hurry for one account; a no-op until it lands.
+
+    Adapters call this after a successful publish so fresh metrics arrive
+    sooner. The realtime work connects the real implementation at merge.
+    """
+    logger.debug(
+        "boost requested but the realtime seam is not wired (account_id=%s scope=%s minutes=%s)",
+        account_id,
+        scope,
+        minutes,
+    )
+
+
 def on_publish_event(
     event_type: str,
     database: Database | None = None,

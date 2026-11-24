@@ -241,6 +241,9 @@ def test_realtime_seam_is_a_callable_no_op_without_a_database() -> None:
         )
         is False
     )
+    # `boost` exists so adapters can ask for faster sync; it is a no-op until
+    # the realtime work lands.
+    assert realtime_seam.boost(account_id=1, scope="videos", minutes=30) is None
 
 
 def test_realtime_seam_nudges_the_named_target(database: Database) -> None:
