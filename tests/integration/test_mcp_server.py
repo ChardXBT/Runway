@@ -641,9 +641,7 @@ async def test_a_stale_version_is_refused_and_changes_nothing(
     assert engine.posts[post["id"]]["title"] == "v2"
 
 
-def test_the_daily_post_cap_applies_to_mcp(
-    database: Database, settings: Settings
-) -> None:
+def test_the_daily_post_cap_applies_to_mcp(database: Database, settings: Settings) -> None:
     """The cap is enforced inside the create transaction on the real engine,
     counted on `content_drafts` — not pre-checked on audit rows."""
     from runway.agent.engine import engine_agent_services

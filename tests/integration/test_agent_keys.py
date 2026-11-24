@@ -100,9 +100,7 @@ def test_default_agent_scopes_are_exactly_the_spec_list(client: TestClient) -> N
 
 def test_a_key_can_never_hold_workspace_admin(client: TestClient) -> None:
     """A key holding workspace:admin could administer credentials itself."""
-    refused = client.post(
-        "/api/v1/keys", json={"name": "admin", "scopes": ["workspace:admin"]}
-    )
+    refused = client.post("/api/v1/keys", json={"name": "admin", "scopes": ["workspace:admin"]})
     assert refused.status_code == 422
     assert refused.json()["code"] == "validation_failed"
     mixed = client.post(
@@ -132,9 +130,7 @@ def test_key_administration_is_for_people_only(client: TestClient) -> None:
             {"grants": [{"platform": "youtube"}]},
         ),
     ):
-        response = client.request(
-            method, url, json=body, headers=_bearer(agent)
-        )
+        response = client.request(method, url, json=body, headers=_bearer(agent))
         assert response.status_code == 403, (method, url, response.text)
         assert response.json()["code"] == "scope_missing"
     # The same calls by the owner keep working.
@@ -462,9 +458,7 @@ def test_the_daily_post_cap_covers_the_rest_and_cross_post_paths(
         assert crossed.status_code == 429
         assert crossed.json()["code"] == "rate_limited"
         # And the owner is unaffected by the key's cap.
-        by_owner = client.post(
-            "/api/v1/posts", json={"title": "owner", "body": "b", "targets": []}
-        )
+        by_owner = client.post("/api/v1/posts", json={"title": "owner", "body": "b", "targets": []})
         assert by_owner.status_code == 201, by_owner.text
 
 

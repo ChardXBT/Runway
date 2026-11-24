@@ -411,9 +411,7 @@ def test_an_endpoint_never_delivers_events_its_creator_could_not_read(
     )
     # Creating a subscription to an invisible family is refused outright.
     with pytest.raises(Problem) as raised:
-        service.create(
-            limited, WebhookCreate(url=RECEIVER, event_types=[types.COMMENT_NEW])
-        )
+        service.create(limited, WebhookCreate(url=RECEIVER, event_types=[types.COMMENT_NEW]))
     assert raised.value.code == "validation_failed"
     endpoint = service.create(limited, WebhookCreate(url=RECEIVER))
     with database.session() as session:
@@ -428,9 +426,7 @@ def test_an_endpoint_never_delivers_events_its_creator_could_not_read(
     assert delivery.event_type == types.TARGET_AWAITING_RELEASE
     # The stored ceiling binds updates too, whoever makes them.
     with pytest.raises(Problem) as raised:
-        service.update(
-            local_owner(), endpoint.id, WebhookPatch(event_types=[types.COMMENT_NEW])
-        )
+        service.update(local_owner(), endpoint.id, WebhookPatch(event_types=[types.COMMENT_NEW]))
     assert raised.value.code == "validation_failed"
 
 

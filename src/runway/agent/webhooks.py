@@ -407,9 +407,7 @@ class WebhookService:
                 # The ceiling stays the creator's scopes; a row without them
                 # (predating the column) is checked against the updater's.
                 ceiling = _creator_scopes(endpoint)
-                _check_event_visibility(
-                    types, ceiling if ceiling is not None else principal.scopes
-                )
+                _check_event_visibility(types, ceiling if ceiling is not None else principal.scopes)
                 endpoint.event_types_json = json.dumps(types)
             if data.description is not None:
                 endpoint.description = data.description
@@ -597,9 +595,7 @@ class WebhookService:
                 url = endpoint.url
                 event_type = event.type
                 body = self.body_for(event, delivery.id)
-                secret = self._cipher().decrypt(
-                    endpoint.secret_encrypted.encode("ascii")
-                ).decode()
+                secret = self._cipher().decrypt(endpoint.secret_encrypted.encode("ascii")).decode()
             pinned, host_header, extensions = self._pinned_target(url)
             now_ts = int(self.clock().timestamp())
             headers = {
@@ -616,9 +612,7 @@ class WebhookService:
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
-                response = client.post(
-                    pinned, content=body, headers=headers, extensions=extensions
-                )
+                response = client.post(pinned, content=body, headers=headers, extensions=extensions)
             status_code = response.status_code
             if not 200 <= status_code < 300:
                 error = f"HTTP {status_code}"

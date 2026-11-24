@@ -284,9 +284,7 @@ def test_an_agent_key_reconciles_only_under_its_release_grant(
         headers=_bearer(secret),
     )
     assert by_key.status_code == 200, by_key.text
-    by_person = client.post(
-        f"/api/v1/posts/{insta_post}/targets/{insta_target}/reconcile", json={}
-    )
+    by_person = client.post(f"/api/v1/posts/{insta_post}/targets/{insta_target}/reconcile", json={})
     assert by_person.status_code == 200, by_person.text
 
 

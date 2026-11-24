@@ -420,7 +420,5 @@ def test_0019_downgrade_leaves_a_table_it_did_not_create(tmp_path: Path) -> None
     assert "workspace_policies" not in names
     assert "api_key_release_grants" not in names
     with engine.connect() as connection:
-        assert connection.execute(text("SELECT note FROM webhook_endpoints")).all() == [
-            ("keep",)
-        ]
+        assert connection.execute(text("SELECT note FROM webhook_endpoints")).all() == [("keep",)]
     engine.dispose()
