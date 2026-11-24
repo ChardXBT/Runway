@@ -42,7 +42,6 @@ from runway.realtime.quota import (
     QUOTA_BUDGET_ERROR,
     YOUTUBE_METHOD_COSTS,
     QuotaRecorder,
-    call_allowed,
     enforce_instagram_usage,
     enforce_youtube_budget,
     next_pacific_reset,
@@ -392,13 +391,10 @@ def test_zero_budget_defers_every_scope_but_never_blocks_publishing(
         account_id = _account(database)
         _active_workspace(database)
 
-        # A publish-category call is never blocked, even with nothing left.
-        assert call_allowed(
-            database, settings, provider="youtube", purpose="publish", account_id=account_id
-        )
-        assert not call_allowed(
-            database, settings, provider="youtube", purpose="sync", account_id=account_id
-        )
+        # The sync budget is fully reserved: nothing is left for sync, while
+        # publishing rides the reserve - it never consults this module, so
+        # it can never be blocked by it.
+        assert sync_budget_units(settings) == 0
 
         assert enforce_youtube_budget(database, account_id, settings, now=START)
         states = _states(database, account_id)

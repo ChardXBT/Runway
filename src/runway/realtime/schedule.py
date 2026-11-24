@@ -361,9 +361,11 @@ class AdaptiveSyncScheduler:
                     next_run = _aware(state.next_run_at)
                     if next_run is not None and next_run > now:
                         continue
-                    # `next_run` is the due slot this job belongs to; a null
-                    # one belongs to now.
-                    slot = int((next_run or now).timestamp())
+                    # `next_run` is the due slot this job belongs to; state
+                    # rows always carry one (a null would be a writer bug,
+                    # surfaced loudly rather than re-keyed onto now).
+                    assert next_run is not None
+                    slot = int(next_run.timestamp())
                     self.queue.enqueue_pending_job(
                         session,
                         self.job_kind,

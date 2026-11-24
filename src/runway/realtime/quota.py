@@ -51,10 +51,6 @@ QUOTA_BUDGET_ERROR = "quota budget reached"
 INSTAGRAM_USAGE_THRESHOLD = 80.0
 INSTAGRAM_USAGE_DEFER = timedelta(hours=1)
 
-# Purposes the sync budget governs. Publishing and reply calls ride on the
-# reserved share and are never blocked by it.
-PUBLISH_PURPOSES: frozenset[str] = frozenset({"publish", "reply"})
-
 # YouTube API method -> (quota bucket, units per call).
 # Costs read 2026-11-23 from the quota-cost table rechecked in
 # `runway-orchestration/docs/expansion/research/recheck-20261123.md` section 3
@@ -287,23 +283,6 @@ def youtube_sync_share_spent(
     if share <= 0:
         return True
     return account_sync_spend(source, account_id, now=now) >= share
-
-
-def call_allowed(
-    source: Session | Database,
-    settings: Settings,
-    *,
-    provider: str,
-    purpose: str,
-    account_id: int | None = None,
-    now: datetime | None = None,
-) -> bool:
-    """Publishing and reply calls are never blocked by the sync budget."""
-    if purpose in PUBLISH_PURPOSES:
-        return True
-    if provider != "youtube" or account_id is None:
-        return True
-    return not youtube_sync_share_spent(source, settings, account_id, now=now or utcnow())
 
 
 def provider_quota_summary(
