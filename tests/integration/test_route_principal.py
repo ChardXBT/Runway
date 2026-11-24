@@ -25,6 +25,8 @@ EXEMPT_STATIC_MOUNTS = frozenset({"/media"})
 # Authenticated by platform signatures; no session, no workspace (spec 04 section 2).
 EXEMPT_SIGNED_WEBHOOKS = frozenset(
     {
+        # liveness for the public edge; returns no data
+        "/hooks/health",
         "/hooks/youtube/websub/{subscription_id}",
         "/hooks/instagram",
         "/hooks/tiktok",

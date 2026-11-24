@@ -195,6 +195,11 @@ def build_hooks_router(database: Database, settings: Settings) -> APIRouter:
     queue = JobQueue(database)
     limiter = _SourceRateLimiter(settings.webhook_rate_limit_per_minute)
 
+    @router.get("/hooks/health")
+    def hooks_health() -> dict[str, bool]:
+        """Liveness for the public edge; returns no data (spec 04 section 6)."""
+        return {"ok": True}
+
     @router.get("/hooks/youtube/websub/{subscription_id}")
     def youtube_websub_verify(subscription_id: int, request: Request) -> Response:
         mode = request.query_params.get("hub.mode")

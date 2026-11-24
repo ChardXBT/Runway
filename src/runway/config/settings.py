@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -105,6 +106,9 @@ class Settings(BaseSettings):
     tiktok_client_secret: str | None = None
     # Per-(provider, source) sliding-window cap on webhook POSTs.
     webhook_rate_limit_per_minute: int = Field(default=120, ge=1)
+    # Public edge hostname (spec 04 section 6): the one non-loopback Host the
+    # request guard serves, and only for /hooks/ and OAuth callbacks.
+    public_edge_url: str | None = None
     inbox_replies_enabled: bool = False
     platform_sync_interval_minutes: int = Field(default=0, ge=0, le=1440)
     platform_sync_max_content_items: int = Field(default=200, ge=10, le=2000)
@@ -127,6 +131,7 @@ class Settings(BaseSettings):
     @field_validator(
         "oauth_redirect_base_url",
         "web_base_url",
+        "public_edge_url",
         "youtube_client_id",
         "youtube_client_secret",
         "instagram_app_id",
@@ -141,6 +146,27 @@ class Settings(BaseSettings):
         if value is None or (isinstance(value, str) and not value.strip()):
             return None
         return value
+
+    @field_validator("public_edge_url")
+    @classmethod
+    def valid_public_edge_url(cls, value: str | None) -> str | None:
+        """https://host only: no path beyond '/', no query, no userinfo."""
+        if value is None:
+            return None
+        try:
+            parsed = urlsplit(value.strip())
+            host = parsed.hostname
+            port = parsed.port  # raises on a malformed port
+        except ValueError as exc:
+            raise ValueError("public_edge_url must be a valid https:// URL") from exc
+        if parsed.scheme != "https" or not host:
+            raise ValueError("public_edge_url must be an https:// URL with a host")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("public_edge_url must not carry userinfo")
+        if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            raise ValueError("public_edge_url must not carry a path, query or fragment")
+        suffix = f":{port}" if port is not None else ""
+        return f"https://{host}{suffix}"
 
     @field_validator("default_post_time")
     @classmethod
@@ -249,6 +275,13 @@ class Settings(BaseSettings):
         if self.oauth_redirect_base_url:
             return self.oauth_redirect_base_url.rstrip("/")
         return f"http://127.0.0.1:{self.api_port}"
+
+    @property
+    def public_edge_host(self) -> str | None:
+        """The normalized edge hostname (no port), for the request guard."""
+        if not self.public_edge_url:
+            return None
+        return urlsplit(self.public_edge_url).hostname
 
     @property
     def resolved_web_base_url(self) -> str:

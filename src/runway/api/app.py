@@ -128,8 +128,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
-    # Added last so it runs first, before CORS handling and every route.
-    application.add_middleware(LocalRequestGuard, allowed_origins=web_origins)
+    # Added last so it runs first, before CORS handling and every route. The
+    # public edge host (spec 04 section 6) reaches only /hooks/ and the OAuth
+    # callback; every other foreign host is refused.
+    application.add_middleware(
+        LocalRequestGuard,
+        allowed_origins=web_origins,
+        edge_host=active_settings.public_edge_host,
+    )
     application.mount(
         "/media",
         StaticFiles(directory=active_settings.resolved_data_dir / "media"),
