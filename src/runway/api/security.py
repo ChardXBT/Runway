@@ -40,9 +40,11 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # The only path families the public edge may reach (spec 04 section 6).
 EDGE_HOOKS_PREFIX = "/hooks/"
 EDGE_OAUTH_CALLBACK = re.compile(r"^/api/platforms/[^/]+/oauth/callback$")
-# Raw-path smuggling markers: dot segments, double slashes and their encoded
-# forms must never reach the router via the edge host.
-_EDGE_RAW_BANNED = (b"..", b"//", b"%2e", b"%2f")
+# Raw-path smuggling markers: dot segments and double slashes must never
+# reach the router via the edge host, and no allow-listed route needs a
+# percent sign - banning "%" outright also kills multiply-encoded forms
+# like %252e that a single decode would re-arm.
+_EDGE_RAW_BANNED = (b"..", b"//", b"%")
 # A request carrying any of these arrived through a forwarder: it is edge
 # traffic no matter what Host it claims (recheck-20261123.md section 4 -
 # Tailscale Funnel preserves the client Host, marks the request with

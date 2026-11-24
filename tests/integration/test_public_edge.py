@@ -113,7 +113,12 @@ def test_edge_requests_with_credentials_are_refused(tmp_path: Path) -> None:
 
 
 def test_edge_paths_with_dot_segments_or_encoded_slashes_are_refused(tmp_path: Path) -> None:
-    """Raw-path smuggling: `..`, `//`, `%2e`, `%2f` never reach the router."""
+    """Raw-path smuggling: `..`, `//` and any `%` never reach the router.
+
+    Percent signs are banned outright on edge paths - no allow-listed route
+    needs them, and `%252e` (double-encoded dot) used to slip past the
+    single-decode markers.
+    """
     reached: list[str] = []
 
     async def sentinel(scope, receive, send):  # type: ignore[no-untyped-def]
@@ -137,6 +142,9 @@ def test_edge_paths_with_dot_segments_or_encoded_slashes_are_refused(tmp_path: P
         b"/hooks//tiktok",
         b"/hooks/%2f%2f/tiktok",
         b"/api/platforms/%2e%2e/oauth/callback",
+        b"/hooks/%252e%252e/api/settings",
+        b"/hooks/tiktok%252fextra",
+        b"/hooks/health%20",
     ):
         sent.clear()
         scope = {
