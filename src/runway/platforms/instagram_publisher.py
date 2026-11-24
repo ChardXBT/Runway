@@ -294,9 +294,7 @@ class InstagramDirectPublisher:
                 )
             status = self._container_status(token, parent["id"])
             if status == "ERROR":
-                raise PublishRefused(
-                    "container_error", self._container_detail(token, parent["id"])
-                )
+                raise PublishRefused("container_error", self._container_detail(token, parent["id"]))
             if status == "EXPIRED":
                 parent = self._recreate_expired(ctx, token, ig_id, state)
                 status = self._container_status(token, parent["id"])
@@ -305,9 +303,7 @@ class InstagramDirectPublisher:
                 self._sleep(_STATUS_STEP.total_seconds())
                 status = self._container_status(token, parent["id"])
             if status == "ERROR":
-                raise PublishRefused(
-                    "container_error", self._container_detail(token, parent["id"])
-                )
+                raise PublishRefused("container_error", self._container_detail(token, parent["id"]))
             if status == "EXPIRED":
                 raise PublishRefused(
                     "container_expired",
@@ -484,16 +480,32 @@ class InstagramDirectPublisher:
         return expected
 
     def _check_quota(self, token: TokenSet, ig_id: str) -> None:
-        """`GET /{ig}/content_publishing_limit` is the quota source of truth."""
+        """`GET /{ig}/content_publishing_limit` is the quota source of truth.
+
+        The response wraps one record in `data`, and `config.quota_total` is
+        only returned when the `fields` parameter asks for it. A reported
+        total replaces the documented static cap — in both directions — and
+        the static cap is the fallback when only `quota_usage` comes back.
+        """
         try:
-            data = self._get(token, f"{ig_id}/content_publishing_limit", {})
+            data = self._get(
+                token,
+                f"{ig_id}/content_publishing_limit",
+                {"fields": "quota_usage,config"},
+            )
         except PublishError as exc:
             logger.warning("content_publishing_limit unreadable: %s", exc.detail)
             return
-        usage = _int_or_none(data.get("quota_usage"))
-        config = data.get("config")
+        entries = data.get("data")
+        entry = entries[0] if isinstance(entries, list) and entries else {}
+        if not isinstance(entry, dict):
+            entry = {}
+        usage = _int_or_none(entry.get("quota_usage"))
+        config = entry.get("config")
         total = _int_or_none(config.get("quota_total")) if isinstance(config, dict) else None
-        if usage is not None and total is not None and usage >= total:
+        if total is None:
+            total = INSTAGRAM_DAILY_POSTS.max_count
+        if usage is not None and usage >= total:
             raise PublishRetryLater(
                 "quota_exceeded",
                 f"{usage} of {total} posts in the last 24 hours",

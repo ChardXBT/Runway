@@ -63,7 +63,7 @@ class FakeGraph:
         self.media_rows: dict[str, dict[str, object]] = {}
         self.media_order: list[str] = []
         self.quota_usage = 0
-        self.quota_total = 50
+        self.quota_total: int | None = 50
         self.me_id = IG
         self.publish_outcomes: list[object] = []
         self.media_post_responses: list[httpx.Response] = []
@@ -108,13 +108,13 @@ class FakeGraph:
         if path == "me":
             return httpx.Response(200, json={"id": self.me_id, "user_id": self.me_id})
         if path.endswith("/content_publishing_limit"):
-            return httpx.Response(
-                200,
-                json={
-                    "quota_usage": self.quota_usage,
-                    "config": {"quota_total": self.quota_total},
-                },
-            )
+            # The real endpoint wraps the record in `data` and returns `config`
+            # only when the fields parameter asks for it.
+            entry: dict[str, object] = {"quota_usage": self.quota_usage}
+            fields = str(request.url.params.get("fields", ""))
+            if "config" in fields and self.quota_total is not None:
+                entry["config"] = {"quota_total": self.quota_total}
+            return httpx.Response(200, json={"data": [entry]})
         if path.endswith("/media") and method == "POST":
             if self.media_post_responses:
                 return self.media_post_responses.pop(0)
@@ -649,6 +649,42 @@ def test_send_refuses_when_the_publishing_quota_is_exhausted() -> None:
         publisher.send(ctx, None)
     assert marks["count"] == 0
     assert not [r for r in graph.requests if r[1] == f"{IG}/media_publish"]
+
+
+def test_send_uses_the_reported_quota_headroom_above_fifty() -> None:
+    graph = FakeGraph()
+    graph.quota_usage = 60
+    graph.quota_total = 100  # the reported cap beats the documented 50
+    publisher = _publisher(graph)
+    ctx, _m, _s = _context(resumable={"containers": [{"id": "c1", "position": 0, "role": "main"}]})
+    result = publisher.send(ctx, None)
+    assert result.status == "published"
+
+
+def test_send_refuses_at_the_reported_quota_total() -> None:
+    graph = FakeGraph()
+    graph.quota_usage = 25
+    graph.quota_total = 25
+    publisher = _publisher(graph)
+    ctx, marks, _s = _context(
+        resumable={"containers": [{"id": "c1", "position": 0, "role": "main"}]}
+    )
+    with pytest.raises(PublishRetryLater):
+        publisher.send(ctx, None)
+    assert marks["count"] == 0
+
+
+def test_send_falls_back_to_the_static_cap_when_no_quota_is_reported() -> None:
+    graph = FakeGraph()
+    graph.quota_usage = 50
+    graph.quota_total = None  # config absent: the documented 50/day applies
+    publisher = _publisher(graph)
+    ctx, marks, _s = _context(
+        resumable={"containers": [{"id": "c1", "position": 0, "role": "main"}]}
+    )
+    with pytest.raises(PublishRetryLater):
+        publisher.send(ctx, None)
+    assert marks["count"] == 0
 
 
 def test_send_refuses_when_the_token_belongs_to_another_account() -> None:

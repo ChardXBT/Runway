@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from runway.api.platform_routes import build_platform_router
+from runway.auth.principal import get_principal, local_owner
 from runway.config import Settings
 from runway.db import initialize_database
 from runway.db.base import Database
@@ -268,6 +269,9 @@ def _router_app(
 ) -> FastAPI:
     app = FastAPI()
     app.state.settings = settings
+    # Pin the principal: identical to what the local profile resolves, and it
+    # keeps the hosted-profile tests free of the hosted identity stack.
+    app.dependency_overrides[get_principal] = local_owner
     app.include_router(
         build_platform_router(
             database,
@@ -330,8 +334,9 @@ def _issue_unified_state(database: Database, oauth_states: OAuthStateService) ->
 def _callback_app(
     tmp_path: Path,
     graph: FakeFacebook,
+    settings: Settings | None = None,
 ) -> tuple[Settings, Database, OAuthStateService, TestClient, ProviderRegistry]:
-    settings = _unified_settings(tmp_path)
+    settings = settings or _unified_settings(tmp_path)
     database = Database(settings)
     oauth_states = OAuthStateService(database)
     registry = ProviderRegistry(database, settings)
@@ -432,6 +437,118 @@ def test_unified_callback_with_several_accounts_waits_for_a_pick(
     assert again.status_code == 404
 
 
+def _two_account_select(
+    tmp_path: Path,
+    graph: FakeFacebook,
+    settings: Settings | None = None,
+    extra_assigned: list[dict[str, str]] | None = None,
+) -> tuple[Database, TestClient, ProviderRegistry, str]:
+    graph.assigned = [
+        {"id": IG, "username": "northwindstudio"},
+        {"id": IG2, "username": "secondig"},
+        *(extra_assigned or []),
+    ]
+    _s, database, oauth_states, client, registry = _callback_app(tmp_path, graph, settings)
+    state = _issue_unified_state(database, oauth_states)
+    response = client.get(
+        f"/api/platforms/instagram/oauth/callback?code=abc&state={state}",
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    select_state = parse_qs(urlparse(response.headers["location"]).query)["select_instagram"][0]
+    return database, client, registry, select_state
+
+
+def _held_token_ref(database: Database, select_state: str) -> str:
+    with database.session() as session:
+        record = session.scalar(select(OAuthState).where(OAuthState.state == select_state))
+        assert record is not None
+        return str(json.loads(record.code_verifier or "{}")["token_ref"])
+
+
+def test_unified_select_rejects_a_bad_pick_without_consuming_the_state(
+    tmp_path: Path,
+) -> None:
+    database, client, _r, select_state = _two_account_select(tmp_path, FakeFacebook())
+    bad = client.post(
+        "/api/platforms/instagram/unified/select",
+        json={"state": select_state, "external_account_id": "not-assigned"},
+    )
+    assert bad.status_code == 400
+    # The state was not consumed by the rejected pick: a valid one works.
+    good = client.post(
+        "/api/platforms/instagram/unified/select",
+        json={"state": select_state, "external_account_id": IG2},
+    )
+    assert good.status_code == 200
+    with database.session() as session:
+        account = session.scalar(select(ConnectedAccount))
+        assert account is not None and account.external_account_id == IG2
+
+
+def test_unified_select_deletes_the_held_token(tmp_path: Path) -> None:
+    database, client, registry, select_state = _two_account_select(tmp_path, FakeFacebook())
+    held_ref = _held_token_ref(database, select_state)
+    assert registry.token_store.load(held_ref) is not None
+    picked = client.post(
+        "/api/platforms/instagram/unified/select",
+        json={"state": select_state, "external_account_id": IG2},
+    )
+    assert picked.status_code == 200
+    assert registry.token_store.load(held_ref) is None
+
+
+def test_unified_select_maps_a_persist_failure_to_the_fail_redirect(
+    tmp_path: Path,
+) -> None:
+    graph = FakeFacebook()
+    # The third assigned account has no identity endpoint: fetch_identity
+    # raises ProviderError inside _persist_connection.
+    database, client, registry, select_state = _two_account_select(
+        tmp_path,
+        graph,
+        extra_assigned=[{"id": "17841400923819", "username": "thirdig"}],
+    )
+    held_ref = _held_token_ref(database, select_state)
+    picked = client.post(
+        "/api/platforms/instagram/unified/select",
+        json={"state": select_state, "external_account_id": "17841400923819"},
+        follow_redirects=False,
+    )
+    assert picked.status_code == 303
+    assert "error=exchange_failed" in picked.headers["location"]
+    assert registry.token_store.load(held_ref) is None
+    with database.session() as session:
+        assert session.scalar(select(ConnectedAccount)) is None
+
+
+def test_unified_select_maps_a_quota_problem_to_the_fail_redirect(
+    tmp_path: Path,
+) -> None:
+    # Quotas only bind in the hosted profile; model_copy skips the hosted
+    # profile_requirements validator (Postgres, identity provider, ...).
+    settings = migrated(
+        Settings(
+            data_dir=tmp_path / "data",
+            meta_app_id=META_APP,
+            meta_app_secret=META_SECRET,
+            instagram_unified_config_id=CONFIG_ID,
+        ).model_copy(update={"profile": "hosted", "quota_connected_accounts": 0})
+    )
+    database, client, registry, select_state = _two_account_select(
+        tmp_path, FakeFacebook(), settings
+    )
+    held_ref = _held_token_ref(database, select_state)
+    picked = client.post(
+        "/api/platforms/instagram/unified/select",
+        json={"state": select_state, "external_account_id": IG2},
+        follow_redirects=False,
+    )
+    assert picked.status_code == 303
+    assert "error=quota_exceeded" in picked.headers["location"]
+    assert registry.token_store.load(held_ref) is None
+
+
 def test_unified_callback_without_assigned_accounts_fails(tmp_path: Path) -> None:
     graph = FakeFacebook()
     graph.assigned = []
@@ -485,6 +602,33 @@ def test_capability_picks_unified_for_a_unified_account() -> None:
     assert direct.state == "needs_media_host"
 
 
+def test_capability_keeps_media_host_for_post_types_that_can_hold_images() -> None:
+    from runway.platforms.publish_capability import (
+        AccountFacts,
+        AppStatus,
+        publishing_capability,
+    )
+    from runway.posts.types import TargetPostType
+
+    # The capability check sees only the post type, not the media kinds: a
+    # story or carousel can carry images, which still need a public URL even
+    # through instagram_unified. Only the always-video Reel is exempt.
+    for post_type in (TargetPostType.INSTAGRAM_STORY, TargetPostType.INSTAGRAM_CAROUSEL):
+        capability = publishing_capability(
+            post_type,
+            account=AccountFacts(
+                "connected",
+                ("instagram_content_publish",),
+                connection="instagram_unified",
+            ),
+            app=AppStatus("unverified", "development", "sandbox", False),
+            profile="local",
+            implemented={"instagram_direct", "instagram_unified", "assisted"},
+            media_host_available=False,
+        )
+        assert capability.state == "needs_media_host"
+
+
 # ----------------------------------------------------------------- publisher
 
 
@@ -499,7 +643,7 @@ class FakeMetaGraph(FakeFacebook):
         self.media_rows: dict[str, dict[str, object]] = {}
         self.media_order: list[str] = []
         self.quota_usage = 0
-        self.quota_total = 50
+        self.quota_total: int | None = 50
         self.uploads: list[tuple[str, str, str, int]] = []  # (cid, offset, size, len)
         self.upload_responses: list[httpx.Response] = []
 
@@ -545,13 +689,13 @@ class FakeMetaGraph(FakeFacebook):
                 },
             )
         if path.endswith("/content_publishing_limit"):
-            return httpx.Response(
-                200,
-                json={
-                    "quota_usage": self.quota_usage,
-                    "config": {"quota_total": self.quota_total},
-                },
-            )
+            # The real endpoint wraps the record in `data` and returns `config`
+            # only when the fields parameter asks for it.
+            entry: dict[str, object] = {"quota_usage": self.quota_usage}
+            fields = str(request.url.params.get("fields", ""))
+            if "config" in fields and self.quota_total is not None:
+                entry["config"] = {"quota_total": self.quota_total}
+            return httpx.Response(200, json={"data": [entry]})
         if path.endswith("/media") and method == "POST":
             self.next_container += 1
             container_id = f"c{self.next_container}"

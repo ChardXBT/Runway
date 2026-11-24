@@ -601,13 +601,19 @@ def build_platform_router(
     def unified_select(
         payload: UnifiedSelectRequest,
         principal: Principal = Depends(get_principal),
-    ) -> dict[str, object]:
-        try:
-            record = oauth_states.consume(Platform.instagram, state=payload.state)
-        except OAuthStateError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        meta = _state_meta(record)
-        if meta.get("adapter") != "instagram_unified" or not meta.get("select"):
+    ) -> Response:
+        web_base = settings.resolved_web_base_url
+
+        def fail(short_code: str) -> RedirectResponse:
+            return RedirectResponse(
+                url=f"{web_base}/accounts?error={short_code}",
+                status_code=303,
+            )
+
+        # Peek first: a pick the state never offered is rejected without
+        # consuming it, so the owner can still choose a valid account.
+        meta = _select_meta(payload.state)
+        if meta is None:
             raise HTTPException(status_code=404, detail="no pending Instagram account pick")
         candidates = meta.get("accounts")
         accounts = (
@@ -619,17 +625,31 @@ def build_platform_router(
                 status_code=400,
                 detail="that Instagram account is not among the assigned ones",
             )
+        try:
+            oauth_states.consume(Platform.instagram, state=payload.state)
+        except OAuthStateError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         token_ref = str(meta.get("token_ref") or "")
         token = registry.token_store.load(token_ref) if token_ref else None
         if token is None:
             raise HTTPException(status_code=410, detail="the held token is gone; connect again")
         token.extra["user_id"] = chosen["id"]
-        account = _persist_connection(
-            Platform.instagram,
-            token,
-            token.scopes,
-            workspace_id=principal.workspace_id,
-        )
+        try:
+            account = _persist_connection(
+                Platform.instagram,
+                token,
+                token.scopes,
+                workspace_id=principal.workspace_id,
+            )
+        except Problem as exc:
+            return fail(exc.code)
+        except ProviderError:
+            return fail("exchange_failed")
+        finally:
+            # The held ref was a temporary parking spot for the pick; the
+            # persisted connection stores its own token.
+            if token_ref:
+                registry.token_store.delete(token_ref)
         return {"status": "connected", "account": _account_view(database, settings, account)}
 
     @router.get("/platforms/{platform}/oauth/callback")
