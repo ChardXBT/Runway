@@ -557,6 +557,84 @@ def test_send_recreates_an_expired_container_once() -> None:
     assert result.status == "published"
 
 
+def test_send_recreates_expired_carousel_children_then_the_parent() -> None:
+    graph = FakeGraph()
+    graph.containers["c3"] = {"status_code": "EXPIRED", "params": {}}
+    graph.next_container = 3
+    publisher = _publisher(graph)
+    media = (
+        _media("image", key="w/1/7/a1a1a1a1a1a1a1a1.jpg", position=0),
+        _media("image", key="w/1/7/b2b2b2b2b2b2b2b2.jpg", position=1),
+    )
+    signed = {m.storage_key: f"https://sig.test/{m.position}" for m in media}
+    ctx, _m, _s = _context(
+        post_type="instagram_carousel",
+        media=media,
+        signed=signed,
+        resumable={
+            "containers": [
+                {"id": "c1", "position": 0, "role": "child"},
+                {"id": "c2", "position": 1, "role": "child"},
+                {"id": "c3", "position": -1, "role": "parent"},
+            ]
+        },
+    )
+    result = publisher.send(ctx, None)
+    posts = [r for r in graph.requests if r[1] == f"{IG}/media" and r[0] == "POST"]
+    # The expired children are recreated first (the expired ids cannot be
+    # reused), then the parent over the fresh child ids.
+    assert len(posts) == 3
+    assert posts[0][2]["is_carousel_item"] == "true"
+    assert posts[0][2]["image_url"] == "https://sig.test/0"
+    assert posts[1][2]["is_carousel_item"] == "true"
+    assert posts[1][2]["image_url"] == "https://sig.test/1"
+    assert posts[2][2]["media_type"] == "CAROUSEL"
+    assert posts[2][2]["children"] == "c4,c5"
+    publish = [r for r in graph.requests if r[1] == f"{IG}/media_publish"][0]
+    assert publish[2]["creation_id"] == "c6"
+    assert result.status == "published"
+
+
+def test_send_recreates_expired_containers_only_once_per_target() -> None:
+    graph = FakeGraph()
+    graph.containers["c2"] = {"status_code": "EXPIRED", "params": {}}
+    graph.next_container = 2
+    publisher = _publisher(graph)
+    ctx, _m, _s = _context(
+        signed={"w/1/7/aaaabbbbccccdddd.mp4": "https://sig.test/v"},
+        resumable={
+            "containers": [{"id": "c2", "position": 0, "role": "main"}],
+            # A first recreation already happened for this target.
+            "recreated": True,
+        },
+    )
+    with pytest.raises(PublishRefused) as caught:
+        publisher.send(ctx, None)
+    assert caught.value.code == "container_expired"
+    assert "release again" in caught.value.detail
+    assert not [r for r in graph.requests if r[1] == f"{IG}/media" and r[0] == "POST"]
+    assert not [r for r in graph.requests if r[1] == f"{IG}/media_publish"]
+
+
+def test_send_treats_a_legacy_recreated_list_as_already_recreated() -> None:
+    graph = FakeGraph()
+    graph.containers["c2"] = {"status_code": "EXPIRED", "params": {}}
+    graph.next_container = 2
+    publisher = _publisher(graph)
+    ctx, _m, _s = _context(
+        signed={"w/1/7/aaaabbbbccccdddd.mp4": "https://sig.test/v"},
+        resumable={
+            "containers": [{"id": "c2", "position": 0, "role": "main"}],
+            # Older builds stored the recreated container ids in a list.
+            "recreated": ["c1"],
+        },
+    )
+    with pytest.raises(PublishRefused) as caught:
+        publisher.send(ctx, None)
+    assert caught.value.code == "container_expired"
+    assert not [r for r in graph.requests if r[1] == f"{IG}/media" and r[0] == "POST"]
+
+
 def test_send_refuses_when_the_publishing_quota_is_exhausted() -> None:
     graph = FakeGraph()
     graph.quota_usage = 50

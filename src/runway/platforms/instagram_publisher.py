@@ -412,7 +412,9 @@ class InstagramDirectPublisher:
         state: dict[str, Any] = dict(resumable or {})
         state.setdefault("containers", [])
         state.setdefault("r2_keys", [])
-        state.setdefault("recreated", [])
+        # Once a target's containers were recreated, an EXPIRED recreation is
+        # final — a truthy legacy list of recreated ids counts the same.
+        state.setdefault("recreated", False)
         return state
 
     def _parent(self, state: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -724,26 +726,18 @@ class InstagramDirectPublisher:
     def _recreate_expired(
         self, ctx: PublishContext, token: TokenSet, ig_id: str, state: dict[str, Any]
     ) -> dict[str, Any]:
-        """An EXPIRED container was never publishable — recreate it, once."""
+        """An EXPIRED container was never publishable — recreate it, once per target."""
         parent = self._parent(state)
         if parent is None:
             raise PublishRefused("container_expired", "no container record")
-        if parent["id"] in state["recreated"]:
+        if state.get("recreated"):
             raise PublishRefused(
                 "container_expired",
                 "the recreated container expired too; release again to rebuild",
             )
-        state["recreated"].append(parent["id"])
-        containers = [c for c in state["containers"] if c["role"] != "parent"]
+        state["recreated"] = True
         if parent["role"] == "parent":
-            params = {"media_type": "CAROUSEL"}
-            params["children"] = ",".join(c["id"] for c in containers)
-            params.update(self._container_params(ctx, None, "", state, child=False))
-            data = self._post(token, f"{ig_id}/media", params)
-            new_parent = {"id": str(data.get("id")), "position": -1, "role": "parent"}
-            state["containers"] = [*containers, new_parent]
-            ctx.save_resumable(state)
-            return new_parent
+            return self._recreate_carousel(ctx, token, ig_id, state)
         media = next((m for m in ctx.media if m.position == parent.get("position")), ctx.media[0])
         params = self._media_container_params(ctx, media, state, child=False)
         data = self._post(token, f"{ig_id}/media", params)
@@ -755,6 +749,40 @@ class InstagramDirectPublisher:
         ]
         ctx.save_resumable(state)
         return new_main
+
+    def _recreate_carousel(
+        self, ctx: PublishContext, token: TokenSet, ig_id: str, state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Rebuild an expired carousel: fresh children first, then the parent.
+
+        The children expired with the parent, so their container ids cannot be
+        reused — each is recreated through the same staging and upload path a
+        first-time child takes.
+        """
+        children: list[dict[str, Any]] = []
+        for old in [c for c in state["containers"] if c["role"] != "parent"]:
+            media = next(
+                (m for m in ctx.media if m.position == old.get("position")),
+                None,
+            )
+            if media is None:
+                raise PublishRefused(
+                    "container_expired",
+                    "carousel containers expired; release again to rebuild",
+                )
+            params = self._media_container_params(ctx, media, state, child=True)
+            data = self._post(token, f"{ig_id}/media", params)
+            new_id = str(data.get("id"))
+            self._upload_to_container(ctx, token, new_id, media, None)
+            children.append({"id": new_id, "position": media.position, "role": "child"})
+        params = {"media_type": "CAROUSEL"}
+        params["children"] = ",".join(c["id"] for c in children)
+        params.update(self._container_params(ctx, None, "", state, child=False))
+        data = self._post(token, f"{ig_id}/media", params)
+        new_parent = {"id": str(data.get("id")), "position": -1, "role": "parent"}
+        state["containers"] = [*children, new_parent]
+        ctx.save_resumable(state)
+        return new_parent
 
     # --------------------------------------------------------- graph access
 
