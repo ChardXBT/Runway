@@ -31,6 +31,7 @@ from runway.jobs.worker import PermanentJobError
 from runway.platforms.base import AuthorizationExpired, TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
+from runway.realtime import standby
 from runway.realtime.subscriptions import mark_needs_reauth
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,8 @@ def run_refresh_token_job(
     the account ``needs_reauth`` while every other provider error
     propagates for the queue's retry.
     """
+    # Spec 07 section 4: a standby machine runs no token refresh.
+    standby.ensure_active(registry.settings)
     account_id = job.payload.get("account_id")
     if not isinstance(account_id, int):
         raise PermanentJobError("refresh_token job needs an account_id")

@@ -32,7 +32,7 @@ from runway.events.types import ACCOUNT_UPDATED
 from runway.jobs.queue import JOB_STATE_MACHINE, Job, JobQueue, JobState
 from runway.jobs.worker import PermanentJobError
 from runway.platforms.sync import SYNC_ACCOUNT_JOB
-from runway.realtime import PROCESS_WEBHOOK_JOB, hooks
+from runway.realtime import PROCESS_WEBHOOK_JOB, hooks, standby
 from runway.realtime.schedule import (
     INVENTORY_BOOST_MINUTES,
     RECENT_METRICS_BOOST_MINUTES,
@@ -48,8 +48,10 @@ _ERROR_LIMIT = 500
 
 
 def run_process_webhook_job(
-    database: Database, _settings: Settings, queue: JobQueue, job: Job
+    database: Database, settings: Settings, queue: JobQueue, job: Job
 ) -> None:
+    # Spec 07 section 4: a standby machine runs no platform writes.
+    standby.ensure_active(settings)
     event_id = job.payload.get("event_id")
     if not isinstance(event_id, int):
         raise PermanentJobError("process_webhook job has no integer event_id")

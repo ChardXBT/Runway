@@ -50,6 +50,7 @@ from runway.platforms.instagram import InstagramProvider
 from runway.platforms.registry import ProviderRegistry
 from runway.realtime import quota as sync_quota
 from runway.realtime import schedule as sync_schedule
+from runway.realtime import standby
 
 logger = logging.getLogger(__name__)
 
@@ -1136,6 +1137,8 @@ def run_sync_account_job(service: SyncService, job: Job) -> None:
     a payload without `scope` is a full sync, the pre-RT2 job shape that
     already-queued jobs and webhook hints still use.
     """
+    # Spec 07 section 4: a standby machine runs no sync jobs.
+    standby.ensure_active(service.settings)
     account_id = job.payload.get("account_id")
     if not isinstance(account_id, int):
         raise PermanentJobError("sync_account job has no integer account_id")

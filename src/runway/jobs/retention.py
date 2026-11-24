@@ -40,6 +40,7 @@ from runway.jobs.queue import RECONCILE, SEND, Job, JobQueue, JobState
 from runway.locks import LockTimeout, exclusive_file_lock
 from runway.platforms.sync import sync_lock_path
 from runway.platforms.tokens import TokenStore
+from runway.realtime import standby
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +265,8 @@ def purge_dead_account_data(session: Session, token_store: TokenStore, *, now: d
 
 
 def run_purge_job(database: Database, settings: Settings, _job: Job) -> None:
+    # Spec 07 section 4: a standby machine runs no purge jobs.
+    standby.ensure_active(settings)
     # Imported here: runway.api.v1 is an API package, the worker only needs its store.
     from runway.api.v1.idempotency import IdempotencyStore
 

@@ -43,6 +43,7 @@ from runway.jobs.worker import PermanentJobError
 from runway.platforms.base import AuthorizationExpired, ProviderError, safe_error_summary
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
+from runway.realtime import standby
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +310,8 @@ def run_renew_subscription_job(
     queue retries (a subscription that never verifies drifts to ``expired``
     and is resubscribed by the producer).
     """
+    # Spec 07 section 4: a standby machine runs no subscription jobs.
+    standby.ensure_active(settings)
     subscription_id = job.payload.get("subscription_id")
     mode = job.payload.get("mode")
     if not isinstance(subscription_id, int) or mode not in {"subscribe", "unsubscribe"}:
@@ -403,6 +406,8 @@ def run_subscribe_apps_job(registry: ProviderRegistry, job: Job) -> None:
     marks the account ``needs_reauth``; every other provider error propagates
     so the queue retries the transient failures.
     """
+    # Spec 07 section 4: a standby machine runs no subscription jobs.
+    standby.ensure_active(registry.settings)
     account_id = job.payload.get("account_id")
     if not isinstance(account_id, int):
         raise PermanentJobError("subscribe_apps job needs an account_id")
