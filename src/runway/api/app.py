@@ -241,8 +241,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # the OAuth callback they feed into; hosted gets them when the
         # tenancy work scopes the platform tables per workspace.
         from runway.api.v1.accounts_routes import build_accounts_router
+        from runway.api.v1.doctor_routes import build_doctor_router
 
         application.include_router(build_accounts_router(database, active_settings))
+        # `GET /api/v1/doctor/platforms`: the CLI doctor's API twin. Owner
+        # only, read-only; it drives the settings page's connect checklist.
+        application.include_router(build_doctor_router(database, active_settings))
         application.include_router(build_posts_router(post_service))
         application.include_router(build_media_router(media_service))
         application.include_router(

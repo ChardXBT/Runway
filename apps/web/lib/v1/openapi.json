@@ -4442,6 +4442,72 @@
         ]
       }
     },
+    "/api/v1/doctor/platforms": {
+      "get": {
+        "description": "Per-platform connect readiness (owner only, read-only, no network).",
+        "operationId": "doctor_platforms_api_v1_doctor_platforms_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Doctor Platforms Api V1 Doctor Platforms Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "An application/problem+json error with a stable `code`"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "An application/problem+json error with a stable `code`"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "An application/problem+json error with a stable `code`"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "An application/problem+json error with a stable `code`"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "An application/problem+json error with a stable `code`"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "An application/problem+json error with a stable `code`"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "An application/problem+json error with a stable `code`"
+          }
+        },
+        "summary": "Doctor Platforms",
+        "tags": [
+          "doctor"
+        ]
+      }
+    },
     "/api/v1/events/stream": {
       "get": {
         "description": "Events for the caller's workspace, resumable with Last-Event-ID.\n\nFrames carry `id:` (the event row id), `event:` (the type) and a JSON\n`data:` of ids and a small summary. A `resync` event means the client\nmust refetch what it shows. A comment line is sent every 20 seconds\nso proxies keep the connection open.",

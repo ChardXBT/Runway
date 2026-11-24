@@ -89,6 +89,10 @@ arena_app = typer.Typer(help="Operate the blinded three-arm raw-frontier arena."
 neural_app = typer.Typer(help="Evaluate local neural representation challengers offline.")
 composed_app = typer.Typer(help="Prepare learned composed-image retrieval datasets.")
 platforms_app = typer.Typer(help="Inspect and sync connected creator platforms.")
+doctor_app = typer.Typer(
+    invoke_without_command=True,
+    help="Check local dependencies, configuration and platform connections.",
+)
 
 app.add_typer(capture_app, name="capture")
 app.add_typer(catalog_app, name="catalog")
@@ -115,6 +119,7 @@ intelligence_app.add_typer(arena_app, name="arena")
 intelligence_app.add_typer(neural_app, name="neural")
 intelligence_app.add_typer(composed_app, name="composed-retrieval")
 app.add_typer(platforms_app, name="platforms")
+app.add_typer(doctor_app, name="doctor")
 app.add_typer(db_app, name="db")
 app.add_typer(keys_app, name="keys")
 app.command("worker")(worker_command)
@@ -1657,9 +1662,11 @@ def _runway_api_healthy(host: str, port: int) -> bool:
     return response.status == 200 and isinstance(product, str) and product.casefold() == "runway"
 
 
-@app.command()
-def doctor() -> None:
+@doctor_app.callback()
+def doctor(ctx: typer.Context) -> None:
     """Check local dependencies and configuration without exposing secrets."""
+    if ctx.invoked_subcommand is not None:
+        return
     settings = get_settings()
     initialize_database(settings)
     checks: list[tuple[str, bool, str]] = []
@@ -1765,6 +1772,37 @@ def doctor() -> None:
         if not ok and not optional:
             required_failures += 1
     if required_failures:
+        raise typer.Exit(code=1)
+
+
+@doctor_app.command("platforms")
+def doctor_platforms(
+    json_output: bool = typer.Option(False, "--json", help="Print the machine-readable report."),
+    check_edge: bool = typer.Option(
+        False,
+        "--check-edge",
+        help="Also GET {RUNWAY_PUBLIC_EDGE_URL}/hooks/health - the only "
+        "network call, and it goes to the owner's own edge.",
+    ),
+) -> None:
+    """Report whether each platform can be connected; exit 1 while not.
+
+    Per platform: credentials (set? from where? never the value), the exact
+    redirect URI to register, the platform's HTTPS rule, requested versus
+    granted scopes, token state, app-status gates and the per-post-type
+    publishing capability. It ends in a "What is missing" list of one-line
+    actions and exits 1 while that list is not empty.
+    """
+    from runway.platforms.doctor import PlatformsDoctor
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    report = PlatformsDoctor(database, settings).run(check_edge=check_edge)
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(), indent=2))
+    else:
+        typer.echo(report.human_text())
+    if not report.ready:
         raise typer.Exit(code=1)
 
 
