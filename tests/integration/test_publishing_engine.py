@@ -24,6 +24,7 @@ from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
     AccountPublisher,
+    AccountSyncState,
     ConnectedAccount,
     DraftTarget,
     EventRecord,
@@ -322,6 +323,33 @@ def test_a_clean_send_publishes_once_and_verifies_by_read_back(harness: Harness)
         ).all()
     # Three reports in one fast send: the first and the final one are written.
     assert 1 <= len(progress) <= 3
+
+
+def test_a_published_target_boosts_inventory_and_recent_metrics(harness: Harness) -> None:
+    """A publish is a push hint (spec 04 section 3): the sync scopes hurry after it."""
+    target_id = harness.release()
+    account_id = harness.target(target_id).account_id
+    assert account_id is not None
+
+    harness.drain()
+
+    assert harness.target(target_id).state == "verified"
+    with harness.database.session() as session:
+        states = {
+            row.scope: row
+            for row in session.scalars(
+                select(AccountSyncState).where(AccountSyncState.account_id == account_id)
+            )
+        }
+    inventory = states["inventory"]
+    recent = states["content_metrics_recent"]
+    # `next_run_at` was pulled to the publish moment; `boosted_until` opened a
+    # fast-cadence window of 30 min for inventory and 2 h for recent metrics.
+    assert inventory.next_run_at is not None and inventory.boosted_until is not None
+    assert inventory.boosted_until - inventory.next_run_at == timedelta(minutes=30)
+    assert recent.next_run_at is not None and recent.boosted_until is not None
+    assert recent.boosted_until - recent.next_run_at == timedelta(minutes=120)
+    assert inventory.source == recent.source == "push"
 
 
 @pytest.mark.parametrize(
