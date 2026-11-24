@@ -157,8 +157,8 @@ Business). Switch it in the Instagram app first if it is still personal.
    ```
 
    Either credential set fully configures Instagram for connect; the doctor reports both.
-   Note `meta_app_*` and the config id can only come from the environment or `.env` —
-   `secrets.enc.env` does not carry them today.
+   Note `meta_app_*`, the config id and the webhook verify token can only come from the
+   environment or `.env` — `secrets.enc.env` does not carry them today.
 7. If there is no HTTPS edge at all you can still connect: generate a token in the
    console's credentials page and use the **import token** form on the Accounts page.
    The doctor notes this path whenever the redirect URI fails the https rule.
