@@ -33,11 +33,12 @@ ALLOWLIST = Path(__file__).with_name("secret_scan_allowlist.txt")
 BLOCKED_NAME_PATTERNS: tuple[tuple[str, str], ...] = (
     ("*.db", "database file"),
     ("*.db.gz", "database snapshot"),
+    ("*.db-journal", "database rollback journal"),
     ("*.db-wal", "database write-ahead log"),
     ("*.db-shm", "database shared-memory file"),
     ("*.sqlite", "database file"),
     ("*.sqlite3", "database file"),
-    ("runway-operational-media.zip", "media snapshot"),
+    ("*.zip", "zip archive"),
     ("*.key", "key file"),
     ("*.agekey", "age private key file"),
     (".env*", "environment file"),
@@ -56,7 +57,7 @@ _START = r"(?<![A-Za-z0-9_])"
 # (for example "`ya29.` tokens") does not match.
 TOKEN_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("google-oauth-access-token", re.compile(_START + r"ya29\.[0-9A-Za-z_-]{20,}")),
-    ("google-refresh-token", re.compile(r"(?<![A-Za-z0-9/:])1//[0-9A-Za-z_-]{30,}")),
+    ("google-refresh-token", re.compile(r"(?<![A-Za-z0-9/])1//[0-9A-Za-z_-]{30,}")),
     ("google-client-secret", re.compile(_START + r"GOCSPX-[0-9A-Za-z_-]{20,}")),
     ("meta-access-token", re.compile(_START + r"EAAC[0-9A-Za-z]{20,}")),
     ("instagram-access-token", re.compile(_START + r"IG(?:AA|QV)[0-9A-Za-z_-]{30,}")),
@@ -227,17 +228,25 @@ def decode_text(data: bytes) -> str | None:
     if pairs:
         odd = sum(1 for index in range(1, 2 * pairs, 2) if sample[index] == 0)
         even = sum(1 for index in range(0, 2 * pairs, 2) if sample[index] == 0)
-        if odd >= 0.8 * pairs and even == 0:
+        # UTF-16 of mostly-Latin text puts NULs on one side only: 30% on the
+        # dominant side is enough (non-Latin characters dilute the pattern),
+        # as long as the other side is clearly lower — binary mixes them.
+        if odd >= 0.3 * pairs and odd > even:
             return data.decode("utf-16-le", errors="replace")
-        if even >= 0.8 * pairs and odd == 0:
+        if even >= 0.3 * pairs and even > odd:
             return data.decode("utf-16-be", errors="replace")
-    return None
+    try:
+        # Valid UTF-8 with stray NUL bytes is still text; scan it without them.
+        return data.decode("utf-8").replace("\0", "")
+    except UnicodeDecodeError:
+        return None
 
 
 # Binary payloads that may not enter the repository even under an innocent name.
 _BINARY_MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"SQLite format 3\x00", "SQLite database binary"),
     (b"\x1f\x8b", "gzip archive binary"),
+    (b"PK\x03\x04", "binary archive in history"),
 )
 
 

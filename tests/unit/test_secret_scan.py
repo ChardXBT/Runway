@@ -688,3 +688,56 @@ def test_binary_database_and_archive_content_is_flagged(tmp_path: Path) -> None:
     assert [finding.rule for finding in findings] == ["SQLite database binary"]
     findings = secret_scan.scan_blob("pack.bin", b"\x1f\x8b\x08\x00rest")
     assert [finding.rule for finding in findings] == ["gzip archive binary"]
+
+
+# --- re-review fixes ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "backups/media.zip",
+        "runway-operational-media.zip",
+        "data/runway.db-journal",
+        "data/runway.db-wal",
+        "data/runway.db-shm",
+        "data/runway.sqlite",
+        "data/runway.sqlite3",
+    ],
+)
+def test_archive_and_database_sidecar_names_are_refused(path: str) -> None:
+    assert secret_scan.blocked_name(path) is not None
+
+
+def test_zip_binary_magic_is_flagged() -> None:
+    findings = secret_scan.scan_blob("innocent.txt", b"PK\x03\x04" + b"\x00" * 32)
+    assert [finding.rule for finding in findings] == ["binary archive in history"]
+
+    repo_file = secret_scan.scan_blob("x.zip", b"PK\x03\x04" + b"\x00" * 8)
+    rules = {finding.rule for finding in repo_file}
+    assert "binary archive in history" in rules
+    assert any("zip" in rule for rule in rules)
+
+
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+def test_utf16_is_detected_below_full_nul_saturation(encoding: str) -> None:
+    # About a third non-Latin characters: ~60% NULs on one side, not nearly all.
+    line = f"token = '{FAKE_GOOGLE}' " + chr(0x4E2D) * 30
+    data = line.encode(encoding)
+    text = secret_scan.decode_text(data)
+    assert text is not None
+    assert [finding.rule for finding in secret_scan.scan_blob("notes.txt", data)] == [
+        "google-oauth-access-token"
+    ]
+
+
+def test_text_with_stray_nul_bytes_is_scanned_after_stripping() -> None:
+    data = b"line one\0\nTOKEN = '" + FAKE_GOOGLE.encode() + b"'\0\n"
+    findings = secret_scan.scan_blob("notes.txt", data)
+    assert [finding.rule for finding in findings] == ["google-oauth-access-token"]
+
+
+def test_a_refresh_token_after_a_colon_is_caught() -> None:
+    refresh = "1//" + "0gAbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+    findings = secret_scan.scan_text("config.env", f"refresh:{refresh}\n")
+    assert "google-refresh-token" in {finding.rule for finding in findings}
