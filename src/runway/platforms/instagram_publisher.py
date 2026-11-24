@@ -776,6 +776,7 @@ class InstagramDirectPublisher:
             "POST",
             f"{self.graph_base}/{path.lstrip('/')}",
             data={k: v for k, v in params.items() if v is not None},
+            headers={"Authorization": f"Bearer {token.access_token}"},
         )
         return self._result(response)
 

@@ -130,7 +130,21 @@ class FakeFacebook:
         query = parse_qs(request.url.query.decode()) if request.url.query else {}
         self.requests.append((request.method, request.url.host, path))
         if path == "oauth/access_token":
+            # The exchange authenticates with client_id/client_secret query
+            # params, not a Bearer header.
             return httpx.Response(200, json={"access_token": "sys-token", "token_type": "bearer"})
+        # Every other graph call must authenticate like the real API: a
+        # request without the held token's Bearer header is an OAuth failure.
+        if request.headers.get("Authorization") != "Bearer sys-token":
+            return httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "code": 190,
+                        "message": "Invalid OAuth access token - cannot parse access token",
+                    }
+                },
+            )
         if path == "me" and query.get("fields") == ["client_business_id"]:
             return httpx.Response(
                 200, json={"id": "sys-1", "client_business_id": self.client_business_id}
@@ -491,6 +505,17 @@ class FakeMetaGraph(FakeFacebook):
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.host == "rupload.facebook.com":
+            # The resumable upload authenticates with `Authorization: OAuth`.
+            if request.headers.get("Authorization") != "OAuth sys-token":
+                return httpx.Response(
+                    401,
+                    json={
+                        "error": {
+                            "code": 190,
+                            "message": "Invalid OAuth access token",
+                        }
+                    },
+                )
             parts = request.url.path.lstrip("/").split("/")
             container_id = parts[-1]
             offset = request.headers.get("offset", "0")
@@ -505,6 +530,20 @@ class FakeMetaGraph(FakeFacebook):
         method = request.method
         body = parse_qs(request.content.decode()) if request.content else {}
         self.requests.append((method, request.url.host, path))
+        if path == "oauth/access_token":
+            return super().handler(request)
+        # Every graph call must authenticate like the real API: a request
+        # without the held token's Bearer header is an OAuth failure (190).
+        if request.headers.get("Authorization") != "Bearer sys-token":
+            return httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "code": 190,
+                        "message": "Invalid OAuth access token - cannot parse access token",
+                    }
+                },
+            )
         if path.endswith("/content_publishing_limit"):
             return httpx.Response(
                 200,

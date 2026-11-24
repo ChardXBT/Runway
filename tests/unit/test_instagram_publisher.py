@@ -92,6 +92,18 @@ class FakeGraph:
         method = request.method
         body = parse_qs(request.content.decode()) if request.content else {}
         self.requests.append((method, path, {k: v[0] for k, v in body.items()}))
+        # Every graph call must authenticate like the real API: a request
+        # without the held token's Bearer header is an OAuth failure (190).
+        if request.headers.get("Authorization") != "Bearer ig-tok":
+            return httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "code": 190,
+                        "message": "Invalid OAuth access token - cannot parse access token",
+                    }
+                },
+            )
         if path == "me":
             return httpx.Response(200, json={"id": self.me_id, "user_id": self.me_id})
         if path.endswith("/content_publishing_limit"):
