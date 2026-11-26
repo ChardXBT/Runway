@@ -73,27 +73,34 @@ class OAuthStateService:
             )
         return IssuedState(state=state, code_verifier=verifier)
 
-    def consume(self, platform: Platform, *, state: str) -> OAuthState:
+    def consume(
+        self,
+        platform: Platform,
+        *,
+        state: str,
+        workspace_id: int | None = None,
+    ) -> OAuthState:
         """Validate and consume a state value; each state may be used exactly once.
 
         The check-then-set is a single conditional UPDATE, so two concurrent
         callbacks cannot both pass the unconsumed/unexpired gate: only the
         transaction whose statement matches all conditions reports rowcount 1.
+        When a workspace is supplied it is part of that same conditional gate,
+        so a callback from another workspace neither consumes nor uses the state.
         """
         now = utcnow()
+        conditions = [
+            OAuthState.state == state,
+            OAuthState.platform == platform.value,
+            OAuthState.consumed_at.is_(None),
+            OAuthState.expires_at > now,
+        ]
+        if workspace_id is not None:
+            conditions.append(OAuthState.workspace_id == workspace_id)
         with self.database.session() as session:
             result = cast(
                 CursorResult[Any],
-                session.execute(
-                    update(OAuthState)
-                    .where(
-                        OAuthState.state == state,
-                        OAuthState.platform == platform.value,
-                        OAuthState.consumed_at.is_(None),
-                        OAuthState.expires_at > now,
-                    )
-                    .values(consumed_at=now)
-                ),
+                session.execute(update(OAuthState).where(*conditions).values(consumed_at=now)),
             )
             record = session.scalar(select(OAuthState).where(OAuthState.state == state))
             if result.rowcount != 1:
@@ -101,6 +108,7 @@ class OAuthStateService:
                     record is None
                     or record.platform != platform.value
                     or record.consumed_at is not None
+                    or (workspace_id is not None and record.workspace_id != workspace_id)
                 ):
                     raise OAuthStateError("invalid_state")
                 raise OAuthStateError("expired_state")
@@ -108,22 +116,29 @@ class OAuthStateService:
             session.expunge(record)
             return record
 
-    def peek(self, platform: Platform, *, state: str) -> OAuthState | None:
+    def peek(
+        self,
+        platform: Platform,
+        *,
+        state: str,
+        workspace_id: int | None = None,
+    ) -> OAuthState | None:
         """Read a live, unconsumed state without consuming it.
 
         Used by two-step flows (Unified Login's account pick) that list the
         stored payload first and consume the state only on the final POST.
         """
         now = utcnow()
+        conditions = [
+            OAuthState.state == state,
+            OAuthState.platform == platform.value,
+            OAuthState.consumed_at.is_(None),
+            OAuthState.expires_at > now,
+        ]
+        if workspace_id is not None:
+            conditions.append(OAuthState.workspace_id == workspace_id)
         with self.database.session() as session:
-            record = session.scalar(
-                select(OAuthState).where(
-                    OAuthState.state == state,
-                    OAuthState.platform == platform.value,
-                    OAuthState.consumed_at.is_(None),
-                    OAuthState.expires_at > now,
-                )
-            )
+            record = session.scalar(select(OAuthState).where(*conditions))
             if record is not None:
                 session.expunge(record)
             return record

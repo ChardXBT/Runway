@@ -191,6 +191,91 @@ def test_oauth_connect_state_stays_in_the_callers_workspace(
         assert state.workspace_id == 2
 
 
+def test_unified_connect_state_stays_in_the_callers_workspace(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        meta_app_id="meta-app",
+        meta_app_secret="meta-secret",
+        instagram_unified_config_id="cfg-12345",
+    )
+    app = create_app(migrated(settings))
+    database: Database = app.state.database
+    with database.session() as session:
+        session.add(Workspace(id=2, slug="other-workspace", name="Other workspace"))
+    caller = Principal(
+        kind="user",
+        id="user-2",
+        workspace_id=2,
+        role="owner",
+        scopes=scopes_for_role("owner"),
+        display="Other owner",
+    )
+    app.dependency_overrides[get_principal] = lambda: caller
+    with TestClient(app, base_url="http://127.0.0.1:8000") as web:
+        connect = web.post(
+            "/api/platforms/instagram/connect", json={"adapter": "instagram_unified"}
+        )
+        assert connect.status_code == 200, connect.text
+    with database.session() as session:
+        state = session.scalar(select(OAuthState))
+        assert state is not None
+        assert state.workspace_id == 2
+
+
+def test_oauth_callback_rejects_state_from_another_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="live",
+        youtube_client_id="yt-client",
+        youtube_client_secret="yt-secret",
+    )
+    client = httpx.Client(transport=httpx.MockTransport(_youtube_handler), timeout=20.0)
+    provider = YouTubeProvider(settings, client)
+    original = ProviderRegistry.provider
+
+    def patched(self: ProviderRegistry, platform: Platform):
+        if platform is Platform.youtube:
+            return provider
+        return original(self, platform)
+
+    monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    app = create_app(migrated(settings))
+    database: Database = app.state.database
+    with database.session() as session:
+        session.add(Workspace(id=2, slug="other-workspace", name="Other workspace"))
+
+    def principal(workspace_id: int) -> Principal:
+        return Principal(
+            kind="user",
+            id=f"user-{workspace_id}",
+            workspace_id=workspace_id,
+            role="owner",
+            scopes=scopes_for_role("owner"),
+            display=f"Owner {workspace_id}",
+        )
+
+    app.dependency_overrides[get_principal] = lambda: principal(2)
+    with TestClient(app, base_url="http://127.0.0.1:8000") as web:
+        connect = web.post("/api/platforms/youtube/connect")
+        assert connect.status_code == 200, connect.text
+        state_value = connect.json()["state"]
+        app.dependency_overrides[get_principal] = lambda: principal(1)
+        callback = web.get(
+            "/api/platforms/youtube/oauth/callback",
+            params={"code": "auth-code", "state": state_value},
+            follow_redirects=False,
+        )
+        assert callback.status_code == 303
+        assert callback.headers["location"].endswith("/accounts?error=invalid_state")
+    with database.session() as session:
+        state = session.scalar(select(OAuthState).where(OAuthState.state == state_value))
+        assert state is not None
+        assert state.consumed_at is None
+        assert session.scalar(select(ConnectedAccount)) is None
+
+
 def test_oauth_callback_gates_standby_before_exchanging_the_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
