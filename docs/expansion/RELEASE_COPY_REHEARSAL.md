@@ -113,7 +113,7 @@ an isolated end-to-end-equivalent health check, not a live deployment smoke.
 | PR #16 Ruff / mypy | reported | Ruff and format passed on changed files; mypy passed on 253 source files |
 | PR #16 synthetic migration | reported | upgrade to `0020_youtube_publishing`, downgrade to `0012_creator_platforms`, integrity and foreign-key checks clean on fixture data |
 | Independent generated edge rehearsal | generated | passed as above |
-| This branch backend suite (docs-only change) | generated | `.venv/bin/python -m pytest -q -n 6 --dist loadfile`: 2065 passed, 32 skipped in 207.33s; Windows/PowerShell-only cases skipped on Linux |
+| This branch backend suite (docs-only change) | generated | `.venv/bin/python -m pytest -q -n 6 --dist loadfile`: 2067 passed, 32 skipped in 193.10s; Windows/PowerShell-only cases skipped on Linux |
 | Publish-off health | generated | passed as above |
 | Production-copy migration | owner-verified | **not done**: production database location is still owner-confirmed only |
 | OAuth live acceptance | owner-verified | **not done**: owner-only account/console work |
