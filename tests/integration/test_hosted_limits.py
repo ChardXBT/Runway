@@ -17,7 +17,7 @@ from runway.cli import hosted_commands
 from runway.cli.main import app as cli
 from runway.config import Settings
 from runway.db import Database
-from runway.db.models import ConnectedAccount
+from runway.db.models import ConnectedAccount, Workspace
 from runway.hosted.quotas import (
     UNLIMITED,
     PublishingPaused,
@@ -205,3 +205,19 @@ def test_connected_account_slots_count_everything_not_disconnected(
         with pytest.raises(Problem, match="403"):
             require_connected_account_slot(session, hosted, 1)
         require_connected_account_slot(session, settings, 1)
+
+
+def test_connected_account_slots_do_not_leak_across_workspaces(
+    settings: Settings, database: Database
+) -> None:
+    hosted = _hosted(settings, quota_connected_accounts=1)
+    with database.session() as session:
+        session.add(Workspace(id=2, slug="other-workspace", name="Other workspace"))
+        session.flush()
+        session.add(
+            ConnectedAccount(platform="youtube", external_account_id="theirs", workspace_id=2)
+        )
+    with database.session() as session:
+        require_connected_account_slot(session, hosted, 1)
+        with pytest.raises(Problem, match="403"):
+            require_connected_account_slot(session, hosted, 2)
