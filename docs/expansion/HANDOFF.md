@@ -11,6 +11,23 @@ left. The specs it builds from are in this folder (`README.md`, `specs/00-09`,
 Paths below use `%USERPROFILE%` (the owner's Windows profile). All work lives under
 `%USERPROFILE%\Downloads`.
 
+
+## 0. Integrated verification update (2026-11-26)
+
+This handoff's branch table and older verification counts are historical. The integrated
+`expansion/build` branch at `4f25721` has now been re-verified as a whole: backend 2061 passed /
+31 skipped before the review fix and 2062 passed / 31 skipped after it; frontend 46 files / 228
+tests plus lint, typecheck, API drift and production build passed; upstream GitHub CI and Secret
+scan were green on `4f25721`. A synthetic SQLite copy was migrated from `0012_creator_platforms`
+to `0020_youtube_publishing` and back through the public CLI: both commands exited 0, integrity
+checks were clean, foreign-key checks were empty, scoped fixture rows were preserved at head, and
+the downgraded schema fingerprint matched the expected 0012 fingerprint. Exact evidence is in
+`docs/VERIFICATION_REPORT.md` under "Integrated-branch re-verification (2026-11-26)".
+
+The same review found and fixed one OAuth workspace-binding defect in the legacy connect helper.
+Legacy `/api/platforms` routes remain a local single-workspace surface and are excluded from the
+hosted allowlist; do not expose them in hosted mode without adding workspace filters throughout.
+
 ## 1. Goal and the owner's words
 
 - 2026-11-22: "Complete the runaway repo do deeper research you have full permission Runway should
