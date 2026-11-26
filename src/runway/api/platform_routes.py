@@ -433,7 +433,7 @@ def build_platform_router(
     def _unified() -> InstagramUnifiedProvider:
         return unified_provider or InstagramUnifiedProvider(settings)
 
-    def _issue_unified_connect() -> dict[str, object]:
+    def _issue_unified_connect(workspace_id: int) -> dict[str, object]:
         if settings.platform_provider == "mock":
             raise HTTPException(
                 status_code=400,
@@ -455,6 +455,7 @@ def build_platform_router(
             redirect_uri=redirect_uri,
             use_pkce=False,
             payload=json.dumps({"adapter": "instagram_unified"}),
+            workspace_id=workspace_id,
         )
         return {
             "authorization_url": provider.authorization_url(
@@ -487,8 +488,8 @@ def build_platform_router(
                     status_code=400,
                     detail="instagram_unified is an Instagram connection adapter",
                 )
-            return _issue_unified_connect()
-        return _issue_connect(parsed)
+            return _issue_unified_connect(principal.workspace_id)
+        return _issue_connect(parsed, workspace_id=principal.workspace_id)
 
     def _unified_callback(
         code: str,
@@ -547,14 +548,15 @@ def build_platform_router(
                     "accounts": candidates,
                 }
             ),
+            workspace_id=principal.workspace_id,
         )
         return RedirectResponse(
             url=f"{web_base}/accounts?select_instagram={issued.state}",
             status_code=303,
         )
 
-    def _select_meta(state: str) -> dict[str, object] | None:
-        record = oauth_states.peek(Platform.instagram, state=state)
+    def _select_meta(state: str, workspace_id: int) -> dict[str, object] | None:
+        record = oauth_states.peek(Platform.instagram, state=state, workspace_id=workspace_id)
         if record is None:
             return None
         meta = _state_meta(record)
@@ -563,8 +565,10 @@ def build_platform_router(
         return meta
 
     @router.get("/platforms/instagram/unified/select")
-    def unified_select_list(state: str = Query(min_length=1)) -> dict[str, object]:
-        meta = _select_meta(state)
+    def unified_select_list(
+        state: str = Query(min_length=1), principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
+        meta = _select_meta(state, principal.workspace_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="no pending Instagram account pick")
         return {"state": state, "accounts": meta.get("accounts") or []}
@@ -584,7 +588,7 @@ def build_platform_router(
 
         # Peek first: a pick the state never offered is rejected without
         # consuming it, so the owner can still choose a valid account.
-        meta = _select_meta(payload.state)
+        meta = _select_meta(payload.state, principal.workspace_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="no pending Instagram account pick")
         candidates = meta.get("accounts")
@@ -598,7 +602,9 @@ def build_platform_router(
                 detail="that Instagram account is not among the assigned ones",
             )
         try:
-            oauth_states.consume(Platform.instagram, state=payload.state)
+            oauth_states.consume(
+                Platform.instagram, state=payload.state, workspace_id=principal.workspace_id
+            )
         except OAuthStateError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         token_ref = str(meta.get("token_ref") or "")
@@ -660,7 +666,7 @@ def build_platform_router(
             # authorization code on a token it could never store.
             return fail("standby")
         try:
-            record = oauth_states.consume(parsed, state=state)
+            record = oauth_states.consume(parsed, state=state, workspace_id=principal.workspace_id)
         except OAuthStateError as exc:
             return fail(str(exc))
         if (

@@ -24,11 +24,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from runway.api.platform_routes import build_platform_router
-from runway.auth.principal import get_principal, local_owner
+from runway.auth.principal import Principal, get_principal, local_owner, scopes_for_role
 from runway.config import Settings
 from runway.db import initialize_database
 from runway.db.base import Database
-from runway.db.models import ConnectedAccount, OAuthState
+from runway.db.models import ConnectedAccount, OAuthState, Workspace
 from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.instagram import API_VERSION, InstagramProvider
@@ -476,6 +476,41 @@ def test_unified_select_rejects_a_bad_pick_without_consuming_the_state(
     )
     assert bad.status_code == 400
     # The state was not consumed by the rejected pick: a valid one works.
+    good = client.post(
+        "/api/platforms/instagram/unified/select",
+        json={"state": select_state, "external_account_id": IG2},
+    )
+    assert good.status_code == 200
+    with database.session() as session:
+        account = session.scalar(select(ConnectedAccount))
+        assert account is not None and account.external_account_id == IG2
+
+
+def test_unified_select_rejects_another_workspace_without_consuming_the_state(
+    tmp_path: Path,
+) -> None:
+    database, client, _r, select_state = _two_account_select(tmp_path, FakeFacebook())
+    with database.session() as session:
+        session.add(Workspace(id=2, slug="other-workspace", name="Other workspace"))
+
+    def other_workspace_owner() -> Principal:
+        return Principal(
+            kind="user",
+            id="user-2",
+            workspace_id=2,
+            role="owner",
+            scopes=scopes_for_role("owner"),
+            display="Other owner",
+        )
+
+    client.app.dependency_overrides[get_principal] = other_workspace_owner
+    wrong_workspace = client.post(
+        "/api/platforms/instagram/unified/select",
+        json={"state": select_state, "external_account_id": IG2},
+    )
+    assert wrong_workspace.status_code == 404
+
+    client.app.dependency_overrides[get_principal] = local_owner
     good = client.post(
         "/api/platforms/instagram/unified/select",
         json={"state": select_state, "external_account_id": IG2},

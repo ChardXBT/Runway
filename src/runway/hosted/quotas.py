@@ -212,15 +212,12 @@ def require_send_allowed(
 
 
 def connected_account_count(session: Session, workspace_id: int) -> int:
-    """Accounts that hold a connection slot (everything not disconnected).
-
-    `connected_accounts` has no workspace column on this branch yet, so every
-    account counts against the workspace: an over-count, which can only refuse.
-    The tenancy work adds `ConnectedAccount.workspace_id == workspace_id` here.
-    """
-    del workspace_id
+    """Workspace accounts that hold a connection slot (everything not disconnected)."""
     count = session.scalar(
-        select(func.count(ConnectedAccount.id)).where(ConnectedAccount.status != "disconnected")
+        select(func.count(ConnectedAccount.id)).where(
+            ConnectedAccount.workspace_id == workspace_id,
+            ConnectedAccount.status != "disconnected",
+        )
     )
     return int(count or 0)
 

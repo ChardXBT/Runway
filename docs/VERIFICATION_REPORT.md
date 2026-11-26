@@ -5,6 +5,92 @@ results. It distinguishes offline verification (tests, fixtures, mocked transpor
 verification (a real authorized account). **No live platform account was connected during this
 work**, so every platform integration below is verified offline only.
 
+
+## Integrated-branch re-verification (2026-11-26)
+
+This section supersedes the counts and migration evidence below for the integrated
+`expansion/build` work. It was produced on a Linux verification VM; Windows-only launcher and
+PowerShell tests were therefore skipped locally and are covered by GitHub CI.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Backend before edits | `.venv/bin/python -m pytest -q -n 6 --dist loadfile` | 2061 passed, 31 skipped in 172.46s |
+| Backend after the OAuth workspace fix | `.venv/bin/python -m pytest -q -n 6 --dist loadfile` | 2062 passed, 31 skipped in 170.63s |
+| Frontend after the fix | `npm run check` | pass; Vitest 46 files / 228 tests, ESLint, `tsc --noEmit`, OpenAPI drift check and Next.js build all passed |
+| Ruff | `.venv/bin/python -m ruff check` and `ruff format --check` on changed files | pass |
+| Types | `.venv/bin/python -m mypy src/runway` | no issues in 253 source files |
+| Upstream CI baseline | GitHub Actions on `expansion/build` commit `4f25721` | CI and Secret scan both green, including the Windows launcher jobs |
+
+### Synthetic migration rehearsal
+
+The rehearsal used a synthetic SQLite database created at revision `0012_creator_platforms`,
+populated with the migration fixture rows, copied with SQLite's online backup API, then upgraded
+and downgraded only through the public CLI. The production database was not touched. Commands run
+against the copy (with `RUNWAY_DATA_DIR` pointing at the copied data directory):
+
+```
+python -m runway.cli.main db current
+python -m runway.cli.main db upgrade
+python -m runway.cli.main db downgrade 0012_creator_platforms
+```
+
+Exact results: before-copy tables 65; upgrade exit 0; downgrade exit 0; revision after upgrade
+`0020_youtube_publishing`; revision after downgrade `0012_creator_platforms`; the downgraded schema
+fingerprint matched `SCHEMA_0012_FINGERPRINT`; `PRAGMA integrity_check` was `ok` both after upgrade
+and after downgrade; `PRAGMA foreign_key_check` returned 0 rows. Workspace-scoped fixture rows at
+head: channels 1, connected_accounts 3, oauth_states 1, content_groups 1, platform_content 2,
+content_metric_snapshots 2, account_metric_snapshots 1, account_metric_days 1, comment_records 2,
+reply_drafts 1, platform_actions 1, sync_runs 1, sync_cursors 1, content_drafts 2, draft_targets 2.
+
+### Security/control review findings
+
+- **Fixed:** the legacy `/api/platforms/{platform}/connect` helper issued its OAuth state for the
+  local workspace when it was reused with a non-default principal. It now passes the caller's
+  `principal.workspace_id`; `tests/integration/test_platform_routes.py` has a regression test.
+- **Reviewed, no defect found:** posting requires a recorded release of the exact payload hash,
+  `confirmed: true`, the release consent text where required, role/release authorization, and a
+  payload-hash match at send time; edits withdraw the release. The send worker rechecks the global
+  publishing pause, workspace kill switch, workspace pause, planned-time rules, rate guards and
+  adapter availability before submission. YouTube browser publishing additionally requires both
+  `RUNWAY_PUBLISHING_ENABLED=true` and `RUNWAY_YOUTUBE_AUTOMATION_AUTHORIZED=true`, a one-time
+  confirmation, and rechecks `require_send_allowed` immediately before network submission. Inbox
+  replies use the same send gate.
+- **Documented boundary:** legacy `/api/platforms` UI routes are workspace-unaware, but the hosted
+  profile serves only its exact allowlist and excludes them. They remain a local single-workspace
+  surface; do not expose them hosted without completing workspace filtering. The additive `/api/v1`
+  and workspace routes already scope account lookups and writes to `principal.workspace_id`.
+- **Windows/local compatibility:** local loopback binding, Windows launcher contracts, deployment
+  paths, console control and PowerShell guards are covered by the test suite. On Linux the
+  Windows-specific tests are skipped (part of the 31 skips), and the upstream GitHub CI run above
+  supplies the Windows evidence. No compatibility defect was found in this review.
+
+### Independent review update (2026-11-26, second reviewer)
+
+The independent review reproduced the migration rehearsal on a synthetic SQLite copy: public CLI
+upgrade to `0020_youtube_publishing` and downgrade to `0012_creator_platforms` both exited 0,
+`PRAGMA integrity_check` was `ok`, `PRAGMA foreign_key_check` returned 0 rows and the downgraded
+schema fingerprint matched `SCHEMA_0012_FINGERPRINT`.
+
+It also found the first OAuth workspace fix was incomplete: the state row recorded the caller's
+workspace for the ordinary legacy connect flow, but the callback never enforced it, and the
+Instagram Unified Login connect/select states still used the default workspace. A cross-workspace
+callback could therefore attach the account to the callback caller's workspace. Review commits added
+workspace filtering to state consume/peek, bind Unified Login states to their caller, and regression
+tests for ordinary OAuth, Unified Login connect and Unified Login account selection. A mismatched
+workspace now receives `invalid_state` without consuming the victim's state or creating an account.
+
+The independent review also found connected-account quota accounting still counted every workspace
+even though `connected_accounts` now has `workspace_id`. A regression test first showed one
+workspace's account consuming another workspace's slot; the smallest fix scopes the count to the
+workspace while preserving the existing rule that every status except `disconnected` holds a slot.
+
+Final independent-review counts on the PR branch: backend `2066 passed, 31 skipped` with
+`pytest -q -n 6 --dist loadfile`; frontend `npm run check` passed with Vitest `46 files / 228 tests`,
+ESLint, `tsc --noEmit`, OpenAPI drift and production build; `ruff check .`, `ruff format --check .`
+and strict `mypy src/runway` passed (`253 source files`). The default branch independently measured
+`525 passed, 4 skipped` on this Linux VM. Windows-only tests remain skipped locally and covered by
+GitHub CI.
+
 ## Environment
 
 - Windows 11, Python 3.13.2 (`.venv`), Node 24.14.0 / npm 11.9.0.
