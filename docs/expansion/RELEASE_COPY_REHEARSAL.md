@@ -62,6 +62,24 @@ Exact generated results:
 The candidate report is at `run2/rehearsal-20261126T223428Z/report.json` on the verification VM;
 copies and reports contain synthetic data only and were not committed.
 
+### Independent review correction and rerun
+
+The first draft of this checklist named `scripts/rehearse_migrations.py` but did not commit that
+script, so the owner handoff command could not run from the PR branch. The script is now committed
+in this branch. It opens the source read-only, copies it twice with SQLite's online backup API,
+refuses a non-empty scratch directory rather than deleting anything, migrates only the copies, and
+writes a row-count/schema/row-content report without copying row values into the report. For the
+rollback copy it compares semantic schema structure (columns, foreign keys and indexes, ignoring
+constraint creation order) and canonical row contents, not just row counts.
+
+Independent generated rerun on Linux Python 3.13 with the committed script: exit 0,
+`REHEARSAL PASSED`; source/copy-B `0012_creator_platforms`, copy-A `0020_youtube_publishing`;
+source and copy-B 66 tables / 10 rows, copy-A 91 tables / 11 rows; no original-count, schema,
+row-content, missing-table or extra-table differences; integrity `ok`; exactly the 4 intentional
+orphan foreign-key rows. The generated fixture contains duplicate semantic rows, orphan rows and
+America/Toronto DST-fold/DST-gap strings. Focused script coverage: 2 passed, including the
+non-empty-scratch fail-closed case.
+
 ## Isolated publish-off health check
 
 The health check used FastAPI's in-process `TestClient` against the upgraded generated copy with
