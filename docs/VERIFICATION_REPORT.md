@@ -79,7 +79,12 @@ workspace filtering to state consume/peek, bind Unified Login states to their ca
 tests for ordinary OAuth, Unified Login connect and Unified Login account selection. A mismatched
 workspace now receives `invalid_state` without consuming the victim's state or creating an account.
 
-Final independent-review counts on the PR branch: backend `2065 passed, 31 skipped` with
+The independent review also found connected-account quota accounting still counted every workspace
+even though `connected_accounts` now has `workspace_id`. A regression test first showed one
+workspace's account consuming another workspace's slot; the smallest fix scopes the count to the
+workspace while preserving the existing rule that every status except `disconnected` holds a slot.
+
+Final independent-review counts on the PR branch: backend `2066 passed, 31 skipped` with
 `pytest -q -n 6 --dist loadfile`; frontend `npm run check` passed with Vitest `46 files / 228 tests`,
 ESLint, `tsc --noEmit`, OpenAPI drift and production build; `ruff check .`, `ruff format --check .`
 and strict `mypy src/runway` passed (`253 source files`). The default branch independently measured
