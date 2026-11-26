@@ -25,6 +25,12 @@ the downgraded schema fingerprint matched the expected 0012 fingerprint. Exact e
 `docs/VERIFICATION_REPORT.md` under "Integrated-branch re-verification (2026-11-26)".
 
 The same review found and fixed one OAuth workspace-binding defect in the legacy connect helper.
+A second independent review then found that fix was incomplete: callbacks did not enforce the
+recorded workspace and Unified Login states were still unbound. The PR now makes OAuth state
+consume/peek workspace-aware, binds Unified Login connect/select states to the caller, and proves
+cross-workspace callbacks/picks cannot consume or use another workspace's state. Final counts are in
+`docs/VERIFICATION_REPORT.md` (backend `2065 passed, 31 skipped`; frontend `46 files / 228 tests`).
+
 Legacy `/api/platforms` routes remain a local single-workspace surface and are excluded from the
 hosted allowlist; do not expose them in hosted mode without adding workspace filters throughout.
 

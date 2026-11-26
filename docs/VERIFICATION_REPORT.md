@@ -64,6 +64,28 @@ reply_drafts 1, platform_actions 1, sync_runs 1, sync_cursors 1, content_drafts 
   Windows-specific tests are skipped (part of the 31 skips), and the upstream GitHub CI run above
   supplies the Windows evidence. No compatibility defect was found in this review.
 
+### Independent review update (2026-11-26, second reviewer)
+
+The independent review reproduced the migration rehearsal on a synthetic SQLite copy: public CLI
+upgrade to `0020_youtube_publishing` and downgrade to `0012_creator_platforms` both exited 0,
+`PRAGMA integrity_check` was `ok`, `PRAGMA foreign_key_check` returned 0 rows and the downgraded
+schema fingerprint matched `SCHEMA_0012_FINGERPRINT`.
+
+It also found the first OAuth workspace fix was incomplete: the state row recorded the caller's
+workspace for the ordinary legacy connect flow, but the callback never enforced it, and the
+Instagram Unified Login connect/select states still used the default workspace. A cross-workspace
+callback could therefore attach the account to the callback caller's workspace. Review commits added
+workspace filtering to state consume/peek, bind Unified Login states to their caller, and regression
+tests for ordinary OAuth, Unified Login connect and Unified Login account selection. A mismatched
+workspace now receives `invalid_state` without consuming the victim's state or creating an account.
+
+Final independent-review counts on the PR branch: backend `2065 passed, 31 skipped` with
+`pytest -q -n 6 --dist loadfile`; frontend `npm run check` passed with Vitest `46 files / 228 tests`,
+ESLint, `tsc --noEmit`, OpenAPI drift and production build; `ruff check .`, `ruff format --check .`
+and strict `mypy src/runway` passed (`253 source files`). The default branch independently measured
+`525 passed, 4 skipped` on this Linux VM. Windows-only tests remain skipped locally and covered by
+GitHub CI.
+
 ## Environment
 
 - Windows 11, Python 3.13.2 (`.venv`), Node 24.14.0 / npm 11.9.0.
