@@ -488,7 +488,7 @@ def build_platform_router(
                     detail="instagram_unified is an Instagram connection adapter",
                 )
             return _issue_unified_connect()
-        return _issue_connect(parsed)
+        return _issue_connect(parsed, workspace_id=principal.workspace_id)
 
     def _unified_callback(
         code: str,

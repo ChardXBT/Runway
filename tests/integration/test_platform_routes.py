@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from runway.api.app import create_app
+from runway.auth.principal import Principal, get_principal, scopes_for_role
 from runway.config import Settings
 from runway.db import initialize_database
 from runway.db.base import Database
@@ -19,7 +20,9 @@ from runway.db.models import (
     AccountMetricSnapshot,
     CommentRecord,
     ConnectedAccount,
+    OAuthState,
     PlatformContent,
+    Workspace,
 )
 from runway.operations import instance_lease
 from runway.platforms.base import TokenSet
@@ -145,6 +148,47 @@ def test_oauth_connect_and_callback_happy_path(
         assert accounts[0]["platform"] == "youtube"
         assert accounts[0]["external_account_id"] == "UCtest"
         assert accounts[0]["status"] == "connected"
+
+
+def test_oauth_connect_state_stays_in_the_callers_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="live",
+        youtube_client_id="yt-client",
+        youtube_client_secret="yt-secret",
+    )
+    client = httpx.Client(transport=httpx.MockTransport(_youtube_handler), timeout=20.0)
+    provider = YouTubeProvider(settings, client)
+    original = ProviderRegistry.provider
+
+    def patched(self: ProviderRegistry, platform: Platform):
+        if platform is Platform.youtube:
+            return provider
+        return original(self, platform)
+
+    monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    app = create_app(migrated(settings))
+    database: Database = app.state.database
+    with database.session() as session:
+        session.add(Workspace(id=2, slug="other-workspace", name="Other workspace"))
+    caller = Principal(
+        kind="user",
+        id="user-2",
+        workspace_id=2,
+        role="owner",
+        scopes=scopes_for_role("owner"),
+        display="Other owner",
+    )
+    app.dependency_overrides[get_principal] = lambda: caller
+    with TestClient(app, base_url="http://127.0.0.1:8000") as web:
+        connect = web.post("/api/platforms/youtube/connect")
+        assert connect.status_code == 200, connect.text
+    with database.session() as session:
+        state = session.scalar(select(OAuthState))
+        assert state is not None
+        assert state.workspace_id == 2
 
 
 def test_oauth_callback_gates_standby_before_exchanging_the_code(
