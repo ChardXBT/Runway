@@ -101,6 +101,82 @@ def test_blind_export_removes_compound_and_nested_provenance_metadata(
     }
 
 
+def test_blind_export_rejects_json_escaped_provenance_identity(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    secret = "secret\nmodel-ü"
+    case = _study_cases(database, count=1)[0].model_copy(
+        update={"metadata": {"notes": f"prefix {secret} suffix"}}
+    )
+    planned = service.plan(
+        [case],
+        baseline_identity=secret,
+        challenger_identity="other-model",
+        seed=42,
+    )
+
+    output = tmp_path / "blind.json"
+    with pytest.raises(RuntimeError, match="would reveal hidden model provenance"):
+        service.export(int(planned["study_id"]), output, minimum_cases=1)
+    assert not output.exists()
+
+
+def test_blind_export_rejects_nested_and_keyed_escaped_provenance_identity(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    base_case = _study_cases(database, count=1)[0]
+    metadata_variants = [
+        ("secret\nmodel-ü", {"nested": {"safe_list": ["prefix secret\nmodel-ü suffix"]}}),
+        ("secret\nidentity-ü", {"safe-key-secret\nidentity-ü": "kept"}),
+    ]
+    for index, (secret, metadata) in enumerate(metadata_variants):
+        case = base_case.model_copy(update={"metadata": metadata})
+        planned = service.plan(
+            [case],
+            baseline_identity=secret,
+            challenger_identity="other-model",
+            seed=42,
+        )
+
+        output = tmp_path / f"blind-{index}.json"
+        with pytest.raises(RuntimeError, match="would reveal hidden model provenance"):
+            service.export(int(planned["study_id"]), output, minimum_cases=1)
+        assert not output.exists()
+
+
+@pytest.mark.parametrize("bad_number", [float("nan"), float("inf"), float("-inf")])
+def test_blind_export_rejects_nonfinite_metadata_numbers(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    bad_number: float,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    case = _study_cases(database, count=1)[0].model_copy(
+        update={"metadata": {"bad_number": bad_number}}
+    )
+    planned = service.plan(
+        [case],
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+
+    output = tmp_path / "blind.json"
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        service.export(int(planned["study_id"]), output, minimum_cases=1)
+    assert not output.exists()
+
+
 def test_blind_order_export_and_offline_fixture_import_are_provenance_safe(
     database: Database,
     settings: Settings,
