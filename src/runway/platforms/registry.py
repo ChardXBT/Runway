@@ -84,19 +84,24 @@ class ProviderRegistry:
         5xx, rate limits) propagate as their own ProviderError so callers do not
         mistake a network blip for a revoked account.
         """
-        token = self.token_store.load(token_ref)
-        if token is None:
-            raise AuthorizationExpired("account token is missing", status=401)
-        if token.expires_at is None:
-            return token
-        expires_at = token.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)
-        if expires_at - datetime.now(UTC) > token_refresh_window(platform):
-            return token
-        refreshed = self.provider(platform).refresh(token)
-        self.token_store.store(token_ref, refreshed)
-        return refreshed
+        # The refresh decision, provider refresh, and replacement write are one
+        # cross-process critical section. A process that waits becomes the
+        # loser only after the winner has stored its replacement, so it reloads
+        # that token instead of consuming a second provider refresh grant.
+        with self.token_store.locked():
+            token = self.token_store.load(token_ref)
+            if token is None:
+                raise AuthorizationExpired("account token is missing", status=401)
+            if token.expires_at is None:
+                return token
+            expires_at = token.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if expires_at - datetime.now(UTC) > token_refresh_window(platform):
+                return token
+            refreshed = self.provider(platform).refresh(token)
+            self.token_store.store(token_ref, refreshed)
+            return refreshed
 
     def platforms(self) -> list[Platform]:
         return list(Platform)

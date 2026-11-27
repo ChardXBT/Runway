@@ -126,6 +126,59 @@ def test_revoked_grant_during_refresh_still_needs_reauth(env) -> None:
     assert _status(database, account_id) == "needs_reauth"
 
 
+def test_failed_refresh_keeps_the_original_token_and_can_retry(env) -> None:
+    settings, database, registry = env
+    attempts: list[str] = []
+
+    class FlakyThenFresh(MockPlatformProvider):
+        def refresh(self, token: TokenSet) -> TokenSet:
+            attempts.append(token.access_token)
+            if len(attempts) == 1:
+                raise ProviderError("YouTube request failed: timed out", retryable=True)
+            return token.model_copy(
+                update={
+                    "access_token": "retry-access",
+                    "expires_at": datetime.now(UTC) + timedelta(hours=1),
+                }
+            )
+
+    registry.set_provider(Platform.youtube, FlakyThenFresh(Platform.youtube, settings))
+    token_ref = registry.token_store.new_token_ref()
+    registry.token_store.store(token_ref, _expiring())
+
+    with pytest.raises(ProviderError, match="timed out"):
+        registry.fresh_token(Platform.youtube, token_ref)
+    stored = registry.token_store.load(token_ref)
+    assert stored is not None and stored.access_token == "old-access"
+
+    retried = registry.fresh_token(Platform.youtube, token_ref)
+
+    assert attempts == ["old-access", "old-access"]
+    assert retried.access_token == "retry-access"
+    stored = registry.token_store.load(token_ref)
+    assert stored is not None and stored.access_token == "retry-access"
+
+
+def test_tokens_outside_the_refresh_window_are_returned_without_provider_work(env) -> None:
+    settings, database, registry = env
+
+    class MustNotRefresh(MockPlatformProvider):
+        def refresh(self, token: TokenSet) -> TokenSet:  # pragma: no cover
+            raise AssertionError("fresh tokens must not call the provider")
+
+    registry.set_provider(Platform.youtube, MustNotRefresh(Platform.youtube, settings))
+    no_expiry_ref = registry.token_store.new_token_ref()
+    fresh_ref = registry.token_store.new_token_ref()
+    registry.token_store.store(no_expiry_ref, TokenSet(access_token="no-expiry"))
+    registry.token_store.store(
+        fresh_ref,
+        TokenSet(access_token="fresh", expires_at=datetime.now(UTC) + timedelta(hours=1)),
+    )
+
+    assert registry.fresh_token(Platform.youtube, no_expiry_ref).access_token == "no-expiry"
+    assert registry.fresh_token(Platform.youtube, fresh_ref).access_token == "fresh"
+
+
 def test_instagram_long_lived_tokens_refresh_well_before_expiry(env) -> None:
     settings, database, registry = env
     refreshed: list[str] = []
