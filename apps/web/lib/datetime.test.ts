@@ -70,6 +70,45 @@ describe("configured-timezone scheduling", () => {
     expect(shiftIsoDate("2026-08-01", -1)).toBe("2026-07-31");
   });
 
+  it("treats naive API timestamps as UTC independent of the browser timezone", () => {
+    const originalTimeZone = process.env.TZ;
+    process.env.TZ = "America/Vancouver";
+    try {
+      expect(localDate("2026-11-01T05:30:00", "America/Toronto")).toBe(
+        "2026-11-01",
+      );
+      expect(localTime("2026-11-01T05:30:00", "America/Toronto")).toBe("01:30");
+      expect(localTime("2026-11-01", "America/Toronto")).toBe("20:00");
+    } finally {
+      if (originalTimeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTimeZone;
+    }
+  });
+
+  it("preserves explicit timezone offsets and fractional seconds", () => {
+    expect(localTime("2026-11-01T05:30:00Z", "America/Toronto")).toBe("01:30");
+    expect(localTime("2026-11-01T05:30:00+00:00", "America/Toronto")).toBe(
+      "01:30",
+    );
+    expect(localTime("2026-11-01T01:30:00-04:00", "America/Toronto")).toBe(
+      "01:30",
+    );
+    expect(localTime("2026-11-01T07:30:00+0200", "America/Toronto")).toBe(
+      "01:30",
+    );
+    expect(localTime("2026-11-01T05:30:00.123Z", "America/Toronto")).toBe(
+      "01:30",
+    );
+  });
+
+  it("returns null for lost or invalid source timestamps instead of displaying epoch time", () => {
+    expect(localDate(null, "America/Toronto")).toBeNull();
+    expect(localTime(undefined, "America/Toronto")).toBeNull();
+    expect(localDate("", "America/Toronto")).toBeNull();
+    expect(localTime("   ", "America/Toronto")).toBeNull();
+    expect(localDate(new Date("not-a-date"), "America/Toronto")).toBeNull();
+  });
+
   it("enforces the same five-minute publishing lead-time boundary as the API", () => {
     const now = new Date("2026-07-18T14:00:00Z");
     expect(

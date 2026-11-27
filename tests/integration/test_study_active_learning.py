@@ -50,6 +50,57 @@ def _study_cases(
     ]
 
 
+def test_blind_export_removes_compound_and_nested_provenance_metadata(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    case = _study_cases(database, count=1)[0].model_copy(
+        update={
+            "metadata": {
+                "scene": "unicode-ü-fixture",
+                "baseline_model": "baseline",
+                "nested": {
+                    "challenger_side": "challenger",
+                    "safe_detail": "kept",
+                },
+                "score_breakdown": {"value": 0.9},
+                "safe_list": [{"origin": "baseline", "label": "kept"}, "challenger", "kept"],
+                "empty_object": {},
+                "empty_list": [],
+                "zero": 0,
+                "negative": -1,
+                "false": False,
+                "null": None,
+            }
+        }
+    )
+    planned = service.plan(
+        [case],
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+
+    output = tmp_path / "blind.json"
+    service.export(int(planned["study_id"]), output, minimum_cases=1)
+    exported = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exported["cases"][0]["metadata"] == {
+        "scene": "unicode-ü-fixture",
+        "nested": {"safe_detail": "kept"},
+        "safe_list": [{"label": "kept"}, "kept"],
+        "empty_object": {},
+        "empty_list": [],
+        "zero": 0,
+        "negative": -1,
+        "false": False,
+        "null": None,
+    }
+
+
 def test_blind_order_export_and_offline_fixture_import_are_provenance_safe(
     database: Database,
     settings: Settings,
