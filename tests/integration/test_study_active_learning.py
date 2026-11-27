@@ -125,6 +125,31 @@ def test_blind_export_rejects_json_escaped_provenance_identity(
     assert not output.exists()
 
 
+@pytest.mark.parametrize("bad_number", [float("nan"), float("inf"), float("-inf")])
+def test_blind_export_rejects_nonfinite_metadata_numbers(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    bad_number: float,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    case = _study_cases(database, count=1)[0].model_copy(
+        update={"metadata": {"bad_number": bad_number}}
+    )
+    planned = service.plan(
+        [case],
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+
+    output = tmp_path / "blind.json"
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        service.export(int(planned["study_id"]), output, minimum_cases=1)
+    assert not output.exists()
+
+
 def test_blind_order_export_and_offline_fixture_import_are_provenance_safe(
     database: Database,
     settings: Settings,

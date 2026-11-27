@@ -474,7 +474,7 @@ class BlindStudyService:
             ],
             "responses": [],
         }
-        serialized = json.dumps(payload, indent=2, ensure_ascii=False)
+        serialized = json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False)
         for forbidden in (
             study.baseline_identity,
             study.challenger_identity,
