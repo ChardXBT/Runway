@@ -54,6 +54,56 @@ describe("AssistedPublishingWorkspace", () => {
     expect(screen.getByRole("button", { name: "Image downloaded" })).toBeEnabled();
   });
 
+  it("renders generated schedule fixtures in each synthetic workspace timezone across DST", () => {
+    for (const fixture of [
+      {
+        timezone: "America/Toronto",
+        plannedPublishAt: "2026-03-08T17:00:00",
+        expectedDate: "2026-03-08",
+        expectedTime: "13:00",
+      },
+      {
+        timezone: "America/Phoenix",
+        plannedPublishAt: "2026-03-08T17:00:00",
+        expectedDate: "2026-03-08",
+        expectedTime: "10:00",
+      },
+      {
+        timezone: "America/Toronto",
+        plannedPublishAt: "2026-11-01T17:00:00",
+        expectedDate: "2026-11-01",
+        expectedTime: "12:00",
+      },
+      {
+        timezone: "America/Phoenix",
+        plannedPublishAt: "2026-11-01T17:00:00",
+        expectedDate: "2026-11-01",
+        expectedTime: "10:00",
+      },
+    ]) {
+      const view = render(
+        <AssistedPublishingWorkspace
+          workspace={{
+            ...workspace,
+            timezone: fixture.timezone,
+            items: [
+              {
+                ...workspace.items[0],
+                planned_publish_at: fixture.plannedPublishAt,
+              },
+            ],
+          }}
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(fixture.expectedDate)).toBeInTheDocument();
+      expect(screen.getByText(fixture.expectedTime)).toBeInTheDocument();
+      expect(screen.getByText(fixture.timezone)).toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
   it("renders an empty state instead of crashing when no items were prepared", () => {
     const onClose = vi.fn();
     render(
