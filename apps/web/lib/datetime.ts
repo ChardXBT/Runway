@@ -39,10 +39,30 @@ export function isValidTimeZone(value: string) {
   }
 }
 
-export function localDate(value: string | Date, timeZone: string) {
+function parseApiInstant(value: string | Date | null | undefined): Date | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = /[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)
+    ? trimmed
+    : /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+      ? `${trimmed}T00:00:00Z`
+      : `${trimmed}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function localDate(
+  value: string | Date | null | undefined,
+  timeZone: string,
+) {
   try {
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime()) || !isValidTimeZone(timeZone)) return null;
+    const date = parseApiInstant(value);
+    if (date === null || !isValidTimeZone(timeZone)) return null;
     const parts = dateParts(date, timeZone);
     return `${parts.year}-${parts.month}-${parts.day}`;
   } catch {
@@ -50,10 +70,13 @@ export function localDate(value: string | Date, timeZone: string) {
   }
 }
 
-export function localTime(value: string | Date, timeZone: string) {
+export function localTime(
+  value: string | Date | null | undefined,
+  timeZone: string,
+) {
   try {
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime()) || !isValidTimeZone(timeZone)) return null;
+    const date = parseApiInstant(value);
+    if (date === null || !isValidTimeZone(timeZone)) return null;
     return cachedFormatter("en-GB", {
       hour: "2-digit",
       minute: "2-digit",

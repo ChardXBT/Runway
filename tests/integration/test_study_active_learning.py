@@ -9,7 +9,14 @@ from sqlalchemy import func, select
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
-from runway.db.models import BlindStudyResponse, PairwisePreference, PostMedia
+from runway.db.models import (
+    BlindStudyResponse,
+    Channel,
+    PairwisePreference,
+    Post,
+    PostMedia,
+    Workspace,
+)
 from runway.intelligence.studies import (
     ActiveLearningCase,
     ActiveLearningService,
@@ -48,6 +55,207 @@ def _study_cases(
         )
         for index, media_id in enumerate(source_ids[:count], start=1)
     ]
+
+
+def _add_synthetic_workspace_channel(
+    database: Database,
+    *,
+    slug: str,
+    handle: str,
+    timezone: str,
+) -> tuple[int, int]:
+    with database.session() as session:
+        workspace = Workspace(slug=slug, name=f"Synthetic {slug}")
+        session.add(workspace)
+        session.flush()
+        channel = Channel(
+            name=f"Synthetic {slug}",
+            handle=handle,
+            timezone=timezone,
+            default_post_time="10:00",
+            planning_horizon_days=0,
+            duplicate_window_days=180,
+            workspace_id=workspace.id,
+        )
+        session.add(channel)
+        session.flush()
+        return workspace.id, channel.id
+
+
+def _clone_fixture_media_without_source_timestamps(
+    database: Database,
+    *,
+    source_channel_handle: str,
+    target_channel_id: int,
+    count: int,
+) -> list[int]:
+    with database.session() as session:
+        source_channel = session.scalar(
+            select(Channel).where(Channel.handle == source_channel_handle)
+        )
+        assert source_channel is not None
+        rows = session.execute(
+            select(PostMedia.media_asset_id, Post.source_capture_run_id)
+            .join(Post, Post.id == PostMedia.post_id)
+            .where(Post.channel_id == source_channel.id)
+            .order_by(PostMedia.media_asset_id)
+            .limit(count)
+        ).all()
+        assert len(rows) == count
+        media_ids: list[int] = []
+        for index, (media_id, capture_run_id) in enumerate(rows, start=1):
+            post = Post(
+                channel_id=target_channel_id,
+                external_post_id=f"synthetic-missing-time-{target_channel_id}-{index}",
+                permalink=f"https://fixture.local/workspaces/{target_channel_id}/{index}",
+                post_type="image",
+                caption="Synthetic fixture with a lost source timestamp",
+                displayed_date_text=None,
+                published_at=None,
+                date_precision="unknown",
+                like_count=None,
+                comment_count=None,
+                raw_engagement_json=None,
+                is_published=True,
+                is_training_eligible=False,
+                source_capture_run_id=capture_run_id,
+            )
+            session.add(post)
+            session.flush()
+            session.add(PostMedia(post_id=post.id, media_asset_id=media_id, position=0))
+            media_ids.append(media_id)
+        return media_ids
+
+
+def test_blind_export_removes_compound_and_nested_provenance_metadata(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    case = _study_cases(database, count=1)[0].model_copy(
+        update={
+            "metadata": {
+                "scene": "unicode-ü-fixture",
+                "baseline_model": "baseline",
+                "nested": {
+                    "challenger_side": "challenger",
+                    "safe_detail": "kept",
+                },
+                "score_breakdown": {"value": 0.9},
+                "safe_list": [{"origin": "baseline", "label": "kept"}, "challenger", "kept"],
+            }
+        }
+    )
+    planned = service.plan(
+        [case],
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+
+    output = tmp_path / "blind.json"
+    service.export(int(planned["study_id"]), output, minimum_cases=1)
+    exported = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exported["cases"][0]["metadata"] == {
+        "scene": "unicode-ü-fixture",
+        "nested": {"safe_detail": "kept"},
+        "safe_list": [{"label": "kept"}, "kept"],
+    }
+
+
+def test_blind_export_is_deterministic_across_synthetic_workspaces_and_repeat_exports(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    first_service = BlindStudyService(database, settings)
+    cases = _study_cases(database, count=4)
+    first = first_service.plan(
+        cases,
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+
+    second_workspace_id, second_channel_id = _add_synthetic_workspace_channel(
+        database,
+        slug="workspace-two",
+        handle="SyntheticTwo",
+        timezone="America/Phoenix",
+    )
+    second_settings = settings.model_copy(
+        update={
+            "channel_name": "Synthetic Two",
+            "channel_handle": "SyntheticTwo",
+            "timezone": "America/Phoenix",
+        }
+    )
+    cloned_media_ids = _clone_fixture_media_without_source_timestamps(
+        database,
+        source_channel_handle=settings.channel_handle,
+        target_channel_id=second_channel_id,
+        count=4,
+    )
+    assert cloned_media_ids == [case.media_asset_id for case in cases]
+    second_service = BlindStudyService(database, second_settings)
+    second = second_service.plan(
+        cases,
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+    assert first["study_id"] != second["study_id"]
+    assert second_workspace_id != 1
+    assert second_channel_id is not None
+
+    first_output = tmp_path / "first.json"
+    repeat_output = tmp_path / "repeat.json"
+    second_output = tmp_path / "second.json"
+    first_service.export(int(first["study_id"]), first_output, minimum_cases=4)
+    first_service.export(int(first["study_id"]), repeat_output, minimum_cases=4)
+    second_service.export(int(second["study_id"]), second_output, minimum_cases=4)
+
+    assert first_output.read_bytes() == repeat_output.read_bytes()
+    first_exported = json.loads(first_output.read_text(encoding="utf-8"))
+    second_exported = json.loads(second_output.read_text(encoding="utf-8"))
+    assert [row["case_key"] for row in first_exported["cases"]] == [
+        row["case_key"] for row in second_exported["cases"]
+    ]
+    assert [row["first_caption"] for row in first_exported["cases"]] == [
+        row["first_caption"] for row in second_exported["cases"]
+    ]
+    with pytest.raises(LookupError, match="blind study"):
+        first_service.export(int(second["study_id"]), tmp_path / "wrong.json", minimum_cases=4)
+
+    empty_workspace_id, empty_channel_id = _add_synthetic_workspace_channel(
+        database,
+        slug="workspace-empty",
+        handle="SyntheticEmpty",
+        timezone="UTC",
+    )
+    assert empty_workspace_id != second_workspace_id
+    assert empty_channel_id != second_channel_id
+    empty_service = BlindStudyService(
+        database,
+        settings.model_copy(
+            update={
+                "channel_name": "Synthetic Empty",
+                "channel_handle": "SyntheticEmpty",
+                "timezone": "UTC",
+            }
+        ),
+    )
+    with pytest.raises(LookupError, match="outside the configured channel"):
+        empty_service.plan(
+            cases[:1],
+            baseline_identity="secret-model-a",
+            challenger_identity="secret-model-b",
+            seed=42,
+        )
 
 
 def test_blind_order_export_and_offline_fixture_import_are_provenance_safe(
