@@ -92,6 +92,21 @@ def _scrub_public_metadata_value(value: object) -> object:
     return value
 
 
+def _json_contains_text(value: object, needle: str) -> bool:
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if needle in item:
+                return True
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
+
+
 class BlindStudyCasePlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -468,7 +483,9 @@ class BlindStudyService:
             "order_token",
             "hidden_label",
         ):
-            if forbidden and forbidden in serialized:
+            if forbidden and (
+                forbidden in serialized or _json_contains_text(payload, forbidden)
+            ):
                 raise RuntimeError("blind export would reveal hidden model provenance")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(serialized + "\n", encoding="utf-8")

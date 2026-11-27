@@ -101,6 +101,30 @@ def test_blind_export_removes_compound_and_nested_provenance_metadata(
     }
 
 
+def test_blind_export_rejects_json_escaped_provenance_identity(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    secret = "secret\nmodel-ü"
+    case = _study_cases(database, count=1)[0].model_copy(
+        update={"metadata": {"notes": f"prefix {secret} suffix"}}
+    )
+    planned = service.plan(
+        [case],
+        baseline_identity=secret,
+        challenger_identity="other-model",
+        seed=42,
+    )
+
+    output = tmp_path / "blind.json"
+    with pytest.raises(RuntimeError, match="would reveal hidden model provenance"):
+        service.export(int(planned["study_id"]), output, minimum_cases=1)
+    assert not output.exists()
+
+
 def test_blind_order_export_and_offline_fixture_import_are_provenance_safe(
     database: Database,
     settings: Settings,
