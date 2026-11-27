@@ -490,7 +490,7 @@ class BlindStudyService:
         output.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
             dir=output.parent,
-            prefix=f"{output.name}-",
+            prefix="blind-review-",
             suffix=".tmp",
         )
         try:
