@@ -181,5 +181,5 @@ outside the public repository. The scratch copies were removed after verificatio
 
 The release candidate checks passed locally for Ruff, formatting, strict mypy, the focused
 OAuth, quota, request-policy, platform, and migration tests, and the production-copy
-rehearsal. The GitHub full-suite run still needs to be rerun on the corrected candidate
-before merge.
+rehearsal. GitHub CI and secret scanning passed on commit \`aece546\`, including backend,
+Postgres, frontend, Windows launcher, and container-image jobs.
