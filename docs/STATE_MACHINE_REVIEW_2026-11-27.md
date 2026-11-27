@@ -113,16 +113,28 @@ stateDiagram-v2
 | `PublishAttempt` | Declared enum: `prepared`, `queued`, `submitting`, `blocked_session`, `verified`, `submitted_unverified`, `failed_before_submission`, `expired`, `invalidated`, `superseded`, `unknown`; payload hash, confirmation hash, submitted/completed timestamps, receipt fields. | Explicit owner confirmation and batch preflight; worker consumes queued rows; browser write; verified/unverified/failure receipt. | Declared transition validation, timestamp consistency, `unknown` fail-closed behavior, interruption recovery to `submitted_unverified`, late outcomes preserved as audit evidence. Queue worker uses process-local locks; claim is read/check/write rather than one conditional DB update/lease. | Much stronger than the earlier audit. Residual high-risk gap is cross-process duplicate dispatch/timeout misclassification, not intra-process ordering. |
 | Publisher queue coordinator | In-memory worker absent/present, paused reason, ready state; persisted attempts supply durable state. | Startup/resume starts worker when saved session is valid and queued rows exist; exceptions pause worker. | Restart reads persisted queue and reruns recovery. In-process mutex prevents duplicate local workers. No cross-process worker ownership exists. | Restart behavior is fixture-covered. Cross-process ownership is not. |
 | Capture/search/generation/image-generation runs | Raw status strings: `running`, `paused`, `completed`, `failed`; timestamps, counters, cursors, error summaries. | CLI/UI/API jobs create rows; providers/fixtures process candidates; finalizer marks terminal state. | Capture resume can reopen prior runs, including `completed` for managed/CDP continuation. Stale search/generation recovery is age-based (6h or size-adjusted) and only runs when a new job starts. No heartbeat, cancellation row, lease, or run transition guard. | Partial success is represented inconsistently: proposal batches return `partial` but store `failed`; discovery returns `completed_with_errors` but stores `completed`. Crash-stuck rows can be overwritten by the original late worker. |
+| Legacy/generic `ModelRun` audit rows | `completed` or `failed`, with start/completion timestamps, token usage, cost, prompt version, request/output summaries. | Model-call wrappers persist a terminal audit row after the call returns or fails. | Rows are normally written only in terminal form, so they do not create a stale `running` recovery problem. They are evidence records rather than executable jobs. | Adequate as audit evidence; not a recovery machine. Cost/token fields are usage evidence, not a money-movement control. |
 | Intelligence agent runs/steps | Parent run statuses include `running`, `completed`, `failed`, `abstained`; step rows have sequence/attempt/status/usage/artifacts; deterministic `run_key` unique. | Handlers execute capability-scoped steps with timeouts and retries; terminal rows persist usage and artifacts. | Idempotent reuse only for `completed`/`abstained`; any other existing status rejects same-key execution. No stale `running` recovery. | Proven fixture gap: a failed deterministic run key cannot be retried. Concurrent same-key creation likely relies on the unique constraint and may surface an integrity error rather than a clean claim. |
 | Representation sets/items and activation | Set: `planned`, `backfilling`, `backfilled`, `ready`, `active`, `superseded`, `rolled_back`, `failed`; item: `pending`, `running`, `complete`, `failed`, `stale`; counts and activation rows mirror progress. | Backfill embeds sources; validation recomputes counts; activation supersedes old active set and writes an activation event atomically; rollback flips active/rolled-back atomically. | Activation/rollback gates are strong. Backfill selects only `pending`/`failed`; an item committed as `running` before a crash is not selected again. | Proven fixture gap: `running` orphan remains unselected. Clock/crash assumptions are not encoded as leases/heartbeats. |
-| Annotation/preference activation families | Similar raw status/active/count/timestamp encodings across annotation refresh and preference models. | Training/refresh workers update model artifacts and active rows; activation gates govern rollout. | Same pattern as representation sets: activation atomicity is stronger than worker crash recovery. | Needs a follow-up implementation audit before changing those controls; no live-model activation was exercised here. |
+| Annotation/preference activation families | Annotation refresh runs: `planned`, `running`, `backfilled`, `ready`, `active`, `superseded`, `failed`; items `pending/running/complete/failed/stale`. Preference datasets are `frozen`; model versions include `trained`, `active`, `superseded`, `rolled_back`, `insufficient_data`. | Annotation batches run analysis and refresh item states; preference training creates immutable artifact-hashed versions; activation/rollback writes activation events. | Activation/rollback rows are transactional and reject multiple active rows. Annotation validation can turn a `running` item without an annotation into `failed`, unlike representation backfill. | Controls are stronger than the oldest implicit-status design, but this audit did not exercise real model activation or paid/model calls. |
 | OAuth state / connected account / token store | OAuth state rows have unique `state`, expiry, and `consumed_at`; accounts have `status`, scopes, token ref, sync mirrors; token blob is encrypted JSON. | Connect issues state; callback consumes state, exchanges code, writes account row, stores token; disconnect revokes/deletes token and disconnects row. | OAuth consume is a single conditional `UPDATE` and fixture-tested as single-use under concurrency. Token writes use a cross-process file lock plus atomic `os.replace`. Account row commits before token blob write, so a crash between those operations can leave `connected` without token bytes. | OAuth state machine is strong. Durable account/token atomicity is a residual crash-recovery gap. |
 | `SyncRun`, `SyncCursor`, scheduler | Run `running/completed/partial/failed`, step JSON, item/quota/error counts; cursors `complete` or `resume`; account mirror fields. | Manual or interval scheduler starts sync; steps store content/comments/metrics and cursor progress; exceptions produce terminal run state and account status. | Process-local per-account lock plus a database scan for recent `running` rows; stale rows older than 30 minutes are marked failed at startup. No DB lease/conditional claim. | In-process duplicate sync prevention and stale startup recovery are fixture-tested. Cross-process duplicate manual sync remains unproven but unguarded. Scheduler first tick is interval-delayed and `stop()` leaves no clear restart semantics. |
 | `PlatformAction` / comment reply | `proposed`, `attempted`, `completed`, `failed`, `uncertain`; attempt/completion/verified timestamps, external result id, error, redacted request/response. | Owner-triggered reply creates action, refreshes token, sends non-idempotent public write, records verified/unverified outcome. | Timeout-after-send and rejection tests exist. `uncertain` is deliberately non-retryable. | Proven fixture gap: when provider returns `verified=False`, action is `uncertain` but the comment is still marked `answered` and `has_owner_reply=true`. This can hide a write needing manual verification. |
 | `ContentDraft` / `DraftTarget` | Draft status observed as `draft`, `scheduled`, `archived`, `published`, or `partially_published`; the API only permits `draft`/`scheduled` edits. Target status observed as `pending` or `published`, with timestamps/external URL linkage. | Draft creation/editing schedules targets; owner can mark a target published with an http(s) URL; parent status is recomputed only when a target is marked published. | Status is partly derived from child targets rather than one declared transition table. Duplicate targets for the same platform/account are rejected. | Low external-write risk because these are local records, but parent status recomputation is one-way: once `published`/`partially_published`, later edits or target changes do not recalculate it. |
-| Blind study / reviewer export | Study `planned`, `exported`, `in_progress`, `completed`; cases carry hidden provenance; responses are immutable by duplicate rejection. | Export writes a local JSON packet after minimum-case and provenance checks; import validates cases, duplicates, reviewer kind, and creates preferences in the same transaction. | Export scans serialized payload and nested metadata for hidden identities/keys; escaped/nonfinite metadata tests exist; engineering fixture labels require mock runtime and publishing disabled. | Strong provenance controls. One semantic limitation: export status can move `planned` to `exported`, but repeated export is not a distinct idempotency state and no export artifact hash is persisted in the study row. |
+| Blind study / reviewer export | Blind study: `planned`, `exported`, `in_progress`, `completed`; frontier arena: `planned`, `in_review`, `completed`; cases carry hidden provenance and responses are immutable by duplicate rejection. | Export writes a local JSON packet after minimum-case/provenance checks (or arena provenance checks); import validates cases, duplicates, reviewer kind, and creates preferences in the same transaction. | Blind export scans serialized payload and nested metadata for hidden identities/keys; escaped/nonfinite metadata tests exist. Arena export scans the encoded packet for hidden arm labels. Engineering fixture labels require mock runtime and publishing disabled. | Strong provenance controls. Residual semantics: export file write and study status update are not atomic; repeated export has no distinct idempotency state, and no export artifact hash is persisted in the study row. |
 | Alembic migration / schema contract | `alembic_version` is the schema state; migrations are ordered `0001` through `0012_creator_platforms`; schema fingerprint/catalog records tables/indexes/constraints. | App startup always runs `upgrade(..., "head")`; doctor compares current migration/fingerprint with canonical snapshots. | Migration tests cover upgrade, downgrade, row preservation, and canonical schema. Alembic logs SQLite as non-transactional DDL; there is no migration lease or application stop gate around startup migrations. | Versioned migration state is explicit. Concurrent startup or crash mid-migration recovery remains a deployment/operator uncertainty rather than a tested fixture gap. |
 | Windows launcher / scheduled watchdog | Launcher file lock, service readiness, port ownership, child process state, log rotation; scheduled task trigger/repetition/restart settings. | At logon and every watchdog interval the idempotent launcher starts missing/crashed API/web components. | Lock is cross-process; launcher never kills unrelated or pre-existing healthy services; only children started by the failed invocation are rolled back. | Strong local process-state controls. It restarts processes but does not own database job leases, so it cannot distinguish a live long-running job in another healthy process from a stale row. |
+
+## Skeptical pass
+
+A separate skeptical pass was performed after the first draft. It checked the declared transition tables rather than trusting the prose graph, checked whether apparently missing uniqueness was compensated elsewhere, and re-read provider implementations before calling the inbox gap reachable. Corrections made by that pass:
+
+- the one-off `prepared -> queued` edge was removed because batch rows are created directly as `queued` and the declared machine only allows `prepared -> submitting` for exact confirmation;
+- proposal retry/cancellation/reopen edges were corrected to match `ALLOWED_TRANSITIONS` exactly;
+- draft status vocabulary was narrowed to the statuses actually written by `DraftService`;
+- the inbox finding was retained only after confirming both YouTube and Instagram providers can return `verified=False` for an already-posted reply whose read-back is unavailable.
+
+The main residual skepticism is deliberately preserved below: multi-process race findings are control absences, not observed duplicate external effects.
 
 ## Proven current gaps
 
@@ -172,18 +184,18 @@ Missing control: separate idempotency keys from attempt keys, or permit a new at
 
 Source evidence: `_backfill_item()` commits `item.status="running"` before external embedding work, then writes `complete` in a later transaction. `backfill()` selects only items whose status is `pending` or `failed`; `_refresh_counts()` treats `running` as in-progress and leaves the set in `backfilling`.
 
-Disposable fixture evidence from this audit:
+Disposable fixture evidence from this audit (an orphaned `running` item, then a direct `RepresentationSetService.backfill()` call):
 
 ```json
 {
-  "representation_running_retry": {
-    "item_status": "running",
-    "selected_item_ids": []
-  }
+  "batch_attempted": 0,
+  "batch_completed": 0,
+  "batch_failed": 0,
+  "set_status": "backfilling"
 }
 ```
 
-Impact: a crash between the two transactions leaves a permanent `running` item and a perpetually `backfilling` set. Activation correctly refuses it, but there is no automatic recovery path.
+Impact: a crash between the two transactions leaves a permanent `running` item and a perpetually `backfilling` set. Validation also cannot repair it: validation treats the incomplete item as invalid but only requeues a set when a `pending` item exists, while backfill still refuses to select the orphaned `running` item. Activation correctly refuses it, but there is no automatic recovery path.
 
 Missing control: a heartbeat/lease, timeout-based requeue from `running` to `failed`/`pending`, or atomic work-item claim with attempt ownership.
 
@@ -247,12 +259,18 @@ The base already contains substantial fixture-backed evidence, especially in:
 
 Baseline before report creation:
 
-- `npm run check`: **32 test files passed, 179 tests passed**.
-- Python `pytest -q`: pending in this session; exact count will be filled before the PR is opened.
+- Python `pytest -q`: **531 passed, 4 skipped, 1 warning** in 470.60s.
+- `npm run check`: **32 test files passed, 179 tests passed**; lint, typecheck, and production build passed.
 
 After report creation:
 
-- to be filled after the full post-change suite.
+- Python `pytest -q`: **531 passed, 4 skipped, 1 warning** in 459.25s.
+- `npm run check`: **32 test files passed, 179 tests passed**; lint, typecheck, and production build passed.
+- `ruff check .`: passed.
+- `ruff format --check .`: **213 files already formatted**.
+- `mypy src/runway`: **success, no issues found in 126 source files**.
+
+The four skipped tests are Windows launcher contract tests skipped on this Linux VM. No repository Python or TypeScript code was changed; the branch adds this audit report only.
 
 ## Remaining uncertainty
 
