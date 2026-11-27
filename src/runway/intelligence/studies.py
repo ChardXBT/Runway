@@ -5,7 +5,7 @@ import json
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
@@ -49,6 +49,47 @@ RequestedTarget = Literal[
     "annotation",
     "retrieval_relevance",
 ]
+
+_METADATA_PROVENANCE_TERMS = frozenset(
+    {
+        "provider",
+        "model",
+        "origin",
+        "rank",
+        "score",
+        "configuration",
+        "baseline",
+        "challenger",
+    }
+)
+_METADATA_DROP = object()
+
+
+def _metadata_key_reveals_provenance(key: str) -> bool:
+    folded = key.casefold()
+    return any(term in folded for term in _METADATA_PROVENANCE_TERMS)
+
+
+def _scrub_public_metadata_value(value: object) -> object:
+    if isinstance(value, dict):
+        scrubbed: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or _metadata_key_reveals_provenance(key):
+                continue
+            cleaned = _scrub_public_metadata_value(item)
+            if cleaned is not _METADATA_DROP:
+                scrubbed[key] = cleaned
+        return scrubbed
+    if isinstance(value, list):
+        scrubbed_list: list[object] = []
+        for item in value:
+            cleaned = _scrub_public_metadata_value(item)
+            if cleaned is not _METADATA_DROP:
+                scrubbed_list.append(cleaned)
+        return scrubbed_list
+    if isinstance(value, str) and value.strip().casefold() in _METADATA_PROVENANCE_TERMS:
+        return _METADATA_DROP
+    return value
 
 
 class BlindStudyCasePlan(BaseModel):
@@ -775,17 +816,8 @@ class BlindStudyService:
     @classmethod
     def _public_metadata(cls, value: str) -> dict[str, object]:
         metadata = cls._json_object(value)
-        blocked = {
-            "provider",
-            "model",
-            "origin",
-            "rank",
-            "score",
-            "configuration",
-            "baseline",
-            "challenger",
-        }
-        return {key: item for key, item in metadata.items() if key.casefold() not in blocked}
+        scrubbed = _scrub_public_metadata_value(metadata)
+        return cast(dict[str, object], scrubbed)
 
     @staticmethod
     def _media_url(media: MediaAsset) -> str:
