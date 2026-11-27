@@ -71,6 +71,41 @@ Test Files  32 passed (32)
 Tests       179 passed (179)
 ```
 
+After-report backend command:
+
+```bash
+.venv/bin/python -m pytest
+```
+
+After-report backend exact result:
+
+```text
+535 tests collected
+531 passed, 4 skipped, 1 warning in 438.05s (0:07:18)
+```
+
+After-report frontend command:
+
+```bash
+npm run check   # from the repository root
+```
+
+After-report frontend exact result:
+
+```text
+Test Files  32 passed (32)
+Tests       179 passed (179)
+```
+
+Startup smoke after the report:
+
+```bash
+RUNWAY_DATA_DIR=/tmp/runway-smoke/data RUNWAY_AGENT_RUNTIME=mock RUNWAY_PUBLISHING_ENABLED=false .venv/bin/python -m runway.cli.main init
+RUNWAY_DATA_DIR=/tmp/runway-smoke/data RUNWAY_AGENT_RUNTIME=mock RUNWAY_PUBLISHING_ENABLED=false .venv/bin/python -m runway.cli.main doctor
+```
+
+Exact startup smoke result: `init` exit 0; `doctor` exit 0 with Python 3.13.18, Node v24.22.2, npm 10.8.3, migration `0012_creator_platforms`, mock runtime, and loopback API port all OK. The only warning was that Playwright Chromium was not installed; Google Chrome publishing path was present. No browser or platform action was launched.
+
 Migration fixture commands (fixture directory `/tmp/runway-edge-migration`, no production data):
 
 ```bash
