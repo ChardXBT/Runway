@@ -169,6 +169,15 @@ These are agent-doable because they require no credentials or live systems:
 6. Write reviewer exports through a temporary file plus atomic rename and add an interrupted-write fixture.
 7. Add an explicit unknown-job-kind/dead-letter operator surface in expansion before merge, or document that unknown kinds are intentionally ignored for rolling deploy compatibility.
 
+## Follow-up issues opened
+
+- #35 — Add atomic cross-process claim for queued YouTube publish attempts
+- #36 — Prevent duplicate cross-process platform sync runs
+- #37 — Fail fast on partial pre-existing creator-platform tables
+- #38 — Report provider revocation outcome when disconnecting platform accounts
+- #39 — Serialize platform token refresh across processes
+- #40 — Write reviewer exports atomically
+
 ## Unresolved owner decisions
 
 1. Should main receive small ports of atomic publish/sync admission now, or should those fixes wait for the owner-held expansion/job-worker architecture?
