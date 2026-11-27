@@ -157,6 +157,8 @@ def build_accounts_router(
         if settings.tiktok_app_status == "audited":
             needed.append(TIKTOK_PUBLISH_SCOPE)
         granted = _granted_scopes(account)
+        if set(needed).issubset(granted):
+            return {"status": "already_enabled", "account_id": account.id}
         # Request the read scopes plus the publishing scopes the consent adds;
         # TikTok keeps scopes already granted on the account.
         requested = list(dict.fromkeys([*TIKTOK_SCOPES, *needed, *granted]))

@@ -49,6 +49,8 @@ LEGACY_WRITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset(
         # Platform webhooks (spec 04 section 2): authenticated by the platform's
         # signature, never by a Runway key.
         ("POST", "/hooks/instagram"),
+        ("POST", "/hooks/meta/deauthorize"),
+        ("POST", "/hooks/meta/data-deletion"),
         ("POST", "/hooks/tiktok"),
         ("POST", "/hooks/youtube/websub/{subscription_id}/{callback_token}"),
         # Instagram Unified Login account pick (the owner's browser, mid-connect).

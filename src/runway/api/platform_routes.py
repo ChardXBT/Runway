@@ -483,8 +483,10 @@ def _require_slot(database: Database, settings: Settings, principal: Principal) 
         require_connected_account_slot(session, settings, principal.workspace_id)
 
 
-def _select_record(oauth_states: OAuthStateService, state: str) -> OAuthState | None:
-    record = oauth_states.peek(Platform.instagram, state=state)
+def _select_record(
+    oauth_states: OAuthStateService, state: str, workspace_id: int
+) -> OAuthState | None:
+    record = oauth_states.peek(Platform.instagram, state=state, workspace_id=workspace_id)
     if record is None:
         return None
     meta = _state_meta(record)
@@ -493,8 +495,10 @@ def _select_record(oauth_states: OAuthStateService, state: str) -> OAuthState | 
     return record
 
 
-def _select_meta(oauth_states: OAuthStateService, state: str) -> dict[str, object] | None:
-    record = _select_record(oauth_states, state)
+def _select_meta(
+    oauth_states: OAuthStateService, state: str, workspace_id: int
+) -> dict[str, object] | None:
+    record = _select_record(oauth_states, state, workspace_id)
     return _state_meta(record) if record is not None else None
 
 
@@ -624,8 +628,10 @@ def _register_oauth_routes(
     if include_select_routes:
 
         @router.get("/platforms/instagram/unified/select")
-        def unified_select_list(state: str = Query(min_length=1)) -> dict[str, object]:
-            meta = _select_meta(oauth_states, state)
+        def unified_select_list(
+            state: str = Query(min_length=1), principal: Principal = Depends(get_principal)
+        ) -> dict[str, object]:
+            meta = _select_meta(oauth_states, state, principal.workspace_id)
             if meta is None:
                 raise HTTPException(status_code=404, detail="no pending Instagram account pick")
             return {"state": state, "accounts": meta.get("accounts") or []}
@@ -646,7 +652,7 @@ def _register_oauth_routes(
             # Peek first: a pick the state never offered is rejected without
             # consuming it, so the owner can still choose a valid account. The
             # parked ciphertext rides the peeked record; consuming clears it.
-            record = _select_record(oauth_states, payload.state)
+            record = _select_record(oauth_states, payload.state, principal.workspace_id)
             if record is None:
                 raise HTTPException(status_code=404, detail="no pending Instagram account pick")
             meta = _state_meta(record)
@@ -664,7 +670,9 @@ def _register_oauth_routes(
                 )
             parked = record.token_ciphertext
             try:
-                oauth_states.consume(Platform.instagram, state=payload.state)
+                oauth_states.consume(
+                    Platform.instagram, state=payload.state, workspace_id=principal.workspace_id
+                )
             except OAuthStateError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             token: TokenSet | None = None
@@ -730,7 +738,7 @@ def _register_oauth_routes(
             # authorization code on a token it could never store.
             return fail("standby")
         try:
-            record = oauth_states.consume(parsed, state=state)
+            record = oauth_states.consume(parsed, state=state, workspace_id=principal.workspace_id)
         except OAuthStateError as exc:
             return fail(str(exc))
         if record.workspace_id != principal.workspace_id:

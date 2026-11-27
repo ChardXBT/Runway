@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import select
 from typer.testing import CliRunner
 
@@ -138,7 +140,13 @@ def _member(workspace_id: int = 1) -> Principal:
 def test_connect_is_refused_once_the_connected_accounts_quota_is_reached(
     settings: Settings, database: Database
 ) -> None:
-    hosted = _hosted(settings, platform_provider="mock", quota_connected_accounts=1)
+    test_key = base64.b64encode(bytes(32)).decode("ascii")
+    hosted = _hosted(
+        settings,
+        platform_provider="mock",
+        quota_connected_accounts=1,
+        token_keys=SecretStr(f"test:{test_key}"),
+    )
     with database.session() as session:
         session.add(ConnectedAccount(platform="youtube", external_account_id="UC1"))
     client = _platform_client(hosted, database, _member())

@@ -22,6 +22,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -60,15 +61,21 @@ def copy_live(dest: Path) -> None:
     dst.close()
 
 
-def runway(candidate: Path, data_dir: Path, *args: str) -> None:
-    scripts = candidate / ".venv" / ("Scripts" if os.name == "nt" else "bin")
-    exe = scripts / ("runway.exe" if os.name == "nt" else "runway")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNWAY_")}
+def runway(candidate: Path, python: Path, data_dir: Path, *args: str) -> None:
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("RUNWAY_")}
     env["RUNWAY_DATA_DIR"] = str(data_dir)
+    env["RUNWAY_INSTANCE_DIR"] = str(data_dir / "instance")
     env["RUNWAY_PLATFORM_PROVIDER"] = "mock"
+    env["RUNWAY_PUBLISHING_ENABLED"] = "false"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONPATH"] = str(candidate / "src")
     # cwd is the scratch dir, so no repository .env is read.
     result = subprocess.run(
-        [str(exe), *args], cwd=data_dir.parent, env=env, capture_output=True, text=True
+        [str(python), "-m", "runway.cli.main", *args],
+        cwd=data_dir.parent,
+        env=env,
+        capture_output=True,
+        encoding="utf-8",
     )
     print(f"$ runway {' '.join(args)} -> {result.returncode}")
     tail = (result.stdout + result.stderr).strip().splitlines()[-6:]
@@ -83,12 +90,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument(
+        "--candidate-python",
+        type=Path,
+        help="Python with the candidate's dependencies (default: the candidate's .venv)",
+    )
     parser.add_argument("--scratch", type=Path, required=True)
     args = parser.parse_args()
     LIVE_DB = args.source.resolve()
     candidate = args.candidate.resolve()
+    python = (
+        args.candidate_python.resolve()
+        if args.candidate_python is not None
+        else candidate / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    )
     if not LIVE_DB.is_file():
         raise SystemExit(f"no database at {LIVE_DB}")
+    if not python.is_file():
+        raise SystemExit(f"no Python interpreter at {python}")
+    if args.scratch.exists() and any(args.scratch.iterdir()):
+        print(f"scratch directory is not empty: {args.scratch}", file=sys.stderr)
+        raise SystemExit(2)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     base = args.scratch.resolve() / f"rehearsal-{stamp}"
     a, b = base / "a" / "data" / "runway.db", base / "b" / "data" / "runway.db"
@@ -100,7 +122,7 @@ def main() -> None:
         f"rows={sum(original['counts'].values())} integrity={original['integrity']}"
     )
 
-    runway(candidate, a.parent, "db", "upgrade")
+    runway(candidate, python, a.parent, "db", "upgrade")
     upgraded = snapshot(a)
     changed_a = {
         t: (n, upgraded["counts"].get(t))
@@ -113,8 +135,8 @@ def main() -> None:
     )
     print(f"A original tables with changed row counts: {changed_a or 'none'}")
 
-    runway(candidate, b.parent, "db", "upgrade")
-    runway(candidate, b.parent, "db", "downgrade", DOWNGRADE_TARGET)
+    runway(candidate, python, b.parent, "db", "upgrade")
+    runway(candidate, python, b.parent, "db", "downgrade", DOWNGRADE_TARGET)
     down = snapshot(b)
     changed_b = {
         t: (n, down["counts"].get(t))
@@ -148,8 +170,12 @@ def main() -> None:
         not changed_a
         and not changed_b
         and not missing
+        and not extra
+        and original["integrity"] == "ok"
         and upgraded["integrity"] == "ok"
         and down["integrity"] == "ok"
+        and original["fk_violations"] == upgraded["fk_violations"] == down["fk_violations"]
+        and original["version"] == DOWNGRADE_TARGET
         and down["version"] == DOWNGRADE_TARGET
     )
     print("REHEARSAL", "PASSED" if ok else "FAILED", "->", base / "report.json")

@@ -78,7 +78,9 @@ class OAuthStateService:
             )
         return IssuedState(state=state, code_verifier=verifier)
 
-    def consume(self, platform: Platform, *, state: str) -> OAuthState:
+    def consume(
+        self, platform: Platform, *, state: str, workspace_id: int | None = None
+    ) -> OAuthState:
         """Validate and consume a state value; each state may be used exactly once.
 
         The check-then-set is a single conditional UPDATE, so two concurrent
@@ -86,13 +88,16 @@ class OAuthStateService:
         transaction whose statement matches all conditions reports rowcount 1.
         """
         now = utcnow()
-        with self.database.session() as session:
+        with self.database.session(workspace_id=workspace_id) as session:
+            lookup = [OAuthState.state == state]
+            if workspace_id is not None:
+                lookup.append(OAuthState.workspace_id == workspace_id)
             result = cast(
                 CursorResult[Any],
                 session.execute(
                     update(OAuthState)
                     .where(
-                        OAuthState.state == state,
+                        *lookup,
                         OAuthState.platform == platform.value,
                         OAuthState.consumed_at.is_(None),
                         OAuthState.expires_at > now,
@@ -102,7 +107,7 @@ class OAuthStateService:
                     .values(consumed_at=now, token_ciphertext=None)
                 ),
             )
-            record = session.scalar(select(OAuthState).where(OAuthState.state == state))
+            record = session.scalar(select(OAuthState).where(*lookup))
             if result.rowcount != 1:
                 if (
                     record is None
@@ -118,22 +123,25 @@ class OAuthStateService:
             session.expunge(record)
             return record
 
-    def peek(self, platform: Platform, *, state: str) -> OAuthState | None:
+    def peek(
+        self, platform: Platform, *, state: str, workspace_id: int | None = None
+    ) -> OAuthState | None:
         """Read a live, unconsumed state without consuming it.
 
         Used by two-step flows (Unified Login's account pick) that list the
         stored payload first and consume the state only on the final POST.
         """
         now = utcnow()
-        with self.database.session() as session:
-            record = session.scalar(
-                select(OAuthState).where(
-                    OAuthState.state == state,
-                    OAuthState.platform == platform.value,
-                    OAuthState.consumed_at.is_(None),
-                    OAuthState.expires_at > now,
-                )
-            )
+        conditions = [
+            OAuthState.state == state,
+            OAuthState.platform == platform.value,
+            OAuthState.consumed_at.is_(None),
+            OAuthState.expires_at > now,
+        ]
+        if workspace_id is not None:
+            conditions.append(OAuthState.workspace_id == workspace_id)
+        with self.database.session(workspace_id=workspace_id) as session:
+            record = session.scalar(select(OAuthState).where(*conditions))
             if record is not None:
                 session.expunge(record)
             return record

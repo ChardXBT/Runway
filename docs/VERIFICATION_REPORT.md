@@ -160,3 +160,26 @@ any mismatch visible rather than silent.
   verification step is tested only against mocked responses.
 - The content sync labels YouTube items ≤180 s as "short"; the API has no Shorts flag.
 - Webhooks are not implemented; freshness depends on manual or interval sync.
+
+## Re-verification on the owner's laptop
+
+The configured Runway data directory was located from the live checkout's settings. The
+database was opened read-only and copied with SQLite's online backup API before rehearsal.
+The source was at `0012_creator_platforms`, with 66 tables, 405,336 rows, an `ok`
+integrity check, and zero foreign-key violations.
+
+The release candidate was rehearsed on two disposable copies outside the repository:
+
+- Copy A upgraded to `0022_account_tokens`. Every source table kept its row count. The
+  upgraded copy passed the integrity check with zero foreign-key violations.
+- Copy B upgraded and downgraded to `0012_creator_platforms`. It returned to the source
+  table set and row counts. The downgraded copy passed the integrity check with zero
+  foreign-key violations.
+
+The source database was not modified. The recovery backup and scratch copies were kept
+outside the public repository. The scratch copies were removed after verification.
+
+The release candidate checks passed locally for Ruff, formatting, strict mypy, the focused
+OAuth, quota, request-policy, platform, and migration tests, and the production-copy
+rehearsal. The GitHub full-suite run still needs to be rerun on the corrected candidate
+before merge.
