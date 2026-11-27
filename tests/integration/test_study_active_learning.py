@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -175,6 +176,100 @@ def test_blind_export_rejects_nonfinite_metadata_numbers(
     with pytest.raises(ValueError, match="not JSON compliant"):
         service.export(int(planned["study_id"]), output, minimum_cases=1)
     assert not output.exists()
+
+
+def test_blind_export_uses_temporary_sibling_then_atomic_rename(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    planned = service.plan(
+        _study_cases(database, count=1),
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+    output = tmp_path / "blind.json"
+    replacements: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def recording_replace(source: object, destination: object) -> None:
+        replacements.append((Path(source), Path(destination)))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+    service.export(int(planned["study_id"]), output, minimum_cases=1)
+
+    assert len(replacements) == 1
+    temporary, destination = replacements[0]
+    assert destination == output
+    assert temporary.parent == output.parent
+    assert temporary != output
+    assert not temporary.exists()
+    assert json.loads(output.read_text(encoding="utf-8"))["case_count"] == 1
+
+
+@pytest.mark.parametrize("has_existing_export", [False, True])
+def test_blind_export_interruption_cannot_leave_partial_final_export(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    has_existing_export: bool,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    planned = service.plan(
+        _study_cases(database, count=1),
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+    output = tmp_path / "blind.json"
+    if has_existing_export:
+        output.write_text("complete prior export\n", encoding="utf-8")
+
+    def interrupted_replace(source: object, destination: object) -> None:
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr(os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="simulated interruption"):
+        service.export(int(planned["study_id"]), output, minimum_cases=1)
+
+    if has_existing_export:
+        assert output.read_text(encoding="utf-8") == "complete prior export\n"
+    else:
+        assert not output.exists()
+    temporary_leftovers = [path for path in tmp_path.iterdir() if path != output and path.is_file()]
+    assert temporary_leftovers == []
+
+
+def test_blind_export_overwrite_remains_deterministic(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    planned = service.plan(
+        _study_cases(database, count=1),
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+    output = tmp_path / "blind.json"
+    output.write_text("stale partial export\n", encoding="utf-8")
+
+    service.export(int(planned["study_id"]), output, minimum_cases=1)
+    first_export = output.read_bytes()
+    assert first_export != b"stale partial export\n"
+
+    service.export(int(planned["study_id"]), output, minimum_cases=1)
+    assert output.read_bytes() == first_export
+    assert json.loads(first_export.decode("utf-8"))["case_count"] == 1
 
 
 def test_blind_order_export_and_offline_fixture_import_are_provenance_safe(
