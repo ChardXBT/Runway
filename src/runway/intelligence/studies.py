@@ -483,9 +483,7 @@ class BlindStudyService:
             "order_token",
             "hidden_label",
         ):
-            if forbidden and (
-                forbidden in serialized or _json_contains_text(payload, forbidden)
-            ):
+            if forbidden and (forbidden in serialized or _json_contains_text(payload, forbidden)):
                 raise RuntimeError("blind export would reveal hidden model provenance")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(serialized + "\n", encoding="utf-8")
