@@ -487,31 +487,50 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
 
     @router.post("/platforms/accounts/{account_id}/disconnect")
     def disconnect(account_id: int, payload: ConfirmedRequest) -> dict[str, object]:
-        account = _account_or_404(account_id)
-        if account.token_ref:
-            try:
-                token = registry.token_store.load(account.token_ref)
-            except TokenStoreError:
-                # Disconnect must remain available when disaster recovery is
-                # needed. The delete below performs the quarantining mutation;
-                # no token plaintext is available for a provider revocation call.
+        _account_or_404(account_id)
+        token_ref: str | None = None
+        # The database status transition and token deletion are serialized
+        # with connect/reconnect token replacement by the same cross-process
+        # lock. The row is committed first; reconciliation can prune a token
+        # orphaned by a crash after that commit, but no crash can leave a row
+        # that falsely reports a connected account while its token is gone.
+        with registry.token_store.locked():
+            with database.session() as session:
+                record = session.get(ConnectedAccount, account_id)
+                if record is None:
+                    raise HTTPException(status_code=404, detail="account not found")
+                token_ref = str(record.token_ref) if record.token_ref else None
                 token = None
-            if token is not None:
-                try:
-                    registry.provider(Platform(account.platform)).revoke(token)
-                except ProviderError as exc:
-                    logger.warning(
-                        "token revoke failed for account %s: %s",
-                        account_id,
-                        exc.detail,
-                    )
-            registry.token_store.delete(account.token_ref)
-        with database.session() as session:
-            record = session.get(ConnectedAccount, account_id)
-            if record is not None:
+                if token_ref:
+                    try:
+                        token = registry.token_store.load(token_ref)
+                    except TokenStoreError:
+                        logger.warning(
+                            "stored token unreadable during disconnect for account %s",
+                            account_id,
+                            exc_info=True,
+                        )
+                if token is not None:
+                    try:
+                        registry.provider(Platform(record.platform)).revoke(token)
+                    except ProviderError as exc:
+                        logger.warning(
+                            "token revoke failed for account %s: %s",
+                            account_id,
+                            exc.detail,
+                        )
                 record.status = "disconnected"
                 record.token_ref = None
                 record.last_error = None
+            if token_ref:
+                try:
+                    registry.token_store.delete(token_ref)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "token delete failed during disconnect for account %s",
+                        account_id,
+                        exc_info=True,
+                    )
         return {"account_id": account_id, "status": "disconnected"}
 
     @router.post("/platforms/accounts/{account_id}/reconnect")
