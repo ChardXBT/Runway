@@ -48,7 +48,7 @@ def upgrade() -> None:
         if table_name not in existing_tables:
             continue
         existing_columns = _columns(table_name)
-        for column_name, column_type, nullable in LEASE_COLUMNS:
+        for column_name, column_type, _nullable in LEASE_COLUMNS:
             if column_name in existing_columns:
                 continue
             column = sa.Column(column_name, column_type, nullable=True)
