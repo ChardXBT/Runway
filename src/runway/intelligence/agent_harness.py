@@ -71,7 +71,7 @@ def _require_json_compatible(value: Any, *, path: str) -> None:
         if not math.isfinite(value):
             raise ValueError(f"{path} must contain only finite JSON numbers")
         return
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
             _require_json_compatible(item, path=f"{path}[{index}]")
         return
