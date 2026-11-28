@@ -433,3 +433,22 @@ class JobQueue:
             )
         candidates = [_aware(value) for value in (pending, lease) if value is not None]
         return min(candidates) if candidates else None
+
+    def unknown_pending_counts(self, known_kinds: Collection[str]) -> dict[str, int]:
+        """Pending-job counts grouped by kinds this worker does not handle.
+
+        The rows are read-only: an unknown kind may belong to a newer worker
+        during a rolling deploy, so this worker must not fail, re-time or claim
+        it. The counts are for operator surfaces (worker log and `runway jobs unknown`).
+        """
+        statement = (
+            select(PublishJob.kind, func.count(PublishJob.id))
+            .where(PublishJob.state == JobState.PENDING.value)
+            .group_by(PublishJob.kind)
+        )
+        known = set(known_kinds)
+        if known:
+            statement = statement.where(PublishJob.kind.not_in(sorted(known)))
+        with self.database.session() as session:
+            rows = session.execute(statement).all()
+        return {kind: int(count) for kind, count in sorted(rows, key=lambda row: row[0])}

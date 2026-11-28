@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -320,6 +321,67 @@ def test_worker_records_handler_errors(queue: JobQueue, database: Database) -> N
     assert retry_row.state == "pending"
     assert "abc123" not in (retry_row.last_error or "")
     assert _row(database, final.id).state == "failed"
+
+
+def test_unknown_pending_counts_group_edge_case_kinds_without_touching_state(
+    queue: JobQueue, database: Database
+) -> None:
+    queue.enqueue("purge", idempotency_key="known")
+    queue.enqueue("", idempotency_key="empty")
+    queue.enqueue("unknown/υνικοde", idempotency_key="unicode")
+    queue.enqueue("future_kind", idempotency_key="future-1")
+    queue.enqueue("future_kind", idempotency_key="future-2", run_at=START + timedelta(days=1))
+    finished = queue.enqueue("future_kind", idempotency_key="finished")
+    with database.session() as session:
+        row = session.get(PublishJob, finished.id)
+        assert row is not None
+        row.state = "completed"
+
+    assert list(queue.unknown_pending_counts({"purge"}).items()) == [
+        ("", 1),
+        ("future_kind", 2),
+        ("unknown/υνικοde", 1),
+    ]
+    assert queue.unknown_pending_counts({"purge", ""})["future_kind"] == 2
+    assert queue.unknown_pending_counts(set())["purge"] == 1
+    assert _row(database, finished.id).state == "completed"
+
+
+def test_unknown_pending_job_is_operator_visible_once_per_worker_and_survives_restart(
+    queue: JobQueue, database: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    unknown = queue.enqueue(
+        "future_kind", idempotency_key="unknown", run_at=START - timedelta(minutes=1)
+    )
+    before = _row(database, unknown.id)
+    worker = _worker(queue, {"purge": lambda _job: None}, unknown_kind_check_seconds=0)
+
+    with caplog.at_level(logging.WARNING, logger="runway.jobs.worker"):
+        for _ in range(5):
+            assert worker.run_once() is False
+
+    warnings = [record for record in caplog.records if "does not handle" in record.message]
+    assert len(warnings) == 1
+    assert "future_kind" in warnings[0].message
+    assert "rolling-deploy compatibility" in warnings[0].message
+    after = _row(database, unknown.id)
+    assert (after.state, after.attempts, after.locked_by, after.locked_until) == (
+        "pending",
+        0,
+        None,
+        None,
+    )
+    assert after.run_at == before.run_at
+
+    caplog.clear()
+    restarted = _worker(queue, {"purge": lambda _job: None}, unknown_kind_check_seconds=0)
+    with caplog.at_level(logging.WARNING, logger="runway.jobs.worker"):
+        assert restarted.run_once() is False
+    restarted_warnings = [
+        record for record in caplog.records if "does not handle" in record.message
+    ]
+    assert len(restarted_warnings) == 1
+    assert _row(database, unknown.id).state == "pending"
 
 
 def test_idle_sleep_waits_for_the_earliest_job_capped_at_30_seconds(

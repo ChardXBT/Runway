@@ -8,12 +8,15 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from runway.config import Settings
-from runway.db import initialize_database
+from runway.db import Database, initialize_database
+from runway.db.models import PublishJob, utcnow
+from runway.jobs.queue import JobQueue
 from runway.locks import LockTimeout, exclusive_file_lock
 from runway.operations.runtime_files import read_pid_file, worker_lock_path, worker_pid_path
 
@@ -121,6 +124,59 @@ def test_worker_stops_cleanly_on_a_signal_and_releases_its_lock_and_pid_record(
         time.sleep(0.05)
     assert not pid_path.exists()
     assert _lock_is_free(settings)
+
+
+def test_worker_once_surfaces_an_unknown_kind_without_touching_it_and_repeats_after_restart(
+    migrated: Path, tmp_path: Path
+) -> None:
+    settings = Settings(data_dir=migrated, platform_provider="mock")
+    database = Database(settings)
+    try:
+        unknown = JobQueue(database).enqueue(
+            "future_kind",
+            idempotency_key="operator-surface-fixture",
+            run_at=utcnow() - timedelta(minutes=1),
+        )
+    finally:
+        database.engine.dispose()
+
+    outputs: list[str] = []
+    for _restart in range(2):
+        result = subprocess.run(
+            [sys.executable, "-m", "runway.cli.worker_commands", "--once"],
+            cwd=tmp_path,
+            env=_env(migrated),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        outputs.append(result.stdout + result.stderr)
+
+    for output in outputs:
+        warnings = [
+            line
+            for line in output.splitlines()
+            if "does not handle pending durable job kind" in line
+        ]
+        assert len(warnings) == 1
+        assert "future_kind" in warnings[0]
+        assert "rolling-deploy compatibility" in warnings[0]
+
+    database = Database(settings)
+    try:
+        with database.session() as session:
+            row = session.get(PublishJob, unknown.id)
+            assert row is not None
+            assert (row.state, row.attempts, row.locked_by, row.locked_until) == (
+                "pending",
+                0,
+                None,
+                None,
+            )
+    finally:
+        database.engine.dispose()
 
 
 def test_worker_refuses_a_database_behind_head(tmp_path: Path) -> None:

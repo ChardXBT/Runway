@@ -156,3 +156,31 @@ def test_pid_records_are_removed_only_by_their_owner(tmp_path: Path) -> None:
     assert read_pid_file(path) is None
     path.write_text("not json", encoding="utf-8")
     assert read_pid_file(path) is None
+
+
+def test_jobs_unknown_is_an_operator_visible_rolling_deploy_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from runway.cli import job_commands
+    from runway.db import initialize_database
+    from runway.jobs.queue import JobQueue
+
+    active = Settings(data_dir=tmp_path / "data", platform_provider="mock")
+    database = initialize_database(active)
+    try:
+        queue = JobQueue(database)
+        queue.enqueue("purge", idempotency_key="known")
+        queue.enqueue("future_kind", idempotency_key="unknown-1")
+        queue.enqueue("future_kind", idempotency_key="unknown-2")
+        monkeypatch.setattr(job_commands, "get_settings", lambda: active)
+
+        result = CliRunner().invoke(cli_app, ["jobs", "unknown"])
+
+        assert result.exit_code == 0, result.output
+        start = result.output.rfind("\n{\n")
+        payload = json.loads(result.output[start + 1 :] if start >= 0 else result.output)
+        assert payload["policy"] == "pending_for_rolling_deploy_compatibility"
+        assert payload["unknown_pending_jobs"] == [{"kind": "future_kind", "pending": 2}]
+        assert "purge" not in {job["kind"] for job in payload["unknown_pending_jobs"]}
+    finally:
+        database.engine.dispose()
