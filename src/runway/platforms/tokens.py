@@ -7,6 +7,8 @@ import os
 import secrets
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,16 +35,28 @@ class TokenStore:
         self.key_path = secrets_dir / "token.key"
         self.store_path = secrets_dir / "platform-tokens.json"
         self.lock_path = secrets_dir / "token.lock"
+        self._lock_state = threading.local()
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
-        """Serialize read-modify-write cycles across threads and processes.
+    def locked(self) -> Iterator[None]:
+        """Serialize token-store operations across threads and processes.
 
         ``os.replace`` keeps each write atomic for readers, but without this
         lock two processes can read the same blob, mutate different keys, and
         silently overwrite each other's token updates. A sidecar
-        ``token.lock`` file is held exclusively for the whole sequence.
+        ``token.lock`` file is held exclusively for the whole sequence. The
+        lock is reentrant for one thread so higher-level token operations can
+        compose the public load/store methods without self-deadlocking.
         """
+        depth = getattr(self._lock_state, "depth", 0)
+        if depth:
+            self._lock_state.depth = depth + 1
+            try:
+                yield
+            finally:
+                self._lock_state.depth = depth
+            return
+
         self.secrets_dir.mkdir(parents=True, exist_ok=True)
         with self.lock_path.open("a+b") as handle:
             if sys.platform == "win32":
@@ -53,19 +67,30 @@ class TokenStore:
                     handle.write(b"\0")
                     handle.flush()
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                # LK_LOCK gives up after about ten seconds, but a refreshing
+                # peer can legitimately hold this lock through a network call.
+                while True:
+                    try:
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+                self._lock_state.depth = 1
                 try:
                     yield
                 finally:
+                    self._lock_state.depth = 0
                     handle.seek(0)
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 import fcntl
 
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                self._lock_state.depth = 1
                 try:
                     yield
                 finally:
+                    self._lock_state.depth = 0
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _load_key(self) -> bytes:
@@ -128,24 +153,25 @@ class TokenStore:
             raise
 
     def store(self, token_ref: str, token: TokenSet) -> None:
-        with self._locked():
+        with self.locked():
             fernet = Fernet(self._load_key())
             payload = self._read_store(fernet)
             payload[token_ref] = serialize_token(token)
             self._write_store(fernet, payload)
 
     def load(self, token_ref: str) -> TokenSet | None:
-        fernet = Fernet(self._load_key())
-        payload = self._read_store(fernet)
-        entry = payload.get(token_ref)
-        if entry is None:
-            return None
-        if not isinstance(entry, dict):
-            raise TokenStoreError(f"token entry {token_ref!r} is malformed")
-        return deserialize_token(entry)
+        with self.locked():
+            fernet = Fernet(self._load_key())
+            payload = self._read_store(fernet)
+            entry = payload.get(token_ref)
+            if entry is None:
+                return None
+            if not isinstance(entry, dict):
+                raise TokenStoreError(f"token entry {token_ref!r} is malformed")
+            return deserialize_token(entry)
 
     def delete(self, token_ref: str) -> None:
-        with self._locked():
+        with self.locked():
             fernet = Fernet(self._load_key())
             payload = self._read_store(fernet)
             if token_ref in payload:

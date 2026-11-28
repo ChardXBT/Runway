@@ -81,6 +81,18 @@ def test_delete_removes_entry(tmp_path: Path) -> None:
     store.delete(ref)  # deleting a missing ref is a no-op
 
 
+def test_lock_is_reentrant_for_composed_token_operations(tmp_path: Path) -> None:
+    store = TokenStore(tmp_path / "secrets")
+    ref = store.new_token_ref()
+
+    with store.locked():
+        store.store(ref, _token())
+        loaded = store.load(ref)
+
+    assert loaded is not None
+    assert loaded.access_token == "access-abc"
+
+
 def test_load_missing_ref_returns_none(tmp_path: Path) -> None:
     store = TokenStore(tmp_path / "secrets")
     assert store.load("does-not-exist") is None
