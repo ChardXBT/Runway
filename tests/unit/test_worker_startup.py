@@ -177,8 +177,7 @@ def test_jobs_unknown_is_an_operator_visible_rolling_deploy_surface(
         result = CliRunner().invoke(cli_app, ["jobs", "unknown"])
 
         assert result.exit_code == 0, result.output
-        start = result.output.rfind("\n{\n")
-        payload = json.loads(result.output[start + 1 :] if start >= 0 else result.output)
+        payload = json.loads(result.stdout)
         assert payload["policy"] == "pending_for_rolling_deploy_compatibility"
         assert payload["unknown_pending_jobs"] == [{"kind": "future_kind", "pending": 2}]
         assert "purge" not in {job["kind"] for job in payload["unknown_pending_jobs"]}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import typer
 
@@ -11,6 +12,7 @@ from runway.db.base import Database
 from runway.db.bootstrap import DatabaseNotCurrent, require_database_at_head
 from runway.jobs.queue import JobQueue
 from runway.jobs.runtime import build_worker
+from runway.logging import configure_logging
 
 jobs_app = typer.Typer(help="Inspect durable worker jobs.", no_args_is_help=True)
 
@@ -18,6 +20,8 @@ jobs_app = typer.Typer(help="Inspect durable worker jobs.", no_args_is_help=True
 @jobs_app.command("unknown")
 def unknown_jobs() -> None:
     """List pending job kinds the currently configured worker cannot run."""
+    # stdout is the machine-readable operator surface; migration/library logs are diagnostics.
+    configure_logging(stream=sys.stderr)
     settings = get_settings()
     try:
         require_database_at_head(settings)
