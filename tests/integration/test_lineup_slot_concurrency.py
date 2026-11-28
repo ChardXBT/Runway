@@ -508,6 +508,74 @@ async def test_lineup_swaps_and_removals_keep_claim_rows_in_sync(
     assert replacement["scheduled_publish_at"] == first_after["scheduled_publish_at"]
 
 
+@pytest.mark.asyncio
+async def test_stale_non_reserving_rows_do_not_block_lineup_moves(
+    database: Database,
+    settings: Settings,
+) -> None:
+    proposals = ProposalService(database, settings)
+    active_id = _seed_review_proposal(
+        database,
+        settings,
+        suffix="move-active",
+        planned_offset_days=63,
+    )
+    stale_id = _seed_review_proposal(
+        database,
+        settings,
+        suffix="move-stale",
+        planned_offset_days=64,
+    )
+    proposals.approve(active_id)
+    timezone = ZoneInfo(settings.timezone)
+    target_date = datetime.now(timezone).date() + timedelta(days=3)
+    target_timestamp = datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        10,
+        0,
+        tzinfo=timezone,
+    ).isoformat()
+    with database.session() as session:
+        active = session.get(Proposal, active_id)
+        stale = session.get(Proposal, stale_id)
+        assert active is not None
+        assert stale is not None
+        active.status = "internally_scheduled"
+        stale.status = "needs_review"
+        stale.scheduled_publish_at = target_timestamp
+        channel = get_channel(session, settings.channel_handle)
+        session.add(
+            LineupSlotClaim(
+                channel_id=channel.id,
+                proposal_id=stale_id,
+                slot_date=target_date,
+                scheduled_publish_at=target_timestamp,
+            )
+        )
+
+    publisher = YouTubeBrowserPublisher(database, settings)
+    moved = await publisher.update_lineup(active_id, final_caption=None, new_date=target_date)
+
+    assert moved["proposal_id"] == active_id
+    assert moved["swapped_with"] is None
+    with database.session() as session:
+        active = session.get(Proposal, active_id)
+        stale = session.get(Proposal, stale_id)
+        assert active is not None
+        assert stale is not None
+        assert active.scheduled_publish_at is not None
+        assert datetime.fromisoformat(active.scheduled_publish_at).astimezone(timezone).date() == (
+            target_date
+        )
+        assert stale.status == "needs_review"
+        claims = session.scalars(select(LineupSlotClaim)).all()
+        assert len(claims) == 1
+        assert claims[0].proposal_id == active_id
+        assert claims[0].slot_date == target_date
+
+
 def test_0013_migration_backfills_active_claims_using_channel_timezone_dates(
     database: Database,
     settings: Settings,

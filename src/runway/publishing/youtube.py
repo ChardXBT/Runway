@@ -43,6 +43,7 @@ from runway.domain.state_machine import (
     transition_attempt,
 )
 from runway.proposals.schedule_slots import (
+    RESERVING_PROPOSAL_STATUSES,
     release_lineup_slot_claim,
     replace_lineup_slot_claims,
     synchronize_lineup_slot_claims,
@@ -1807,12 +1808,7 @@ class YouTubeBrowserPublisher:
                             Proposal.id != proposal.id,
                             Proposal.channel_id == proposal.channel_id,
                             Proposal.scheduled_publish_at.is_not(None),
-                            Proposal.status.not_in(
-                                [
-                                    ProposalStatus.REJECTED.value,
-                                    ProposalStatus.CANCELLED.value,
-                                ]
-                            ),
+                            Proposal.status.in_(sorted(RESERVING_PROPOSAL_STATUSES)),
                         )
                     ).all()
                     target_occupants = [
