@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
+from pydantic import ValidationError
 
 from runway.platforms.base import TokenSet, deserialize_token, serialize_token
 
@@ -153,6 +154,8 @@ class TokenStore:
             raise
 
     def store(self, token_ref: str, token: TokenSet) -> None:
+        if not token.access_token.strip():
+            raise TokenStoreError("access token material is empty")
         with self.locked():
             fernet = Fernet(self._load_key())
             payload = self._read_store(fernet)
@@ -168,7 +171,15 @@ class TokenStore:
                 return None
             if not isinstance(entry, dict):
                 raise TokenStoreError(f"token entry {token_ref!r} is malformed")
-            return deserialize_token(entry)
+            try:
+                token = deserialize_token(entry)
+            except (TypeError, ValueError, ValidationError):
+                # Validation errors can echo the decrypted input object. Keep
+                # token material out of logs and persisted exception chains.
+                raise TokenStoreError(f"token entry {token_ref!r} is malformed") from None
+            if not token.access_token.strip():
+                raise TokenStoreError(f"token entry {token_ref!r} is malformed")
+            return token
 
     def delete(self, token_ref: str) -> None:
         with self.locked():
@@ -177,6 +188,19 @@ class TokenStore:
             if token_ref in payload:
                 del payload[token_ref]
                 self._write_store(fernet, payload)
+
+    def prune_except(self, keep_refs: set[str]) -> int:
+        """Remove unreferenced token entries and return how many were removed."""
+        with self.locked():
+            fernet = Fernet(self._load_key())
+            payload = self._read_store(fernet)
+            stale_refs = [token_ref for token_ref in payload if token_ref not in keep_refs]
+            if not stale_refs:
+                return 0
+            for token_ref in stale_refs:
+                del payload[token_ref]
+            self._write_store(fernet, payload)
+            return len(stale_refs)
 
     def new_token_ref(self) -> str:
         return secrets.token_hex(16)

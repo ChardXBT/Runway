@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -9,7 +11,7 @@ from sqlalchemy import select
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
-from runway.platforms.base import AuthorizationExpired, PlatformProvider, TokenSet
+from runway.platforms.base import AuthorizationExpired, PlatformProvider, ProviderError, TokenSet
 from runway.platforms.capabilities import (
     DEFAULT_PLATFORM_SCOPES,
     Platform,
@@ -17,7 +19,7 @@ from runway.platforms.capabilities import (
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.mock import MockPlatformProvider, mock_token
 from runway.platforms.tiktok import TikTokProvider
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import TokenStore, TokenStoreError
 from runway.platforms.youtube import YouTubeProvider
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,39 @@ def token_refresh_window(platform: Platform) -> timedelta:
 
 class UnknownPlatformError(ValueError):
     pass
+
+
+class AccountTokenAuthorizationExpired(AuthorizationExpired):
+    """Authorization failure tied to one token-store reference generation."""
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        token_ref: str | None,
+        retryable: bool = False,
+        status: int | None = None,
+    ) -> None:
+        super().__init__(detail, retryable=retryable, status=status)
+        self.token_ref = token_ref
+
+
+def _auth_error_for_ref(exc: AuthorizationExpired, token_ref: str) -> AuthorizationExpired:
+    return AccountTokenAuthorizationExpired(
+        exc.detail,
+        retryable=exc.retryable,
+        status=exc.status,
+        token_ref=token_ref,
+    )
+
+
+TOKEN_RECOVERY_DETAIL = "stored OAuth token is missing or unreadable; reconnect the account"
+
+
+@dataclass(frozen=True)
+class TokenReconciliationResult:
+    accounts_marked_needs_reauth: int
+    orphaned_tokens_removed: int
 
 
 def parse_platform(value: str) -> Platform:
@@ -89,9 +124,20 @@ class ProviderRegistry:
         # loser only after the winner has stored its replacement, so it reloads
         # that token instead of consuming a second provider refresh grant.
         with self.token_store.locked():
-            token = self.token_store.load(token_ref)
+            try:
+                token = self.token_store.load(token_ref)
+            except TokenStoreError as exc:
+                raise AccountTokenAuthorizationExpired(
+                    TOKEN_RECOVERY_DETAIL,
+                    status=401,
+                    token_ref=token_ref,
+                ) from exc
             if token is None:
-                raise AuthorizationExpired("account token is missing", status=401)
+                raise AccountTokenAuthorizationExpired(
+                    "account token is missing",
+                    status=401,
+                    token_ref=token_ref,
+                )
             if token.expires_at is None:
                 return token
             expires_at = token.expires_at
@@ -99,9 +145,98 @@ class ProviderRegistry:
                 expires_at = expires_at.replace(tzinfo=UTC)
             if expires_at - datetime.now(UTC) > token_refresh_window(platform):
                 return token
-            refreshed = self.provider(platform).refresh(token)
-            self.token_store.store(token_ref, refreshed)
+            try:
+                refreshed = self.provider(platform).refresh(token)
+                self.token_store.store(token_ref, refreshed)
+            except AuthorizationExpired as exc:
+                raise _auth_error_for_ref(exc, token_ref) from exc
+            except TokenStoreError as exc:
+                raise AccountTokenAuthorizationExpired(
+                    TOKEN_RECOVERY_DETAIL,
+                    status=401,
+                    token_ref=token_ref,
+                ) from exc
             return refreshed
+
+    def _account_token_ref(self, account_id: int) -> str | None:
+        with self.database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            return str(account.token_ref) if account is not None and account.token_ref else None
+
+    def fresh_account_token_with_ref(
+        self, platform: Platform, account_id: int
+    ) -> tuple[TokenSet, str]:
+        """Load a fresh token and the reference generation it came from.
+
+        Sync and inbox work capture account state before network work. A
+        reconnect may commit a fresh token ref and remove the old one in that
+        gap; treating the stale ref as a revoked grant would incorrectly mark a
+        healthy reconnected account as needing reauth. Retry once with the
+        row's current ref, while preserving the original failure when the ref
+        is unchanged or the account has been disconnected.
+        """
+        token_ref = self._account_token_ref(account_id)
+        if token_ref is None:
+            raise AccountTokenAuthorizationExpired(
+                "account has no stored token",
+                status=401,
+                token_ref=None,
+            )
+        for _ in range(2):
+            try:
+                return self.fresh_token(platform, token_ref), token_ref
+            except AuthorizationExpired as exc:
+                current_ref = self._account_token_ref(account_id)
+                if current_ref is None or current_ref == token_ref:
+                    if getattr(exc, "token_ref", None) == token_ref:
+                        raise
+                    raise _auth_error_for_ref(exc, token_ref) from exc
+                token_ref = current_ref
+        raise ProviderError("account token changed while loading; retry", retryable=True)
+
+    def fresh_account_token(self, platform: Platform, account_id: int) -> TokenSet:
+        return self.fresh_account_token_with_ref(platform, account_id)[0]
+
+    def reconcile_connected_accounts(self) -> TokenReconciliationResult:
+        """Reconcile account rows with the encrypted token blob.
+
+        A connected row without decryptable token bytes is recovery state, not a
+        ready account: mark it ``needs_reauth`` with a secret-free detail. Token
+        refs left behind by an interrupted connect are unreferenced encrypted
+        blobs and can be removed while the cross-process token lock is held.
+        """
+        marked = 0
+        with self.token_store.locked():
+            with self.database.session() as session:
+                accounts = session.scalars(select(ConnectedAccount)).all()
+                keep_refs = {str(account.token_ref) for account in accounts if account.token_ref}
+                for account in accounts:
+                    if account.status != "connected":
+                        continue
+                    detail: str | None = None
+                    if not account.token_ref:
+                        detail = TOKEN_RECOVERY_DETAIL
+                    else:
+                        try:
+                            stored = self.token_store.load(str(account.token_ref))
+                        except TokenStoreError:
+                            detail = TOKEN_RECOVERY_DETAIL
+                        else:
+                            if stored is None:
+                                detail = TOKEN_RECOVERY_DETAIL
+                    if detail is not None:
+                        account.status = "needs_reauth"
+                        account.last_error = detail
+                        marked += 1
+            try:
+                pruned = self.token_store.prune_except(keep_refs)
+            except TokenStoreError:
+                logger.warning("unreferenced platform token cleanup failed", exc_info=True)
+                pruned = 0
+        return TokenReconciliationResult(
+            accounts_marked_needs_reauth=marked,
+            orphaned_tokens_removed=pruned,
+        )
 
     def platforms(self) -> list[Platform]:
         return list(Platform)
@@ -115,38 +250,47 @@ class ProviderRegistry:
         if self.settings.platform_provider != "mock":
             return
         created_ids: list[int] = []
-        pending_tokens: list[tuple[str, TokenSet]] = []
-        with self.database.session() as session:
-            for platform in Platform:
-                existing = session.scalar(
-                    select(ConnectedAccount).where(ConnectedAccount.platform == platform.value)
-                )
-                if existing is not None:
-                    continue
-                provider = self.provider(platform)
-                token = mock_token(platform)
-                identity = provider.fetch_identity(token)
-                account = ConnectedAccount(
-                    platform=platform.value,
-                    external_account_id=identity.external_account_id,
-                    handle=identity.handle,
-                    display_name=identity.display_name,
-                    avatar_url=identity.avatar_url,
-                    profile_url=identity.profile_url,
-                    account_type=identity.account_type,
-                    status="connected",
-                    granted_scopes_json=json.dumps(list(DEFAULT_PLATFORM_SCOPES.get(platform, []))),
-                    token_ref=self.token_store.new_token_ref(),
-                    last_error=None,
-                )
-                session.add(account)
-                session.flush()
-                created_ids.append(account.id)
-                pending_tokens.append((str(account.token_ref), token))
-        # Token files are written only after the account rows commit, so a
-        # failed commit never leaves orphaned secrets on disk.
-        for token_ref, token in pending_tokens:
-            self.token_store.store(token_ref, token)
+        written_token_refs: list[str] = []
+        try:
+            # Token bytes are written before the rows that reference them. A
+            # crash can leave only an encrypted orphan (which reconciliation
+            # prunes), never a connected row without usable token bytes.
+            with self.token_store.locked(), self.database.session() as session:
+                for platform in Platform:
+                    existing = session.scalar(
+                        select(ConnectedAccount).where(ConnectedAccount.platform == platform.value)
+                    )
+                    if existing is not None:
+                        continue
+                    provider = self.provider(platform)
+                    token = mock_token(platform)
+                    identity = provider.fetch_identity(token)
+                    token_ref = self.token_store.new_token_ref()
+                    self.token_store.store(token_ref, token)
+                    written_token_refs.append(token_ref)
+                    account = ConnectedAccount(
+                        platform=platform.value,
+                        external_account_id=identity.external_account_id,
+                        handle=identity.handle,
+                        display_name=identity.display_name,
+                        avatar_url=identity.avatar_url,
+                        profile_url=identity.profile_url,
+                        account_type=identity.account_type,
+                        status="connected",
+                        granted_scopes_json=json.dumps(
+                            list(DEFAULT_PLATFORM_SCOPES.get(platform, []))
+                        ),
+                        token_ref=token_ref,
+                        last_error=None,
+                    )
+                    session.add(account)
+                    session.flush()
+                    created_ids.append(account.id)
+        except BaseException:
+            for token_ref in written_token_refs:
+                with contextlib.suppress(Exception):
+                    self.token_store.delete(token_ref)
+            raise
         if not created_ids:
             return
         from runway.platforms.sync import SyncService

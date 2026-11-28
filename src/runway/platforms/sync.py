@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 
 from runway.config import Settings
 from runway.db.base import Database
@@ -206,14 +206,20 @@ class SyncService:
         try:
             final_status = "completed"
             error_summary: str | None = None
+            account_error_finalized = False
 
             provider = self.registry.provider(Platform(self._account_platform(account_id)))
 
+            token_ref_used: str | None = None
             try:
-                token = self.ensure_fresh(account_id)
+                token, token_ref_used = self._ensure_fresh_with_ref(account_id)
             except AuthorizationExpired as exc:
                 detail = safe_error_summary(exc)
-                self._finish_account_needs_reauth(account_id, detail)
+                self._finish_account_needs_reauth(
+                    account_id,
+                    detail,
+                    token_ref=getattr(exc, "token_ref", None),
+                )
                 self._finish_run(
                     run_id,
                     account_id,
@@ -222,6 +228,7 @@ class SyncService:
                     items_fetched=items_fetched,
                     quota_units=quota_units,
                     error_summary=detail,
+                    account_error_finalized=True,
                 )
                 return
             except ProviderError as exc:
@@ -272,7 +279,12 @@ class SyncService:
                     final_status = "failed"
                     error_summary = record["error"]
                     steps.append(record)
-                    self._finish_account_needs_reauth(account_id, record["error"])
+                    self._finish_account_needs_reauth(
+                        account_id,
+                        record["error"],
+                        token_ref=token_ref_used,
+                    )
+                    account_error_finalized = True
                     break
                 except CapabilityUnsupported as exc:
                     record["status"] = "skipped"
@@ -303,6 +315,7 @@ class SyncService:
                 items_fetched=items_fetched,
                 quota_units=quota_units,
                 error_summary=error_summary,
+                account_error_finalized=account_error_finalized,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("sync run %s failed for account %s", run_id, account_id)
@@ -320,15 +333,15 @@ class SyncService:
                 logger.exception("could not record failure for sync run %s", run_id)
 
     def ensure_fresh(self, account_id: int) -> TokenSet:
+        return self._ensure_fresh_with_ref(account_id)[0]
+
+    def _ensure_fresh_with_ref(self, account_id: int) -> tuple[TokenSet, str]:
         with self.database.session() as session:
             account = session.get(ConnectedAccount, account_id)
             if account is None:
                 raise SyncAccountMissing(f"account {account_id} does not exist")
-            token_ref = account.token_ref
             platform = account.platform
-        if not token_ref:
-            raise AuthorizationExpired("account has no stored token", status=401)
-        return self.registry.fresh_token(Platform(platform), token_ref)
+        return self.registry.fresh_account_token_with_ref(Platform(platform), account_id)
 
     def _account_platform(self, account_id: int) -> str:
         with self.database.session() as session:
@@ -337,12 +350,23 @@ class SyncService:
                 raise SyncAccountMissing(f"account {account_id} does not exist")
             return str(account.platform)
 
-    def _finish_account_needs_reauth(self, account_id: int, detail: str) -> None:
+    def _finish_account_needs_reauth(
+        self,
+        account_id: int,
+        detail: str,
+        *,
+        token_ref: str | None,
+    ) -> None:
         with self.database.session() as session:
-            account = session.get(ConnectedAccount, account_id)
-            if account is not None:
-                account.status = "needs_reauth"
-                account.last_error = detail
+            session.execute(
+                update(ConnectedAccount)
+                .where(
+                    ConnectedAccount.id == account_id,
+                    ConnectedAccount.status != "disconnected",
+                    ConnectedAccount.token_ref == token_ref,
+                )
+                .values(status="needs_reauth", last_error=detail)
+            )
 
     def _finish_run(
         self,
@@ -354,6 +378,7 @@ class SyncService:
         items_fetched: int,
         quota_units: int,
         error_summary: str | None,
+        account_error_finalized: bool = False,
     ) -> None:
         with self.database.session() as session:
             run = session.get(SyncRun, run_id)
@@ -368,7 +393,7 @@ class SyncService:
             if account is not None:
                 account.last_sync_at = utcnow()
                 account.last_sync_status = status
-                if status == "failed" and error_summary:
+                if status == "failed" and error_summary and not account_error_finalized:
                     account.last_error = error_summary
 
     # ------------------------------------------------------------------ steps

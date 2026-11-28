@@ -333,7 +333,7 @@ class InboxService:
         # YouTube access tokens last an hour; a reply long after the last sync
         # must refresh first rather than send an expired token.
         try:
-            token = registry.fresh_token(platform, account_token_ref)
+            token = registry.fresh_account_token(platform, account_id)
         except AuthorizationExpired as exc:
             forbidden = InboxReplyForbidden(
                 f"account authorization expired; reconnect it ({safe_error_summary(exc)})"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -70,6 +71,33 @@ def test_blob_written_with_other_key_raises(tmp_path: Path) -> None:
 
     with pytest.raises(TokenStoreError):
         store.load("ref")
+
+
+def test_malformed_entry_traceback_does_not_expose_token_material(tmp_path: Path) -> None:
+    store = TokenStore(tmp_path / "secrets")
+    ref = store.new_token_ref()
+    store.store(ref, _token())
+    fernet = Fernet(store._load_key())
+    payload = store._read_store(fernet)
+    payload[ref] = {"refresh_token": "secret-refresh-material"}
+    store._write_store(fernet, payload)
+
+    with pytest.raises(TokenStoreError) as excinfo:
+        store.load(ref)
+
+    rendered = "".join(traceback.format_exception(excinfo.value))
+    assert "secret-refresh-material" not in rendered
+    assert "malformed" in str(excinfo.value)
+
+
+def test_empty_access_token_is_rejected_without_writing(tmp_path: Path) -> None:
+    store = TokenStore(tmp_path / "secrets")
+    ref = store.new_token_ref()
+
+    with pytest.raises(TokenStoreError, match="empty"):
+        store.store(ref, TokenSet(access_token="   "))
+
+    assert store.load(ref) is None
 
 
 def test_delete_removes_entry(tmp_path: Path) -> None:

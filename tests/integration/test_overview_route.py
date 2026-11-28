@@ -17,11 +17,13 @@ from runway.db.models import (
     ConnectedAccount,
     PlatformContent,
 )
+from runway.platforms.base import TokenSet
 from runway.platforms.overview import (
     FRESHNESS_STALE_AFTER,
     account_freshness,
     metric_window_start,
 )
+from runway.platforms.tokens import TokenStore
 
 PLATFORMS = {"youtube", "instagram", "tiktok"}
 
@@ -139,6 +141,10 @@ def test_overview_never_synced_connected_account_is_freshness_never(
 ) -> None:
     app = create_app(live_settings)
     database: Database = app.state.database
+    token_ref = "overview-never-synced-token"
+    TokenStore(live_settings.resolved_data_dir / "secrets").store(
+        token_ref, TokenSet(access_token="fixture-access-token")
+    )
     with database.session() as session:
         session.add(
             ConnectedAccount(
@@ -148,6 +154,7 @@ def test_overview_never_synced_connected_account_is_freshness_never(
                 display_name="Never Synced",
                 status="connected",
                 granted_scopes_json="[]",
+                token_ref=token_ref,
             )
         )
 
