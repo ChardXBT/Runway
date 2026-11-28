@@ -166,15 +166,36 @@ artifacts are never deleted during supersession or rollback.
 
 A run stores its stable run key, channel, capability, provider/model/prompt
 identity, typed input and output envelopes, budget, measured usage,
-configuration hash, status, attempt count, timestamps, and terminal error or
-abstention reason.
+configuration hash, status, cumulative attempt count, lease owner/expiry,
+timestamps, and terminal error or abstention reason.
+
+A run key is the idempotency key for one immutable logical request. Replay or
+retry requires the same channel, typed input, and configuration hash; a key
+reused for a different logical request conflicts instead of replacing or
+joining unrelated work. A completed or abstained row returns its persisted
+terminal output without re-executing. A failed row may be retried by the same
+logical request: the retry receives a fresh invocation budget under the same
+execution configuration, while step attempt numbers and the parent attempt
+count remain monotonic across the row's history. A pipeline retry re-enters its
+deterministic sequence from the first step; prior step rows remain as history
+rather than being overwritten. An active duplicate fails closed with a
+controlled claim conflict, and concurrent creation races are reconciled through
+the unique key rather than surfacing raw integrity errors. Input and output
+envelopes must contain only JSON-serializable values with string object keys and
+finite numbers; non-JSON values fail closed instead of being coerced into a
+colliding persisted identity. Logical-input comparison is type strict, so JSON
+`true`/`false` never compare equal to `1`/`0`.
 
 ### `intelligence_agent_steps`
 
-Steps record deterministic sequence and bounded attempts, typed input/output,
-budget and usage snapshots, timeout, linked artifact identity, and failure
-classification. A repeated completed run key returns the persisted result; an
-in-flight duplicate fails rather than starting hidden work.
+Steps record deterministic sequence and monotonic bounded attempts, typed
+input/output, budget and usage snapshots, timeout, linked artifact identity,
+and failure classification. While a run is active its owner renews a short
+lease; if the lease is absent or expired, the identical request may atomically
+reclaim the row. Reclaiming marks orphaned in-flight steps failed as stale
+lease interruptions, then appends new attempts rather than overwriting history.
+Conditional owner fencing rejects a delayed completion from the prior owner, so
+out-of-order zombie completion cannot replace the recovered terminal output.
 
 The capability registry contains historical annotation, candidate analysis,
 retrieval planning, caption generation, caption verification, and deterministic

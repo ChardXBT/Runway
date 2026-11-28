@@ -85,7 +85,7 @@ def test_0012_upgrade_and_downgrade_preserve_existing_rows(tmp_path: Path) -> No
         assert connection.execute(text("SELECT count(*) FROM proposals")).scalar_one() == 1
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == "0012_creator_platforms"
+            == "0013_agent_run_leases"
         )
     engine.dispose()
 
@@ -99,5 +99,65 @@ def test_0012_upgrade_and_downgrade_preserve_existing_rows(tmp_path: Path) -> No
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
             == "0011_runtime_performance"
+        )
+    engine.dispose()
+
+
+def test_0013_agent_run_lease_upgrade_and_downgrade_preserve_existing_runs(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "lease-migration-data")
+    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+    config = _alembic_config(settings)
+    command.upgrade(config, "0012_creator_platforms")
+
+    engine = create_engine(settings.database_url)
+    _seed_0011_rows(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO intelligence_agent_runs (channel_id, run_key, capability, provider, "
+                "model, prompt_version, status, input_json, output_json, budget_json, usage_json, "
+                "configuration_hash, attempt_count, error_summary, started_at, completed_at) "
+                "VALUES (1, 'legacy-running', 'candidate_analysis', 'mock', 'fixture', 'v1', "
+                "'running', '{}', '{}', '{}', '{}', 'hash', 0, NULL, "
+                "'2026-10-01 00:00:00', NULL)"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(settings.database_url)
+    upgraded_columns = {
+        column["name"] for column in inspect(engine).get_columns("intelligence_agent_runs")
+    }
+    assert {"lease_owner", "lease_expires_at"} <= upgraded_columns
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT run_key, status, lease_owner, lease_expires_at FROM intelligence_agent_runs"
+            )
+        ).one()
+        assert row == ("legacy-running", "running", None, None)
+        assert (
+            connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            == "0013_agent_run_leases"
+        )
+    engine.dispose()
+
+    command.downgrade(config, "0012_creator_platforms")
+    engine = create_engine(settings.database_url)
+    downgraded_columns = {
+        column["name"] for column in inspect(engine).get_columns("intelligence_agent_runs")
+    }
+    assert {"lease_owner", "lease_expires_at"}.isdisjoint(downgraded_columns)
+    with engine.connect() as connection:
+        assert (
+            connection.execute(text("SELECT count(*) FROM intelligence_agent_runs")).scalar_one()
+            == 1
+        )
+        assert (
+            connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            == "0012_creator_platforms"
         )
     engine.dispose()

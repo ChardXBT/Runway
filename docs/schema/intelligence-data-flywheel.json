@@ -5595,6 +5595,20 @@
           },
           {
             "default": null,
+            "name": "lease_expires_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "lease_owner",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(64)"
+          },
+          {
+            "default": null,
             "name": "model",
             "nullable": false,
             "primary_key": 0,
@@ -11186,7 +11200,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be",
-  "migration": "0012_creator_platforms",
+  "fingerprint": "45e221fe3aa871b7938bc480ac67f115693ec5fc4d788691978c4f5a4a7d7391",
+  "migration": "0013_agent_run_leases",
   "table_count": 66
 }
