@@ -28,6 +28,7 @@ from runway.db.models import (
     StyleProfile,
 )
 from runway.db.repositories import audit, get_channel
+from runway.discovery.recovery import recover_stale_search_runs
 from runway.domain.enums import RunStatus
 from runway.generation.providers import ImageGenerationProviderRegistry
 from runway.generation.schemas import CreativeBrief, ProviderRequest
@@ -75,6 +76,7 @@ class ImageGenerationService:
         provider_name: str = "mock",
         output_count: int = 1,
     ) -> dict[str, object]:
+        recover_stale_search_runs(self.database, self.settings)
         owner_token = new_owner_token()
         lease = lease_claim_fields(owner_token)
         provider = self.registry.get(provider_name)
@@ -262,18 +264,20 @@ class ImageGenerationService:
                         loaded_generation.status = RunStatus.FAILED.value
                         loaded_generation.error_summary = f"{type(exc).__name__}: {exc}"
                         loaded_generation.completed_at = datetime.now(UTC)
-                    if loaded_search is not None:
-                        finish_owned_run(
-                            session,
-                            SearchRun,
-                            search_run_id,
-                            owner_token,
-                            {
-                                "status": RunStatus.FAILED.value,
-                                "error_summary": f"{type(exc).__name__}: {exc}",
-                                "completed_at": datetime.now(UTC),
-                            },
-                        )
+                    if loaded_search is None or not finish_owned_run(
+                        session,
+                        SearchRun,
+                        search_run_id,
+                        owner_token,
+                        {
+                            "status": RunStatus.FAILED.value,
+                            "error_summary": f"{type(exc).__name__}: {exc}",
+                            "completed_at": datetime.now(UTC),
+                        },
+                    ):
+                        raise LeaseLost(
+                            f"search run {search_run_id} lease is no longer owned"
+                        ) from None
                 raise
             with self.database.session() as session:
                 loaded_generation = session.get(ImageGenerationRun, run_id)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -17,11 +17,9 @@ from runway.db.base import Database
 from runway.db.job_leases import (
     LeaseLost,
     RunLeaseHeartbeat,
-    complete_stale_run,
     finish_owned_run,
     lease_claim_fields,
     new_owner_token,
-    run_lease_expired,
     update_owned_run,
 )
 from runway.db.models import (
@@ -48,6 +46,7 @@ from runway.discovery.providers import (
     SearchProvider,
     TopicMixArchiveSearchProvider,
 )
+from runway.discovery.recovery import recover_stale_search_runs
 from runway.discovery.safety import is_known_adult_result
 from runway.discovery.schemas import ImageSearchResult
 from runway.domain.enums import MediaKind, RunStatus
@@ -353,48 +352,7 @@ class DiscoveryService:
     def _recover_stale_runs(self) -> int:
         """Close abandoned runs left behind by a killed process or machine restart."""
 
-        now = datetime.now(UTC)
-        fallback_after = timedelta(hours=6)
-        recovered = 0
-        with self.database.session() as session:
-            channel_id = get_channel(session, self.settings.channel_handle).id
-            rows = session.scalars(
-                select(SearchRun).where(
-                    SearchRun.channel_id == channel_id,
-                    SearchRun.status == RunStatus.RUNNING.value,
-                )
-            ).all()
-            for row in rows:
-                if not run_lease_expired(row, now, fallback_after=fallback_after):
-                    continue
-                if not complete_stale_run(
-                    session,
-                    SearchRun,
-                    row.id,
-                    owner_token=row.owner_token,
-                    lease_version=row.lease_version,
-                    values={
-                        "status": RunStatus.FAILED.value,
-                        "completed_at": now,
-                        "error_summary": (
-                            "Recovered abandoned discovery run without a valid lease."
-                        ),
-                    },
-                ):
-                    continue
-                audit(
-                    session,
-                    "search_stale_run_recovered",
-                    "search_run",
-                    row.id,
-                    {
-                        "started_at": row.started_at.isoformat(),
-                        "owner_token_present": row.owner_token is not None,
-                        "lease_version": row.lease_version,
-                    },
-                )
-                recovered += 1
-        return recovered
+        return recover_stale_search_runs(self.database, self.settings)
 
     def list_candidates(
         self, *, run_id: int | None = None, accepted_only: bool = False, limit: int = 100
