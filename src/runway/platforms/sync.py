@@ -8,9 +8,20 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from runway.config import Settings
 from runway.db.base import Database
+from runway.db.job_leases import (
+    DEFAULT_LEASE_DURATION,
+    LeaseLost,
+    RunLeaseHeartbeat,
+    complete_stale_run,
+    finish_owned_run,
+    lease_claim_fields,
+    new_owner_token,
+    run_lease_expired,
+)
 from runway.db.models import (
     AccountMetricDay,
     AccountMetricSnapshot,
@@ -81,25 +92,35 @@ class SyncService:
                 self._locks[account_id] = lock
             return lock
 
-    def mark_stale_runs_failed(self) -> int:
-        """Fail runs left in `running` state for longer than STALE_RUN_AGE."""
-        cutoff = datetime.now(UTC) - STALE_RUN_AGE
+    def mark_stale_runs_failed(self, account_id: int | None = None) -> int:
+        """Fail running rows whose persisted lease or legacy age proves them stale."""
+        now = datetime.now(UTC)
         marked = 0
         with self.database.session() as session:
-            runs = session.scalars(select(SyncRun).where(SyncRun.status == "running")).all()
+            statement = select(SyncRun).where(SyncRun.status == "running")
+            if account_id is not None:
+                statement = statement.where(SyncRun.account_id == account_id)
+            runs = session.scalars(statement).all()
             for run in runs:
-                started = run.started_at
-                if started.tzinfo is None:
-                    started = started.replace(tzinfo=UTC)
-                if started < cutoff:
-                    run.status = "failed"
-                    run.completed_at = utcnow()
-                    run.error_summary = "interrupted"
+                if not run_lease_expired(run, now, fallback_after=STALE_RUN_AGE):
+                    continue
+                if complete_stale_run(
+                    session,
+                    SyncRun,
+                    run.id,
+                    owner_token=run.owner_token,
+                    lease_version=run.lease_version,
+                    values={
+                        "status": "failed",
+                        "completed_at": utcnow(),
+                        "error_summary": "interrupted",
+                    },
+                ):
                     marked += 1
         return marked
 
     def _has_recent_running_run(self, account_id: int) -> bool:
-        cutoff = datetime.now(UTC) - STALE_RUN_AGE
+        now = datetime.now(UTC)
         with self.database.session() as session:
             runs = session.scalars(
                 select(SyncRun).where(
@@ -107,21 +128,21 @@ class SyncService:
                     SyncRun.status == "running",
                 )
             ).all()
-            for run in runs:
-                started = run.started_at
-                if started.tzinfo is None:
-                    started = started.replace(tzinfo=UTC)
-                if started >= cutoff:
-                    return True
-        return False
+            return any(
+                not run_lease_expired(run, now, fallback_after=STALE_RUN_AGE) for run in runs
+            )
 
     # -------------------------------------------------------------------- run
 
-    def _begin_run(self, account_id: int, trigger: str) -> tuple[threading.Lock, int]:
+    def _begin_run(self, account_id: int, trigger: str) -> tuple[threading.Lock, int, str]:
         lock = self._account_lock(account_id)
         if not lock.acquire(blocking=False):
             raise SyncRunInProgress(f"account {account_id} already has a sync in progress")
         try:
+            # Admission must close expired rows rather than merely ignore them;
+            # otherwise a crashed worker remains `running` forever while new
+            # syncs accumulate beside it.
+            self.mark_stale_runs_failed(account_id=account_id)
             if self._has_recent_running_run(account_id):
                 raise SyncRunInProgress(f"account {account_id} already has a running sync")
             with self.database.session() as session:
@@ -134,31 +155,58 @@ class SyncService:
                     raise SyncAccountDisconnected(
                         f"account {account_id} is disconnected; reconnect it before syncing"
                     )
-                run = SyncRun(account_id=account_id, trigger=trigger, status="running")
+                owner_token = new_owner_token()
+                lease = lease_claim_fields(owner_token, lease_duration=DEFAULT_LEASE_DURATION)
+                run = SyncRun(
+                    account_id=account_id,
+                    trigger=trigger,
+                    status="running",
+                    owner_token=owner_token,
+                    heartbeat_at=lease["heartbeat_at"],
+                    lease_expires_at=lease["lease_expires_at"],
+                    lease_version=lease["lease_version"],
+                )
                 session.add(run)
-                session.flush()
-                return lock, run.id
+                try:
+                    session.flush()
+                except IntegrityError as exc:
+                    detail = str(exc.orig)
+                    if (
+                        "ux_sync_runs_account_running" not in detail
+                        and "UNIQUE constraint failed: sync_runs.account_id" not in detail
+                    ):
+                        raise
+                    raise SyncRunInProgress(
+                        f"account {account_id} already has a running sync"
+                    ) from exc
+                return lock, run.id, owner_token
         except BaseException:
             lock.release()
             raise
 
     def run(self, account_id: int, trigger: str = "manual") -> SyncRun:
-        lock, run_id = self._begin_run(account_id, trigger)
+        lock, run_id, owner_token = self._begin_run(account_id, trigger)
+        heartbeat = RunLeaseHeartbeat(self.database, SyncRun, run_id, owner_token)
+        heartbeat.start()
         try:
-            self._execute(run_id, account_id)
+            self._execute(run_id, account_id, owner_token, heartbeat)
         finally:
+            heartbeat.stop()
             lock.release()
         return self.get_run(run_id)
 
     def start_background(self, account_id: int, trigger: str = "manual") -> SyncRun:
-        lock, run_id = self._begin_run(account_id, trigger)
+        lock, run_id, owner_token = self._begin_run(account_id, trigger)
+        heartbeat = RunLeaseHeartbeat(self.database, SyncRun, run_id, owner_token)
+        heartbeat.start()
 
         def worker() -> None:
             try:
-                self._execute(run_id, account_id)
+                self._execute(run_id, account_id, owner_token, heartbeat)
             except Exception:  # noqa: BLE001
                 logger.exception("background sync failed for account %s", account_id)
             finally:
+                heartbeat.stop()
                 lock.release()
 
         try:
@@ -170,11 +218,13 @@ class SyncService:
         except Exception:
             # The worker never started, so nothing else will release the lock
             # or finish the run; unwind both before surfacing the failure.
+            heartbeat.stop()
             lock.release()
             try:
                 self._finish_run(
                     run_id,
                     account_id,
+                    owner_token=owner_token,
                     status="failed",
                     steps=[],
                     items_fetched=0,
@@ -194,7 +244,13 @@ class SyncService:
             session.expunge(run)
             return run
 
-    def _execute(self, run_id: int, account_id: int) -> None:
+    def _execute(
+        self,
+        run_id: int,
+        account_id: int,
+        owner_token: str,
+        heartbeat: RunLeaseHeartbeat,
+    ) -> None:
         # Every path out of this method must finish the run; an exception that
         # escapes before a step records its own failure (e.g. a transport error
         # in ensure_fresh or a provider construction failure) would otherwise
@@ -217,6 +273,7 @@ class SyncService:
                 self._finish_run(
                     run_id,
                     account_id,
+                    owner_token=owner_token,
                     status="failed",
                     steps=steps,
                     items_fetched=items_fetched,
@@ -231,6 +288,7 @@ class SyncService:
                 self._finish_run(
                     run_id,
                     account_id,
+                    owner_token=owner_token,
                     status="failed",
                     steps=steps,
                     items_fetched=items_fetched,
@@ -261,11 +319,14 @@ class SyncService:
                     "quota_units": 0,
                 }
                 try:
+                    heartbeat.require()
                     result = step()
                     record["items"] = result.get("items", 0)
                     record["quota_units"] = result.get("quota_units", 0)
                     items_fetched += int(result.get("items", 0))
                     quota_units += int(result.get("quota_units", 0))
+                except LeaseLost:
+                    raise
                 except AuthorizationExpired as exc:
                     record["status"] = "failed"
                     record["error"] = safe_error_summary(exc)
@@ -298,6 +359,7 @@ class SyncService:
             self._finish_run(
                 run_id,
                 account_id,
+                owner_token=owner_token,
                 status=final_status,
                 steps=steps,
                 items_fetched=items_fetched,
@@ -310,6 +372,7 @@ class SyncService:
                 self._finish_run(
                     run_id,
                     account_id,
+                    owner_token=owner_token,
                     status="failed",
                     steps=steps,
                     items_fetched=items_fetched,
@@ -349,24 +412,38 @@ class SyncService:
         run_id: int,
         account_id: int,
         *,
+        owner_token: str,
         status: str,
         steps: list[dict[str, Any]],
         items_fetched: int,
         quota_units: int,
         error_summary: str | None,
     ) -> None:
+        finished_at = utcnow()
         with self.database.session() as session:
-            run = session.get(SyncRun, run_id)
-            if run is not None:
-                run.status = status
-                run.completed_at = utcnow()
-                run.steps_json = json.dumps(steps)
-                run.items_fetched = items_fetched
-                run.quota_units_estimate = quota_units
-                run.error_summary = error_summary
+            finished = finish_owned_run(
+                session,
+                SyncRun,
+                run_id,
+                owner_token,
+                {
+                    "status": status,
+                    "completed_at": finished_at,
+                    "steps_json": json.dumps(steps),
+                    "items_fetched": items_fetched,
+                    "quota_units_estimate": quota_units,
+                    "error_summary": error_summary,
+                },
+            )
+            if not finished:
+                logger.warning(
+                    "sync run %s terminal write skipped because ownership was lost",
+                    run_id,
+                )
+                return
             account = session.get(ConnectedAccount, account_id)
             if account is not None:
-                account.last_sync_at = utcnow()
+                account.last_sync_at = finished_at
                 account.last_sync_status = status
                 if status == "failed" and error_summary:
                     account.last_error = error_summary

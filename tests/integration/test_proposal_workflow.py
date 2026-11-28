@@ -10,6 +10,7 @@ from runway.analysis.service import AnalysisService
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
+from runway.db.job_leases import finish_owned_run, lease_claim_fields, new_owner_token
 from runway.db.models import (
     AuditEvent,
     CandidateImage,
@@ -73,29 +74,133 @@ def test_proposal_service_recovers_only_abandoned_generation_runs(
             status="running",
             started_at=datetime.now(UTC) - timedelta(hours=7),
         )
-        session.add_all([stale, active, long_batch])
+        now = datetime.now(UTC)
+        live_owner = new_owner_token()
+        live_lease = lease_claim_fields(live_owner, lease_duration=timedelta(minutes=5), now=now)
+        leased_long_live = GenerationRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            start_date=date(2026, 1, 4),
+            days=500,
+            status="running",
+            started_at=now - timedelta(hours=30),
+            owner_token=live_owner,
+            heartbeat_at=live_lease["heartbeat_at"],
+            lease_expires_at=live_lease["lease_expires_at"],
+            lease_version=live_lease["lease_version"],
+        )
+        timed_out_owner = new_owner_token()
+        leased_timed_out = GenerationRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            start_date=date(2026, 1, 5),
+            days=1,
+            status="running",
+            started_at=now,
+            owner_token=timed_out_owner,
+            heartbeat_at=now - timedelta(minutes=10),
+            lease_expires_at=now - timedelta(seconds=1),
+            lease_version=1,
+        )
+        session.add_all([stale, active, long_batch, leased_long_live, leased_timed_out])
         session.flush()
         stale_id = stale.id
         active_id = active.id
         long_batch_id = long_batch.id
+        leased_long_live_id = leased_long_live.id
+        leased_timed_out_id = leased_timed_out.id
 
     service = ProposalService(database, settings)
-    assert service._recover_stale_generation_runs() == 1
+    assert service._recover_stale_generation_runs() == 2
 
     with database.session() as session:
         stale = session.get(GenerationRun, stale_id)
         active = session.get(GenerationRun, active_id)
         long_batch = session.get(GenerationRun, long_batch_id)
+        leased_long_live = session.get(GenerationRun, leased_long_live_id)
+        leased_timed_out = session.get(GenerationRun, leased_timed_out_id)
         assert stale is not None
         assert stale.status == "failed"
         assert stale.completed_at is not None
-        assert "Recovered abandoned" in str(stale.error_summary)
+        assert "without a valid lease" in str(stale.error_summary)
         assert active is not None
         assert active.status == "running"
         assert active.completed_at is None
         assert long_batch is not None
         assert long_batch.status == "running"
         assert long_batch.completed_at is None
+        assert leased_long_live is not None
+        assert leased_long_live.status == "running"
+        assert leased_timed_out is not None
+        assert leased_timed_out.status == "failed"
+        assert not finish_owned_run(
+            session,
+            GenerationRun,
+            leased_timed_out_id,
+            timed_out_owner,
+            {"status": "completed", "completed_at": datetime.now(UTC), "error_summary": None},
+        )
+        assert leased_timed_out.status == "failed"
+        assert "without a valid lease" in str(leased_timed_out.error_summary)
+        assert not finish_owned_run(
+            session,
+            GenerationRun,
+            stale_id,
+            new_owner_token(),
+            {"status": "completed", "completed_at": datetime.now(UTC), "error_summary": None},
+        )
+        assert stale.status == "failed"
+        assert "without a valid lease" in str(stale.error_summary)
+
+
+@pytest.mark.asyncio
+async def test_generation_normal_entrypoint_closes_crashed_lease_and_completes_owned_run(
+    database: Database,
+    settings: Settings,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    await AnalysisService(database, settings).analyze_history()
+    await StyleProfileService(database, settings).build()
+    await DiscoveryService(database, settings).discover(provider_name="fixture", dry_run=True)
+    now = datetime.now(UTC)
+    crashed_owner = new_owner_token()
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+        crashed = GenerationRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            start_date=date(2026, 1, 5),
+            days=1,
+            status="running",
+            started_at=now,
+            owner_token=crashed_owner,
+            heartbeat_at=now - timedelta(minutes=10),
+            lease_expires_at=now - timedelta(seconds=1),
+            lease_version=1,
+        )
+        session.add(crashed)
+        session.flush()
+        crashed_id = crashed.id
+
+    result = await ProposalService(database, settings).generate_batch(
+        days=1,
+        start_date=date(2026, 3, 6),
+    )
+
+    assert result["status"] == "completed"
+    assert len(result["proposal_ids"]) == 1
+    assert int(result["generation_run_id"]) != crashed_id
+    with database.session() as session:
+        crashed_run = session.get(GenerationRun, crashed_id)
+        current_run = session.get(GenerationRun, int(result["generation_run_id"]))
+        assert crashed_run is not None
+        assert crashed_run.status == "failed"
+        assert "without a valid lease" in str(crashed_run.error_summary)
+        assert current_run is not None
+        assert current_run.status == "completed"
+        assert current_run.owner_token
+        assert current_run.heartbeat_at is not None
+        assert current_run.lease_expires_at is not None
 
 
 @pytest.mark.asyncio

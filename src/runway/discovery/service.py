@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -14,6 +14,14 @@ from runway.analysis.runtime import AgentRuntime, AgentTerminalError, runtime_fo
 from runway.analysis.schemas import CandidateAnalysis, SearchPlan
 from runway.config import Settings
 from runway.db.base import Database
+from runway.db.job_leases import (
+    LeaseLost,
+    RunLeaseHeartbeat,
+    finish_owned_run,
+    lease_claim_fields,
+    new_owner_token,
+    update_owned_run,
+)
 from runway.db.models import (
     BlockedSource,
     CandidateImage,
@@ -38,6 +46,7 @@ from runway.discovery.providers import (
     SearchProvider,
     TopicMixArchiveSearchProvider,
 )
+from runway.discovery.recovery import recover_stale_search_runs
 from runway.discovery.safety import is_known_adult_result
 from runway.discovery.schemas import ImageSearchResult
 from runway.domain.enums import MediaKind, RunStatus
@@ -134,6 +143,8 @@ class DiscoveryService:
                         "remained: " + "; ".join(repeated_queries)
                     )
         provider = self._provider(provider_name, manual_urls or [], live=live)
+        owner_token = new_owner_token()
+        lease = lease_claim_fields(owner_token)
         with self.database.session() as session:
             channel = get_channel(session, self.settings.channel_handle)
             run = SearchRun(
@@ -151,123 +162,171 @@ class DiscoveryService:
                 ),
                 provider=provider.name,
                 status=RunStatus.RUNNING.value,
+                owner_token=owner_token,
+                heartbeat_at=lease["heartbeat_at"],
+                lease_expires_at=lease["lease_expires_at"],
+                lease_version=lease["lease_version"],
             )
             session.add(run)
             session.flush()
             run_id = run.id
             audit(session, "search_started", "search_run", run.id, {"provider": provider.name})
 
-        if dry_run and provider.name != "fixture":
-            with self.database.session() as session:
-                loaded_run = session.get(SearchRun, run_id)
-                if loaded_run:
-                    loaded_run.status = RunStatus.COMPLETED.value
-                    loaded_run.completed_at = datetime.now(UTC)
-            return {
-                "run_id": run_id,
-                "status": "planned_only",
-                "provider": provider.name,
-                "query_plan": plan.model_dump(),
-                "candidates": 0,
-            }
-
+        heartbeat = RunLeaseHeartbeat(self.database, SearchRun, run_id, owner_token)
+        heartbeat.start()
         try:
-            page = await provider.search(plan)
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            with self.database.session() as session:
-                loaded_run = session.get(SearchRun, run_id)
-                if loaded_run:
-                    loaded_run.status = RunStatus.FAILED.value
-                    loaded_run.completed_at = datetime.now(UTC)
-                    loaded_run.error_summary = error
+            if dry_run and provider.name != "fixture":
+                with self.database.session() as session:
+                    if not finish_owned_run(
+                        session,
+                        SearchRun,
+                        run_id,
+                        owner_token,
+                        {
+                            "status": RunStatus.COMPLETED.value,
+                            "completed_at": datetime.now(UTC),
+                        },
+                    ):
+                        raise LeaseLost(f"search run {run_id} lease is no longer owned")
+                return {
+                    "run_id": run_id,
+                    "status": "planned_only",
+                    "provider": provider.name,
+                    "query_plan": plan.model_dump(),
+                    "candidates": 0,
+                }
+
+            try:
+                page = await provider.search(plan)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                with self.database.session() as session:
+                    if not finish_owned_run(
+                        session,
+                        SearchRun,
+                        run_id,
+                        owner_token,
+                        {
+                            "status": RunStatus.FAILED.value,
+                            "completed_at": datetime.now(UTC),
+                            "error_summary": error,
+                        },
+                    ):
+                        raise LeaseLost(f"search run {run_id} lease is no longer owned") from None
                     audit(
                         session,
                         "search_failed",
                         "search_run",
-                        loaded_run.id,
+                        run_id,
                         {"provider": provider.name, "error": error},
                     )
-            raise
-        provider_results = [result.model_dump() for result in page.results]
-        with self.database.session() as session:
-            loaded_run = session.get(SearchRun, run_id)
-            if loaded_run:
+                raise
+            provider_results = [result.model_dump() for result in page.results]
+            with self.database.session() as session:
+                loaded_run = session.get(SearchRun, run_id)
+                if loaded_run is None:
+                    raise LeaseLost(f"search run {run_id} is missing")
                 saved = json.loads(loaded_run.query_plan_json)
                 saved["provider_results"] = provider_results
                 diagnostics = getattr(provider, "last_diagnostics", None)
                 if isinstance(diagnostics, dict):
                     saved["provider_ensemble"] = diagnostics
-                loaded_run.query_plan_json = json.dumps(saved, sort_keys=True)
-
-        created = 0
-        accepted = 0
-        rejected = 0
-        nsfw_source_blocked = 0
-        errors: list[str] = []
-        # Parse each stored provider payload once per run; new candidates extend
-        # this index as they persist instead of re-reading every JSON blob.
-        archive_fingerprints = self._load_archive_fingerprints()
-        for result in page.results:
-            if is_known_adult_result(result):
-                nsfw_source_blocked += 1
-                with self.database.session() as session:
-                    audit(
-                        session,
-                        "candidate_nsfw_source_blocked",
-                        "search_run",
-                        run_id,
-                        {
-                            "source_domain": result.source_domain,
-                            "source_page_url": result.source_page_url,
-                        },
-                    )
-                continue
-            try:
-                hard_rejected = await self._process_result(
+                if not update_owned_run(
+                    session,
+                    SearchRun,
                     run_id,
-                    result,
-                    archive_fingerprints,
-                )
-            except Exception as exc:
-                errors.append(f"rank {result.result_rank}: {type(exc).__name__}: {exc}")
-                with self.database.session() as session:
-                    audit(
-                        session,
-                        "candidate_download_error",
-                        "search_run",
-                        run_id,
-                        {"result": result.model_dump(), "error": errors[-1]},
-                    )
-                if isinstance(exc, AgentTerminalError):
-                    with self.database.session() as session:
-                        loaded_run = session.get(SearchRun, run_id)
-                        if loaded_run:
-                            loaded_run.status = RunStatus.FAILED.value
-                            loaded_run.completed_at = datetime.now(UTC)
-                            loaded_run.error_summary = errors[-1]
-                    raise
-                continue
-            created += 1
-            rejected += hard_rejected
-            accepted += not hard_rejected
+                    owner_token,
+                    {"query_plan_json": json.dumps(saved, sort_keys=True)},
+                ):
+                    raise LeaseLost(f"search run {run_id} lease is no longer owned")
 
-        with self.database.session() as session:
-            loaded_run = session.get(SearchRun, run_id)
-            if loaded_run:
+            created = 0
+            accepted = 0
+            rejected = 0
+            nsfw_source_blocked = 0
+            errors: list[str] = []
+            # Parse each stored provider payload once per run; new candidates extend
+            # this index as they persist instead of re-reading every JSON blob.
+            archive_fingerprints = self._load_archive_fingerprints()
+            for result in page.results:
+                heartbeat.require()
+                if is_known_adult_result(result):
+                    nsfw_source_blocked += 1
+                    with self.database.session() as session:
+                        audit(
+                            session,
+                            "candidate_nsfw_source_blocked",
+                            "search_run",
+                            run_id,
+                            {
+                                "source_domain": result.source_domain,
+                                "source_page_url": result.source_page_url,
+                            },
+                        )
+                    continue
+                try:
+                    hard_rejected = await self._process_result(
+                        run_id,
+                        result,
+                        archive_fingerprints,
+                    )
+                except LeaseLost:
+                    raise
+                except Exception as exc:
+                    errors.append(f"rank {result.result_rank}: {type(exc).__name__}: {exc}")
+                    with self.database.session() as session:
+                        audit(
+                            session,
+                            "candidate_download_error",
+                            "search_run",
+                            run_id,
+                            {"result": result.model_dump(), "error": errors[-1]},
+                        )
+                    if isinstance(exc, AgentTerminalError):
+                        with self.database.session() as session:
+                            if not finish_owned_run(
+                                session,
+                                SearchRun,
+                                run_id,
+                                owner_token,
+                                {
+                                    "status": RunStatus.FAILED.value,
+                                    "completed_at": datetime.now(UTC),
+                                    "error_summary": errors[-1],
+                                },
+                            ):
+                                raise LeaseLost(
+                                    f"search run {run_id} lease is no longer owned"
+                                ) from None
+                        raise
+                    continue
+                created += 1
+                rejected += hard_rejected
+                accepted += not hard_rejected
+
+            with self.database.session() as session:
                 # A failed provider request or terminal model error fails the run
                 # earlier. Individual unavailable result URLs are recoverable row
                 # errors: preserve them, but do not misreport an otherwise useful
                 # discovery run as wholly failed.
-                loaded_run.status = RunStatus.COMPLETED.value
-                loaded_run.completed_at = datetime.now(UTC)
-                loaded_run.result_count = created
-                loaded_run.error_summary = "\n".join(errors) or None
+                if not finish_owned_run(
+                    session,
+                    SearchRun,
+                    run_id,
+                    owner_token,
+                    {
+                        "status": RunStatus.COMPLETED.value,
+                        "completed_at": datetime.now(UTC),
+                        "result_count": created,
+                        "error_summary": "\n".join(errors) or None,
+                    },
+                ):
+                    raise LeaseLost(f"search run {run_id} lease is no longer owned")
                 audit(
                     session,
                     "search_completed",
                     "search_run",
-                    loaded_run.id,
+                    run_id,
                     {
                         "accepted": accepted,
                         "rejected": rejected,
@@ -275,47 +334,25 @@ class DiscoveryService:
                         "errors": len(errors),
                     },
                 )
-        return {
-            "run_id": run_id,
-            "status": "completed" if not errors else "completed_with_errors",
-            "provider": provider.name,
-            "query_plan": plan.model_dump(),
-            "candidates": created,
-            "accepted": accepted,
-            "hard_rejected": rejected,
-            "nsfw_source_blocked": nsfw_source_blocked,
-            "errors": errors,
-        }
+            return {
+                "run_id": run_id,
+                "status": "completed" if not errors else "completed_with_errors",
+                "provider": provider.name,
+                "query_plan": plan.model_dump(),
+                "candidates": created,
+                "accepted": accepted,
+                "hard_rejected": rejected,
+                "nsfw_source_blocked": nsfw_source_blocked,
+                "errors": errors,
+            }
+
+        finally:
+            heartbeat.stop()
 
     def _recover_stale_runs(self) -> int:
         """Close abandoned runs left behind by a killed process or machine restart."""
 
-        stale_before = datetime.now(UTC) - timedelta(hours=6)
-        recovered = 0
-        with self.database.session() as session:
-            channel_id = get_channel(session, self.settings.channel_handle).id
-            rows = session.scalars(
-                select(SearchRun).where(
-                    SearchRun.channel_id == channel_id,
-                    SearchRun.status == RunStatus.RUNNING.value,
-                    SearchRun.started_at < stale_before,
-                )
-            ).all()
-            for row in rows:
-                row.status = RunStatus.FAILED.value
-                row.completed_at = datetime.now(UTC)
-                row.error_summary = (
-                    "Recovered abandoned discovery run after six hours without completion."
-                )
-                audit(
-                    session,
-                    "search_stale_run_recovered",
-                    "search_run",
-                    row.id,
-                    {"started_at": row.started_at.isoformat()},
-                )
-                recovered += 1
-        return recovered
+        return recover_stale_search_runs(self.database, self.settings)
 
     def list_candidates(
         self, *, run_id: int | None = None, accepted_only: bool = False, limit: int = 100
