@@ -200,11 +200,14 @@ Disposable fixture evidence from this audit (an orphaned `running` item, then a 
   "batch_attempted": 0,
   "batch_completed": 0,
   "batch_failed": 0,
-  "set_status": "backfilling"
+  "set_status": "backfilling",
+  "validate_valid": false,
+  "validate_status": "failed",
+  "validate_first_error": "item 1 is running"
 }
 ```
 
-Impact: a crash between the two transactions leaves a permanent `running` item and a perpetually `backfilling` set. Validation also cannot repair it: validation treats the incomplete item as invalid but only requeues a set when a `pending` item exists, while backfill still refuses to select the orphaned `running` item. Activation correctly refuses it, but there is no automatic recovery path.
+Impact: a crash between the two transactions leaves a permanent `running` item and a set that cannot finish. Backfill still returns the set to `backfilling` after attempting zero eligible items. Validation correctly rejects the orphan (`validate_valid=false`, first error `item 1 is running`) and marks the set `failed`, but it does not requeue the item; the next backfill resets the set to `backfilling` and again refuses to select the orphaned `running` item. Activation correctly refuses it, but there is no automatic recovery path.
 
 Missing control: a heartbeat/lease, timeout-based requeue from `running` to `failed`/`pending`, or atomic work-item claim with attempt ownership.
 
@@ -242,7 +245,7 @@ These are real control absences visible in source. This audit did not execute a 
 | Invalid transitions | `PublishAttempt` and proposal transitions are validated by `src/runway/domain/state_machine.py`; settled attempts are immutable in `tests/unit/test_publish_attempt_state_machine.py`. Many job tables still use raw strings. |
 | Duplicate events | OAuth concurrent consume test proves only one callback succeeds. Publish queue dedupe/preflight tests exist. Edge-matrix fixtures independently demonstrated publish/sync cross-process duplicates; schedule double-booking and the missing leases remain unguarded. |
 | Out-of-order events | Publish late outcomes are preserved without illegal transitions; impossible timestamp/status combinations map to `unknown` and block work. Job status overwrite after stale recovery is not guarded. |
-| Crash recovery | Publish interruption recovery tests exist; startup recovery covers sync stale rows. Representation/intelligence `running` orphans are proven/observed gaps. Blind-study export writes are atomic after PR #45; active-learning/arena export writes remain direct until issue #43. |
+| Crash recovery | Publish interruption recovery tests exist; startup recovery covers sync stale rows. Representation/intelligence `running` orphans are proven/observed gaps; representation validation can mark the set `failed` but cannot requeue orphaned items. Blind-study export writes are atomic after PR #45; active-learning/arena export writes remain direct until issue #43. |
 | Restart | Publisher queue resume and blocked-session resume tests exist. Windows launcher is idempotent and never kills unrelated services. A sync-scheduler object cannot usefully start again after `stop()` because its stop event remains set; the application does not reuse that object after shutdown. |
 | Timeout | Agent step timeouts are explicit. Reply delivery timeouts are uncertain/non-retryable. Long browser submissions can be misclassified by age-based recovery across processes. |
 | Cancellation | No general job cancellation machine found. Owner cancellation/invalidation exists in publishing/lineup paths. |
@@ -266,20 +269,19 @@ The base already contains substantial fixture-backed evidence, especially in:
 
 ## Test counts
 
-Baseline before report creation:
+Original author's self-reported validation at base `9cae17a443ec4126a3f2d877e7dfc1b59e1254cd` / original head `57d096831ab3ccb4b145fe1f62722d02dfb9a840`:
 
-- Python `pytest -q`: **531 passed, 4 skipped, 1 warning** in 470.60s.
+- Python `pytest -q`: **531 passed, 4 skipped, 1 warning** before and after report creation.
 - `npm run check`: **32 test files passed, 179 tests passed**; lint, typecheck, and production build passed.
+- `ruff check .`, `ruff format --check .` (213 files), and `mypy src/runway` (126 files) passed.
 
-After report creation:
+Independent review reruns:
 
-- Python `pytest -q`: **531 passed, 4 skipped, 1 warning** in 459.25s.
-- `npm run check`: **32 test files passed, 179 tests passed**; lint, typecheck, and production build passed.
-- `ruff check .`: passed.
-- `ruff format --check .`: **213 files already formatted**.
-- `mypy src/runway`: **success, no issues found in 126 source files**.
+- Original PR head `57d096831ab3ccb4b145fe1f62722d02dfb9a840`: Python `pytest -q` **531 passed, 4 skipped, 1 warning** in 448.32s; `npm run check` **32 test files passed, 179 tests passed**; Ruff, format, and mypy passed.
+- Current base `1e7f8883a30cf45deb582df1650123b6b25aa1c1`: Python `pytest -q` **546 passed, 4 skipped, 1 warning** in 472.17s; `npm run check` **32 test files passed, 179 tests passed**; Ruff, format, and mypy passed (214 formatted files).
+- Rebased review branch: Python `pytest -q` **546 passed, 4 skipped, 1 warning** in 473.95s; `npm run check` **32 test files passed, 179 tests passed**; `ruff check .`, `ruff format --check .` (214 files), `mypy src/runway` (126 files), and `pip-audit` passed. Offline startup smoke passed: CLI `--help`, `init`, and `doctor` all exited 0 with a disposable data directory, mock runtime, and publishing disabled.
 
-The four skipped tests are Windows launcher contract tests skipped on this Linux VM. No repository Python or TypeScript code was changed; the branch adds this audit report only.
+The four skipped tests are Windows launcher contract tests skipped on this Linux VM. No repository Python or TypeScript code was changed; the branch adds and revises this audit report only.
 
 ## Remaining uncertainty
 
