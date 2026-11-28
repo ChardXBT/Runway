@@ -174,11 +174,13 @@ retry requires the same channel, typed input, and configuration hash; a key
 reused for a different logical request conflicts instead of replacing or
 joining unrelated work. A completed or abstained row returns its persisted
 terminal output without re-executing. A failed row may be retried by the same
-logical request: the retry receives a fresh invocation budget, while step
-attempt numbers and the parent attempt count remain monotonic across the row's
-history. An active duplicate fails closed with a controlled claim conflict, and
-concurrent creation races are reconciled through the unique key rather than
-surfacing raw integrity errors.
+logical request: the retry receives a fresh invocation budget under the same
+execution configuration, while step attempt numbers and the parent attempt
+count remain monotonic across the row's history. A pipeline retry re-enters its
+deterministic sequence from the first step; prior step rows remain as history
+rather than being overwritten. An active duplicate fails closed with a
+controlled claim conflict, and concurrent creation races are reconciled through
+the unique key rather than surfacing raw integrity errors.
 
 ### `intelligence_agent_steps`
 
