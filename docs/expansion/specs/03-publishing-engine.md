@@ -104,6 +104,17 @@ the API (audit C8); `PlatformSyncScheduler` becomes a producer of `sync_account`
 Idle behaviour: the worker sleeps until the earliest `run_at` (capped at 30 s) rather than
 polling every second, so a scale-to-zero database is not kept awake needlessly.
 
+Unknown kinds: a worker claims only kinds in its handler registry. During a rolling deploy a
+newer component may enqueue a kind an older worker does not know; that worker intentionally
+leaves the row `pending` and unchanged (no attempt, failure, re-time or retry) so the newer
+worker can run it. Lease recovery is kind-scoped for the same reason: when a newer worker
+crashes mid-job, an older worker that does not implement the kind leaves the expired lease
+untouched, and a worker that implements the kind recovers it. This compatibility behavior is
+operator-visible rather than silent: the worker logs a warning only when its unknown-kind
+snapshot changes and `runway jobs unknown` prints the pending counts. A kind that remains
+unknown after every component is on one release is a producer typo or missing handler, not a
+job to keep retrying.
+
 Why not a queue library: see research/hosting-and-sync §3. In short, Runway must run on SQLite
 too, and the hard part (uncertain outcomes) is domain logic no library provides.
 

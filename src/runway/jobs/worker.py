@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 MAX_IDLE_SECONDS = 30.0
 # Longest time a stop request waits for the idle sleep to notice it.
 STOP_POLL_SECONDS = 0.5
+# How often a running worker re-reads the unknown-kind operator surface. The
+# surface itself is logged only when it changes, so this does not spam worker.log.
+UNKNOWN_KIND_CHECK_SECONDS = 60.0
 
 Handler = Callable[[Job], None]
 
@@ -67,7 +70,10 @@ class Worker:
     is_active: Callable[[], bool] | None = None
     busy: Callable[[str], AbstractContextManager[object]] | None = None
     standby_recheck: timedelta = timedelta(seconds=60)
+    unknown_kind_check_seconds: float = UNKNOWN_KIND_CHECK_SECONDS
     _standby_logged: bool = field(default=False, init=False, repr=False)
+    _unknown_kind_check_at: float = field(default=float("-inf"), init=False, repr=False)
+    _unknown_pending_reported: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -146,8 +152,39 @@ class Worker:
             self._standby_logged = True
         return True
 
+    def _report_unknown_pending(self) -> None:
+        """Surface pending kinds this worker cannot run without changing them."""
+        checked_at = time.monotonic()
+        if checked_at - self._unknown_kind_check_at < self.unknown_kind_check_seconds:
+            return
+        self._unknown_kind_check_at = checked_at
+        try:
+            counts = self.queue.unknown_pending_counts(self.handlers.keys())
+        except Exception:  # noqa: BLE001
+            # Observability must never stop the worker's real job loop.
+            logger.exception("could not inspect pending durable jobs for unknown kinds")
+            return
+        if counts == self._unknown_pending_reported:
+            return
+        had_unknown = bool(self._unknown_pending_reported)
+        self._unknown_pending_reported = counts
+        if counts:
+            detail = ", ".join(f"{kind!r}: {count}" for kind, count in counts.items())
+            logger.warning(
+                "worker does not handle pending durable job kind(s): %s; "
+                "leaving them pending for rolling-deploy compatibility",
+                detail,
+                extra={"event_type": "worker_unknown_job_kinds"},
+            )
+        elif had_unknown:
+            logger.info(
+                "all pending durable job kinds are handled by this worker",
+                extra={"event_type": "worker_unknown_job_kinds_clear"},
+            )
+
     def run_once(self) -> bool:
         """Claim and run one due job. Returns False when nothing was due."""
+        self._report_unknown_pending()
         if self._standby():
             return False
         job = self.queue.claim(
