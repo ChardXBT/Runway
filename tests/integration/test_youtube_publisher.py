@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -520,6 +521,102 @@ async def test_blocked_session_attempt_can_resume_without_duplicate_submission(
     assert result.status == "externally_scheduled"
     assert len(adapter.schedule_calls) == 1
     assert publisher.attempt_status(int(queued["id"]))["status"] == "verified"
+
+
+@pytest.mark.asyncio
+async def test_independent_queue_workers_claim_one_attempt_atomically(
+    database: Database,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proposal_id = await _scheduled_proposal(database, settings)
+    enabled_settings = _authorized_settings(settings)
+    first_adapter = FakeYouTubeAdapter()
+    second_adapter = FakeYouTubeAdapter()
+    first = YouTubeBrowserPublisher(database, enabled_settings, first_adapter)
+    second_database = Database(settings)
+    second = YouTubeBrowserPublisher(second_database, enabled_settings, second_adapter)
+    queued = first.queue_attempt(proposal_id)
+    attempt_id = int(queued["id"])
+
+    validate_gate = threading.Barrier(2)
+    prepared_gate = threading.Barrier(2)
+
+    async def gated_validate(adapter: FakeYouTubeAdapter) -> PublisherSessionStatus:
+        status = await FakeYouTubeAdapter.validate_session(adapter)
+        validate_gate.wait(timeout=5)
+        return status
+
+    first_validate = first_adapter.validate_session
+    second_validate = second_adapter.validate_session
+
+    async def first_validate_session() -> PublisherSessionStatus:
+        return await gated_validate(first_adapter)
+
+    async def second_validate_session() -> PublisherSessionStatus:
+        return await gated_validate(second_adapter)
+
+    first_adapter.validate_session = first_validate_session  # type: ignore[method-assign]
+    second_adapter.validate_session = second_validate_session  # type: ignore[method-assign]
+
+    original_prepared_post = YouTubeBrowserPublisher._prepared_post
+
+    def gated_prepared_post(
+        publisher: YouTubeBrowserPublisher,
+        proposal_id_value: int,
+        *,
+        allowed_statuses: set[str] | None = None,
+    ) -> tuple[PreparedPost, str]:
+        result = original_prepared_post(
+            publisher,
+            proposal_id_value,
+            allowed_statuses=allowed_statuses,
+        )
+        prepared_gate.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(YouTubeBrowserPublisher, "_prepared_post", gated_prepared_post)
+
+    outcomes: list[tuple[int, str, str]] = []
+
+    def worker(index: int, publisher: YouTubeBrowserPublisher) -> None:
+        try:
+            result = asyncio.run(publisher.process_queued_attempt(attempt_id))
+        except Exception as exc:  # noqa: BLE001
+            outcomes.append((index, "error", type(exc).__name__))
+        else:
+            outcomes.append((index, "success", result.status))
+
+    threads = [
+        threading.Thread(target=worker, args=(0, first)),
+        threading.Thread(target=worker, args=(1, second)),
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+        assert all(not thread.is_alive() for thread in threads)
+    finally:
+        second_database.engine.dispose()
+        first_adapter.validate_session = first_validate  # type: ignore[method-assign]
+        second_adapter.validate_session = second_validate  # type: ignore[method-assign]
+
+    successes = [outcome for outcome in outcomes if outcome[1] == "success"]
+    failures = [outcome for outcome in outcomes if outcome[1] == "error"]
+    assert len(successes) == 1
+    assert successes[0][2] == "externally_scheduled"
+    assert len(failures) == 1
+    assert failures[0][2] == "StalePublishAttempt"
+    assert len(first_adapter.schedule_calls) + len(second_adapter.schedule_calls) == 1
+    with database.session() as session:
+        events = session.scalars(
+            select(AuditEvent).where(
+                AuditEvent.event_type == "youtube_submission_started",
+                AuditEvent.entity_id == proposal_id,
+            )
+        ).all()
+    assert len(events) == 1
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,8 @@ from zoneinfo import ZoneInfo
 
 from PIL import Image
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from runway.config import Settings
@@ -39,6 +40,7 @@ from runway.domain.state_machine import (
     ATTEMPT_PENDING_STATUSES,
     ATTEMPT_PRE_SUBMISSION_STATUSES,
     attempt_status_of,
+    require_attempt_transition,
     require_transition,
     transition_attempt,
 )
@@ -2463,48 +2465,101 @@ class YouTubeBrowserPublisher:
                 raise ValueError(
                     f"publish attempt is {attempt_status_of(attempt).value}, not queued"
                 )
-            current_payload_hash: str | None = None
-            try:
-                post, current_payload_hash = self._prepared_post(
-                    proposal.id,
-                    allowed_statuses={
-                        ProposalStatus.INTERNALLY_SCHEDULED.value,
-                        ProposalStatus.PUBLISH_FAILED.value,
-                    },
-                )
-            except ValueError as exc:
-                # This post can no longer be submitted (slot inside the
-                # five-minute window, image missing or blocked, ...). Nothing
-                # was sent, so settle only this attempt instead of leaving it
-                # queued behind a memory-only pause of the whole queue.
-                terminal_error = str(exc)
-            if current_payload_hash is not None and not hmac.compare_digest(
-                attempt.payload_hash, current_payload_hash
-            ):
-                terminal_error = "proposal changed after it entered the scheduling queue"
+            proposal_id = proposal.id
+            expected_payload_hash = attempt.payload_hash
+
+        current_payload_hash: str | None = None
+        try:
+            post, current_payload_hash = self._prepared_post(
+                proposal_id,
+                allowed_statuses={
+                    ProposalStatus.INTERNALLY_SCHEDULED.value,
+                    ProposalStatus.PUBLISH_FAILED.value,
+                },
+            )
+        except ValueError as exc:
+            # This post can no longer be submitted (slot inside the
+            # five-minute window, image missing or blocked, ...). Nothing
+            # was sent, so settle only this attempt instead of leaving it
+            # queued behind a memory-only pause of the whole queue.
+            terminal_error = str(exc)
+        if current_payload_hash is not None and not hmac.compare_digest(
+            expected_payload_hash, current_payload_hash
+        ):
+            terminal_error = "proposal changed after it entered the scheduling queue"
+
+        now = datetime.now(UTC)
+        queued_row = (
+            PublishAttempt.id == attempt_id,
+            PublishAttempt.publisher == self.publisher_name,
+            PublishAttempt.status == PublishAttemptStatus.QUEUED.value,
+            PublishAttempt.submitted_at.is_(None),
+            PublishAttempt.completed_at.is_(None),
+        )
+        with self.database.session() as session:
             if terminal_error is not None:
-                transition_attempt(
-                    attempt,
+                require_attempt_transition(
+                    PublishAttemptStatus.QUEUED,
                     PublishAttemptStatus.INVALIDATED,
-                    now=datetime.now(UTC),
                 )
-                attempt.error_summary = terminal_error[:2000]
+                result = cast(
+                    CursorResult[Any],
+                    session.execute(
+                        update(PublishAttempt)
+                        .where(*queued_row)
+                        .values(
+                            status=PublishAttemptStatus.INVALIDATED.value,
+                            completed_at=now,
+                            error_summary=terminal_error[:2000],
+                        )
+                    ),
+                )
+                if result.rowcount != 1:
+                    raise StalePublishAttempt(
+                        f"publish attempt {attempt_id} was superseded before submission"
+                    )
                 audit(
                     session,
                     "youtube_queue_attempt_invalidated",
                     "proposal",
-                    proposal.id,
-                    {"attempt_id": attempt.id, "error": terminal_error[:500]},
+                    proposal_id,
+                    {"attempt_id": attempt_id, "error": terminal_error[:500]},
                 )
             else:
+                # This conditional UPDATE is the cross-process queue claim. The
+                # statement is the first write in a fresh transaction, so a
+                # concurrent worker either waits and then matches zero rows or
+                # wins itself; both can never carry the same queued row into
+                # their browser adapters.
+                require_attempt_transition(
+                    PublishAttemptStatus.QUEUED,
+                    PublishAttemptStatus.SUBMITTING,
+                )
+                result = cast(
+                    CursorResult[Any],
+                    session.execute(
+                        update(PublishAttempt)
+                        .where(*queued_row)
+                        .values(
+                            status=PublishAttemptStatus.SUBMITTING.value,
+                            submitted_at=now,
+                            completed_at=None,
+                        )
+                    ),
+                )
+                if result.rowcount != 1:
+                    raise StalePublishAttempt(
+                        f"publish attempt {attempt_id} was superseded before submission"
+                    )
+                attempt = session.get(PublishAttempt, attempt_id)
+                if attempt is None:
+                    raise LookupError(f"publish attempt {attempt_id} not found")
+                proposal = session.get(Proposal, attempt.proposal_id)
+                if proposal is None:
+                    raise LookupError(f"proposal {attempt.proposal_id} not found")
                 require_transition(proposal.status, ProposalStatus.PUBLISHING)
                 old_status = proposal.status
                 proposal.status = ProposalStatus.PUBLISHING.value
-                transition_attempt(
-                    attempt,
-                    PublishAttemptStatus.SUBMITTING,
-                    now=datetime.now(UTC),
-                )
                 session.add(
                     ProposalEvent(
                         proposal_id=proposal.id,
