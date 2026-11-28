@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from runway.config import Settings
 from runway.db.base import Database
@@ -16,11 +20,13 @@ from runway.intelligence.agent_harness import (
     AgentHarnessError,
     AgentInputEnvelope,
     AgentOutputEnvelope,
+    AgentPipelineStep,
     AgentStepResult,
     CapabilitySpec,
     IntelligenceAgentHarness,
     IntelligenceCapabilityRegistry,
 )
+from runway.intelligence.embeddings import configuration_hash
 
 
 @pytest.mark.asyncio
@@ -201,6 +207,13 @@ async def test_agent_harness_timeout_and_capability_registry_fail_closed(
             usage={},
         )
 
+    budget = AgentBudget(
+        max_steps=1,
+        max_attempts_per_step=1,
+        max_total_tokens=10,
+        max_seconds=1,
+        timeout_seconds=0.01,
+    )
     with pytest.raises(AgentHarnessError, match="failed after"):
         await harness.execute(
             channel_id=channel_id,
@@ -210,14 +223,38 @@ async def test_agent_harness_timeout_and_capability_registry_fail_closed(
             prompt_version="fixture-v1",
             input_value=AgentInputEnvelope(payload={"caption": "fixture"}),
             handler=slow,
-            budget=AgentBudget(
-                max_steps=1,
-                max_attempts_per_step=1,
-                max_total_tokens=10,
-                max_seconds=1,
-                timeout_seconds=0.01,
-            ),
+            budget=budget,
+            run_key="fixture-timeout-retry",
         )
+
+    async def fast(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"late": False}),
+            usage={"total_tokens": 1},
+        )
+
+    with database.session() as session:
+        timed_out = session.scalar(
+            select(IntelligenceAgentRun).where(
+                IntelligenceAgentRun.run_key == "fixture-timeout-retry"
+            )
+        )
+        assert timed_out is not None
+        assert timed_out.status == "failed"
+        timed_out_id = timed_out.id
+    retry_id, retry_output = await harness.execute(
+        channel_id=channel_id,
+        capability="caption_verification",
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        input_value=AgentInputEnvelope(payload={"caption": "fixture"}),
+        handler=fast,
+        budget=budget,
+        run_key="fixture-timeout-retry",
+    )
+    assert retry_id == timed_out_id
+    assert retry_output.payload == {"late": False}
 
 
 @pytest.mark.asyncio
@@ -265,6 +302,21 @@ async def test_agent_harness_persists_typed_abstention_without_retry(
     assert detail["status"] == "abstained"
     assert detail["error_summary"] == ("Visible evidence is insufficient for a grounded caption.")
     assert detail["steps"][0]["status"] == "abstained"  # type: ignore[index]
+
+    repeated_id, repeated_output = await harness.execute(
+        channel_id=channel_id,
+        capability="caption_verification",
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        input_value=AgentInputEnvelope(payload={"caption": "What happens next?"}),
+        handler=abstain,
+        budget=AgentBudget(max_attempts_per_step=3),
+        run_key="fixture-abstention",
+    )
+    assert repeated_id == run_id
+    assert repeated_output == output
+    assert calls == 1
 
 
 def test_agent_harness_persists_one_adaptive_observed_parent_trace(
@@ -329,3 +381,623 @@ def test_agent_harness_persists_one_adaptive_observed_parent_trace(
     ]
     assert detail["steps"][-1]["artifact_type"] == "caption_slate"  # type: ignore[index]
     assert detail["steps"][-1]["artifact_id"] == "23"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_failed_deterministic_run_key_retries_without_duplicating_the_logical_run(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database)
+    input_value = AgentInputEnvelope(payload={"candidate_id": 7})
+    budget = AgentBudget(
+        max_steps=1,
+        max_attempts_per_step=1,
+        max_total_tokens=20,
+        max_seconds=5,
+        timeout_seconds=1,
+    )
+
+    async def fail_once(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        raise RuntimeError("transient fixture failure")
+
+    with pytest.raises(AgentHarnessError, match="failed after"):
+        await harness.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=input_value,
+            handler=fail_once,
+            budget=budget,
+            run_key="fixture-retryable-failure",
+        )
+    with database.session() as session:
+        failed = session.scalar(
+            select(IntelligenceAgentRun).where(
+                IntelligenceAgentRun.run_key == "fixture-retryable-failure"
+            )
+        )
+        assert failed is not None
+        assert failed.status == "failed"
+        failed_id = failed.id
+
+    retry_attempts: list[int] = []
+
+    async def succeeds_on_retry(_value: AgentInputEnvelope, attempt: int) -> AgentStepResult:
+        retry_attempts.append(attempt)
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"recovered": True}),
+            usage={"total_tokens": 1},
+        )
+
+    retry_id, output = await harness.execute(
+        channel_id=channel_id,
+        capability="candidate_analysis",
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        input_value=input_value,
+        handler=succeeds_on_retry,
+        budget=budget,
+        run_key="fixture-retryable-failure",
+    )
+
+    assert retry_id == failed_id
+    assert output.payload == {"recovered": True}
+    assert retry_attempts == [2]
+    detail = harness.inspect(failed_id)
+    assert detail["status"] == "completed"
+    assert detail["attempt_count"] == 2
+    assert [
+        (step["attempt"], step["status"])
+        for step in detail["steps"]  # type: ignore[index]
+    ] == [(1, "failed"), (2, "completed")]
+
+    replay_id, replay_output = await harness.execute(
+        channel_id=channel_id,
+        capability="candidate_analysis",
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        input_value=input_value,
+        handler=succeeds_on_retry,
+        budget=budget,
+        run_key="fixture-retryable-failure",
+    )
+    assert replay_id == failed_id
+    assert replay_output == output
+    assert retry_attempts == [2]
+
+    with pytest.raises(AgentHarnessError, match="different logical request"):
+        await harness.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=AgentInputEnvelope(payload={"candidate_id": 8}),
+            handler=succeeds_on_retry,
+            budget=budget,
+            run_key="fixture-retryable-failure",
+        )
+    with pytest.raises(AgentHarnessError, match="different logical request"):
+        await harness.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="different-provider",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=input_value,
+            handler=succeeds_on_retry,
+            budget=budget,
+            run_key="fixture-retryable-failure",
+        )
+    with database.session() as session:
+        assert (
+            session.scalar(
+                select(func.count(IntelligenceAgentRun.id)).where(
+                    IntelligenceAgentRun.run_key == "fixture-retryable-failure"
+                )
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_is_recovered_only_after_its_lease_expires(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database, lease_seconds=0.2)
+    started = asyncio.Event()
+
+    async def stuck(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        started.set()
+        await asyncio.sleep(60)
+        raise AssertionError("the cancelled fixture unexpectedly completed")
+
+    input_value = AgentInputEnvelope(payload={"candidate_id": 11})
+    task = asyncio.create_task(
+        harness.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=input_value,
+            handler=stuck,
+            run_key="fixture-crash-stale-running",
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    with database.session() as session:
+        crashed = session.scalar(
+            select(IntelligenceAgentRun).where(
+                IntelligenceAgentRun.run_key == "fixture-crash-stale-running"
+            )
+        )
+        assert crashed is not None
+        assert crashed.status == "running"
+        crashed_id = crashed.id
+        crashed.lease_expires_at = datetime.now(UTC) - timedelta(seconds=0.001)
+
+    retry_attempts: list[int] = []
+
+    async def recovered(_value: AgentInputEnvelope, attempt: int) -> AgentStepResult:
+        retry_attempts.append(attempt)
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"recovered": True}),
+            usage={"total_tokens": 0},
+        )
+
+    recovered_id, _output = await harness.execute(
+        channel_id=channel_id,
+        capability="candidate_analysis",
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        input_value=input_value,
+        handler=recovered,
+        run_key="fixture-crash-stale-running",
+    )
+
+    assert recovered_id == crashed_id
+    assert retry_attempts == [2]
+    detail = harness.inspect(crashed_id)
+    assert detail["status"] == "completed"
+    assert [
+        (step["attempt"], step["status"])
+        for step in detail["steps"]  # type: ignore[index]
+    ] == [(1, "failed"), (2, "completed")]
+    assert "stale lease" in str(detail["steps"][0]["error_summary"])  # type: ignore[index]
+
+
+def _seed_running_run(
+    database: Database,
+    *,
+    channel_id: int,
+    run_key: str,
+    lease_expires_at: datetime,
+) -> int:
+    input_value = AgentInputEnvelope(payload={"candidate_id": 1})
+    budget = AgentBudget()
+    configuration = {
+        "capability": "candidate_analysis",
+        "provider": "mock",
+        "model": "fixture",
+        "prompt_version": "fixture-v1",
+        "budget": budget.model_dump(),
+    }
+    with database.session() as session:
+        run = IntelligenceAgentRun(
+            channel_id=channel_id,
+            run_key=run_key,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            status="running",
+            input_json=input_value.model_dump_json(),
+            output_json="{}",
+            budget_json=budget.model_dump_json(),
+            usage_json="{}",
+            configuration_hash=configuration_hash(configuration),
+            attempt_count=0,
+            lease_owner="crashed-owner",
+            lease_expires_at=lease_expires_at,
+        )
+        session.add(run)
+        session.flush()
+        return run.id
+
+
+@pytest.mark.asyncio
+async def test_active_run_heartbeat_protects_lease_past_initial_expiry(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database, lease_seconds=0.1)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def active(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        started.set()
+        await release.wait()
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"finished": True}),
+            usage={"total_tokens": 0},
+        )
+
+    input_value = AgentInputEnvelope(payload={"candidate_id": 12})
+    first = asyncio.create_task(
+        harness.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=input_value,
+            handler=active,
+            run_key="fixture-heartbeat-active",
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.sleep(0.15)
+    with pytest.raises(AgentHarnessError, match="already claimed"):
+        await harness.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=input_value,
+            handler=active,
+            run_key="fixture-heartbeat-active",
+        )
+    release.set()
+    run_id, output = await first
+    assert output.payload == {"finished": True}
+    assert harness.inspect(run_id)["lease_owner"] is None
+
+
+@pytest.mark.asyncio
+async def test_lease_expiry_clock_boundary_is_explicit(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    fixed_now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    harness = IntelligenceAgentHarness(database, clock=lambda: fixed_now, lease_seconds=5)
+    input_value = AgentInputEnvelope(payload={"candidate_id": 1})
+
+    async def success(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"ok": True}),
+            usage={"total_tokens": 0},
+        )
+
+    expired_id = _seed_running_run(
+        database,
+        channel_id=channel_id,
+        run_key="fixture-lease-expired-at-now",
+        lease_expires_at=fixed_now,
+    )
+    recovered_id, _output = await harness.execute(
+        channel_id=channel_id,
+        capability="candidate_analysis",
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        input_value=input_value,
+        handler=success,
+        run_key="fixture-lease-expired-at-now",
+    )
+    assert recovered_id == expired_id
+
+    active_id = _seed_running_run(
+        database,
+        channel_id=channel_id,
+        run_key="fixture-lease-still-active",
+        lease_expires_at=fixed_now + timedelta(seconds=1),
+    )
+    with pytest.raises(AgentHarnessError, match="already claimed"):
+        await harness.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=input_value,
+            handler=success,
+            run_key="fixture-lease-still-active",
+        )
+    with database.session() as session:
+        active = session.get(IntelligenceAgentRun, active_id)
+        assert active is not None
+        assert active.status == "running"
+        assert active.lease_owner == "crashed-owner"
+
+
+def test_concurrent_same_key_creation_has_one_controlled_winner(
+    database: Database,
+    settings: Settings,
+) -> None:
+    del database  # each thread uses its own engine against the same database file
+    with Database(settings).session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    barrier = threading.Barrier(2)
+    release = threading.Event()
+    outcomes: list[tuple[str, object]] = []
+    input_value = AgentInputEnvelope(payload={"candidate_id": 21})
+
+    def worker(worker_index: int) -> None:
+        local_database = Database(settings)
+        harness = IntelligenceAgentHarness(local_database, lease_seconds=1)
+
+        async def handler(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+            await asyncio.to_thread(release.wait, 2)
+            return AgentStepResult(
+                output=AgentOutputEnvelope(payload={"worker": worker_index}),
+                usage={"total_tokens": 0},
+            )
+
+        try:
+            barrier.wait(timeout=3)
+            result = asyncio.run(
+                harness.execute(
+                    channel_id=channel_id,
+                    capability="candidate_analysis",
+                    provider="mock",
+                    model="fixture",
+                    prompt_version="fixture-v1",
+                    input_value=input_value,
+                    handler=handler,
+                    run_key="fixture-concurrent-same-key",
+                )
+            )
+            outcomes.append(("completed", result))
+        except Exception as exc:  # the thread boundary requires preserving the exception object
+            outcomes.append(("error", exc))
+        finally:
+            local_database.engine.dispose()
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.1)
+    release.set()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    completed = [value for kind, value in outcomes if kind == "completed"]
+    errors = [value for kind, value in outcomes if kind == "error"]
+    assert len(completed) == 1
+    assert len(errors) == 1
+    error = errors[0]
+    assert isinstance(error, AgentHarnessError)
+    assert not isinstance(error, IntegrityError)
+    assert "already claimed" in str(error)
+
+    verification_database = Database(settings)
+    try:
+        with verification_database.session() as session:
+            runs = session.scalars(
+                select(IntelligenceAgentRun).where(
+                    IntelligenceAgentRun.run_key == "fixture-concurrent-same-key"
+                )
+            ).all()
+            assert len(runs) == 1
+            assert runs[0].status == "completed"
+    finally:
+        verification_database.engine.dispose()
+
+    replay_database = Database(settings)
+    try:
+        harness = IntelligenceAgentHarness(replay_database)
+
+        async def unused(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+            raise AssertionError("a completed same-key run must replay without re-executing")
+
+        replay_id, replay_output = asyncio.run(
+            harness.execute(
+                channel_id=channel_id,
+                capability="candidate_analysis",
+                provider="mock",
+                model="fixture",
+                prompt_version="fixture-v1",
+                input_value=input_value,
+                handler=unused,
+                run_key="fixture-concurrent-same-key",
+            )
+        )
+        assert replay_id == completed[0][0]  # type: ignore[index]
+        assert "worker" in replay_output.payload
+    finally:
+        replay_database.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_pipeline_retry_preserves_partial_history_and_step_attempt_order(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database)
+    input_value = AgentInputEnvelope(payload={"candidate_id": 31})
+    steps = [
+        AgentPipelineStep(capability="caption_generation", input_value=input_value),
+        AgentPipelineStep(capability="caption_verification", input_value=input_value),
+    ]
+
+    async def generate(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"caption": "unicode fixture ✓"}),
+            usage={"total_tokens": 1},
+        )
+
+    verification_calls = 0
+
+    async def verify(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        nonlocal verification_calls
+        verification_calls += 1
+        if verification_calls == 1:
+            raise RuntimeError("partial fixture failure")
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"verified": True}),
+            usage={"total_tokens": 1},
+        )
+
+    budget = AgentBudget(
+        max_steps=2,
+        max_attempts_per_step=1,
+        max_total_tokens=10,
+        max_seconds=10,
+        timeout_seconds=2,
+    )
+    handlers = {"caption_generation": generate, "caption_verification": verify}
+    with pytest.raises(AgentHarnessError, match="required pipeline step"):
+        await harness.execute_pipeline(
+            channel_id=channel_id,
+            steps=steps,
+            handlers=handlers,
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            risk_route="easy",
+            budget=budget,
+            run_key="fixture-pipeline-partial-retry",
+        )
+    with database.session() as session:
+        failed = session.scalar(
+            select(IntelligenceAgentRun).where(
+                IntelligenceAgentRun.run_key == "fixture-pipeline-partial-retry"
+            )
+        )
+        assert failed is not None
+        assert failed.status == "failed"
+        failed_id = failed.id
+
+    retry_id, outputs = await harness.execute_pipeline(
+        channel_id=channel_id,
+        steps=steps,
+        handlers=handlers,
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        risk_route="easy",
+        budget=budget,
+        run_key="fixture-pipeline-partial-retry",
+    )
+
+    assert retry_id == failed_id
+    assert outputs["caption_verification"].payload["verified"] is True
+    detail = harness.inspect(failed_id)
+    step_states = {
+        (step["sequence"], step["attempt"]): step["status"]  # type: ignore[index]
+        for step in detail["steps"]  # type: ignore[index]
+    }
+    assert step_states == {
+        (1, 1): "completed",
+        (1, 2): "completed",
+        (2, 1): "failed",
+        (2, 2): "completed",
+    }
+    assert detail["attempt_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_edge_payloads_replay_by_exact_logical_input_and_distinct_keys_can_overlap(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database)
+    edge_payload = {
+        "empty": "",
+        "none": None,
+        "zero": 0,
+        "negative": -1,
+        "huge": "x" * 5000,
+        "unicode": "åß∂ƒ©˙∆˚¬…æ🔥",
+        "nested": {"out_of_order": [3, 1, 2], "false": False},
+    }
+    calls = 0
+
+    async def handler(value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        nonlocal calls
+        calls += 1
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"echo": value.payload}),
+            usage={"total_tokens": 0},
+        )
+
+    kwargs = {
+        "channel_id": channel_id,
+        "capability": "candidate_analysis",
+        "provider": "mock",
+        "model": "fixture",
+        "prompt_version": "fixture-v1",
+        "input_value": AgentInputEnvelope(payload=edge_payload),
+        "handler": handler,
+    }
+    first_id, first_output = await harness.execute(
+        **kwargs,
+        run_key="fixture-edge-payloads",
+    )
+    replay_id, replay_output = await harness.execute(
+        **kwargs,
+        run_key="fixture-edge-payloads",
+    )
+    assert replay_id == first_id
+    assert replay_output == first_output
+    assert replay_output.payload["echo"] == edge_payload  # type: ignore[index]
+    assert calls == 1
+
+    gate = asyncio.Event()
+
+    async def gated(value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        await gate.wait()
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"key": value.payload["key"]}),
+            usage={"total_tokens": 0},
+        )
+
+    async def distinct(key: str):
+        return await harness.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=AgentInputEnvelope(payload={"key": key}),
+            handler=gated,
+            run_key=f"fixture-distinct-{key}",
+        )
+
+    first_task = asyncio.create_task(distinct("a"))
+    second_task = asyncio.create_task(distinct("b"))
+    await asyncio.sleep(0)
+    gate.set()
+    (
+        (first_distinct_id, first_distinct_output),
+        (second_distinct_id, second_distinct_output),
+    ) = await asyncio.gather(first_task, second_task)
+    assert first_distinct_id != second_distinct_id
+    assert first_distinct_output.payload["key"] == "a"
+    assert second_distinct_output.payload["key"] == "b"
