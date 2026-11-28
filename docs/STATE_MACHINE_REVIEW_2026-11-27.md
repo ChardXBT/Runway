@@ -1,18 +1,21 @@
 # State-machine review: Runway transitions and recovery
 
-Date: 2026-11-27  
-Audited base: `9cae17a443ec4126a3f2d877e7dfc1b59e1254cd` (`main` / `origin/main`)  
+Date: 2026-11-27; independently revised after rebase on 2026-11-28<br>
+Original audited base: `9cae17a443ec4126a3f2d877e7dfc1b59e1254cd` (the default branch when the first pass ran)<br>
+Reviewed/rebased base: `1e7f8883a30cf45deb582df1650123b6b25aa1c1` (`origin/main` at the independent revision)
 Mode: source audit plus disposable fixture databases only. No credentials, live accounts, browser publishing, deployments, destructive actions, or external writes were used.
 
 ## Scope and overlap
 
-This review covers workspace jobs, OAuth boundaries, publishing, migration, reviewer exports, drafts/inbox actions, and scheduled work. It intentionally does not repeat the whole root `IMPLICIT-STATE-MACHINES.md` audit. Overlap checked: merged PR #3 (`Audit: implicit state machines`) is the broad earlier audit; issue #15 / PR #16 covered integrated publishing controls and migration rehearsal; issue #22 covered offline reviewer export/time-zone verification. Those areas are cited here rather than re-audited wholesale. The earlier broad audit is partly stale: the old highest-risk `PublishAttempt` machine now has an explicit declared transition table, fail-closed `unknown` handling, restart recovery, and an extensive fixture suite. This report therefore narrows to the current controls and the gaps/uncertainties that remain at base `9cae17a`.
+This review covers workspace jobs, OAuth boundaries, publishing, migration, reviewer exports, drafts/inbox actions, and scheduled work. It intentionally does not repeat the whole root `IMPLICIT-STATE-MACHINES.md` audit. Overlap checked: merged PR #3 (`Audit: implicit state machines`) is the broad earlier audit; issue #15 / PR #16 covered integrated publishing controls and migration rehearsal; issue #22 covered offline reviewer export/time-zone verification; issue #32 was a static defensive review whose detailed findings are private by instruction; issue #33 / merged PR #42 produced `docs/EDGE_CASE_FAILURE_MATRIX.md`. Those areas are cited here rather than re-audited wholesale.
+
+The edge-case matrix was merged after the first pass of this report. It independently demonstrated the cross-process publish and sync admission races and the partial migration-table failure in offline fixtures, and it tracks follow-ups #35-#38. Since then #39 / PR #44 serialized token refresh across processes and #40 / PR #45 made blind reviewer exports atomic; issue #43 remains the adjacent active-learning/arena export atomicity work. This report is therefore narrowed to state-machine-wide evidence, the unique fixture-proven gaps G1-G3, and the control uncertainties not already fixed by #44/#45. The earlier broad audit is partly stale: the old highest-risk `PublishAttempt` machine now has an explicit declared transition table, fail-closed `unknown` handling, restart recovery, and an extensive fixture suite.
 
 Evidence basis:
 
 - static reads of the code paths listed below;
 - existing fixture-backed suites named in this report;
-- three additional disposable-database probes executed during this audit, quoted in the findings;
+- three additional disposable-database probes executed during the first audit and independently re-executed during review, quoted in the findings;
 - no live OAuth, social-account, browser, paid-provider, or deployment execution.
 
 ## Main transition graph
@@ -24,26 +27,26 @@ stateDiagram-v2
     state "Proposal" as P {
         [*] --> generating
         generating --> needs_review : generation_completed
-        generating --> cancelled : owner cancellation
+        generating --> cancelled : declared only
         needs_review --> approved : approve
         needs_review --> rejected : reject
-        needs_review --> cancelled : owner cancellation
+        needs_review --> cancelled : declared only
         approved --> needs_review : caption edit / alternative select
         approved --> internally_scheduled : accept to lineup
-        approved --> cancelled : owner cancellation
+        approved --> cancelled : declared only
         rejected --> needs_review : owner reopens/revises
-        rejected --> cancelled : owner cancellation
+        rejected --> cancelled : declared only
         internally_scheduled --> publishing : queued attempt consumed
-        internally_scheduled --> cancelled : owner cancellation
+        internally_scheduled --> cancelled : Lineup removal
         publishing --> externally_scheduled : verified receipt
         publishing --> publish_unverified : accepted but unverified
         publishing --> publish_failed : failed before submission
         publish_unverified --> externally_scheduled : later verification
-        publish_unverified --> cancelled : owner cancellation
+        publish_unverified --> cancelled : declared only
         externally_scheduled --> published : due/verified external state
-        externally_scheduled --> cancelled : owner cancellation
+        externally_scheduled --> cancelled : declared only
         publish_failed --> publishing : explicit retry consumes a fresh attempt
-        publish_failed --> cancelled : owner cancellation
+        publish_failed --> cancelled : Lineup removal
     }
 
     state "PublishAttempt" as A {
@@ -85,7 +88,7 @@ stateDiagram-v2
         ready --> active : gates pass
         active --> superseded : replacement activation
         active --> rolled_back : rollback
-        backfilling --> failed : terminal invalid items
+        backfilling --> failed : incomplete with no pending/running items
     }
 
     state "SyncRun" as S {
@@ -105,6 +108,8 @@ stateDiagram-v2
     }
 ```
 
+Graph precision notes: proposal cancellation edges marked `declared only` exist in `ALLOWED_TRANSITIONS`, but the only concrete owner-cancel implementation found is Lineup removal for mutable internally scheduled or failed-before-submission posts. `WorkspaceJob` is a composite diagram: pause/resume/reopen are capture-specific; search, generation, and image-generation runs use raw running/terminal strings rather than one shared declared machine.
+
 ## State table
 
 | Machine / persisted rows | States and signals | Triggers and side effects | Recovery / concurrency control | Assessment |
@@ -118,10 +123,10 @@ stateDiagram-v2
 | Representation sets/items and activation | Set: `planned`, `backfilling`, `backfilled`, `ready`, `active`, `superseded`, `rolled_back`, `failed`; item: `pending`, `running`, `complete`, `failed`, `stale`; counts and activation rows mirror progress. | Backfill embeds sources; validation recomputes counts; activation supersedes old active set and writes an activation event atomically; rollback flips active/rolled-back atomically. | Activation/rollback gates are strong. Backfill selects only `pending`/`failed`; an item committed as `running` before a crash is not selected again. | Proven fixture gap: `running` orphan remains unselected. Clock/crash assumptions are not encoded as leases/heartbeats. |
 | Annotation/preference activation families | Annotation refresh runs: `planned`, `running`, `backfilled`, `ready`, `active`, `superseded`, `failed`; items `pending/running/complete/failed/stale`. Preference datasets are `frozen`; model versions include `trained`, `active`, `superseded`, `rolled_back`, `insufficient_data`. | Annotation batches run analysis and refresh item states; preference training creates immutable artifact-hashed versions; activation/rollback writes activation events. | Activation/rollback rows are transactional and reject multiple active rows. Annotation validation can turn a `running` item without an annotation into `failed`, unlike representation backfill. | Controls are stronger than the oldest implicit-status design, but this audit did not exercise real model activation or paid/model calls. |
 | OAuth state / connected account / token store | OAuth state rows have unique `state`, expiry, and `consumed_at`; accounts have `status`, scopes, token ref, sync mirrors; token blob is encrypted JSON. | Connect issues state; callback consumes state, exchanges code, writes account row, stores token; disconnect revokes/deletes token and disconnects row. | OAuth consume is a single conditional `UPDATE` and fixture-tested as single-use under concurrency. Token writes use a cross-process file lock plus atomic `os.replace`. Account row commits before token blob write, so a crash between those operations can leave `connected` without token bytes. | OAuth state machine is strong. Durable account/token atomicity is a residual crash-recovery gap. |
-| `SyncRun`, `SyncCursor`, scheduler | Run `running/completed/partial/failed`, step JSON, item/quota/error counts; cursors `complete` or `resume`; account mirror fields. | Manual or interval scheduler starts sync; steps store content/comments/metrics and cursor progress; exceptions produce terminal run state and account status. | Process-local per-account lock plus a database scan for recent `running` rows; stale rows older than 30 minutes are marked failed at startup. No DB lease/conditional claim. | In-process duplicate sync prevention and stale startup recovery are fixture-tested. Cross-process duplicate manual sync remains unproven but unguarded. Scheduler first tick is interval-delayed and `stop()` leaves no clear restart semantics. |
+| `SyncRun`, `SyncCursor`, scheduler | Run `running/completed/partial/failed`, step JSON, item/quota/error counts; cursors `complete` or `resume`; account mirror fields. | Manual or interval scheduler starts sync; steps store content/comments/metrics and cursor progress; exceptions produce terminal run state and account status. | Process-local per-account lock plus a database scan for recent `running` rows; stale rows older than 30 minutes are marked failed at startup. No DB lease/conditional claim. | In-process duplicate sync prevention and stale startup recovery are fixture-tested. Cross-process duplicate manual sync was unguarded in source here and was later demonstrated offline in the edge-case matrix. Scheduler first tick is interval-delayed. A `PlatformSyncScheduler` object is one-shot because `stop()` sets `_stop` and `start()` never clears it, although application shutdown does not restart the same object. |
 | `PlatformAction` / comment reply | `proposed`, `attempted`, `completed`, `failed`, `uncertain`; attempt/completion/verified timestamps, external result id, error, redacted request/response. | Owner-triggered reply creates action, refreshes token, sends non-idempotent public write, records verified/unverified outcome. | Timeout-after-send and rejection tests exist. `uncertain` is deliberately non-retryable. | Proven fixture gap: when provider returns `verified=False`, action is `uncertain` but the comment is still marked `answered` and `has_owner_reply=true`. This can hide a write needing manual verification. |
 | `ContentDraft` / `DraftTarget` | Draft status observed as `draft`, `scheduled`, `archived`, `published`, or `partially_published`; the API only permits `draft`/`scheduled` edits. Target status observed as `pending` or `published`, with timestamps/external URL linkage. | Draft creation/editing schedules targets; owner can mark a target published with an http(s) URL; parent status is recomputed only when a target is marked published. | Status is partly derived from child targets rather than one declared transition table. Duplicate targets for the same platform/account are rejected. | Low external-write risk because these are local records, but parent status recomputation is one-way: once `published`/`partially_published`, later edits or target changes do not recalculate it. |
-| Blind study / reviewer export | Blind study: `planned`, `exported`, `in_progress`, `completed`; frontier arena: `planned`, `in_review`, `completed`; cases carry hidden provenance and responses are immutable by duplicate rejection. | Export writes a local JSON packet after minimum-case/provenance checks (or arena provenance checks); import validates cases, duplicates, reviewer kind, and creates preferences in the same transaction. | Blind export scans serialized payload and nested metadata for hidden identities/keys; escaped/nonfinite metadata tests exist. Arena export scans the encoded packet for hidden arm labels. Engineering fixture labels require mock runtime and publishing disabled. | Strong provenance controls. Residual semantics: export file write and study status update are not atomic; repeated export has no distinct idempotency state, and no export artifact hash is persisted in the study row. |
+| Blind study / reviewer export | Blind study: `planned`, `exported`, `in_progress`, `completed`; frontier arena: `planned`, `in_review`, `completed`; cases carry hidden provenance and responses are immutable by duplicate rejection. | Export writes a local JSON packet after minimum-case/provenance checks (or arena provenance checks); import validates cases, duplicates, reviewer kind, and creates preferences in the same transaction. | Blind export scans serialized payload and nested metadata for hidden identities/keys; escaped/nonfinite metadata tests exist. Arena export scans the encoded packet for hidden arm labels. Engineering fixture labels require mock runtime and publishing disabled. | Strong provenance controls. Since PR #45, blind-study export serializes to a temporary sibling and atomically renames it into place. Active-learning export (`src/runway/intelligence/studies.py:1120-1128`) and frontier-arena export (`src/runway/intelligence/frontier_arena.py:301-348`) still write the destination directly; issue #43 tracks that adjacent work. Export-file replacement and database status update are not one atomic operation, but a crash after replacement leaves a complete artifact and a safe re-export path rather than a false exported state. No export artifact hash is persisted in the study row. |
 | Alembic migration / schema contract | `alembic_version` is the schema state; migrations are ordered `0001` through `0012_creator_platforms`; schema fingerprint/catalog records tables/indexes/constraints. | App startup always runs `upgrade(..., "head")`; doctor compares current migration/fingerprint with canonical snapshots. | Migration tests cover upgrade, downgrade, row preservation, and canonical schema. Alembic logs SQLite as non-transactional DDL; there is no migration lease or application stop gate around startup migrations. | Versioned migration state is explicit. Concurrent startup or crash mid-migration recovery remains a deployment/operator uncertainty rather than a tested fixture gap. |
 | Windows launcher / scheduled watchdog | Launcher file lock, service readiness, port ownership, child process state, log rotation; scheduled task trigger/repetition/restart settings. | At logon and every watchdog interval the idempotent launcher starts missing/crashed API/web components. | Lock is cross-process; launcher never kills unrelated or pre-existing healthy services; only children started by the failed invocation are rolled back. | Strong local process-state controls. It restarts processes but does not own database job leases, so it cannot distinguish a live long-running job in another healthy process from a stale row. |
 
@@ -134,7 +139,9 @@ A separate skeptical pass was performed after the first draft. It checked the de
 - draft status vocabulary was narrowed to the statuses actually written by `DraftService`;
 - the inbox finding was retained only after confirming both YouTube and Instagram providers can return `verified=False` for an already-posted reply whose read-back is unavailable.
 
-The main residual skepticism is deliberately preserved below: multi-process race findings are control absences, not observed duplicate external effects.
+Independent review added a second skeptical pass on the rebased branch. It corrected the first draft's cancellation wording (many cancellation edges are declared but have no concrete pre-Lineup implementation), narrowed the composite workspace-job graph, re-ran the three gap probes, and probed scheduler restart behavior. The scheduler probe produced `{"first_alive": true, "restart_thread_alive_after_30ms": false, "stop_event_still_set": true}`; this is a one-shot-object semantic, not a production shutdown defect because the application does not restart the same scheduler object.
+
+The residual skepticism is now narrower than in the first draft: this audit still did not execute multi-process races itself, but the merged edge-case matrix did execute offline fixture races for publish dispatch and sync admission and a partial migration-table fixture. Those outcomes are cited as independent corroboration, not as this report's own dynamic evidence.
 
 ## Proven current gaps
 
@@ -150,6 +157,7 @@ Disposable fixture evidence from this audit:
     "action_state": "uncertain",
     "comment_status": "answered",
     "has_owner_reply": true,
+    "returned_state": "uncertain",
     "verified": false
   }
 }
@@ -171,7 +179,7 @@ Disposable fixture evidence from this audit:
 {
   "agent_failed_run_retry": {
     "first_failure": "AgentHarnessError",
-    "retry_result": "AgentHarnessError: agent run 'fixture-failed-retry' already exists with status failed"
+    "retry_result": "AgentHarnessError: agent run 'probe-failed-retry' already exists with status failed"
   }
 }
 ```
@@ -188,6 +196,7 @@ Disposable fixture evidence from this audit (an orphaned `running` item, then a 
 
 ```json
 {
+  "items_orphaned_running": 9,
   "batch_attempted": 0,
   "batch_completed": 0,
   "batch_failed": 0,
@@ -199,14 +208,14 @@ Impact: a crash between the two transactions leaves a permanent `running` item a
 
 Missing control: a heartbeat/lease, timeout-based requeue from `running` to `failed`/`pending`, or atomic work-item claim with attempt ownership.
 
-## Missing controls proven by source but not dynamically reproduced
+## Missing controls and corroborated race evidence
 
-These are real control absences visible in source, but this audit did not execute a multi-process duplicate-write race. They are not claimed as observed duplicate external effects.
+These are real control absences visible in source. This audit did not execute a multi-process duplicate-write race itself. The merged edge-case matrix later provided offline fixture reproduction for the publish and sync admission races and for a distinct partial migration-table failure; scheduling double-booking, stale-job overwrite, OAuth interruption, migration leasing, and same-key agent creation remain source-proven control absences or uncertainties here, not observed live external effects.
 
 1. **Cross-process publish dispatch is not atomically claimed.** `YouTubeBrowserPublisher._confirm_lock` is a `threading.Lock`, so it cannot coordinate separate API/CLI processes. `_consume_queued_attempt()` reads the queued row, validates it, updates proposal state, then transitions the attempt inside application transactions. `next_queued_attempt_id()` selects `QUEUED` rows with null timestamps but no lease/owner. There is no single conditional `UPDATE publish_attempts SET status='submitting', owner=..., lease=... WHERE id=... AND status='queued'` equivalent. Existing tests cover restart, interruption, stale attempts, cross-process late outcomes, and fail-closed `unknown`; they do not prove at-most-once browser submission when two independent processes run workers against the same database.
 2. **Cross-process scheduling can double-book a local date.** Proposal approval/lineup acceptance uses a process-local `_schedule_lock` plus a scan of existing scheduled slots. `Proposal.scheduled_publish_at` is indexed but not unique. Two processes can choose the same free date before either commits. This affects local scheduling correctness; it does not bypass publication gates.
 3. **Cross-process sync duplicate prevention is heuristic.** `SyncService` uses process-local locks and a recent-`running` scan, then inserts a new row. Two processes can pass the scan concurrently. There is no active-run lease or conditional insert keyed by account. Unique content/comment constraints reduce duplicate stored rows but do not prevent duplicate provider calls/quota consumption.
-4. **Stale-job recovery uses wall-clock age without ownership/heartbeat.** Search (6h), generation (size-adjusted), and sync (30min) stale rules can misclassify a long live job in another process. The original worker can later write terminal state over the stale-failure status because these job tables do not enforce run transition guards. Conversely, a crashed job remains `running` until some later startup/new job invokes recovery.
+4. **Stale-job recovery uses wall-clock age without ownership/heartbeat.** Search (6h), generation (size-adjusted), and sync (30min) stale rules can misclassify a long live job in another process. The original worker can later write terminal state over the stale-failure status because these job tables do not enforce run transition guards. Conversely, a crashed job can remain `running` until startup recovery or, for search/generation, a later new job invokes recovery; ordinary sync admission only ignores rows older than the cutoff and does not close them.
 5. **OAuth account row and encrypted token blob are not one atomic durable operation.** The OAuth callback writes/commits the connected account first, then stores the token blob. Token storage itself is well controlled (encrypted blob, cross-process file lock, atomic replace), but a crash between database commit and token write leaves a connected row without usable token bytes. Recovery requires reconnect or explicit reconciliation.
 6. **Schema migration has no migration lease or application quiesce gate.** Alembic online migration runs inside a transaction, but SQLite logs non-transactional DDL and startup always migrates before serving. A concurrent old/new app instance or crash mid-migration is an operator/deployment uncertainty not covered by current fixtures.
 7. **`run_key` same-key concurrent creation has ambiguous behavior.** The unique constraint prevents duplicate rows, but the loser may receive an integrity error rather than a controlled already-running/duplicate-event result.
@@ -216,12 +225,12 @@ These are real control absences visible in source, but this audit did not execut
 | Invariant | Current result |
 | --- | --- |
 | At-most-once external publish dispatch | **Not proven across processes.** Strong intra-process ordering, payload invalidation, confirmation token, and fail-closed recovery exist; no cross-process lease/atomic claim exists. |
-| No money movement before approval | **No money movement surface found in this scope.** Paid image providers are explicitly disabled and publishing requires explicit owner gates. |
-| No damaged/unauthorized item acceptance | **Strong local gates.** Rights/quality/media validation and corrupt-image rejection are fixture-covered; no bypass was found in the audited publish path. |
+| No money movement before approval | **No direct money-movement surface found in this scope.** Paid model fallback is disabled and publishing requires explicit owner gates. Externally configured search/model providers can still have usage cost; pricing, budget caps, and provider billing were outside this audit and were not changed. |
+| No damaged/unauthorized item acceptance | **Not applicable as written; mapped local equivalent is strong.** Runway has no damaged-item marketplace acceptance surface. Rights/quality/media validation and corrupt-image rejection are fixture-covered, and no bypass was found in the audited publish path. |
 | No duplicate dispatch/events | **Partially enforced.** OAuth state is single-use by conditional update; publish payload dedupe and unique confirmation token exist; cross-process publish/sync/schedule claims lack leases. |
 | No lost receipt | **Improved but incomplete.** Publish late outcomes are preserved as audit evidence; unverified inbox replies are currently hidden as answered (G1). Preference/exposure bookkeeping after proposal acceptance is intentionally best-effort and can be lost without making acceptance fail. |
 | Owner approval before public write | **Strong.** Publishing requires explicit owner confirmation plus independent runtime/automation settings; inbox replies require explicit operator action and scopes. |
-| Crash/restart recovery | **Mixed.** Publish restart/interruption recovery is strong and tested. Sync startup recovery exists. Search/generation stale recovery is heuristic; intelligence/representation running rows lack robust recovery (G2/G3). |
+| Crash/restart recovery | **Mixed.** Publish restart/interruption recovery is strong and tested. Sync startup recovery exists. Search/generation stale recovery is heuristic; intelligence/representation running rows lack robust recovery (G2/G3). Scheduler objects are one-shot after `stop()`, although application shutdown does not restart the same object. |
 | Timeout/cancellation | **Partial.** Agent steps enforce timeouts. Public-write uncertainty is conservative. There is no general cancellation state for workspace jobs. |
 | Clock changes | **Risk remains.** Stale detection and token/session expiry use wall-clock durations; no monotonic lease heartbeat is persisted. This is architectural uncertainty, not a demonstrated clock exploit. |
 | Schema/version changes | **Mostly controlled.** Alembic ordering and schema contract tests exist; startup migration concurrency/crash semantics remain uncertain. |
@@ -231,10 +240,10 @@ These are real control absences visible in source, but this audit did not execut
 | Edge | Evidence / result |
 | --- | --- |
 | Invalid transitions | `PublishAttempt` and proposal transitions are validated by `src/runway/domain/state_machine.py`; settled attempts are immutable in `tests/unit/test_publish_attempt_state_machine.py`. Many job tables still use raw strings. |
-| Duplicate events | OAuth concurrent consume test proves only one callback succeeds. Publish queue dedupe/preflight tests exist. Cross-process dispatch/sync/schedule duplicate claims remain missing controls. |
+| Duplicate events | OAuth concurrent consume test proves only one callback succeeds. Publish queue dedupe/preflight tests exist. Edge-matrix fixtures independently demonstrated publish/sync cross-process duplicates; schedule double-booking and the missing leases remain unguarded. |
 | Out-of-order events | Publish late outcomes are preserved without illegal transitions; impossible timestamp/status combinations map to `unknown` and block work. Job status overwrite after stale recovery is not guarded. |
-| Crash recovery | Publish interruption recovery tests exist; startup recovery covers sync stale rows. Representation/intelligence `running` orphans are proven/observed gaps. |
-| Restart | Publisher queue resume and blocked-session resume tests exist. Windows launcher is idempotent and never kills unrelated services. |
+| Crash recovery | Publish interruption recovery tests exist; startup recovery covers sync stale rows. Representation/intelligence `running` orphans are proven/observed gaps. Blind-study export writes are atomic after PR #45; active-learning/arena export writes remain direct until issue #43. |
+| Restart | Publisher queue resume and blocked-session resume tests exist. Windows launcher is idempotent and never kills unrelated services. A sync-scheduler object cannot usefully start again after `stop()` because its stop event remains set; the application does not reuse that object after shutdown. |
 | Timeout | Agent step timeouts are explicit. Reply delivery timeouts are uncertain/non-retryable. Long browser submissions can be misclassified by age-based recovery across processes. |
 | Cancellation | No general job cancellation machine found. Owner cancellation/invalidation exists in publishing/lineup paths. |
 | Partial success | Sync has persisted `partial`; proposal generation returns `partial` but stores run `failed`; discovery returns `completed_with_errors` but stores `completed`. |
@@ -252,7 +261,7 @@ The base already contains substantial fixture-backed evidence, especially in:
 - `tests/unit/test_platform_oauth.py` — state single-use, expiry, platform mismatch, PKCE, unknown state, concurrent consume.
 - `tests/unit/test_platform_sync.py` — idempotent second run, cursor persistence/bounds, partial runs, authorization expiry, rate-limit partial/retryability, in-process concurrent run rejection, startup stale-run failure, transport/provider construction failures, unsupported comment capability skip.
 - `tests/unit/test_platform_inbox.py` — fail-before-send, platform rejection, timeout-after-send as uncertain/non-retryable, unanswered filtering.
-- `tests/integration/test_study_active_learning.py` — nested/escaped provenance redaction/rejection, nonfinite metadata rejection, offline blind export/import.
+- `tests/integration/test_study_active_learning.py` — nested/escaped provenance redaction/rejection, nonfinite metadata rejection, offline blind export/import, and atomic blind-export rename/interruption behavior after PR #45.
 - `tests/integration/test_creator_platforms_migration.py` and `tests/integration/test_canonical_migration.py` — upgrade/downgrade row preservation and canonical schema migration.
 
 ## Test counts
@@ -275,7 +284,7 @@ The four skipped tests are Windows launcher contract tests skipped on this Linux
 ## Remaining uncertainty
 
 1. This audit did not and must not run live OAuth, live browser publishing, social writes, paid providers, deployments, or production migrations.
-2. Multi-process duplicate submission/sync/schedule behavior is inferred from absent database leases/conditional claims; no live duplicate external effect was observed.
+2. Multi-process duplicate publish/sync behavior now has offline fixture evidence in the edge-case matrix; no live duplicate external effect was observed. Cross-process schedule double-booking is still inferred from the absent database claim/unique slot enforcement.
 3. The exact operational likelihood of multi-process use depends on how the owner runs API/CLI/scheduler instances. The launcher is safe and idempotent, but it cannot prevent a second independently started application process from sharing the database.
 4. Annotation-refresh, preference-model, draft-target, and frontier-arena internals were inventoried enough to classify their state families, but a full implementation-grade audit of every helper in those files remains future work.
 5. Whether deterministic agent-run keys are intentionally permanent failure records or should support retry is a product/design decision; the current user-visible effect is proven.
@@ -283,10 +292,12 @@ The four skipped tests are Windows launcher contract tests skipped on this Linux
 
 ## Recommended follow-up order
 
-1. Fix the unverified-reply comment-state mismatch (G1) with a regression fixture.
-2. Define cross-process publish claiming with a database conditional update/lease and prove concurrent fixture workers cannot both submit.
-3. Add retry/attempt semantics for failed deterministic intelligence runs and stale-running recovery (G2).
-4. Add representation backfill leases/requeue semantics for `running` orphans (G3).
-5. Add database-backed scheduling/sync active-work claims or explicit single-process deployment enforcement.
-6. Reconcile connected-account/token persistence after OAuth callback crashes.
-7. Normalize partial-success vocabulary across generation/search/sync jobs and add cancellation semantics if operators need it.
+1. Fix the unverified-reply comment-state mismatch (G1) with a regression fixture — opened as issue #56.
+2. Define cross-process publish claiming with a database conditional update/lease and prove concurrent fixture workers cannot both submit — already opened as issue #35 from the edge-case review.
+3. Add retry/attempt semantics for failed deterministic intelligence runs and stale-running recovery (G2) — opened as issue #57.
+4. Add representation backfill leases/requeue semantics for `running` orphans (G3) — opened as issue #58.
+5. Add database-backed scheduling/sync active-work claims or explicit single-process deployment enforcement — sync is issue #36; Lineup slot double-booking is issue #59.
+6. Reconcile connected-account/token persistence after OAuth callback crashes — opened as issue #60.
+7. Add ownership/transition guards for stale workspace and sync jobs — opened as issue #61.
+8. Complete active-learning and frontier-arena atomic exports — already opened as issue #43.
+9. Normalize partial-success vocabulary across generation/search/sync jobs and add cancellation semantics if operators need it; this is a product/design decision rather than a required safety fix.
