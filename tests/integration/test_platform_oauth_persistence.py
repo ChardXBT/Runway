@@ -498,6 +498,7 @@ def test_reconnect_completed_before_stale_sync_failure_is_not_overwritten(
         assert account is not None
         assert account.status == "connected"
         assert account.token_ref == replacement_ref
+        assert account.last_error is None
 
 
 def test_disconnect_wins_over_a_concurrent_sync_reauth_failure(oauth_env) -> None:

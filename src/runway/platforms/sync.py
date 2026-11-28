@@ -206,6 +206,7 @@ class SyncService:
         try:
             final_status = "completed"
             error_summary: str | None = None
+            account_error_finalized = False
 
             provider = self.registry.provider(Platform(self._account_platform(account_id)))
 
@@ -227,6 +228,7 @@ class SyncService:
                     items_fetched=items_fetched,
                     quota_units=quota_units,
                     error_summary=detail,
+                    account_error_finalized=True,
                 )
                 return
             except ProviderError as exc:
@@ -282,6 +284,7 @@ class SyncService:
                         record["error"],
                         token_ref=token_ref_used,
                     )
+                    account_error_finalized = True
                     break
                 except CapabilityUnsupported as exc:
                     record["status"] = "skipped"
@@ -312,6 +315,7 @@ class SyncService:
                 items_fetched=items_fetched,
                 quota_units=quota_units,
                 error_summary=error_summary,
+                account_error_finalized=account_error_finalized,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("sync run %s failed for account %s", run_id, account_id)
@@ -374,6 +378,7 @@ class SyncService:
         items_fetched: int,
         quota_units: int,
         error_summary: str | None,
+        account_error_finalized: bool = False,
     ) -> None:
         with self.database.session() as session:
             run = session.get(SyncRun, run_id)
@@ -388,7 +393,7 @@ class SyncService:
             if account is not None:
                 account.last_sync_at = utcnow()
                 account.last_sync_status = status
-                if status == "failed" and error_summary:
+                if status == "failed" and error_summary and not account_error_finalized:
                     account.last_error = error_summary
 
     # ------------------------------------------------------------------ steps
