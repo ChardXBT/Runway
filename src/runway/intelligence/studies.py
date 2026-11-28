@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +38,7 @@ from runway.db.models import (
     utcnow,
 )
 from runway.db.repositories import get_channel
+from runway.intelligence.atomic_export import write_text_atomically
 from runway.intelligence.embeddings import configuration_hash
 
 StudySplit = Literal["development", "tuning", "final_holdout"]
@@ -487,19 +486,11 @@ class BlindStudyService:
         ):
             if forbidden and (forbidden in serialized or _json_contains_text(payload, forbidden)):
                 raise RuntimeError("blind export would reveal hidden model provenance")
-        output.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            dir=output.parent,
-            prefix="blind-review-",
-            suffix=".tmp",
+        write_text_atomically(
+            output,
+            serialized + "\n",
+            temporary_prefix="blind-review-",
         )
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(serialized + "\n")
-            os.replace(temporary_name, output)
-        except BaseException:
-            Path(temporary_name).unlink(missing_ok=True)
-            raise
         with self.database.session() as session:
             loaded = session.get(BlindStudy, study.id)
             if loaded is not None and loaded.status == "planned":
@@ -1120,10 +1111,10 @@ class ActiveLearningService:
     def export(self, batch_id: int, output: Path) -> Path:
         payload = self.status(batch_id)
         payload["exported_at"] = datetime.now(UTC).isoformat()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
+        write_text_atomically(
+            output,
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
+            temporary_prefix="active-learning-",
         )
         return output
 

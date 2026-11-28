@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -196,11 +197,12 @@ async def test_content_mode_backfill_creates_one_immutable_profile_revision(
     assert evaluation["current_pipeline"]["raw_frontier_arena"]["human_response_count"] == 0
 
 
-def test_frontier_arena_is_three_arm_blind_and_fixture_labels_are_not_human(
+def _single_case_arena(
     database: Database,
     settings: Settings,
-    tmp_path: Path,
-) -> None:
+    *,
+    study_key: str = "fixture-three-arm-arena",
+) -> tuple[FrontierArenaService, int]:
     CaptureService(database, settings).run_fixture()
     with database.session() as session:
         media_id = session.scalar(
@@ -218,7 +220,7 @@ def test_frontier_arena_is_three_arm_blind_and_fixture_labels_are_not_human(
         "latency_ms": 100.0,
     }
     planned = service.plan(
-        study_key="fixture-three-arm-arena",
+        study_key=study_key,
         cases=[
             ArenaCasePlan(
                 case_key="case-1",
@@ -238,7 +240,15 @@ def test_frontier_arena_is_three_arm_blind_and_fixture_labels_are_not_human(
         ],
         target_case_count=50,
     )
-    study_id = int(planned["study_id"])
+    return service, int(planned["study_id"])
+
+
+def test_frontier_arena_is_three_arm_blind_and_fixture_labels_are_not_human(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    service, study_id = _single_case_arena(database, settings)
     export_path = service.export(study_id, tmp_path / "arena.json")
     exported = export_path.read_text(encoding="utf-8")
     assert "raw_frontier" not in exported
@@ -257,6 +267,87 @@ def test_frontier_arena_is_three_arm_blind_and_fixture_labels_are_not_human(
     assert report["human_responses"] == 0
     assert report["supports_runway_frontier_beats_raw"] is False
     assert report["supports_runway_weaker_beats_raw"] is False
+
+
+def test_frontier_arena_export_uses_temporary_sibling_then_atomic_rename(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, study_id = _single_case_arena(database, settings, study_key="atomic-rename-arena")
+    output = tmp_path / "arena.json"
+    replacements: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def recording_replace(source: object, destination: object) -> None:
+        replacements.append((Path(source), Path(destination)))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+    service.export(study_id, output)
+
+    assert len(replacements) == 1
+    temporary, destination = replacements[0]
+    assert destination == output
+    assert temporary.parent == output.parent
+    assert temporary != output
+    assert temporary.name.endswith(".tmp")
+    assert not temporary.exists()
+    exported = output.read_text(encoding="utf-8")
+    assert json.loads(exported)["format_version"] == "runway-frontier-arena-v1"
+    assert "raw_frontier" not in exported
+    assert "runway_frontier" not in exported
+    assert "runway_weaker" not in exported
+
+
+@pytest.mark.parametrize("has_existing_export", [False, True])
+def test_frontier_arena_export_interruption_cannot_leave_partial_final_export(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    has_existing_export: bool,
+) -> None:
+    service, study_id = _single_case_arena(database, settings, study_key="atomic-stop-arena")
+    output = tmp_path / "arena.json"
+    if has_existing_export:
+        output.write_text("complete prior export\n", encoding="utf-8")
+
+    def interrupted_replace(source: object, destination: object) -> None:
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr(os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="simulated interruption"):
+        service.export(study_id, output)
+
+    if has_existing_export:
+        assert output.read_text(encoding="utf-8") == "complete prior export\n"
+    else:
+        assert not output.exists()
+    temporary_leftovers = [path for path in tmp_path.iterdir() if path != output and path.is_file()]
+    assert temporary_leftovers == []
+
+
+def test_frontier_arena_export_overwrite_preserves_provenance_blinding(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    service, study_id = _single_case_arena(database, settings, study_key="overwrite-arena")
+    output = tmp_path / "nested" / "arena.json"
+    output.parent.mkdir()
+    output.write_text("stale partial export\n", encoding="utf-8")
+
+    service.export(study_id, output)
+
+    exported = output.read_text(encoding="utf-8")
+    assert exported != "stale partial export\n"
+    assert json.loads(exported)["cases"][0]["case_key"] == "case-1"
+    assert "raw_frontier" not in exported
+    assert "runway_frontier" not in exported
+    assert "runway_weaker" not in exported
+    assert "hidden_label" not in exported
 
 
 def test_no_download_neural_readiness_and_composed_retrieval_boundary(
