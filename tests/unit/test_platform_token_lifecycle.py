@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -177,6 +177,73 @@ def test_tokens_outside_the_refresh_window_are_returned_without_provider_work(en
 
     assert registry.fresh_token(Platform.youtube, no_expiry_ref).access_token == "no-expiry"
     assert registry.fresh_token(Platform.youtube, fresh_ref).access_token == "fresh"
+
+
+@pytest.mark.parametrize("remaining", [timedelta(0), timedelta(seconds=-1)])
+def test_zero_or_negative_remaining_token_lifetime_refreshes(env, remaining: timedelta) -> None:
+    settings, database, registry = env
+
+    class RefreshingProvider(MockPlatformProvider):
+        def refresh(self, token: TokenSet) -> TokenSet:
+            return token.model_copy(
+                update={
+                    "access_token": "fresh-after-expiry",
+                    "expires_at": datetime.now(UTC) + timedelta(hours=1),
+                }
+            )
+
+    registry.set_provider(Platform.youtube, RefreshingProvider(Platform.youtube, settings))
+    token_ref = registry.token_store.new_token_ref()
+    registry.token_store.store(
+        token_ref,
+        TokenSet(access_token="expiring-now", expires_at=datetime.now(UTC) + remaining),
+    )
+
+    assert registry.fresh_token(Platform.youtube, token_ref).access_token == "fresh-after-expiry"
+
+
+def test_naive_expiry_is_interpreted_as_utc_instead_of_crashing(env) -> None:
+    settings, database, registry = env
+
+    class RefreshingProvider(MockPlatformProvider):
+        def refresh(self, token: TokenSet) -> TokenSet:
+            return token.model_copy(
+                update={
+                    "access_token": "fresh-naive-expiry",
+                    "expires_at": datetime.now(UTC) + timedelta(hours=1),
+                }
+            )
+
+    registry.set_provider(Platform.youtube, RefreshingProvider(Platform.youtube, settings))
+    token_ref = registry.token_store.new_token_ref()
+    naive_expiry = (datetime.now(UTC) + timedelta(minutes=1)).replace(tzinfo=None)
+    registry.token_store.store(
+        token_ref,
+        TokenSet(access_token="naive-expiry", expires_at=naive_expiry),
+    )
+
+    assert registry.fresh_token(Platform.youtube, token_ref).access_token == "fresh-naive-expiry"
+
+
+def test_non_utc_expiry_is_compared_as_an_instant(env) -> None:
+    settings, database, registry = env
+
+    class MustNotRefresh(MockPlatformProvider):
+        def refresh(self, token: TokenSet) -> TokenSet:  # pragma: no cover
+            raise AssertionError("fresh non-UTC tokens must not call the provider")
+
+    registry.set_provider(Platform.youtube, MustNotRefresh(Platform.youtube, settings))
+    token_ref = registry.token_store.new_token_ref()
+    offset = timezone(timedelta(hours=-5))
+    registry.token_store.store(
+        token_ref,
+        TokenSet(
+            access_token="offset-expiry",
+            expires_at=datetime.now(offset) + timedelta(hours=1),
+        ),
+    )
+
+    assert registry.fresh_token(Platform.youtube, token_ref).access_token == "offset-expiry"
 
 
 def test_instagram_long_lived_tokens_refresh_well_before_expiry(env) -> None:
