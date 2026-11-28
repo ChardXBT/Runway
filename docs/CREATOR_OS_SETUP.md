@@ -200,7 +200,7 @@ Community posts continue to use the Lineup calendar.
 | Sync run *partial* with `PermissionMissing` on a step | A scope was not granted | Reconnect and grant the permission, or ignore the step. |
 | Sync run *partial* with `RateLimited` | Quota or rate limit hit | Wait; YouTube quota resets at midnight Pacific. |
 | TikTok connect never returns | Tunnel not rewriting Host, so the API answered 421 | Add the host-header rewrite flag to the tunnel. |
-| `data/secrets/token.key` missing after a restore | Key file was not restored with the data dir | Tokens cannot be decrypted; reconnect each account. |
+| `data/secrets/token.key` missing after a restore | Key file was not restored with the data dir | Reconnect each account. Runway quarantines the unreadable encrypted blob under `data/secrets/quarantine/` for owner recovery and creates a fresh encrypted store automatically. |
 
 ## 9. Supervisor compatibility
 

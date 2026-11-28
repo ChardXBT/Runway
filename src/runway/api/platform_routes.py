@@ -41,7 +41,7 @@ from runway.platforms.oauth import OAuthStateError, OAuthStateService
 from runway.platforms.overview import OverviewService, account_freshness, metric_window_start
 from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncAccountDisconnected, SyncRunInProgress, SyncService
-from runway.platforms.tokens import pkce_challenge
+from runway.platforms.tokens import TokenStoreError, pkce_challenge
 
 logger = logging.getLogger(__name__)
 
@@ -489,7 +489,13 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
     def disconnect(account_id: int, payload: ConfirmedRequest) -> dict[str, object]:
         account = _account_or_404(account_id)
         if account.token_ref:
-            token = registry.token_store.load(account.token_ref)
+            try:
+                token = registry.token_store.load(account.token_ref)
+            except TokenStoreError:
+                # Disconnect must remain available when disaster recovery is
+                # needed. The delete below performs the quarantining mutation;
+                # no token plaintext is available for a provider revocation call.
+                token = None
             if token is not None:
                 try:
                     registry.provider(Platform(account.platform)).revoke(token)

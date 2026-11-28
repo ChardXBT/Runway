@@ -11,6 +11,8 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,16 @@ from runway.platforms.base import TokenSet, deserialize_token, serialize_token
 
 class TokenStoreError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class TokenStoreRecovery:
+    """Secret-free description of quarantined encrypted token-store material."""
+
+    quarantine_dir: Path
+    store_preserved: bool
+    key_preserved: bool
+    reason: str
 
 
 class TokenStore:
@@ -101,7 +113,8 @@ class TokenStore:
         if self.store_path.is_file() and self.store_path.stat().st_size > 0:
             raise TokenStoreError(
                 "platform token key file is missing while an encrypted token "
-                "store exists; restore data/secrets/token.key or remove the store"
+                "store exists; restore data/secrets/token.key for recovery or "
+                "reconnect accounts so the unreadable store can be quarantined"
             )
         self.secrets_dir.mkdir(parents=True, exist_ok=True)
         key = Fernet.generate_key()
@@ -117,12 +130,119 @@ class TokenStore:
             os.chmod(self.key_path, 0o600)
         return key
 
+    def _fernet(self) -> Fernet:
+        try:
+            return Fernet(self._load_key())
+        except ValueError as exc:
+            raise TokenStoreError("platform token key file is malformed") from exc
+
+    def _unreadable_reason(self) -> str | None:
+        """Classify unreadable encrypted-store material without exposing its contents."""
+        if not self.store_path.is_file():
+            return None
+        blob = self.store_path.read_bytes().strip()
+        if not blob:
+            return "unreadable empty encrypted token store"
+        key = self.key_path.read_bytes().strip() if self.key_path.is_file() else b""
+        if not key:
+            return "unreadable encrypted token store with a missing key"
+        try:
+            self._read_store(self._fernet())
+        except TokenStoreError:
+            return "unreadable encrypted token store"
+        return None
+
+    def _quarantine_unreadable_locked(self) -> TokenStoreRecovery | None:
+        """Move unreadable encrypted material aside while holding the store lock.
+
+        Recovery must never silently discard potentially decryptable ciphertext or
+        key material. The active filenames are moved into a unique quarantine
+        directory, still inside the ignored ``data/secrets`` tree, and a small
+        secret-free manifest records why they are there. The caller can then
+        create a fresh key and empty store for reauthorization.
+        """
+        reason = self._unreadable_reason()
+        if reason is None:
+            return None
+
+        self.secrets_dir.mkdir(parents=True, exist_ok=True)
+        quarantine_root = self.secrets_dir / "quarantine"
+        quarantine_root.mkdir(parents=True, exist_ok=True)
+        if sys.platform != "win32":
+            os.chmod(quarantine_root, 0o700)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        quarantine_dir = quarantine_root / f"token-store-{stamp}-{secrets.token_hex(4)}"
+        quarantine_dir.mkdir(mode=0o700)
+        if sys.platform != "win32":
+            os.chmod(quarantine_dir, 0o700)
+
+        store_preserved = False
+        key_preserved = False
+        if self.store_path.exists():
+            os.replace(self.store_path, quarantine_dir / self.store_path.name)
+            store_preserved = True
+            if sys.platform != "win32":
+                os.chmod(quarantine_dir / self.store_path.name, 0o600)
+        if self.key_path.exists():
+            os.replace(self.key_path, quarantine_dir / self.key_path.name)
+            key_preserved = True
+            if sys.platform != "win32":
+                os.chmod(quarantine_dir / self.key_path.name, 0o600)
+
+        manifest = {
+            "version": 1,
+            "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "reason": reason,
+            "store_preserved": store_preserved,
+            "key_preserved": key_preserved,
+            "note": (
+                "Encrypted token-store material quarantined for owner recovery; "
+                "no plaintext tokens are stored in this manifest."
+            ),
+        }
+        fd, temp_name = tempfile.mkstemp(dir=quarantine_dir, prefix="recovery-", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+            os.replace(temp_name, quarantine_dir / "recovery.json")
+        except BaseException:
+            Path(temp_name).unlink(missing_ok=True)
+            raise
+        return TokenStoreRecovery(
+            quarantine_dir=quarantine_dir,
+            store_preserved=store_preserved,
+            key_preserved=key_preserved,
+            reason=reason,
+        )
+
+    def quarantine_unreadable(self) -> TokenStoreRecovery | None:
+        """Quarantine a proven-unreadable encrypted store, or return ``None``.
+
+        Read-only token loads never mutate the store. Operators and callers that
+        need recovery can invoke this explicitly, while token mutations use it
+        internally before writing replacement credentials.
+        """
+        with self.locked():
+            return self._quarantine_unreadable_locked()
+
+    def _read_for_update(self) -> tuple[Fernet, dict[str, Any]]:
+        """Read the monolithic payload for a mutation, recovering if impossible."""
+        try:
+            fernet = self._fernet()
+            return fernet, self._read_store(fernet)
+        except TokenStoreError:
+            recovery = self._quarantine_unreadable_locked()
+            if recovery is None:
+                raise
+        fernet = self._fernet()
+        return fernet, self._read_store(fernet)
+
     def _read_store(self, fernet: Fernet) -> dict[str, Any]:
         if not self.store_path.is_file():
             return {}
         blob = self.store_path.read_bytes().strip()
         if not blob:
-            return {}
+            raise TokenStoreError("platform token store is empty or incomplete")
         try:
             plaintext = fernet.decrypt(blob)
         except InvalidToken as exc:
@@ -154,14 +274,13 @@ class TokenStore:
 
     def store(self, token_ref: str, token: TokenSet) -> None:
         with self.locked():
-            fernet = Fernet(self._load_key())
-            payload = self._read_store(fernet)
+            fernet, payload = self._read_for_update()
             payload[token_ref] = serialize_token(token)
             self._write_store(fernet, payload)
 
     def load(self, token_ref: str) -> TokenSet | None:
         with self.locked():
-            fernet = Fernet(self._load_key())
+            fernet = self._fernet()
             payload = self._read_store(fernet)
             entry = payload.get(token_ref)
             if entry is None:
@@ -172,8 +291,7 @@ class TokenStore:
 
     def delete(self, token_ref: str) -> None:
         with self.locked():
-            fernet = Fernet(self._load_key())
-            payload = self._read_store(fernet)
+            fernet, payload = self._read_for_update()
             if token_ref in payload:
                 del payload[token_ref]
                 self._write_store(fernet, payload)
