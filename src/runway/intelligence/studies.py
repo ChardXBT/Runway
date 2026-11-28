@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -486,7 +488,18 @@ class BlindStudyService:
             if forbidden and (forbidden in serialized or _json_contains_text(payload, forbidden)):
                 raise RuntimeError("blind export would reveal hidden model provenance")
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(serialized + "\n", encoding="utf-8")
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=output.parent,
+            prefix="blind-review-",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(serialized + "\n")
+            os.replace(temporary_name, output)
+        except BaseException:
+            Path(temporary_name).unlink(missing_ok=True)
+            raise
         with self.database.session() as session:
             loaded = session.get(BlindStudy, study.id)
             if loaded is not None and loaded.status == "planned":
