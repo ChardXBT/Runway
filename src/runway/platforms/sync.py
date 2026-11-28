@@ -328,7 +328,7 @@ class SyncService:
             platform = account.platform
         if not token_ref:
             raise AuthorizationExpired("account has no stored token", status=401)
-        return self.registry.fresh_token(Platform(platform), token_ref)
+        return self.registry.fresh_account_token(Platform(platform), account_id)
 
     def _account_platform(self, account_id: int) -> str:
         with self.database.session() as session:
@@ -340,7 +340,7 @@ class SyncService:
     def _finish_account_needs_reauth(self, account_id: int, detail: str) -> None:
         with self.database.session() as session:
             account = session.get(ConnectedAccount, account_id)
-            if account is not None:
+            if account is not None and account.status != "disconnected":
                 account.status = "needs_reauth"
                 account.last_error = detail
 

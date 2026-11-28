@@ -15,7 +15,7 @@ from runway.api.app import create_app
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
-from runway.platforms.base import TokenSet
+from runway.platforms.base import AuthorizationExpired, TokenSet
 from runway.platforms.capabilities import Platform
 from runway.platforms.registry import ProviderRegistry
 from runway.platforms.sync import SyncService
@@ -349,6 +349,55 @@ def test_concurrent_reconnect_and_disconnect_never_reports_connected_without_tok
         else:
             assert final_account.status == "disconnected"
             assert final_account.token_ref is None
+
+
+def test_concurrent_reconnect_token_swap_does_not_look_like_revoked_access(
+    oauth_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = oauth_env.database
+    old_ref = "old-token-ref"
+    account_id = _insert_connected_account(database, old_ref)
+    registry = ProviderRegistry(database, oauth_env.settings)
+    registry.token_store.store(old_ref, TokenSet(access_token="old-access"))
+    new_ref = "new-token-ref"
+    original_fresh_token = registry.fresh_token
+    stale_refs_seen: list[str] = []
+
+    def swap_then_fail_stale_ref(platform: Platform, token_ref: str) -> TokenSet:
+        if token_ref == old_ref and not stale_refs_seen:
+            stale_refs_seen.append(token_ref)
+            registry.token_store.store(new_ref, TokenSet(access_token="new-access"))
+            with database.session() as session:
+                account = session.get(ConnectedAccount, account_id)
+                assert account is not None
+                account.token_ref = new_ref
+            registry.token_store.delete(old_ref)
+            raise AuthorizationExpired("stale captured token ref", status=401)
+        return original_fresh_token(platform, token_ref)
+
+    monkeypatch.setattr(registry, "fresh_token", swap_then_fail_stale_ref)
+    fresh = SyncService(database, oauth_env.settings, registry).ensure_fresh(account_id)
+
+    assert fresh.access_token == "new-access"
+    assert stale_refs_seen == [old_ref]
+
+
+def test_disconnect_wins_over_a_concurrent_sync_reauth_failure(oauth_env) -> None:
+    database = oauth_env.database
+    account_id = _insert_connected_account(database, "disconnect-token-ref")
+    with database.session() as session:
+        account = session.get(ConnectedAccount, account_id)
+        assert account is not None
+        account.status = "disconnected"
+        account.token_ref = None
+
+    sync = SyncService(database, oauth_env.settings)
+    sync._finish_account_needs_reauth(account_id, "stale sync failure")
+
+    with database.session() as session:
+        account = session.get(ConnectedAccount, account_id)
+        assert account is not None
+        assert account.status == "disconnected"
 
 
 def test_expired_access_token_is_refreshed_instead_of_requiring_reauth(oauth_env) -> None:

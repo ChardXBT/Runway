@@ -117,6 +117,34 @@ class ProviderRegistry:
             self.token_store.store(token_ref, refreshed)
             return refreshed
 
+    def _account_token_ref(self, account_id: int) -> str | None:
+        with self.database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            return str(account.token_ref) if account is not None and account.token_ref else None
+
+    def fresh_account_token(self, platform: Platform, account_id: int) -> TokenSet:
+        """Load a fresh token even if a reconnect swaps the account's token ref.
+
+        Sync and inbox work capture account state before network work. A
+        reconnect may commit a fresh token ref and remove the old one in that
+        gap; treating the stale ref as a revoked grant would incorrectly mark a
+        healthy reconnected account as needing reauth. Retry once with the
+        row's current ref, while preserving the original failure when the ref
+        is unchanged or the account has been disconnected.
+        """
+        token_ref = self._account_token_ref(account_id)
+        if token_ref is None:
+            raise AuthorizationExpired("account has no stored token", status=401)
+        for _ in range(2):
+            try:
+                return self.fresh_token(platform, token_ref)
+            except AuthorizationExpired:
+                current_ref = self._account_token_ref(account_id)
+                if current_ref is None or current_ref == token_ref:
+                    raise
+                token_ref = current_ref
+        raise AssertionError("unreachable")
+
     def reconcile_connected_accounts(self) -> TokenReconciliationResult:
         """Reconcile account rows with the encrypted token blob.
 
