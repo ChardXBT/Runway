@@ -12,9 +12,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from runway.db.base import Database
@@ -384,6 +384,7 @@ class IntelligenceAgentHarness:
                     budget_json=budget_json,
                     configuration_hash=config_hash,
                 )
+                .execution_options(synchronize_session=False)
             )
         else:
             stored_expiry = existing.lease_expires_at
@@ -395,7 +396,10 @@ class IntelligenceAgentHarness:
             lease_predicate = (
                 IntelligenceAgentRun.lease_expires_at.is_(None)
                 if stored_expiry is None
-                else IntelligenceAgentRun.lease_expires_at == stored_expiry
+                else and_(
+                    IntelligenceAgentRun.lease_expires_at == stored_expiry,
+                    IntelligenceAgentRun.lease_expires_at <= now,
+                )
             )
             result = session.execute(
                 update(IntelligenceAgentRun)
@@ -416,6 +420,7 @@ class IntelligenceAgentHarness:
                     budget_json=budget_json,
                     configuration_hash=config_hash,
                 )
+                .execution_options(synchronize_session=False)
             )
         if self._rowcount(result) != 1:
             raise AgentRunConflictError(f"agent run {key!r} was claimed by a concurrent execution")
@@ -430,6 +435,7 @@ class IntelligenceAgentHarness:
                 error_summary="stale lease recovered before retry",
                 completed_at=now,
             )
+            .execution_options(synchronize_session=False)
         )
         return _RunClaim(
             run_id=existing.id,
@@ -459,7 +465,7 @@ class IntelligenceAgentHarness:
         config_hash: str,
     ) -> _RunClaim:
         owner = f"lease-{uuid.uuid4().hex}"
-        for _attempt in range(2):
+        for claim_attempt in range(2):
             try:
                 with self.database.session() as session:
                     existing = session.scalar(
@@ -505,6 +511,14 @@ class IntelligenceAgentHarness:
             except IntegrityError as exc:
                 if not self._is_duplicate_key_error(exc):
                     raise
+            except OperationalError as exc:
+                message = str(exc).casefold()
+                if "locked" not in message and "snapshot" not in message:
+                    raise
+                if claim_attempt == 1:
+                    raise AgentRunConflictError(
+                        f"agent run {key!r} is contended by a concurrent execution"
+                    ) from exc
         raise AgentRunConflictError(
             f"concurrent creation of agent run {key!r} could not be reconciled"
         )
@@ -534,6 +548,7 @@ class IntelligenceAgentHarness:
                 IntelligenceAgentRun.status == "running",
             )
             .values(lease_expires_at=self._lease_expiry())
+            .execution_options(synchronize_session=False)
         )
         return self._rowcount(result) == 1
 
@@ -660,6 +675,7 @@ class IntelligenceAgentHarness:
                     lease_owner=None,
                     lease_expires_at=None,
                 )
+                .execution_options(synchronize_session=False)
             )
             if self._rowcount(result) != 1:
                 raise AgentRunConflictError(
@@ -702,6 +718,7 @@ class IntelligenceAgentHarness:
                     lease_owner=None,
                     lease_expires_at=None,
                 )
+                .execution_options(synchronize_session=False)
             )
             if self._rowcount(result) != 1:
                 raise AgentRunConflictError(
@@ -776,6 +793,7 @@ class IntelligenceAgentHarness:
                     lease_owner=None,
                     lease_expires_at=None,
                 )
+                .execution_options(synchronize_session=False)
             )
             if self._rowcount(result) != 1:
                 raise AgentRunConflictError(
@@ -1225,7 +1243,8 @@ class IntelligenceAgentHarness:
                 )
                 if existing is not None:
                     if (
-                        existing.configuration_hash != config_hash
+                        existing.channel_id != channel_id
+                        or existing.configuration_hash != config_hash
                         or existing.status != terminal_status
                         or json.loads(existing.output_json) != output_payload
                     ):
@@ -1302,7 +1321,8 @@ class IntelligenceAgentHarness:
                 )
                 if existing is not None:
                     if (
-                        existing.configuration_hash != config_hash
+                        existing.channel_id != channel_id
+                        or existing.configuration_hash != config_hash
                         or existing.status != terminal_status
                         or json.loads(existing.output_json) != output_payload
                     ):
@@ -1312,6 +1332,13 @@ class IntelligenceAgentHarness:
                     return existing.id
             raise AgentRunConflictError(
                 f"concurrent creation of observed pipeline {run_key!r} could not be reconciled"
+            ) from exc
+        except OperationalError as exc:
+            message = str(exc).casefold()
+            if "locked" not in message and "snapshot" not in message:
+                raise
+            raise AgentRunConflictError(
+                f"observed pipeline {run_key!r} is contended by a concurrent creation"
             ) from exc
         return run_id
 

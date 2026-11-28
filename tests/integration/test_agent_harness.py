@@ -735,17 +735,28 @@ def test_concurrent_same_key_creation_has_one_controlled_winner(
     database: Database,
     settings: Settings,
 ) -> None:
-    del database  # each thread uses its own engine against the same database file
-    with Database(settings).session() as session:
+    with database.session() as session:
         channel_id = get_channel(session, settings.channel_handle).id
+    del database  # each worker thread uses its own engine against the same database file
     barrier = threading.Barrier(2)
     release = threading.Event()
     outcomes: list[tuple[str, object]] = []
     input_value = AgentInputEnvelope(payload={"candidate_id": 21})
 
+    class SynchronizedHarness(IntelligenceAgentHarness):
+        def __init__(self, database: Database) -> None:
+            super().__init__(database, lease_seconds=1)
+            self._synchronize_next_claim = True
+
+        def _lease_expiry(self) -> datetime:
+            if self._synchronize_next_claim:
+                self._synchronize_next_claim = False
+                barrier.wait(timeout=3)
+            return super()._lease_expiry()
+
     def worker(worker_index: int) -> None:
         local_database = Database(settings)
-        harness = IntelligenceAgentHarness(local_database, lease_seconds=1)
+        harness = SynchronizedHarness(local_database)
 
         async def handler(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
             await asyncio.to_thread(release.wait, 2)
