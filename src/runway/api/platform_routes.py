@@ -41,7 +41,7 @@ from runway.platforms.oauth import OAuthStateError, OAuthStateService
 from runway.platforms.overview import OverviewService, account_freshness, metric_window_start
 from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncAccountDisconnected, SyncRunInProgress, SyncService
-from runway.platforms.tokens import pkce_challenge
+from runway.platforms.tokens import TokenStoreError, pkce_challenge
 
 logger = logging.getLogger(__name__)
 
@@ -298,40 +298,65 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         identity = provider.fetch_identity(token)
         token = _enrich_token(platform, token, identity.raw, identity.external_account_id)
         now = utcnow()
-        with database.session() as session:
-            account = session.scalar(
-                select(ConnectedAccount).where(
-                    ConnectedAccount.platform == platform.value,
-                    ConnectedAccount.external_account_id == identity.external_account_id,
-                )
-            )
-            if account is None:
-                account = ConnectedAccount(
-                    platform=platform.value,
-                    external_account_id=identity.external_account_id,
-                    token_ref=registry.token_store.new_token_ref(),
-                )
-                session.add(account)
-            if account.token_ref is None:
-                # Disconnect clears token_ref; a reconnect needs a fresh one.
-                account.token_ref = registry.token_store.new_token_ref()
-            account.handle = identity.handle
-            account.display_name = identity.display_name
-            account.avatar_url = identity.avatar_url
-            account.profile_url = identity.profile_url
-            account.account_type = identity.account_type
-            account.status = "connected"
-            account.granted_scopes_json = json.dumps(scopes)
-            account.connected_at = now
-            account.last_verified_at = now
-            account.last_error = None
-            account.metadata_json = json.dumps(
-                {"raw": identity.raw, "scopes_source": scopes_source}
-            )
-            session.flush()
-            token_ref = str(account.token_ref)
-            account_id = account.id
-        registry.token_store.store(token_ref, token)
+        token_ref = registry.token_store.new_token_ref()
+        old_token_ref: str | None = None
+        # Store the replacement token before committing the row that references
+        # it. A crash can therefore leave only an encrypted orphan (which
+        # reconciliation prunes), never a connected row without usable token
+        # bytes. The token-store lock also serializes this swap with disconnect.
+        with registry.token_store.locked():
+            registry.token_store.store(token_ref, token)
+            try:
+                with database.session() as session:
+                    account = session.scalar(
+                        select(ConnectedAccount).where(
+                            ConnectedAccount.platform == platform.value,
+                            ConnectedAccount.external_account_id == identity.external_account_id,
+                        )
+                    )
+                    if account is None:
+                        account = ConnectedAccount(
+                            platform=platform.value,
+                            external_account_id=identity.external_account_id,
+                            token_ref=token_ref,
+                        )
+                        session.add(account)
+                    else:
+                        old_token_ref = account.token_ref
+                        account.token_ref = token_ref
+                    account.handle = identity.handle
+                    account.display_name = identity.display_name
+                    account.avatar_url = identity.avatar_url
+                    account.profile_url = identity.profile_url
+                    account.account_type = identity.account_type
+                    account.status = "connected"
+                    account.granted_scopes_json = json.dumps(scopes)
+                    account.connected_at = now
+                    account.last_verified_at = now
+                    account.last_error = None
+                    account.metadata_json = json.dumps(
+                        {"raw": identity.raw, "scopes_source": scopes_source}
+                    )
+                    session.flush()
+                    account_id = account.id
+            except BaseException:
+                try:
+                    registry.token_store.delete(token_ref)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "token cleanup after connection persistence failure failed",
+                        exc_info=True,
+                    )
+                raise
+            if old_token_ref and old_token_ref != token_ref:
+                try:
+                    registry.token_store.delete(old_token_ref)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "old platform token cleanup failed for account %s",
+                        account_id,
+                        exc_info=True,
+                    )
         with database.session() as session:
             persisted = session.get(ConnectedAccount, account_id)
             assert persisted is not None
@@ -344,6 +369,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
     def platforms() -> dict[str, object]:
         if settings.platform_provider == "mock":
             registry.ensure_mock_accounts()
+        registry.reconcile_connected_accounts()
         with database.session() as session:
             accounts = session.scalars(select(ConnectedAccount)).all()
             views = [_account_view(database, settings, account) for account in accounts]
@@ -368,6 +394,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
     def accounts() -> list[dict[str, object]]:
         if settings.platform_provider == "mock":
             registry.ensure_mock_accounts()
+        registry.reconcile_connected_accounts()
         with database.session() as session:
             records = session.scalars(select(ConnectedAccount)).all()
             return [_account_view(database, settings, account) for account in records]
@@ -441,7 +468,11 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 redirect_uri=record.redirect_uri,
                 code_verifier=record.code_verifier,
             )
-            _persist_connection(parsed, token, token.scopes)
+            try:
+                _persist_connection(parsed, token, token.scopes)
+            except TokenStoreError:
+                logger.warning("oauth token persistence failed for %s", platform, exc_info=True)
+                return fail("token_storage_failed")
         except ProviderError as exc:
             logger.warning("oauth callback failed for %s: %s", platform, exc.detail)
             return fail("exchange_failed")
@@ -470,9 +501,15 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             with contextlib.suppress(ProviderError):
                 token = provider.exchange_long_lived(token)
         scopes = list(dict.fromkeys(str(scope) for scope in payload.granted_scopes))
-        account = _persist_connection(
-            Platform.instagram, token, scopes, scopes_source="user_declared"
-        )
+        try:
+            account = _persist_connection(
+                Platform.instagram, token, scopes, scopes_source="user_declared"
+            )
+        except TokenStoreError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="token storage failed; the account was not connected",
+            ) from exc
         return {"account_id": account.id, "platform": "instagram"}
 
     # ----------------------------------------------------------- account ops
@@ -487,25 +524,50 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
 
     @router.post("/platforms/accounts/{account_id}/disconnect")
     def disconnect(account_id: int, payload: ConfirmedRequest) -> dict[str, object]:
-        account = _account_or_404(account_id)
-        if account.token_ref:
-            token = registry.token_store.load(account.token_ref)
-            if token is not None:
-                try:
-                    registry.provider(Platform(account.platform)).revoke(token)
-                except ProviderError as exc:
-                    logger.warning(
-                        "token revoke failed for account %s: %s",
-                        account_id,
-                        exc.detail,
-                    )
-            registry.token_store.delete(account.token_ref)
-        with database.session() as session:
-            record = session.get(ConnectedAccount, account_id)
-            if record is not None:
+        _account_or_404(account_id)
+        token_ref: str | None = None
+        # The database status transition and token deletion are serialized
+        # with connect/reconnect token replacement by the same cross-process
+        # lock. The row is committed first; reconciliation can prune a token
+        # orphaned by a crash after that commit, but no crash can leave a row
+        # that falsely reports a connected account while its token is gone.
+        with registry.token_store.locked():
+            with database.session() as session:
+                record = session.get(ConnectedAccount, account_id)
+                if record is None:
+                    raise HTTPException(status_code=404, detail="account not found")
+                token_ref = str(record.token_ref) if record.token_ref else None
+                token = None
+                if token_ref:
+                    try:
+                        token = registry.token_store.load(token_ref)
+                    except TokenStoreError:
+                        logger.warning(
+                            "stored token unreadable during disconnect for account %s",
+                            account_id,
+                            exc_info=True,
+                        )
+                if token is not None:
+                    try:
+                        registry.provider(Platform(record.platform)).revoke(token)
+                    except ProviderError as exc:
+                        logger.warning(
+                            "token revoke failed for account %s: %s",
+                            account_id,
+                            exc.detail,
+                        )
                 record.status = "disconnected"
                 record.token_ref = None
                 record.last_error = None
+            if token_ref:
+                try:
+                    registry.token_store.delete(token_ref)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "token delete failed during disconnect for account %s",
+                        account_id,
+                        exc_info=True,
+                    )
         return {"account_id": account_id, "status": "disconnected"}
 
     @router.post("/platforms/accounts/{account_id}/reconnect")

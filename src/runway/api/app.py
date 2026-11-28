@@ -21,6 +21,7 @@ from runway.config import Settings, get_settings
 from runway.db import initialize_database
 from runway.db.base import Database
 from runway.logging import configure_logging
+from runway.platforms.registry import ProviderRegistry
 from runway.platforms.sync import PlatformSyncScheduler, SyncService
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,19 @@ def _lifespan(
             sync_service.mark_stale_runs_failed()
         except Exception:  # noqa: BLE001
             logger.exception("stale sync-run cleanup failed during startup")
+        try:
+            reconciliation = ProviderRegistry(database, settings).reconcile_connected_accounts()
+            if (
+                reconciliation.accounts_marked_needs_reauth
+                or reconciliation.orphaned_tokens_removed
+            ):
+                logger.info(
+                    "platform token reconciliation marked_needs_reauth=%s orphaned_removed=%s",
+                    reconciliation.accounts_marked_needs_reauth,
+                    reconciliation.orphaned_tokens_removed,
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("platform token reconciliation failed during startup")
         scheduler: PlatformSyncScheduler | None = None
         if settings.platform_sync_interval_minutes > 0:
             scheduler = PlatformSyncScheduler(sync_service, settings.platform_sync_interval_minutes)

@@ -219,6 +219,37 @@ def test_reconnect_replaces_token_without_duplicating_the_account(oauth_env) -> 
         assert store.load(first_ref) is None
 
 
+def test_interruption_before_replacement_write_keeps_reconnected_account_on_old_token(
+    oauth_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
+        first = _complete_connect(web)
+        assert first.status_code == 303
+        first_account = _single_account(oauth_env.database)
+        first_ref = str(first_account.token_ref)
+        oauth_env.provider_state["access_token"] = "access-two"
+
+        original_store = TokenStore.store
+
+        def fail_replacement_store(self: TokenStore, token_ref: str, token: TokenSet) -> None:
+            if token.access_token == "access-two":
+                raise TokenStoreError("simulated crash before token replacement")
+            original_store(self, token_ref, token)
+
+        monkeypatch.setattr(TokenStore, "store", fail_replacement_store)
+        response = _complete_reconnect(web, first_account.id)
+
+        assert response.status_code == 303
+        assert response.headers["location"].endswith("/accounts?error=token_storage_failed")
+        account = _single_account(oauth_env.database)
+        assert account.status == "connected"
+        assert account.token_ref == first_ref
+        store = TokenStore(oauth_env.settings.resolved_data_dir / "secrets")
+        old_token = store.load(first_ref)
+        assert old_token is not None
+        assert old_token.access_token == "access-one"
+
+
 def test_crash_after_replacement_write_before_account_commit_keeps_old_token_usable(
     oauth_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -229,14 +260,20 @@ def test_crash_after_replacement_write_before_account_commit_keeps_old_token_usa
         first_ref = str(first_account.token_ref)
         oauth_env.provider_state["access_token"] = "access-two"
 
+        original_store = TokenStore.store
         original_commit = Session.commit
 
-        def crash_on_connected_account_commit(session: Session) -> None:
-            if any(isinstance(item, ConnectedAccount) for item in session.dirty):
-                raise RuntimeError("simulated crash before account commit")
-            return original_commit(session)
+        def crash_on_account_commit(session: Session) -> None:
+            raise RuntimeError("simulated crash before account commit")
 
-        monkeypatch.setattr(Session, "commit", crash_on_connected_account_commit)
+        def store_then_crash_before_account_commit(
+            self: TokenStore, token_ref: str, token: TokenSet
+        ) -> None:
+            original_store(self, token_ref, token)
+            if token.access_token == "access-two":
+                monkeypatch.setattr(Session, "commit", crash_on_account_commit)
+
+        monkeypatch.setattr(TokenStore, "store", store_then_crash_before_account_commit)
         response = _complete_reconnect(web, first_account.id)
         monkeypatch.setattr(Session, "commit", original_commit)
 
@@ -266,7 +303,9 @@ def test_reconciliation_removes_unreferenced_token_from_interrupted_connect(oaut
     assert store.load(orphan_ref) is None
 
 
-def test_concurrent_reconnect_and_disconnect_never_reports_connected_without_token(oauth_env) -> None:
+def test_concurrent_reconnect_and_disconnect_never_reports_connected_without_token(
+    oauth_env,
+) -> None:
     with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
         first = _complete_connect(web)
         assert first.status_code == 303

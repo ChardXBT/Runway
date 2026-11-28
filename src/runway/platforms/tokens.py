@@ -178,6 +178,19 @@ class TokenStore:
                 del payload[token_ref]
                 self._write_store(fernet, payload)
 
+    def prune_except(self, keep_refs: set[str]) -> int:
+        """Remove unreferenced token entries and return how many were removed."""
+        with self.locked():
+            fernet = Fernet(self._load_key())
+            payload = self._read_store(fernet)
+            stale_refs = [token_ref for token_ref in payload if token_ref not in keep_refs]
+            if not stale_refs:
+                return 0
+            for token_ref in stale_refs:
+                del payload[token_ref]
+            self._write_store(fernet, payload)
+            return len(stale_refs)
+
     def new_token_ref(self) -> str:
         return secrets.token_hex(16)
 

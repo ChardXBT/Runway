@@ -31,6 +31,8 @@ const ERROR_COPY: Record<string, string> = {
   expired_state: "The sign-in took too long and expired. Start the connection again.",
   denied: "Access was declined on the provider side. Nothing was connected.",
   exchange_failed: "Runway could not finish the token exchange. Check the client credentials and try again.",
+  token_storage_failed:
+    "Runway could not store the authorization token. Nothing was connected; try again.",
   missing_code: "The provider did not return an authorization code. Try connecting again.",
   unknown_platform: "The callback referenced an unknown platform.",
   provider_error: "The platform returned an error during sign-in. Try again.",
