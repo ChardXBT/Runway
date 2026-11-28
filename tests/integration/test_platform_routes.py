@@ -398,6 +398,7 @@ def test_reconnect_after_reconciliation_quarantines_unreadable_store_and_recover
         assert "unreadable" in manifest
         assert "yt-access" not in manifest
         assert "yt-refresh" not in manifest
+        assert original_key.decode("ascii").strip() not in manifest
 
         with database.session() as session:
             account = session.get(ConnectedAccount, account_id)

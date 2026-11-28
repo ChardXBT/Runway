@@ -45,10 +45,18 @@ def test_tampered_blob_raises_clear_error(tmp_path: Path) -> None:
     store.store(ref, _token())
     blob = bytearray(store.store_path.read_bytes())
     blob[len(blob) // 2] ^= 0xFF
-    store.store_path.write_bytes(bytes(blob))
+    tampered = bytes(blob)
+    store.store_path.write_bytes(tampered)
+    key_before = store.key_path.read_bytes()
 
     with pytest.raises(TokenStoreError):
         store.load(ref)
+
+    # Reads are non-mutating: only an explicit recovery or a token mutation may
+    # quarantine the still-potentially-recoverable ciphertext and key material.
+    assert store.store_path.read_bytes() == tampered
+    assert store.key_path.read_bytes() == key_before
+    assert not (tmp_path / "secrets" / "quarantine").exists()
 
 
 def test_missing_key_with_existing_blob_raises_clear_error(tmp_path: Path) -> None:
@@ -137,6 +145,7 @@ def test_store_quarantines_tampered_blob_and_writes_healthy_replacement(tmp_path
     assert "unreadable" in manifest
     assert "replacement-access" not in manifest
     assert "access-abc" not in manifest
+    assert original_key.decode("ascii").strip() not in manifest
 
     replacement = store.load(replacement_ref)
     assert replacement is not None
