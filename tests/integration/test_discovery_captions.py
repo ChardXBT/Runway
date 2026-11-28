@@ -10,6 +10,7 @@ from runway.captions.visual_consensus import candidate_analysis_from_mapping
 from runway.capture.service import CaptureService
 from runway.config import Settings
 from runway.db.base import Database
+from runway.db.job_leases import finish_owned_run, lease_claim_fields, new_owner_token
 from runway.db.models import SearchRun
 from runway.db.repositories import get_channel
 from runway.discovery.providers import (
@@ -352,6 +353,83 @@ def test_discovery_recovers_abandoned_runs_without_touching_active_ones(
         assert active is not None
         assert active.status == "running"
         assert active.completed_at is None
+
+
+def test_discovery_recovery_uses_lease_heartbeat_and_blocks_out_of_order_completion(
+    database: Database,
+    settings: Settings,
+) -> None:
+    now = datetime.now(UTC)
+    owner = new_owner_token()
+    live_owner = new_owner_token()
+    live_lease = lease_claim_fields(live_owner, lease_duration=timedelta(minutes=5), now=now)
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+        timed_out = SearchRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            query_plan_json="{}",
+            provider="archives",
+            status="running",
+            started_at=now,
+            owner_token=owner,
+            heartbeat_at=now - timedelta(minutes=10),
+            lease_expires_at=now - timedelta(seconds=1),
+            lease_version=1,
+        )
+        long_live = SearchRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            query_plan_json="{}",
+            provider="archives",
+            status="running",
+            started_at=now - timedelta(hours=10),
+            owner_token=live_owner,
+            heartbeat_at=live_lease["heartbeat_at"],
+            lease_expires_at=live_lease["lease_expires_at"],
+            lease_version=live_lease["lease_version"],
+        )
+        clock_regressed = SearchRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            query_plan_json="{}",
+            provider="archives",
+            status="running",
+            started_at=now + timedelta(hours=1),
+            owner_token=new_owner_token(),
+            heartbeat_at=now + timedelta(hours=1),
+            lease_expires_at=now + timedelta(hours=1, minutes=5),
+            lease_version=1,
+        )
+        session.add_all([timed_out, long_live, clock_regressed])
+        session.flush()
+        timed_out_id = timed_out.id
+        long_live_id = long_live.id
+        clock_regressed_id = clock_regressed.id
+    # A fresh service instance represents the process that restarts after the
+    # original worker disappeared; no in-memory state carries over.
+    assert DiscoveryService(database, settings)._recover_stale_runs() == 1
+
+    with database.session() as session:
+        timed_out = session.get(SearchRun, timed_out_id)
+        long_live = session.get(SearchRun, long_live_id)
+        clock_regressed = session.get(SearchRun, clock_regressed_id)
+        assert timed_out is not None
+        assert timed_out.status == "failed"
+        assert "without a valid lease" in str(timed_out.error_summary)
+        assert long_live is not None
+        assert long_live.status == "running"
+        assert clock_regressed is not None
+        assert clock_regressed.status == "running"
+        assert not finish_owned_run(
+            session,
+            SearchRun,
+            timed_out_id,
+            owner,
+            {"status": "completed", "completed_at": datetime.now(UTC), "error_summary": None},
+        )
+        assert timed_out.status == "failed"
+        assert "without a valid lease" in str(timed_out.error_summary)
 
 
 def test_recent_search_queries_are_newest_first_deduplicated_and_bounded(

@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from runway.config import Settings
 from runway.db import initialize_database
 from runway.db.base import Database
+from runway.db.job_leases import lease_claim_fields, new_owner_token
 from runway.db.models import (
     AccountMetricDay,
     AccountMetricSnapshot,
@@ -229,6 +230,7 @@ def test_concurrent_run_is_rejected(sync_env) -> None:
 def test_stale_running_run_marked_failed_on_startup(sync_env) -> None:
     _settings, database, _registry, service = sync_env
     account = _account(database, "youtube")
+    other_account = _account(database, "instagram")
     with database.session() as session:
         stale = SyncRun(
             account_id=account.id,
@@ -240,7 +242,7 @@ def test_stale_running_run_marked_failed_on_startup(sync_env) -> None:
         session.flush()
         stale_id = stale.id
         fresh = SyncRun(
-            account_id=account.id,
+            account_id=other_account.id,
             trigger="manual",
             status="running",
             started_at=datetime.now(UTC),
@@ -255,6 +257,116 @@ def test_stale_running_run_marked_failed_on_startup(sync_env) -> None:
         assert stale_run is not None and stale_run.status == "failed"
         assert stale_run.error_summary == "interrupted"
         assert fresh_run is not None and fresh_run.status == "running"
+
+
+def test_sync_admission_closes_expired_lease_even_when_row_started_recently(sync_env) -> None:
+    _settings, database, _registry, service = sync_env
+    account = _account(database, "youtube")
+    now = datetime.now(UTC)
+    owner = new_owner_token()
+    with database.session() as session:
+        stale = SyncRun(
+            account_id=account.id,
+            trigger="manual",
+            status="running",
+            started_at=now,
+            owner_token=owner,
+            heartbeat_at=now - timedelta(minutes=10),
+            lease_expires_at=now - timedelta(seconds=1),
+            lease_version=1,
+        )
+        session.add(stale)
+        session.flush()
+        stale_id = stale.id
+
+    recovered = service.run(account.id, trigger="manual")
+
+    assert recovered.status == "completed"
+    with database.session() as session:
+        stale_run = session.get(SyncRun, stale_id)
+        assert stale_run is not None
+        assert stale_run.status == "failed"
+        assert stale_run.error_summary == "interrupted"
+        assert stale_run.completed_at is not None
+
+
+def test_sync_admission_respects_active_lease_for_long_live_cross_process_run(sync_env) -> None:
+    settings, database, registry, service = sync_env
+    account = _account(database, "youtube")
+    now = datetime.now(UTC)
+    owner = new_owner_token()
+    lease = lease_claim_fields(owner, lease_duration=timedelta(minutes=5), now=now)
+    with database.session() as session:
+        active = SyncRun(
+            account_id=account.id,
+            trigger="manual",
+            status="running",
+            started_at=now - timedelta(hours=2),
+            owner_token=owner,
+            heartbeat_at=lease["heartbeat_at"],
+            lease_expires_at=lease["lease_expires_at"],
+            lease_version=lease["lease_version"],
+        )
+        session.add(active)
+        session.flush()
+        active_id = active.id
+
+    # A second service has no shared in-memory lock, so this exercises the
+    # persisted cross-process admission guard rather than the threading lock.
+    other_process = SyncService(database, settings, registry)
+    with pytest.raises(SyncRunInProgress):
+        other_process.run(account.id, trigger="manual")
+
+    with database.session() as session:
+        active_run = session.get(SyncRun, active_id)
+        assert active_run is not None
+        assert active_run.status == "running"
+        assert active_run.completed_at is None
+
+
+def test_sync_terminal_write_after_stale_recovery_cannot_overwrite_evidence(sync_env) -> None:
+    _settings, database, _registry, service = sync_env
+    account = _account(database, "youtube")
+    before = account.last_sync_at
+    now = datetime.now(UTC)
+    owner = new_owner_token()
+    with database.session() as session:
+        stale = SyncRun(
+            account_id=account.id,
+            trigger="manual",
+            status="running",
+            started_at=now,
+            owner_token=owner,
+            heartbeat_at=now - timedelta(minutes=10),
+            lease_expires_at=now - timedelta(seconds=1),
+            lease_version=1,
+        )
+        session.add(stale)
+        session.flush()
+        stale_id = stale.id
+
+    assert service.mark_stale_runs_failed() == 1
+    service._finish_run(
+        stale_id,
+        account.id,
+        owner_token=owner,
+        status="completed",
+        steps=[],
+        items_fetched=99,
+        quota_units=99,
+        error_summary=None,
+    )
+
+    with database.session() as session:
+        stale_run = session.get(SyncRun, stale_id)
+        unchanged_account = session.get(ConnectedAccount, account.id)
+        assert stale_run is not None
+        assert stale_run.status == "failed"
+        assert stale_run.error_summary == "interrupted"
+        assert stale_run.items_fetched == 0
+        assert stale_run.quota_units_estimate == 0
+        assert unchanged_account is not None
+        assert unchanged_account.last_sync_at == before
 
 
 def test_ensure_fresh_transport_error_fails_run_and_does_not_wedge(

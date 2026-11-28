@@ -18,6 +18,16 @@ from runway.captions.feedback import CaptionFeedbackService
 from runway.captions.service import CaptionService
 from runway.config import Settings
 from runway.db.base import Database
+from runway.db.job_leases import (
+    LeaseLost,
+    RunLeaseHeartbeat,
+    complete_stale_run,
+    finish_owned_run,
+    lease_claim_fields,
+    new_owner_token,
+    run_lease_expired,
+    update_owned_run,
+)
 from runway.db.models import (
     CandidateImage,
     CaptionFeedback,
@@ -71,6 +81,8 @@ class ProposalService:
         if days < 1 or days > 500:
             raise ValueError("option count must be between 1 and 500")
         self._recover_stale_generation_runs()
+        owner_token = new_owner_token()
+        lease = lease_claim_fields(owner_token)
         timezone_name, default_time = self._schedule_config()
         timezone = ZoneInfo(timezone_name)
         local_start = start_date or (datetime.now(timezone).date() + timedelta(days=1))
@@ -155,6 +167,10 @@ class ProposalService:
                 days=days,
                 status=RunStatus.RUNNING.value,
                 selection_diagnostics_json="{}",
+                owner_token=owner_token,
+                heartbeat_at=lease["heartbeat_at"],
+                lease_expires_at=lease["lease_expires_at"],
+                lease_version=lease["lease_version"],
             )
             session.add(run)
             session.flush()
@@ -168,147 +184,167 @@ class ProposalService:
                 {"days": days, "start_date": local_start.isoformat()},
             )
 
-        created_ids: list[int] = []
-        candidate_index = 0
+        heartbeat = RunLeaseHeartbeat(self.database, GenerationRun, run_id, owner_token)
+        heartbeat.start()
         try:
-            selection_slate = self.diversity.select(
-                available_candidates,
-                anchors=anchor_candidates,
-                session_key=f"generation:{run_id}",
-                primary_franchise=primary_franchise,
-                minimum_primary_share=self.settings.discovery_primary_topic_query_share,
-                franchise_history=franchise_history,
-            )
-            with self.database.session() as session:
-                loaded_run = session.get(GenerationRun, run_id)
-                if loaded_run is not None:
-                    loaded_run.selection_diagnostics_json = json.dumps(
-                        selection_slate.diagnostics,
-                        sort_keys=True,
-                    )
-            candidates = list(selection_slate.candidates)
-            if not candidates and missing_count:
-                raise NoDistinctCandidateError(
-                    "no sufficiently distinct unused candidate is available after active-"
-                    "representation slate optimization"
+            created_ids: list[int] = []
+            candidate_index = 0
+            try:
+                heartbeat.require()
+                selection_slate = self.diversity.select(
+                    available_candidates,
+                    anchors=anchor_candidates,
+                    session_key=f"generation:{run_id}",
+                    primary_franchise=primary_franchise,
+                    minimum_primary_share=self.settings.discovery_primary_topic_query_share,
+                    franchise_history=franchise_history,
                 )
-            self.candidate_exposures.record_selection_pool(
-                channel_id=channel_id,
-                candidate_ids=[candidate.id for candidate in available_candidates],
-                selected_ids=[candidate.id for candidate in candidates],
-                session_key=f"generation:{run_id}",
-                diagnostics=selection_slate.diagnostics,
-                exploration_policy="deterministic_slate_v5",
-                randomized=False,
-            )
-            for offset in range(days):
-                planned_date = local_start + timedelta(days=offset)
-                planned_at = self._planned_datetime(planned_date, timezone_name, default_time)
                 with self.database.session() as session:
-                    existing = session.scalar(
-                        select(Proposal).where(
-                            Proposal.channel_id == channel_id,
-                            Proposal.planned_publish_at == planned_at.isoformat(),
-                        )
-                    )
-                if existing is not None:
-                    created_ids.append(existing.id)
-                    continue
-
-                captions = None
-                candidate = None
-                while candidate_index < len(candidates):
-                    current_candidate = candidates[candidate_index]
-                    candidate_index += 1
-                    current_captions = await self.caption_service.generate(current_candidate.id)
-                    if current_captions.abstained:
-                        continue
-                    candidate = current_candidate
-                    captions = current_captions
-                    break
-                if candidate is None or captions is None:
-                    break
-                context = self.retrieval.context_for_candidate(
-                    candidate.media_asset_id,
-                    candidate_id=candidate.id,
-                )
-                backup_ids: list[int] = []
-                remaining_candidates = candidates[candidate_index:]
-                if remaining_candidates:
-                    backup_ids = [value.id for value in remaining_candidates[:2]]
-                with self.database.session() as session:
-                    current = session.get(CandidateImage, candidate.id)
-                    if current is None or current.hard_rejection_reason:
-                        raise ValueError(f"candidate {candidate.id} became unavailable")
-                    proposal = Proposal(
-                        generation_run_id=run_id,
-                        channel_id=channel_id,
-                        candidate_image_id=current.id,
-                        caption_slate_id=captions.slate_id,
-                        backup_candidate_ids_json=json.dumps(backup_ids),
-                        planned_publish_at=planned_at.isoformat(),
-                        recommended_caption=captions.recommended,
-                        alternative_captions_json=json.dumps(captions.alternatives),
-                        caption_rationale=captions.rationale,
-                        caption_confidence=captions.confidence,
-                        caption_reference_post_ids_json=json.dumps(
-                            captions.referenced_historical_post_ids
-                        ),
-                        factual_uncertainty_warning=captions.factual_uncertainty_warning,
-                        final_caption=captions.recommended,
-                        status=ProposalStatus.GENERATING.value,
-                        selection_reason=current.selection_reason,
-                        style_score=current.style_score,
-                        novelty_score=current.novelty_score,
-                        quality_score=current.quality_score,
-                        closest_historical_matches_json=json.dumps(
-                            context["visual_examples"], default=str
-                        ),
-                        warnings_json=current.soft_warnings_json,
-                    )
-                    session.add(proposal)
-                    session.flush()
-                    if captions.slate_id is not None:
-                        caption_slate = session.get(CaptionSlate, captions.slate_id)
-                        if caption_slate is None or caption_slate.channel_id != channel_id:
-                            raise ValueError("caption slate is missing or outside the channel")
-                        caption_slate.proposal_id = proposal.id
-                    self._event(
+                    if not update_owned_run(
                         session,
-                        proposal.id,
-                        "proposal_created",
-                        {},
+                        GenerationRun,
+                        run_id,
+                        owner_token,
                         {
-                            "status": ProposalStatus.GENERATING.value,
-                            "candidate_image_id": current.id,
-                            "planned_publish_at": planned_at.isoformat(),
+                            "selection_diagnostics_json": json.dumps(
+                                selection_slate.diagnostics,
+                                sort_keys=True,
+                            )
                         },
+                    ):
+                        raise LeaseLost(f"generation run {run_id} lease is no longer owned")
+                candidates = list(selection_slate.candidates)
+                if not candidates and missing_count:
+                    raise NoDistinctCandidateError(
+                        "no sufficiently distinct unused candidate is available after active-"
+                        "representation slate optimization"
                     )
-                    self._transition(
-                        session, proposal, ProposalStatus.NEEDS_REVIEW, "generation_completed"
-                    )
-                    created_ids.append(proposal.id)
-            target_met = len(created_ids) == days
-            with self.database.session() as session:
-                loaded_run = session.get(GenerationRun, run_id)
-                if loaded_run:
-                    loaded_run.status = (
-                        RunStatus.COMPLETED.value if target_met else RunStatus.FAILED.value
-                    )
-                    loaded_run.completed_at = datetime.now(UTC)
-                    loaded_run.error_summary = (
-                        None
-                        if target_met
-                        else (
-                            f"Generated {len(created_ids)} of {days} requested proposal dates; "
-                            "the remaining safe slate was exhausted or abstained."
+                self.candidate_exposures.record_selection_pool(
+                    channel_id=channel_id,
+                    candidate_ids=[candidate.id for candidate in available_candidates],
+                    selected_ids=[candidate.id for candidate in candidates],
+                    session_key=f"generation:{run_id}",
+                    diagnostics=selection_slate.diagnostics,
+                    exploration_policy="deterministic_slate_v5",
+                    randomized=False,
+                )
+                for offset in range(days):
+                    heartbeat.require()
+                    planned_date = local_start + timedelta(days=offset)
+                    planned_at = self._planned_datetime(planned_date, timezone_name, default_time)
+                    with self.database.session() as session:
+                        existing = session.scalar(
+                            select(Proposal).where(
+                                Proposal.channel_id == channel_id,
+                                Proposal.planned_publish_at == planned_at.isoformat(),
+                            )
                         )
+                    if existing is not None:
+                        created_ids.append(existing.id)
+                        continue
+
+                    captions = None
+                    candidate = None
+                    while candidate_index < len(candidates):
+                        current_candidate = candidates[candidate_index]
+                        candidate_index += 1
+                        current_captions = await self.caption_service.generate(current_candidate.id)
+                        if current_captions.abstained:
+                            continue
+                        candidate = current_candidate
+                        captions = current_captions
+                        break
+                    if candidate is None or captions is None:
+                        break
+                    context = self.retrieval.context_for_candidate(
+                        candidate.media_asset_id,
+                        candidate_id=candidate.id,
                     )
+                    backup_ids: list[int] = []
+                    remaining_candidates = candidates[candidate_index:]
+                    if remaining_candidates:
+                        backup_ids = [value.id for value in remaining_candidates[:2]]
+                    with self.database.session() as session:
+                        current = session.get(CandidateImage, candidate.id)
+                        if current is None or current.hard_rejection_reason:
+                            raise ValueError(f"candidate {candidate.id} became unavailable")
+                        proposal = Proposal(
+                            generation_run_id=run_id,
+                            channel_id=channel_id,
+                            candidate_image_id=current.id,
+                            caption_slate_id=captions.slate_id,
+                            backup_candidate_ids_json=json.dumps(backup_ids),
+                            planned_publish_at=planned_at.isoformat(),
+                            recommended_caption=captions.recommended,
+                            alternative_captions_json=json.dumps(captions.alternatives),
+                            caption_rationale=captions.rationale,
+                            caption_confidence=captions.confidence,
+                            caption_reference_post_ids_json=json.dumps(
+                                captions.referenced_historical_post_ids
+                            ),
+                            factual_uncertainty_warning=captions.factual_uncertainty_warning,
+                            final_caption=captions.recommended,
+                            status=ProposalStatus.GENERATING.value,
+                            selection_reason=current.selection_reason,
+                            style_score=current.style_score,
+                            novelty_score=current.novelty_score,
+                            quality_score=current.quality_score,
+                            closest_historical_matches_json=json.dumps(
+                                context["visual_examples"], default=str
+                            ),
+                            warnings_json=current.soft_warnings_json,
+                        )
+                        session.add(proposal)
+                        session.flush()
+                        if captions.slate_id is not None:
+                            caption_slate = session.get(CaptionSlate, captions.slate_id)
+                            if caption_slate is None or caption_slate.channel_id != channel_id:
+                                raise ValueError("caption slate is missing or outside the channel")
+                            caption_slate.proposal_id = proposal.id
+                        self._event(
+                            session,
+                            proposal.id,
+                            "proposal_created",
+                            {},
+                            {
+                                "status": ProposalStatus.GENERATING.value,
+                                "candidate_image_id": current.id,
+                                "planned_publish_at": planned_at.isoformat(),
+                            },
+                        )
+                        self._transition(
+                            session, proposal, ProposalStatus.NEEDS_REVIEW, "generation_completed"
+                        )
+                        created_ids.append(proposal.id)
+                target_met = len(created_ids) == days
+                with self.database.session() as session:
+                    if not finish_owned_run(
+                        session,
+                        GenerationRun,
+                        run_id,
+                        owner_token,
+                        {
+                            "status": (
+                                RunStatus.COMPLETED.value if target_met else RunStatus.FAILED.value
+                            ),
+                            "completed_at": datetime.now(UTC),
+                            "error_summary": (
+                                None
+                                if target_met
+                                else (
+                                    f"Generated {len(created_ids)} of {days} requested "
+                                    "proposal dates; "
+                                    "the remaining safe slate was exhausted or abstained."
+                                )
+                            ),
+                        },
+                    ):
+                        raise LeaseLost(f"generation run {run_id} lease is no longer owned")
                     audit(
                         session,
                         "generation_completed" if target_met else "generation_partial",
                         "generation_run",
-                        loaded_run.id,
+                        run_id,
                         {
                             "proposal_ids": created_ids,
                             "requested_count": days,
@@ -316,26 +352,38 @@ class ProposalService:
                             "target_met": target_met,
                         },
                     )
-        except Exception as exc:
-            with self.database.session() as session:
-                loaded_run = session.get(GenerationRun, run_id)
-                if loaded_run:
-                    loaded_run.status = RunStatus.FAILED.value
-                    loaded_run.completed_at = datetime.now(UTC)
-                    loaded_run.error_summary = f"{type(exc).__name__}: {exc}"
-            raise
-        return {
-            "generation_run_id": run_id,
-            "status": "completed" if target_met else "partial",
-            "proposal_ids": created_ids,
-            "start_date": local_start.isoformat(),
-            "days": days,
-            "requested_count": days,
-            "fulfilled_count": len(created_ids),
-            "unfilled_count": max(0, days - len(created_ids)),
-            "timezone": timezone_name,
-            "local_time": default_time,
-        }
+            except Exception as exc:
+                with self.database.session() as session:
+                    if not finish_owned_run(
+                        session,
+                        GenerationRun,
+                        run_id,
+                        owner_token,
+                        {
+                            "status": RunStatus.FAILED.value,
+                            "completed_at": datetime.now(UTC),
+                            "error_summary": f"{type(exc).__name__}: {exc}",
+                        },
+                    ):
+                        logger.warning(
+                            "generation run %s terminal write skipped because ownership was lost",
+                            run_id,
+                        )
+                raise
+            return {
+                "generation_run_id": run_id,
+                "status": "completed" if target_met else "partial",
+                "proposal_ids": created_ids,
+                "start_date": local_start.isoformat(),
+                "days": days,
+                "requested_count": days,
+                "fulfilled_count": len(created_ids),
+                "unfilled_count": max(0, days - len(created_ids)),
+                "timezone": timezone_name,
+                "local_time": default_time,
+            }
+        finally:
+            heartbeat.stop()
 
     def _recover_stale_generation_runs(self) -> int:
         """Close abandoned generation runs without touching an active long batch."""
@@ -351,27 +399,31 @@ class ProposalService:
                 )
             ).all()
             for row in rows:
-                # Large batches can legitimately take many hours because every proposal
-                # passes through discovery, multimodal verification, and caption review.
-                # Keep the six-hour floor for short jobs, then budget three minutes per
-                # requested option so a new request cannot kill a healthy long batch.
+                # Legacy rows predate persisted leases, so they retain the
+                # size-adjusted wall-clock fallback. Leased rows are controlled
+                # by heartbeat expiry instead: a healthy 30-hour batch renews
+                # its lease, while a crashed ten-minute-old batch times out.
                 abandonment_window = timedelta(
                     hours=6,
                     minutes=min(max(row.days, 1), 500) * 3,
                 )
-                started_at = row.started_at
-                if started_at.tzinfo is None:
-                    started_at = started_at.replace(tzinfo=UTC)
-                else:
-                    started_at = started_at.astimezone(UTC)
-                if now - started_at <= abandonment_window:
+                if not run_lease_expired(row, now, fallback_after=abandonment_window):
                     continue
-                row.status = RunStatus.FAILED.value
-                row.completed_at = now
-                row.error_summary = (
-                    "Recovered abandoned generation run after its size-adjusted "
-                    "completion window elapsed."
-                )
+                if not complete_stale_run(
+                    session,
+                    GenerationRun,
+                    row.id,
+                    owner_token=row.owner_token,
+                    lease_version=row.lease_version,
+                    values={
+                        "status": RunStatus.FAILED.value,
+                        "completed_at": now,
+                        "error_summary": (
+                            "Recovered abandoned generation run without a valid lease."
+                        ),
+                    },
+                ):
+                    continue
                 audit(
                     session,
                     "generation_stale_run_recovered",
@@ -380,7 +432,9 @@ class ProposalService:
                     {
                         "started_at": row.started_at.isoformat(),
                         "requested_count": row.days,
-                        "abandonment_window_seconds": int(abandonment_window.total_seconds()),
+                        "owner_token_present": row.owner_token is not None,
+                        "lease_version": row.lease_version,
+                        "legacy_fallback_window_seconds": int(abandonment_window.total_seconds()),
                     },
                 )
                 recovered += 1

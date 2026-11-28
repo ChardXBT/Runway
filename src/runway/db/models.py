@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -213,6 +214,10 @@ class SearchRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     result_count: Mapped[int] = mapped_column(Integer, default=0)
     error_summary: Mapped[str | None] = mapped_column(Text)
+    owner_token: Mapped[str | None] = mapped_column(String(128))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lease_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class CandidateImage(Base):
@@ -269,6 +274,10 @@ class GenerationRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_summary: Mapped[str | None] = mapped_column(Text)
     selection_diagnostics_json: Mapped[str] = mapped_column(Text, default="{}")
+    owner_token: Mapped[str | None] = mapped_column(String(128))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lease_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class Proposal(Base, TimestampMixin):
@@ -1645,6 +1654,14 @@ class PlatformAction(Base):
 
 class SyncRun(Base):
     __tablename__ = "sync_runs"
+    __table_args__ = (
+        Index(
+            "ux_sync_runs_account_running",
+            "account_id",
+            unique=True,
+            sqlite_where=text("status = 'running'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
@@ -1656,6 +1673,10 @@ class SyncRun(Base):
     items_fetched: Mapped[int] = mapped_column(Integer, default=0)
     quota_units_estimate: Mapped[int] = mapped_column(Integer, default=0)
     error_summary: Mapped[str | None] = mapped_column(Text)
+    owner_token: Mapped[str | None] = mapped_column(String(128))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lease_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class SyncCursor(Base):

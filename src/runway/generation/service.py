@@ -10,6 +10,13 @@ from sqlalchemy import desc, or_, select
 from runway.analysis.runtime import AgentRuntime, runtime_for
 from runway.config import Settings
 from runway.db.base import Database
+from runway.db.job_leases import (
+    LeaseLost,
+    RunLeaseHeartbeat,
+    finish_owned_run,
+    lease_claim_fields,
+    new_owner_token,
+)
 from runway.db.models import (
     CandidateImage,
     GeneratedAssetLineage,
@@ -68,6 +75,8 @@ class ImageGenerationService:
         provider_name: str = "mock",
         output_count: int = 1,
     ) -> dict[str, object]:
+        owner_token = new_owner_token()
+        lease = lease_claim_fields(owner_token)
         provider = self.registry.get(provider_name)
         if provider.capabilities.paid_usage:
             raise ValueError("paid image-generation providers are disabled")
@@ -150,6 +159,10 @@ class ImageGenerationService:
                 ),
                 provider=f"generated:{provider.name}",
                 status=RunStatus.RUNNING.value,
+                owner_token=owner_token,
+                heartbeat_at=lease["heartbeat_at"],
+                lease_expires_at=lease["lease_expires_at"],
+                lease_version=lease["lease_version"],
             )
             session.add(search_run)
             session.flush()
@@ -158,129 +171,151 @@ class ImageGenerationService:
                 self.settings.resolved_data_dir / reference.local_path for reference in references
             ]
 
-        request = ProviderRequest(
-            run_identity=f"generation-{run_id}",
-            brief=brief,
-            reference_paths=reference_paths,
-            output_directory=(
-                self.settings.resolved_data_dir / "raw" / "generated" / f"run-{run_id}"
-            ),
-            output_count=output_count,
-        )
+        heartbeat = RunLeaseHeartbeat(self.database, SearchRun, search_run_id, owner_token)
+        heartbeat.start()
         try:
-
-            async def invoke_provider(
-                _input: AgentInputEnvelope,
-                _attempt: int,
-            ) -> AgentStepResult:
-                generated = await provider.generate(request)
-                return AgentStepResult(
-                    output=AgentOutputEnvelope(
-                        payload={
-                            "outputs": [output.model_dump(mode="json") for output in generated]
-                        }
-                    ),
-                    usage={"total_tokens": 0, "paid_provider_calls": 0},
-                    artifact_type="image_generation_run",
-                    artifact_id=str(run_id),
-                )
-
-            agent_run_id, agent_output = await self.harness.execute(
-                channel_id=channel_id,
-                capability="image_generation_mock",
-                provider=provider.name,
-                model=f"{provider.model}:{provider.model_version}",
-                prompt_version="image-generation-provider-v1",
-                input_value=AgentInputEnvelope(
-                    entity_ids=brief.reference_media_ids,
-                    payload={
-                        "generation_run_id": run_id,
-                        "creative_brief": brief.model_dump(mode="json"),
-                        "output_count": output_count,
-                        "paid_usage": False,
-                    },
+            request = ProviderRequest(
+                run_identity=f"generation-{run_id}",
+                brief=brief,
+                reference_paths=reference_paths,
+                output_directory=(
+                    self.settings.resolved_data_dir / "raw" / "generated" / f"run-{run_id}"
                 ),
-                handler=invoke_provider,
-                budget=AgentBudget(
-                    max_steps=1,
-                    max_attempts_per_step=1,
-                    max_total_tokens=0,
-                    max_seconds=300,
-                    timeout_seconds=300,
-                ),
-                run_key=f"image-generation:{run_id}",
+                output_count=output_count,
             )
-            raw_outputs = agent_output.payload.get("outputs")
-            if not isinstance(raw_outputs, list):
-                raise ValueError("image-generation agent returned malformed outputs")
-            from runway.generation.schemas import ProviderImage
+            try:
 
-            outputs = [ProviderImage.model_validate(output) for output in raw_outputs]
-            with self.database.session() as session:
-                loaded_generation = session.get(ImageGenerationRun, run_id)
-                if loaded_generation is not None:
-                    loaded_generation.agent_run_id = agent_run_id
-            candidate_ids = [
-                await self._ingest_output(
-                    generation_run_id=run_id,
-                    search_run_id=search_run_id,
+                async def invoke_provider(
+                    _input: AgentInputEnvelope,
+                    _attempt: int,
+                ) -> AgentStepResult:
+                    generated = await provider.generate(request)
+                    return AgentStepResult(
+                        output=AgentOutputEnvelope(
+                            payload={
+                                "outputs": [output.model_dump(mode="json") for output in generated]
+                            }
+                        ),
+                        usage={"total_tokens": 0, "paid_provider_calls": 0},
+                        artifact_type="image_generation_run",
+                        artifact_id=str(run_id),
+                    )
+
+                agent_run_id, agent_output = await self.harness.execute(
                     channel_id=channel_id,
-                    output_path=output.path,
-                    output_index=index,
-                    seed=output.seed,
-                    provider_metadata=output.provider_metadata,
-                    provider_safety=output.safety_result,
-                    references=references,
-                    brief=brief,
+                    capability="image_generation_mock",
+                    provider=provider.name,
+                    model=f"{provider.model}:{provider.model_version}",
+                    prompt_version="image-generation-provider-v1",
+                    input_value=AgentInputEnvelope(
+                        entity_ids=brief.reference_media_ids,
+                        payload={
+                            "generation_run_id": run_id,
+                            "creative_brief": brief.model_dump(mode="json"),
+                            "output_count": output_count,
+                            "paid_usage": False,
+                        },
+                    ),
+                    handler=invoke_provider,
+                    budget=AgentBudget(
+                        max_steps=1,
+                        max_attempts_per_step=1,
+                        max_total_tokens=0,
+                        max_seconds=300,
+                        timeout_seconds=300,
+                    ),
+                    run_key=f"image-generation:{run_id}",
                 )
-                for index, output in enumerate(outputs, start=1)
-            ]
-        except Exception as exc:
+                raw_outputs = agent_output.payload.get("outputs")
+                if not isinstance(raw_outputs, list):
+                    raise ValueError("image-generation agent returned malformed outputs")
+                from runway.generation.schemas import ProviderImage
+
+                outputs = [ProviderImage.model_validate(output) for output in raw_outputs]
+                with self.database.session() as session:
+                    loaded_generation = session.get(ImageGenerationRun, run_id)
+                    if loaded_generation is not None:
+                        loaded_generation.agent_run_id = agent_run_id
+                heartbeat.require()
+                candidate_ids = [
+                    await self._ingest_output(
+                        generation_run_id=run_id,
+                        search_run_id=search_run_id,
+                        channel_id=channel_id,
+                        output_path=output.path,
+                        output_index=index,
+                        seed=output.seed,
+                        provider_metadata=output.provider_metadata,
+                        provider_safety=output.safety_result,
+                        references=references,
+                        brief=brief,
+                    )
+                    for index, output in enumerate(outputs, start=1)
+                ]
+            except Exception as exc:
+                with self.database.session() as session:
+                    loaded_generation = session.get(ImageGenerationRun, run_id)
+                    loaded_search = session.get(SearchRun, search_run_id)
+                    if loaded_generation is not None:
+                        loaded_generation.status = RunStatus.FAILED.value
+                        loaded_generation.error_summary = f"{type(exc).__name__}: {exc}"
+                        loaded_generation.completed_at = datetime.now(UTC)
+                    if loaded_search is not None:
+                        finish_owned_run(
+                            session,
+                            SearchRun,
+                            search_run_id,
+                            owner_token,
+                            {
+                                "status": RunStatus.FAILED.value,
+                                "error_summary": f"{type(exc).__name__}: {exc}",
+                                "completed_at": datetime.now(UTC),
+                            },
+                        )
+                raise
             with self.database.session() as session:
                 loaded_generation = session.get(ImageGenerationRun, run_id)
                 loaded_search = session.get(SearchRun, search_run_id)
                 if loaded_generation is not None:
-                    loaded_generation.status = RunStatus.FAILED.value
-                    loaded_generation.error_summary = f"{type(exc).__name__}: {exc}"
+                    loaded_generation.status = RunStatus.COMPLETED.value
                     loaded_generation.completed_at = datetime.now(UTC)
-                if loaded_search is not None:
-                    loaded_search.status = RunStatus.FAILED.value
-                    loaded_search.error_summary = f"{type(exc).__name__}: {exc}"
-                    loaded_search.completed_at = datetime.now(UTC)
-            raise
-        with self.database.session() as session:
-            loaded_generation = session.get(ImageGenerationRun, run_id)
-            loaded_search = session.get(SearchRun, search_run_id)
-            if loaded_generation is not None:
-                loaded_generation.status = RunStatus.COMPLETED.value
-                loaded_generation.completed_at = datetime.now(UTC)
-                loaded_generation.provider_metadata_json = json.dumps(
-                    {"output_count": len(candidate_ids)},
-                    sort_keys=True,
+                    loaded_generation.provider_metadata_json = json.dumps(
+                        {"output_count": len(candidate_ids)},
+                        sort_keys=True,
+                    )
+                if loaded_search is None or not finish_owned_run(
+                    session,
+                    SearchRun,
+                    search_run_id,
+                    owner_token,
+                    {
+                        "status": RunStatus.COMPLETED.value,
+                        "completed_at": datetime.now(UTC),
+                        "result_count": len(candidate_ids),
+                    },
+                ):
+                    raise LeaseLost(f"search run {search_run_id} lease is no longer owned")
+                audit(
+                    session,
+                    "image_generation_completed",
+                    "image_generation_run",
+                    run_id,
+                    {
+                        "provider": provider.name,
+                        "candidate_ids": candidate_ids,
+                        "paid_usage": False,
+                    },
                 )
-            if loaded_search is not None:
-                loaded_search.status = RunStatus.COMPLETED.value
-                loaded_search.completed_at = datetime.now(UTC)
-                loaded_search.result_count = len(candidate_ids)
-            audit(
-                session,
-                "image_generation_completed",
-                "image_generation_run",
-                run_id,
-                {
-                    "provider": provider.name,
-                    "candidate_ids": candidate_ids,
-                    "paid_usage": False,
-                },
-            )
-        return {
-            "generation_run_id": run_id,
-            "search_run_id": search_run_id,
-            "status": "completed",
-            "candidate_ids": candidate_ids,
-            "provider": provider.name,
-            "paid_usage": False,
-        }
+            return {
+                "generation_run_id": run_id,
+                "search_run_id": search_run_id,
+                "status": "completed",
+                "candidate_ids": candidate_ids,
+                "provider": provider.name,
+                "paid_usage": False,
+            }
+        finally:
+            heartbeat.stop()
 
     async def _ingest_output(
         self,

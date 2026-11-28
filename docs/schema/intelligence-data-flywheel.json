@@ -5127,10 +5127,38 @@
           },
           {
             "default": null,
+            "name": "heartbeat_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
             "name": "id",
             "nullable": false,
             "primary_key": 1,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "lease_expires_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "'0'",
+            "name": "lease_version",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "owner_token",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
           },
           {
             "default": null,
@@ -5196,6 +5224,13 @@
               "channel_id"
             ],
             "name": "ix_generation_runs_channel_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "lease_expires_at"
+            ],
+            "name": "ix_generation_runs_lease_expires_at",
             "unique": false
           },
           {
@@ -10467,10 +10502,38 @@
           },
           {
             "default": null,
+            "name": "heartbeat_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
             "name": "id",
             "nullable": false,
             "primary_key": 1,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "lease_expires_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "'0'",
+            "name": "lease_version",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "owner_token",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
           },
           {
             "default": null,
@@ -10543,6 +10606,13 @@
               "channel_id"
             ],
             "name": "ix_search_runs_channel_id",
+            "unique": false
+          },
+          {
+            "columns": [
+              "lease_expires_at"
+            ],
+            "name": "ix_search_runs_lease_expires_at",
             "unique": false
           },
           {
@@ -11105,6 +11175,13 @@
           },
           {
             "default": null,
+            "name": "heartbeat_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
             "name": "id",
             "nullable": false,
             "primary_key": 1,
@@ -11116,6 +11193,27 @@
             "nullable": false,
             "primary_key": 0,
             "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "lease_expires_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": "'0'",
+            "name": "lease_version",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "owner_token",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "VARCHAR(128)"
           },
           {
             "default": null,
@@ -11175,10 +11273,24 @@
           },
           {
             "columns": [
+              "lease_expires_at"
+            ],
+            "name": "ix_sync_runs_lease_expires_at",
+            "unique": false
+          },
+          {
+            "columns": [
               "status"
             ],
             "name": "ix_sync_runs_status",
             "unique": false
+          },
+          {
+            "columns": [
+              "account_id"
+            ],
+            "name": "ux_sync_runs_account_running",
+            "unique": true
           }
         ],
         "unique_constraints": []
@@ -11186,7 +11298,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be",
-  "migration": "0012_creator_platforms",
+  "fingerprint": "8d6209f14372083b36c0629c66197820ca6fa4628e3fda74915a2a25f3fa8ee1",
+  "migration": "0013_job_ownership_leases",
   "table_count": 66
 }
