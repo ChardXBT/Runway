@@ -173,8 +173,10 @@ class TokenStore:
                 raise TokenStoreError(f"token entry {token_ref!r} is malformed")
             try:
                 token = deserialize_token(entry)
-            except (TypeError, ValueError, ValidationError) as exc:
-                raise TokenStoreError(f"token entry {token_ref!r} is malformed") from exc
+            except (TypeError, ValueError, ValidationError):
+                # Validation errors can echo the decrypted input object. Keep
+                # token material out of logs and persisted exception chains.
+                raise TokenStoreError(f"token entry {token_ref!r} is malformed") from None
             if not token.access_token.strip():
                 raise TokenStoreError(f"token entry {token_ref!r} is malformed")
             return token
