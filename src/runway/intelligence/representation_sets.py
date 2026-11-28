@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import numpy as np
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, and_, func, or_, select, update
+from sqlalchemy.engine import CursorResult
 
 from runway.config import Settings
 from runway.db.base import Database
@@ -51,6 +54,15 @@ FIELD_BY_MODALITY: dict[RepresentationModality, str] = {
     "image": "image",
     "multimodal": "image_caption",
 }
+RUNNING_CLAIM_LEASE_SECONDS = 300.0
+
+
+def _database_utcnow() -> datetime:
+    # SQLite stores datetimes without a timezone suffix; keeping lease writes and
+    # comparisons in naive UTC avoids lexicographic mismatches while preserving UTC.
+    return utcnow().replace(tzinfo=None)
+
+
 REQUIRED_CHALLENGER_ACTIVATION_GATES = frozenset(
     {
         "schema_contract",
@@ -94,11 +106,15 @@ class RepresentationSetService:
         database: Database,
         settings: Settings | None = None,
         registry: RepresentationProviderRegistry | None = None,
+        running_lease_seconds: float = RUNNING_CLAIM_LEASE_SECONDS,
     ):
+        if not math.isfinite(running_lease_seconds) or running_lease_seconds <= 0:
+            raise ValueError("running_lease_seconds must be a positive finite value")
         self.database = database
         self.settings = settings or database.settings
         self.registry = registry or RepresentationProviderRegistry()
         self.store = RepresentationStore(database)
+        self.running_lease_seconds = float(running_lease_seconds)
 
     def plan_history(
         self,
@@ -210,7 +226,7 @@ class RepresentationSetService:
                     select(RepresentationSetItem.id)
                     .where(
                         RepresentationSetItem.representation_set_id == representation_set_id,
-                        RepresentationSetItem.status.in_(("pending", "failed")),
+                        self._claimable_item(self._lease_cutoff()),
                     )
                     .order_by(RepresentationSetItem.id)
                     .limit(batch_size)
@@ -219,21 +235,23 @@ class RepresentationSetService:
 
         completed = 0
         failed = 0
+        attempted = 0
         for item_id in item_ids:
+            claim_attempt = self._claim_item(item_id)
+            if claim_attempt is None:
+                # A concurrent worker claimed the item between selection and claim.
+                continue
+            attempted += 1
             try:
-                self._backfill_item(item_id)
-                completed += 1
+                if self._backfill_item(item_id, claim_attempt=claim_attempt):
+                    completed += 1
             except Exception as exc:
-                failed += 1
-                with self.database.session() as session:
-                    item = session.get(RepresentationSetItem, item_id)
-                    if item is not None:
-                        item.status = "failed"
-                        item.error_summary = f"{type(exc).__name__}: {exc}"[:2000]
+                if self._fail_item_claim(item_id, claim_attempt, exc):
+                    failed += 1
         self._refresh_counts(representation_set_id)
         result = self.status(representation_set_id)
         return result | {
-            "batch_attempted": len(item_ids),
+            "batch_attempted": attempted,
             "batch_completed": completed,
             "batch_failed": failed,
         }
@@ -312,7 +330,9 @@ class RepresentationSetService:
                 representation_set.error_summary = None
             else:
                 representation_set.status = (
-                    "backfilling" if any(item.status == "pending" for item in items) else "failed"
+                    "backfilling"
+                    if any(item.status in {"pending", "running"} for item in items)
+                    else "failed"
                 )
                 representation_set.error_summary = "; ".join(errors[:20])
         return self.status(representation_set_id) | {
@@ -507,11 +527,72 @@ class RepresentationSetService:
             )
         return [self.status(set_id) for set_id in ids]
 
-    def _backfill_item(self, item_id: int) -> None:
+    @staticmethod
+    def _claimable_item(lease_cutoff: datetime) -> ColumnElement[bool]:
+        return or_(
+            RepresentationSetItem.status.in_(("pending", "failed")),
+            and_(
+                RepresentationSetItem.status == "running",
+                or_(
+                    RepresentationSetItem.claimed_at.is_(None),
+                    RepresentationSetItem.claimed_at <= lease_cutoff,
+                ),
+            ),
+        )
+
+    def _lease_cutoff(self) -> datetime:
+        return _database_utcnow() - timedelta(seconds=self.running_lease_seconds)
+
+    def _claim_item(self, item_id: int) -> int | None:
+        """Atomically claim one item and return its fencing attempt number."""
+        with self.database.session() as session:
+            claimed_at = _database_utcnow()
+            statement = (
+                update(RepresentationSetItem)
+                .where(
+                    RepresentationSetItem.id == item_id,
+                    self._claimable_item(self._lease_cutoff()),
+                )
+                .values(
+                    status="running",
+                    attempts=RepresentationSetItem.attempts + 1,
+                    claimed_at=claimed_at,
+                    error_summary=None,
+                )
+            )
+            result = cast(CursorResult[Any], session.execute(statement))
+            if result.rowcount != 1:
+                return None
+            attempt = session.scalar(
+                select(RepresentationSetItem.attempts).where(RepresentationSetItem.id == item_id)
+            )
+            return int(attempt or 0)
+
+    def _fail_item_claim(self, item_id: int, claim_attempt: int, exc: Exception) -> bool:
+        """Fail only the claim generation that raised, never a newer claim."""
+        with self.database.session() as session:
+            statement = (
+                update(RepresentationSetItem)
+                .where(
+                    RepresentationSetItem.id == item_id,
+                    RepresentationSetItem.status == "running",
+                    RepresentationSetItem.attempts == claim_attempt,
+                )
+                .values(
+                    status="failed",
+                    error_summary=f"{type(exc).__name__}: {exc}"[:2000],
+                )
+            )
+            result = cast(CursorResult[Any], session.execute(statement))
+            return result.rowcount == 1
+
+    def _backfill_item(self, item_id: int, *, claim_attempt: int) -> bool:
         with self.database.session() as session:
             item = session.get(RepresentationSetItem, item_id)
             if item is None:
                 raise LookupError(f"representation item {item_id} was not found")
+            if item.status != "running" or item.attempts != claim_attempt:
+                return False
             representation_set = session.get(
                 RepresentationSet,
                 item.representation_set_id,
@@ -521,8 +602,6 @@ class RepresentationSetService:
             locator: object = json.loads(item.source_locator_json)
             if not isinstance(locator, dict):
                 raise ValueError("representation item locator is malformed")
-            item.attempts += 1
-            item.status = "running"
             channel_id = item.channel_id
             entity_type = item.entity_type
             entity_id = item.entity_id
@@ -534,6 +613,7 @@ class RepresentationSetService:
             expected_model = representation_set.model
             expected_model_version = representation_set.model_version
             expected_configuration_hash = representation_set.configuration_hash
+            representation_set_id = representation_set.id
 
         observed_hash = self._source_hash(modality, locator)
         if observed_hash != expected_hash:
@@ -553,18 +633,27 @@ class RepresentationSetService:
             configuration_hash=expected_configuration_hash,
             producer=lambda: self._embed(modality, provider, locator, purpose),
             metadata={
-                "representation_set_id": representation_set.id,
+                "representation_set_id": representation_set_id,
                 "source_locator": locator,
             },
         )
         with self.database.session() as session:
-            item = session.get(RepresentationSetItem, item_id)
-            if item is None:
-                raise LookupError(f"representation item {item_id} disappeared")
-            item.representation_record_id = record.id
-            item.status = "complete"
-            item.error_summary = None
-            item.completed_at = utcnow()
+            statement = (
+                update(RepresentationSetItem)
+                .where(
+                    RepresentationSetItem.id == item_id,
+                    RepresentationSetItem.status == "running",
+                    RepresentationSetItem.attempts == claim_attempt,
+                )
+                .values(
+                    representation_record_id=record.id,
+                    status="complete",
+                    error_summary=None,
+                    completed_at=utcnow(),
+                )
+            )
+            result = cast(CursorResult[Any], session.execute(statement))
+            return result.rowcount == 1
 
     def _refresh_counts(self, representation_set_id: int) -> None:
         with self.database.session() as session:
