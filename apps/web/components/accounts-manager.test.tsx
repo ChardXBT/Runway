@@ -101,6 +101,13 @@ describe("AccountsManager", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/declined/);
   });
 
+  it("maps token storage failure to human copy", () => {
+    render(
+      <AccountsManager data={baseData} connected={null} errorCode="token_storage_failed" />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not store the authorization token/);
+  });
+
   it("shows a success notice for ?connected=", () => {
     render(
       <AccountsManager data={baseData} connected="youtube" errorCode={null} />,
