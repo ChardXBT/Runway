@@ -515,6 +515,7 @@ def test_active_learning_export_uses_temporary_sibling_then_atomic_rename(
     assert not temporary.exists()
     exported = json.loads(output.read_text(encoding="utf-8"))
     assert exported["batch_id"] == batch_id
+    assert str(exported["exported_at"]).endswith("+00:00")
     assert exported["selections"][0]["rationale"]["metadata"]["scene"] == "unicode-ü"
 
 
