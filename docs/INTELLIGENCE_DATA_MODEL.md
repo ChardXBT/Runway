@@ -188,6 +188,8 @@ and failure classification. While a run is active its owner renews a short
 lease; if the lease is absent or expired, the identical request may atomically
 reclaim the row. Reclaiming marks orphaned in-flight steps failed as stale
 lease interruptions, then appends new attempts rather than overwriting history.
+Conditional owner fencing rejects a delayed completion from the prior owner, so
+out-of-order zombie completion cannot replace the recovered terminal output.
 
 The capability registry contains historical annotation, candidate analysis,
 retrieval planning, caption generation, caption verification, and deterministic

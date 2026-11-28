@@ -731,6 +731,80 @@ async def test_lease_expiry_clock_boundary_is_explicit(
         assert active.lease_owner == "crashed-owner"
 
 
+@pytest.mark.asyncio
+async def test_out_of_order_zombie_completion_cannot_overwrite_recovered_run(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    original_now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    original = IntelligenceAgentHarness(
+        database,
+        clock=lambda: original_now,
+        lease_seconds=5,
+    )
+    recovery = IntelligenceAgentHarness(
+        database,
+        clock=lambda: original_now + timedelta(seconds=10),
+        lease_seconds=5,
+    )
+    input_value = AgentInputEnvelope(payload={"candidate_id": 22})
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def zombie(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        started.set()
+        await release.wait()
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"winner": "zombie"}),
+            usage={"total_tokens": 0},
+        )
+
+    async def recovered(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"winner": "retry"}),
+            usage={"total_tokens": 0},
+        )
+
+    zombie_task = asyncio.create_task(
+        original.execute(
+            channel_id=channel_id,
+            capability="candidate_analysis",
+            provider="mock",
+            model="fixture",
+            prompt_version="fixture-v1",
+            input_value=input_value,
+            handler=zombie,
+            run_key="fixture-out-of-order-completion",
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    recovered_id, recovered_output = await recovery.execute(
+        channel_id=channel_id,
+        capability="candidate_analysis",
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        input_value=input_value,
+        handler=recovered,
+        run_key="fixture-out-of-order-completion",
+    )
+    assert recovered_output.payload == {"winner": "retry"}
+
+    release.set()
+    with pytest.raises(AgentHarnessError, match="lease ownership was lost"):
+        await zombie_task
+
+    inspection = recovery.inspect(recovered_id)
+    assert inspection["status"] == "completed"
+    assert inspection["output"] == {"payload": {"winner": "retry"}}
+    assert [
+        (step["sequence"], step["attempt"], step["status"]) for step in inspection["steps"]
+    ] == [(1, 1, "failed"), (1, 2, "completed")]
+
+
 def test_concurrent_same_key_creation_has_one_controlled_winner(
     database: Database,
     settings: Settings,
