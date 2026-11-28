@@ -384,6 +384,29 @@ def test_unknown_pending_job_is_operator_visible_once_per_worker_and_survives_re
     assert _row(database, unknown.id).state == "pending"
 
 
+def test_unknown_pending_surface_does_not_block_known_work(
+    queue: JobQueue, database: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    unknown = queue.enqueue("future_kind", idempotency_key="unknown")
+    known = queue.enqueue("purge", idempotency_key="known")
+    ran: list[int] = []
+    worker = _worker(
+        queue,
+        {"purge": lambda job: ran.append(job.id)},
+        unknown_kind_check_seconds=0,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="runway.jobs.worker"):
+        assert worker.run_once() is True
+        assert worker.run_once() is False
+
+    assert ran == [known.id]
+    assert _row(database, known.id).state == "completed"
+    assert _row(database, unknown.id).state == "pending"
+    warnings = [record for record in caplog.records if "does not handle" in record.message]
+    assert len(warnings) == 1
+
+
 def test_idle_sleep_waits_for_the_earliest_job_capped_at_30_seconds(
     queue: JobQueue, clock: Clock
 ) -> None:
