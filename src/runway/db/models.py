@@ -317,6 +317,27 @@ class Proposal(Base, TimestampMixin):
     scheduled_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class LineupSlotClaim(Base, TimestampMixin):
+    """Database-backed one-post-per-channel-day Lineup claim.
+
+    The unique (channel_id, slot_date) key is the cross-process enforcement
+    boundary. `slot_date` is always the date in the channel's configured
+    timezone, not the date in whatever offset the timestamp was stored with.
+    """
+
+    __tablename__ = "lineup_slot_claims"
+    __table_args__ = (
+        UniqueConstraint("channel_id", "slot_date", name="uq_lineup_slot_channel_date"),
+        UniqueConstraint("proposal_id", name="uq_lineup_slot_proposal"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
+    proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id"))
+    slot_date: Mapped[date] = mapped_column(Date)
+    scheduled_publish_at: Mapped[str] = mapped_column(String(40))
+
+
 class ProposalEvent(Base):
     __tablename__ = "proposal_events"
 

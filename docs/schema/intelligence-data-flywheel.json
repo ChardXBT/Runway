@@ -6316,6 +6316,98 @@
         ],
         "unique_constraints": []
       },
+      "lineup_slot_claims": {
+        "check_constraints": [],
+        "columns": [
+          {
+            "default": null,
+            "name": "channel_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
+            "name": "id",
+            "nullable": false,
+            "primary_key": 1,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "proposal_id",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "INTEGER"
+          },
+          {
+            "default": null,
+            "name": "scheduled_publish_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "VARCHAR(40)"
+          },
+          {
+            "default": null,
+            "name": "slot_date",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATE"
+          },
+          {
+            "default": null,
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": 0,
+            "type": "DATETIME"
+          }
+        ],
+        "foreign_keys": [
+          {
+            "columns": [
+              "channel_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "channels"
+          },
+          {
+            "columns": [
+              "proposal_id"
+            ],
+            "ondelete": null,
+            "referred_columns": [
+              "id"
+            ],
+            "referred_table": "proposals"
+          }
+        ],
+        "indexes": [],
+        "unique_constraints": [
+          {
+            "columns": [
+              "channel_id",
+              "slot_date"
+            ],
+            "name": "uq_lineup_slot_channel_date"
+          },
+          {
+            "columns": [
+              "proposal_id"
+            ],
+            "name": "uq_lineup_slot_proposal"
+          }
+        ]
+      },
       "media_assets": {
         "check_constraints": [],
         "columns": [
@@ -11186,7 +11278,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be",
-  "migration": "0012_creator_platforms",
-  "table_count": 66
+  "fingerprint": "f6c39e31720efc62cae290bdc62adb5ca7ee1f922b3b57259694610c6f9875e9",
+  "migration": "0013_lineup_slot_claims",
+  "table_count": 67
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from runway.config import Settings
@@ -52,3 +52,18 @@ class Database:
             raise
         finally:
             session.close()
+
+    @contextmanager
+    def immediate_session(self) -> Generator[Session, None, None]:
+        """SQLite session serialized across processes from its first statement.
+
+        SQLAlchemy's SQLite sessions normally use deferred transactions, so a
+        check-then-write critical section can read the same state in two
+        processes before either one becomes a writer. BEGIN IMMEDIATE acquires
+        SQLite's database write lock up front; concurrent writers wait for the
+        first transaction to commit or roll back. This must be the first
+        statement in the session.
+        """
+        with self.session() as session:
+            session.execute(text("BEGIN IMMEDIATE"))
+            yield session
