@@ -35,7 +35,10 @@ directory (exit code 3).
 
 Unknown durable-job kinds are intentionally left `pending` for rolling-deploy compatibility: a
 newer API or worker may enqueue a kind that an older worker does not implement, and the older
-worker must not fail, re-time, claim or retry that row. The worker emits a `worker.log` warning
+worker must not fail, re-time, claim or retry that row. If a newer worker crashes while running
+a kind the older worker does not know, the expired lease is also left untouched for a worker
+that implements that kind to recover; it is never re-timed or retried by the older worker.
+The worker emits a `worker.log` warning
 only when its unknown-kind snapshot changes, rather than logging on every poll.
 The operator surface is `runway jobs unknown`, which prints the unknown kinds and pending
 counts as JSON. If a kind remains after every component is on the same release, treat it as

@@ -314,7 +314,7 @@ class JobQueue:
             return None
         with self._exclusive() as session:
             now = self.clock()
-            self._recover_expired(session, now)
+            self._recover_expired(session, now, kinds)
             for _ in range(_MAX_UNDECODABLE_PER_CLAIM):
                 row = session.scalar(claim_statement(self.dialect, now, kinds))
                 if row is None:
@@ -337,11 +337,16 @@ class JobQueue:
                 return replace(job, state=row.state)
             return None
 
-    def _recover_expired(self, session: Session, now: datetime) -> None:
+    def _recover_expired(self, session: Session, now: datetime, kinds: Collection[str]) -> None:
+        # A worker recovers only leases for kinds it can run. During a rolling
+        # deploy an older worker must not re-time, retry or fail a newer kind
+        # whose failure semantics it does not know; the worker that implements
+        # the kind recovers it instead.
         expired = session.scalars(
             select(PublishJob).where(
                 PublishJob.state == JobState.RUNNING.value,
                 PublishJob.locked_until < now,
+                PublishJob.kind.in_(sorted(kinds)),
             )
         ).all()
         for job in expired:
@@ -428,7 +433,8 @@ class JobQueue:
             )
             lease = session.scalar(
                 select(func.min(PublishJob.locked_until)).where(
-                    PublishJob.state == JobState.RUNNING.value
+                    PublishJob.state == JobState.RUNNING.value,
+                    PublishJob.kind.in_(sorted(kinds)),
                 )
             )
         candidates = [_aware(value) for value in (pending, lease) if value is not None]

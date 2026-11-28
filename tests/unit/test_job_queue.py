@@ -407,6 +407,36 @@ def test_unknown_pending_surface_does_not_block_known_work(
     assert len(warnings) == 1
 
 
+def test_an_expired_unknown_running_job_is_left_for_a_worker_that_knows_it(
+    queue: JobQueue, database: Database, clock: Clock
+) -> None:
+    unknown = queue.enqueue("future_kind", idempotency_key="unknown", run_at=START)
+    claimed = queue.claim("newer-worker", {"future_kind"}, lease_seconds=1)
+    assert claimed is not None
+    before = _row(database, unknown.id)
+    clock.advance(seconds=2)
+    old_worker = _worker(queue, {"purge": lambda _job: None}, unknown_kind_check_seconds=0)
+
+    assert old_worker.idle_seconds() == 30
+    assert old_worker.run_once() is False
+
+    after = _row(database, unknown.id)
+    assert (after.state, after.attempts, after.locked_by, after.locked_until) == (
+        "running",
+        1,
+        "newer-worker",
+        before.locked_until,
+    )
+    assert after.run_at == before.run_at
+    assert after.last_error == before.last_error
+    assert old_worker.idle_seconds() == 30
+
+    assert queue.claim("replacement-new-worker", {"future_kind"}) is None
+    recovered = _row(database, unknown.id)
+    assert recovered.state == "pending"
+    assert recovered.locked_by is None
+
+
 def test_idle_sleep_waits_for_the_earliest_job_capped_at_30_seconds(
     queue: JobQueue, clock: Clock
 ) -> None:
