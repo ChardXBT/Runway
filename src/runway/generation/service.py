@@ -252,6 +252,8 @@ class ImageGenerationService:
                     )
                     for index, output in enumerate(outputs, start=1)
                 ]
+            except LeaseLost:
+                raise
             except Exception as exc:
                 with self.database.session() as session:
                     loaded_generation = session.get(ImageGenerationRun, run_id)

@@ -352,6 +352,8 @@ class ProposalService:
                             "target_met": target_met,
                         },
                     )
+            except LeaseLost:
+                raise
             except Exception as exc:
                 with self.database.session() as session:
                     if not finish_owned_run(

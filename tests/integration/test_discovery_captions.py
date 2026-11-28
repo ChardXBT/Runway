@@ -406,11 +406,13 @@ def test_discovery_recovery_uses_lease_heartbeat_and_blocks_out_of_order_complet
         timed_out_id = timed_out.id
         long_live_id = long_live.id
         clock_regressed_id = clock_regressed.id
-    # A fresh service instance represents the process that restarts after the
-    # original worker disappeared; no in-memory state carries over.
-    assert DiscoveryService(database, settings)._recover_stale_runs() == 1
+    # Dispose the original engine and build a new one, as a service restart
+    # after a crash would; no in-memory state or open connection carries over.
+    database.engine.dispose()
+    restarted_database = Database(settings)
+    assert DiscoveryService(restarted_database, settings)._recover_stale_runs() == 1
 
-    with database.session() as session:
+    with restarted_database.session() as session:
         timed_out = session.get(SearchRun, timed_out_id)
         long_live = session.get(SearchRun, long_live_id)
         clock_regressed = session.get(SearchRun, clock_regressed_id)

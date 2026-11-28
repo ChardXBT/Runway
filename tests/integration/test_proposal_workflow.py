@@ -142,6 +142,15 @@ def test_proposal_service_recovers_only_abandoned_generation_runs(
         )
         assert leased_timed_out.status == "failed"
         assert "without a valid lease" in str(leased_timed_out.error_summary)
+        assert not finish_owned_run(
+            session,
+            GenerationRun,
+            stale_id,
+            new_owner_token(),
+            {"status": "completed", "completed_at": datetime.now(UTC), "error_summary": None},
+        )
+        assert stale.status == "failed"
+        assert "without a valid lease" in str(stale.error_summary)
 
 
 @pytest.mark.asyncio
