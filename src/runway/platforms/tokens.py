@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
+from pydantic import ValidationError
 
 from runway.platforms.base import TokenSet, deserialize_token, serialize_token
 
@@ -168,7 +169,10 @@ class TokenStore:
                 return None
             if not isinstance(entry, dict):
                 raise TokenStoreError(f"token entry {token_ref!r} is malformed")
-            return deserialize_token(entry)
+            try:
+                return deserialize_token(entry)
+            except (TypeError, ValueError, ValidationError) as exc:
+                raise TokenStoreError(f"token entry {token_ref!r} is malformed") from exc
 
     def delete(self, token_ref: str) -> None:
         with self.locked():

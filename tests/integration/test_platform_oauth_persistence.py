@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -180,6 +181,26 @@ def test_undecryptable_token_blob_is_reconciled_without_exposing_token_material(
     blob = bytearray(store.store_path.read_bytes())
     blob[len(blob) // 2] ^= 0xFF
     store.store_path.write_bytes(bytes(blob))
+
+    with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
+        response = web.get("/api/platforms/accounts")
+
+    assert response.status_code == 200
+    assert "fixture-access-token" not in response.text
+    account = response.json()[0]
+    assert account["status"] == "needs_reauth"
+    assert "reconnect" in account["last_error"]
+
+
+def test_malformed_token_entry_is_reconciled_without_exposing_token_material(oauth_env) -> None:
+    token_ref = "malformed-token-ref"
+    _insert_connected_account(oauth_env.database, token_ref)
+    store = TokenStore(oauth_env.settings.resolved_data_dir / "secrets")
+    store.store(token_ref, TokenSet(access_token="fixture-access-token"))
+    fernet = Fernet(store._load_key())
+    payload = store._read_store(fernet)
+    payload[token_ref] = {}
+    store._write_store(fernet, payload)
 
     with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
         response = web.get("/api/platforms/accounts")
