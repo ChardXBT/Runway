@@ -12,6 +12,7 @@ from typing import Literal, Protocol, TypeVar, cast
 
 import numpy as np
 from sqlalchemy import desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from runway.db.base import Database
@@ -1128,16 +1129,33 @@ class RepresentationStore:
         ):
             raise ValueError("representation producer returned an unexpected identity")
         self._cache_diagnostics["recomputations"] += 1
-        return self.persist(
-            channel_id=channel_id,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            field=field,
-            modality=modality,
-            result=result,
-            source_content_hash=source_content_hash,
-            metadata=metadata,
-        )
+        try:
+            return self.persist(
+                channel_id=channel_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                field=field,
+                modality=modality,
+                result=result,
+                source_content_hash=source_content_hash,
+                metadata=metadata,
+            )
+        except IntegrityError:
+            exact = self.get_exact(
+                channel_id=channel_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                field=field,
+                purpose=purpose,
+                provider=provider,
+                model=model,
+                model_version=model_version,
+                source_content_hash=source_content_hash,
+                configuration_hash=configuration_hash,
+            )
+            if exact is not None:
+                return exact
+            raise
 
     def records_for_set(self, representation_set_id: int) -> list[RepresentationRecord]:
         with self.database.session() as session:

@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from runway.capture.service import CaptureService
 from runway.config import Settings
@@ -314,6 +315,85 @@ def test_expired_claim_fencing_prevents_stale_worker_completion(
     assert completed.attempts == reclaimed_attempt
     assert completed.representation_record_id is not None
     assert provider.calls == 1
+
+
+class SynchronizedTextProvider(DeterministicTextEmbeddingProvider):
+    name = "synchronized-fixture"
+    model = "synchronized-signed-subword-concepts"
+    version = "1"
+
+    def __init__(self) -> None:
+        super().__init__(dimensions=128)
+        self.entered = threading.Event()
+        self.embedding_barrier = threading.Barrier(2)
+
+    def embed_text(self, text: str, *, purpose: str) -> RepresentationResult:
+        self.entered.set()
+        self.embedding_barrier.wait(timeout=3)
+        return super().embed_text(text, purpose=purpose)
+
+
+def test_expired_claim_concurrent_persist_reuses_the_winning_record(
+    database: Database,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    provider = SynchronizedTextProvider()
+    registry = RepresentationProviderRegistry()
+    registry.register_text(provider.name, provider)
+    service = _service(database, settings, registry)
+    planned = service.plan_history("text", provider_name=provider.name)
+    set_id = int(planned["representation_set_id"])
+    target = _items(database, set_id)[0]
+    stale_attempt = service._claim_item(target.id)
+    assert stale_attempt == 1
+
+    original_flush = Session.flush
+    flush_barrier = threading.Barrier(2)
+
+    def gated_flush(session: Session) -> None:
+        if any(isinstance(instance, RepresentationRecord) for instance in session.new):
+            flush_barrier.wait(timeout=3)
+        original_flush(session)
+
+    monkeypatch.setattr(Session, "flush", gated_flush)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        stale_completion = executor.submit(
+            service._backfill_item,
+            target.id,
+            claim_attempt=stale_attempt,
+        )
+        assert provider.entered.wait(2)
+        with database.session() as session:
+            item = session.get(RepresentationSetItem, target.id)
+            assert item is not None
+            item.claimed_at = datetime.now(UTC) - timedelta(seconds=301)
+        reclaimed_attempt = service._claim_item(target.id)
+        assert reclaimed_attempt == stale_attempt + 1
+        current_completion = executor.submit(
+            service._backfill_item,
+            target.id,
+            claim_attempt=reclaimed_attempt,
+        )
+        assert stale_completion.result(timeout=5) is False
+        assert current_completion.result(timeout=5) is True
+
+    completed = next(item for item in _items(database, set_id) if item.id == target.id)
+    assert completed.status == "complete"
+    assert completed.attempts == reclaimed_attempt
+    with database.session() as session:
+        assert (
+            session.scalar(
+                select(func.count(RepresentationRecord.id)).where(
+                    RepresentationRecord.entity_type == target.entity_type,
+                    RepresentationRecord.entity_id == target.entity_id,
+                    RepresentationRecord.field == target.field,
+                )
+            )
+            == 1
+        )
 
 
 def test_running_lease_is_conservative_under_clock_changes(
