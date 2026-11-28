@@ -7,7 +7,12 @@ Review branch: `devin-free/33-edge-case-review`
 
 Issue: #33, “Edge-case review: Runway failure matrix”
 
-Post-review update: after the reviewed base, `main` commit `96740f81adb7091617b3b503734376da06f2a5ef` (#44) serialized the refresh decision, provider refresh, and replacement write in `ProviderRegistry.fresh_token` under `TokenStore.locked()`, with independent-process regression coverage in `tests/unit/test_platform_token_refresh_concurrency.py`. That change closed follow-up #39; the token-refresh serialization gap below is therefore a reviewed-base finding, not a current-main classification. The rest of the matrix remains a point-in-time assessment of the base above.
+Post-review updates after the reviewed base:
+
+- `main` commit `96740f81adb7091617b3b503734376da06f2a5ef` (#44) serialized the refresh decision, provider refresh, and replacement write in `ProviderRegistry.fresh_token` under `TokenStore.locked()`, with independent-process regression coverage in `tests/unit/test_platform_token_refresh_concurrency.py`. That change closed follow-up #39.
+- `main` commit `1e7f8883a30cf45deb582df1650123b6b25aa1c1` (#45) made reviewer exports write a temporary sibling file and atomically rename it into place, with interruption and long-filename regression coverage in `tests/integration/test_study_active_learning.py`. That change closed follow-up #40.
+
+The token-refresh serialization and non-atomic reviewer-export gaps below are therefore reviewed-base findings, not current-main classifications. The rest of the matrix remains a point-in-time assessment of the base above.
 
 ## Verdict
 
@@ -23,7 +28,7 @@ Additional source-verified control gaps, not exploit reproductions:
 
 - disconnect ignores a false revoke result and returns `disconnected` even when provider revocation did not happen or is unsupported (`src/runway/api/platform_routes.py:488-509`); provider contracts return `bool` (`src/runway/platforms/base.py:283-285`) and Instagram explicitly returns `False` (`src/runway/platforms/instagram.py:207-208`). The local token is still deleted, but the caller is not told that provider-side revocation is absent or failed.
 - at the reviewed base, token refresh was protected only during each individual token-file read/write; the read-provider-refresh-write sequence in `ProviderRegistry.fresh_token` was not serialized across processes (`src/runway/platforms/registry.py:79-99` at that base).
-- reviewer export writes the final JSON directly with `output.write_text` (`src/runway/intelligence/studies.py:489-491`), so an interrupted write can leave a partial export file even though re-export remains idempotent.
+- at the reviewed base, reviewer export wrote the final JSON directly with `output.write_text` (`src/runway/intelligence/studies.py:489-491` at that base), so an interrupted write could leave a partial export file even though re-export remained idempotent.
 
 ## Scope and overlap
 
