@@ -140,8 +140,10 @@ vectors, and passing activation gates may become active.
 
 Each item is a checkpoint for one exact `(entity_type, entity_id, field,
 source_content_hash)` identity. It links to one `representation_record` after a
-successful bounded backfill. Attempts and failures are retained, making the
-backfill resumable and diagnosable.
+successful bounded backfill. Claims carry a UTC lease timestamp and attempts act as
+fencing generations, so expired or interrupted `running` items can be requeued without
+letting a stale worker overwrite a newer claim. Attempts and failures are retained,
+making the backfill resumable and diagnosable.
 
 ### `representation_records`
 

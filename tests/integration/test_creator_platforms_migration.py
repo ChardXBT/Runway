@@ -85,7 +85,7 @@ def test_0012_upgrade_and_downgrade_preserve_existing_rows(tmp_path: Path) -> No
         assert connection.execute(text("SELECT count(*) FROM proposals")).scalar_one() == 1
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == "0012_creator_platforms"
+            == "0013_representation_backfill_claims"
         )
     engine.dispose()
 

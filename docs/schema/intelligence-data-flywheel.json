@@ -9800,6 +9800,13 @@
           },
           {
             "default": null,
+            "name": "claimed_at",
+            "nullable": true,
+            "primary_key": 0,
+            "type": "DATETIME"
+          },
+          {
+            "default": null,
             "name": "completed_at",
             "nullable": true,
             "primary_key": 0,
@@ -11186,7 +11193,7 @@
     }
   },
   "contract_version": "runway-schema-contract-v1",
-  "fingerprint": "b70dadf3387170f628f8f1f280e0ac05b7063d60c99d379fe249864add4732be",
-  "migration": "0012_creator_platforms",
+  "fingerprint": "a7b7d733aaa045a548e89fe8796a98bc421bce98255a8b9da85d0121ede54f96",
+  "migration": "0013_representation_backfill_claims",
   "table_count": 66
 }
