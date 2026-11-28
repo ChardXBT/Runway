@@ -6,7 +6,7 @@ import shutil
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -36,6 +36,12 @@ from runway.domain.state_machine import attempt_status_of, require_transition
 from runway.intelligence.exposure_bias import CandidateExposureService
 from runway.intelligence.retrieval import RetrievalService
 from runway.intelligence.slate_optimization import CandidateSlateOptimizer
+from runway.proposals.schedule_slots import (
+    RESERVING_PROPOSAL_STATUSES,
+    claim_next_available_slot,
+    planned_channel_datetime,
+    release_lineup_slot_claim,
+)
 from runway.ranking.diversity import fingerprint_from_candidate
 
 logger = logging.getLogger(__name__)
@@ -619,15 +625,7 @@ class ProposalService:
         first_slot = self._planned_datetime(first_date, timezone_name, default_time)
         if first_slot <= now + timedelta(minutes=5):
             first_date += timedelta(days=1)
-        reserving_statuses = {
-            ProposalStatus.APPROVED.value,
-            ProposalStatus.INTERNALLY_SCHEDULED.value,
-            ProposalStatus.PUBLISHING.value,
-            ProposalStatus.EXTERNALLY_SCHEDULED.value,
-            ProposalStatus.PUBLISH_UNVERIFIED.value,
-            ProposalStatus.PUBLISHED.value,
-            ProposalStatus.PUBLISH_FAILED.value,
-        }
+        reserving_statuses = RESERVING_PROPOSAL_STATUSES
         with self.database.session() as session:
             channel_id = self._channel_id(session)
             statement = select(Proposal.scheduled_publish_at).where(
@@ -788,8 +786,8 @@ class ProposalService:
     def approve(self, proposal_id: int) -> dict[str, object]:
         decision_event_id: int | None = None
         with self._schedule_lock:
-            scheduled_for = self.next_available_slot(exclude_proposal_id=proposal_id)
-            with self.database.session() as session:
+            timezone_name, default_time = self._schedule_config()
+            with self.database.immediate_session() as session:
                 proposal = self._get(session, proposal_id)
                 if not proposal.final_caption.strip():
                     raise ValueError("proposal cannot be approved without a final caption")
@@ -797,6 +795,15 @@ class ProposalService:
                 media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
                 if candidate is None or media is None:
                     raise ValueError("proposal cannot be approved without a local candidate image")
+                source = self.settings.resolved_data_dir / media.local_path
+                if not source.is_file():
+                    raise ValueError("approved media file is missing")
+                scheduled_for = claim_next_available_slot(
+                    session,
+                    proposal,
+                    timezone_name=timezone_name,
+                    default_time=default_time,
+                )
                 old_slot = proposal.scheduled_publish_at
                 proposal.scheduled_publish_at = scheduled_for.isoformat()
                 self._event(
@@ -815,9 +822,6 @@ class ProposalService:
                 decision_event_id = event.id
                 proposal.approved_at = datetime.now(UTC)
                 proposal.rejected_at = None
-                source = self.settings.resolved_data_dir / media.local_path
-                if not source.is_file():
-                    raise ValueError("approved media file is missing")
                 extension = Path(media.local_path).suffix
                 relative = Path("media") / "approved" / f"{media.sha256}{extension}"
                 destination = self.settings.resolved_data_dir / relative
@@ -895,8 +899,8 @@ class ProposalService:
         caption_changed = False
 
         with self._schedule_lock:
-            scheduled_for = self.next_available_slot(exclude_proposal_id=proposal_id)
-            with self.database.session() as session:
+            timezone_name, default_time = self._schedule_config()
+            with self.database.immediate_session() as session:
                 proposal = self._get(session, proposal_id)
                 self._require_status(
                     proposal,
@@ -912,6 +916,12 @@ class ProposalService:
                     raise ValueError(
                         "proposal cannot be accepted because its local image is missing"
                     )
+                scheduled_for = claim_next_available_slot(
+                    session,
+                    proposal,
+                    timezone_name=timezone_name,
+                    default_time=default_time,
+                )
 
                 original_caption = proposal.final_caption
                 generated_caption = proposal.recommended_caption
@@ -1544,13 +1554,7 @@ class ProposalService:
     ) -> datetime:
         if timezone_name is None or default_time is None:
             timezone_name, default_time = self._schedule_config()
-        hour, minute = (int(value) for value in default_time.split(":"))
-        zone = ZoneInfo(timezone_name)
-        wall_time = datetime.combine(target_date, time(hour=hour, minute=minute), tzinfo=zone)
-        # A post time inside a spring-forward gap (02:30 on a DST change day)
-        # does not exist; the UTC round trip moves it to the real instant
-        # (03:30 local) and leaves every existing wall time unchanged.
-        return wall_time.astimezone(UTC).astimezone(zone)
+        return planned_channel_datetime(target_date, timezone_name, default_time)
 
     def _schedule_config(self) -> tuple[str, str]:
         with self.database.session() as session:
@@ -1671,6 +1675,7 @@ class ProposalService:
     ) -> None:
         if proposal.scheduled_publish_at is None:
             return
+        release_lineup_slot_claim(session, proposal.id)
         old_slot = proposal.scheduled_publish_at
         proposal.scheduled_publish_at = None
         self._event(

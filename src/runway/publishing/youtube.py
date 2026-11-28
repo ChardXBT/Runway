@@ -42,6 +42,11 @@ from runway.domain.state_machine import (
     require_transition,
     transition_attempt,
 )
+from runway.proposals.schedule_slots import (
+    release_lineup_slot_claim,
+    replace_lineup_slot_claims,
+    synchronize_lineup_slot_claims,
+)
 from runway.publishing.base import (
     AssistedPost,
     AssistedPreparation,
@@ -1768,7 +1773,9 @@ class YouTubeBrowserPublisher:
 
                 current_slot = datetime.fromisoformat(current.planned_publish_at)
                 channel = get_channel(session, self.settings.channel_handle)
-                timezone = ZoneInfo(channel.timezone)
+                channel_id = channel.id
+                timezone_name = channel.timezone
+                timezone = ZoneInfo(timezone_name)
                 target_slot = current_slot
                 if new_scheduled_publish_at is not None and new_date is not None:
                     raise ValueError("send either a full timestamp or legacy new_date, not both")
@@ -1792,6 +1799,7 @@ class YouTubeBrowserPublisher:
                 if target_slot.astimezone(UTC) <= datetime.now(UTC) + timedelta(minutes=5):
                     raise ValueError("Lineup times must be at least five minutes in the future")
 
+                target_date = target_slot.astimezone(timezone).date()
                 occupant = None
                 if target_slot.isoformat() != current.planned_publish_at:
                     possible_occupants = session.scalars(
@@ -1807,7 +1815,6 @@ class YouTubeBrowserPublisher:
                             ),
                         )
                     ).all()
-                    target_date = target_slot.astimezone(timezone).date()
                     target_occupants = [
                         item
                         for item in possible_occupants
@@ -1863,7 +1870,21 @@ class YouTubeBrowserPublisher:
                     )
 
             now = datetime.now(UTC)
-            with self.database.session() as session:
+            with self.database.immediate_session() as session:
+                active_slots = synchronize_lineup_slot_claims(
+                    session,
+                    channel_id,
+                    timezone_name,
+                )
+                affected_ids = {cast(int, record["id"]) for record in records}
+                target_conflicts = [
+                    proposal_id
+                    for proposal_id, (slot_date, _timestamp) in active_slots.items()
+                    if slot_date == target_date and proposal_id not in affected_ids
+                ]
+                if target_conflicts:
+                    raise RuntimeError("Lineup changed concurrently; refresh before trying again")
+                moved_entries: list[tuple[Proposal, str]] = []
                 for record in records:
                     record_id = cast(int, record["id"])
                     loaded = session.get(Proposal, record_id)
@@ -1890,6 +1911,7 @@ class YouTubeBrowserPublisher:
                     }
                     loaded.final_caption = updated_post.caption
                     loaded.scheduled_publish_at = updated_post.planned_publish_at
+                    moved_entries.append((loaded, updated_post.planned_publish_at))
                     invalidated = self._invalidate_active_attempts(session, loaded.id, now)
                     session.add(
                         ProposalEvent(
@@ -1919,6 +1941,12 @@ class YouTubeBrowserPublisher:
                             "swapped": len(records) > 1,
                         },
                     )
+
+                replace_lineup_slot_claims(
+                    session,
+                    moved_entries,
+                    timezone_name=timezone_name,
+                )
 
                 if cleaned_caption != old_caption:
                     selected = session.get(Proposal, proposal_id)
@@ -1963,7 +1991,7 @@ class YouTubeBrowserPublisher:
                 original_status = proposal.status
 
             now = datetime.now(UTC)
-            with self.database.session() as session:
+            with self.database.immediate_session() as session:
                 proposal = session.get(Proposal, proposal_id)
                 if proposal is None:
                     raise LookupError(f"proposal {proposal_id} not found")
@@ -1976,6 +2004,7 @@ class YouTubeBrowserPublisher:
                 old_slot = proposal.scheduled_publish_at
                 require_transition(proposal.status, ProposalStatus.CANCELLED)
                 proposal.status = ProposalStatus.CANCELLED.value
+                release_lineup_slot_claim(session, proposal.id)
                 proposal.scheduled_publish_at = None
                 invalidated = self._invalidate_active_attempts(session, proposal.id, now)
                 session.add(
