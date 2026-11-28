@@ -616,6 +616,7 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
     def overview() -> dict[str, object]:
         if settings.platform_provider == "mock":
             registry.ensure_mock_accounts()
+        registry.reconcile_connected_accounts()
         with database.session() as session:
             records = session.scalars(select(ConnectedAccount)).all()
             views = [_account_view(database, settings, account) for account in records]

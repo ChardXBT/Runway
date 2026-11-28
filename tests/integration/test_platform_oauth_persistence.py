@@ -232,6 +232,23 @@ def test_empty_token_entry_is_reconciled_without_exposing_token_material(oauth_e
     assert "reconnect" in account["last_error"]
 
 
+def test_overview_read_reconciles_token_loss_after_startup(oauth_env) -> None:
+    token_ref = "overview-runtime-loss-token-ref"
+    _insert_connected_account(oauth_env.database, token_ref)
+    store = TokenStore(oauth_env.settings.resolved_data_dir / "secrets")
+    store.store(token_ref, TokenSet(access_token="fixture-access-token"))
+
+    with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
+        store.store_path.unlink()
+        response = web.get("/api/overview")
+
+    assert response.status_code == 200
+    assert "fixture-access-token" not in response.text
+    account = response.json()["accounts"][0]
+    assert account["status"] == "needs_reauth"
+    assert "reconnect" in account["last_error"]
+
+
 def test_reconnect_replaces_token_without_duplicating_the_account(oauth_env) -> None:
     with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
         first = _complete_connect(web)
