@@ -1024,6 +1024,97 @@ async def test_failed_pipeline_retry_preserves_partial_history_and_step_attempt_
 
 
 @pytest.mark.asyncio
+async def test_cancelled_pipeline_recovers_stale_running_step_with_monotonic_attempts(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database, lease_seconds=0.2)
+    input_value = AgentInputEnvelope(payload={"candidate_id": 32})
+    steps = [
+        AgentPipelineStep(capability="caption_generation", input_value=input_value),
+        AgentPipelineStep(capability="caption_verification", input_value=input_value),
+    ]
+    started = asyncio.Event()
+    verification_calls = 0
+
+    async def generate(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"caption": "pipeline recovery fixture"}),
+            usage={"total_tokens": 1},
+        )
+
+    async def verify(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        nonlocal verification_calls
+        verification_calls += 1
+        if verification_calls == 1:
+            started.set()
+            await asyncio.sleep(60)
+            raise AssertionError("the cancelled pipeline fixture unexpectedly completed")
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"verified": True}),
+            usage={"total_tokens": 1},
+        )
+
+    kwargs = {
+        "channel_id": channel_id,
+        "steps": steps,
+        "handlers": {"caption_generation": generate, "caption_verification": verify},
+        "provider": "mock",
+        "model": "fixture",
+        "prompt_version": "fixture-v1",
+        "risk_route": "easy",
+        "budget": AgentBudget(
+            max_steps=2,
+            max_attempts_per_step=1,
+            max_total_tokens=10,
+            max_seconds=10,
+            timeout_seconds=2,
+        ),
+        "run_key": "fixture-pipeline-stale-recovery",
+    }
+    interrupted = asyncio.create_task(harness.execute_pipeline(**kwargs))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    interrupted.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await interrupted
+
+    with database.session() as session:
+        crashed = session.scalar(
+            select(IntelligenceAgentRun).where(
+                IntelligenceAgentRun.run_key == "fixture-pipeline-stale-recovery"
+            )
+        )
+        assert crashed is not None
+        assert crashed.status == "running"
+        crashed_id = crashed.id
+        crashed.lease_expires_at = datetime.now(UTC) - timedelta(seconds=0.001)
+
+    recovered_id, outputs = await harness.execute_pipeline(**kwargs)
+    assert recovered_id == crashed_id
+    assert outputs["caption_verification"].payload["verified"] is True
+    detail = harness.inspect(crashed_id)
+    step_states = {
+        (step["sequence"], step["attempt"]): step["status"]  # type: ignore[index]
+        for step in detail["steps"]  # type: ignore[index]
+    }
+    assert step_states == {
+        (1, 1): "completed",
+        (1, 2): "completed",
+        (2, 1): "failed",
+        (2, 2): "completed",
+    }
+    stale_steps = [
+        step
+        for step in detail["steps"]  # type: ignore[index]
+        if (step["sequence"], step["attempt"]) == (2, 1)
+    ]
+    assert "stale lease" in str(stale_steps[0]["error_summary"])
+    assert detail["attempt_count"] == 4
+
+
+@pytest.mark.asyncio
 async def test_edge_payloads_replay_by_exact_logical_input_and_distinct_keys_can_overlap(
     database: Database,
     settings: Settings,
