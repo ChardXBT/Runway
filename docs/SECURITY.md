@@ -70,6 +70,14 @@
   database holds only an opaque `token_ref`, so database backups contain no usable credential.
   `data/secrets/` is ignored by Git. Disconnecting revokes the token where the platform supports
   it and deletes it locally.
+- If the encrypted token blob is corrupt, empty, or cannot be decrypted because `token.key` is
+  missing or wrong, read-only token loads fail honestly and no plaintext is guessed. The first
+  token-store mutation that can perform disaster recovery moves the encrypted blob and any
+  existing key into a unique `data/secrets/quarantine/token-store-<timestamp>-<random>/`
+  directory with restrictive permissions and a secret-free `recovery.json` manifest, then starts
+  a new empty encrypted store. The quarantined ciphertext/key material remains available for
+  owner recovery; it is never printed, logged, or committed. A normal reconnect can then write a
+  healthy replacement token without manual file surgery.
 - Tokens are sent only as `Authorization: Bearer` headers to the platform hosts, never in
   URLs, frontend responses, logs, or persisted JSON; `redact_payload` strips token-like
   fields from anything written to `platform_actions`. The only exceptions are the providers'

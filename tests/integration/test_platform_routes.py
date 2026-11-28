@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -305,3 +306,150 @@ def test_health_product_is_runway(mock_settings: Settings) -> None:
         payload = client.get("/health").json()
         assert payload["product"] == mock_settings.product_name
         assert payload["platform_provider"] == "mock"
+
+
+def _quarantine_dirs(secrets_dir: Path) -> list[Path]:
+    root = secrets_dir / "quarantine"
+    if not root.is_dir():
+        return []
+    return sorted(path for path in root.iterdir() if path.is_dir())
+
+
+@pytest.mark.parametrize("damage", ["corrupt_blob", "missing_key", "wrong_key"])
+def test_reconnect_after_reconciliation_quarantines_unreadable_store_and_recovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str,
+) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        platform_provider="live",
+        youtube_client_id="yt-client",
+        youtube_client_secret="yt-secret",
+    )
+    client = httpx.Client(transport=httpx.MockTransport(_youtube_handler), timeout=20.0)
+    provider = YouTubeProvider(settings, client)
+    original = ProviderRegistry.provider
+
+    def patched(self: ProviderRegistry, platform: Platform):
+        if platform is Platform.youtube:
+            return provider
+        return original(self, platform)
+
+    monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    app = create_app(settings)
+    database: Database = app.state.database
+    with TestClient(app, base_url="http://127.0.0.1:8000") as web:
+        connect = web.post("/api/platforms/youtube/connect")
+        assert connect.status_code == 200
+        first_callback = web.get(
+            "/api/platforms/youtube/oauth/callback",
+            params={"code": "auth-code", "state": connect.json()["state"]},
+            follow_redirects=False,
+        )
+        assert first_callback.status_code == 303
+
+        with database.session() as session:
+            account = session.scalar(select(ConnectedAccount))
+            assert account is not None
+            account_id = account.id
+            original_token_ref = str(account.token_ref)
+            # PR #60's reconciliation state: the account is honestly marked for
+            # reauthorization before the user starts reconnect.
+            account.status = "needs_reauth"
+            account.last_error = "stored OAuth token is missing or unreadable; reconnect"
+
+        secrets_dir = settings.resolved_data_dir / "secrets"
+        store = TokenStore(secrets_dir)
+        original_key = store.key_path.read_bytes()
+        original_blob = store.store_path.read_bytes()
+        expected_blob = original_blob
+        expected_key: bytes | None = original_key
+        if damage == "corrupt_blob":
+            corrupted = bytearray(original_blob)
+            corrupted[len(corrupted) // 2] ^= 0xFF
+            expected_blob = bytes(corrupted)
+            store.store_path.write_bytes(expected_blob)
+        elif damage == "missing_key":
+            store.key_path.unlink()
+            expected_key = None
+        else:
+            expected_key = Fernet.generate_key() + b"\n"
+            store.key_path.write_bytes(expected_key)
+
+        reconnect = web.post(f"/api/platforms/accounts/{account_id}/reconnect")
+        assert reconnect.status_code == 200
+        callback = web.get(
+            "/api/platforms/youtube/oauth/callback",
+            params={"code": "auth-code", "state": reconnect.json()["state"]},
+            follow_redirects=False,
+        )
+
+        assert callback.status_code == 303
+        assert callback.headers["location"].endswith("/accounts?connected=youtube")
+        quarantined = _quarantine_dirs(secrets_dir)
+        assert len(quarantined) == 1
+        assert (quarantined[0] / "platform-tokens.json").read_bytes() == expected_blob
+        if expected_key is None:
+            assert not (quarantined[0] / "token.key").exists()
+        else:
+            assert (quarantined[0] / "token.key").read_bytes() == expected_key
+        manifest = (quarantined[0] / "recovery.json").read_text(encoding="utf-8")
+        assert "unreadable" in manifest
+        assert "yt-access" not in manifest
+        assert "yt-refresh" not in manifest
+        assert original_key.decode("ascii").strip() not in manifest
+
+        with database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            assert account is not None
+            current_token_ref = str(account.token_ref)
+        assert current_token_ref
+        replacement = store.load(current_token_ref)
+        assert replacement is not None
+        assert replacement.access_token == "yt-access"
+        if current_token_ref != original_token_ref:
+            assert store.load(original_token_ref) is None
+        accounts_response = web.get("/api/platforms/accounts")
+        assert accounts_response.status_code == 200
+        assert accounts_response.json()[0]["status"] == "connected"
+        assert "yt-access" not in accounts_response.text
+        assert "yt-refresh" not in accounts_response.text
+        for path in settings.resolved_data_dir.rglob("*"):
+            if path.is_file():
+                contents = path.read_bytes()
+                assert b"yt-access" not in contents
+                assert b"yt-refresh" not in contents
+    client.close()
+
+
+def test_disconnect_with_unreadable_store_quarantines_it_and_disconnects(
+    mock_settings: Settings,
+) -> None:
+    app = create_app(mock_settings)
+    database: Database = app.state.database
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        account = client.get("/api/platforms/accounts").json()[0]
+        secrets_dir = mock_settings.resolved_data_dir / "secrets"
+        store = TokenStore(secrets_dir)
+        original_key = store.key_path.read_bytes()
+        corrupted = bytearray(store.store_path.read_bytes())
+        corrupted[len(corrupted) // 2] ^= 0xFF
+        corrupted_blob = bytes(corrupted)
+        store.store_path.write_bytes(corrupted_blob)
+
+        response = client.post(
+            f"/api/platforms/accounts/{account['id']}/disconnect",
+            json={"confirmed": True},
+        )
+
+        assert response.status_code == 200
+        quarantined = _quarantine_dirs(secrets_dir)
+        assert len(quarantined) == 1
+        assert (quarantined[0] / "platform-tokens.json").read_bytes() == corrupted_blob
+        assert (quarantined[0] / "token.key").read_bytes() == original_key
+        with database.session() as session:
+            record = session.get(ConnectedAccount, account["id"])
+            assert record is not None
+            assert record.status == "disconnected"
+            assert record.token_ref is None
