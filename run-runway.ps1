@@ -51,14 +51,53 @@ function Get-LaunchSummary([string]$Root, [bool]$Api, [bool]$Web, [int]$Timeout)
         ($components -join ','), $Timeout, $PID
 }
 
-function Test-Ready([string]$Component) {
+function Get-Health([string]$Component) {
     try {
         $port = if ($Component -eq 'api') { 8000 } else { 3000 }
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 2
+        return Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 2
+    } catch { return $null }
+}
+
+function Get-HealthField($Health, [string]$Name) {
+    # '' when the field is missing: older APIs lack the newer identity fields.
+    if ($null -eq $Health) { return '' }
+    if ($Health -is [System.Collections.IDictionary]) {
+        if ($Health.Contains($Name)) { return "$($Health[$Name])" }
+        return ''
+    }
+    if ($Health.PSObject.Properties[$Name]) { return "$($Health.$Name)" }
+    return ''
+}
+
+function Test-Ready([string]$Component) {
+    $health = Get-Health $Component
+    try {
         return $health.product -eq 'Runway' -and $health.status -eq 'ok' -and (
             $Component -eq 'api' -or $health.component -eq 'web'
         )
     } catch { return $false }
+}
+
+function Get-ApiRestartReason($Health, $Status) {
+    # Why a healthy API on port 8000 must be replaced before the worker starts
+    # and before the database is migrated, or '' when it is current.
+    if ((Get-HealthField $Health 'sync_scheduler') -ne 'worker') {
+        return 'it is older code that runs the in-process sync scheduler'
+    }
+    $running = Get-HealthField $Health 'revision'
+    # "unknown" (no git) on either side proves nothing; the schema check below still applies.
+    if ($running -and $running -ne 'unknown' -and $Status.revision -ne 'unknown' -and
+        $running -ne $Status.revision) {
+        return "it runs revision $running and the checkout is at $($Status.revision)"
+    }
+    $schema = Get-HealthField $Health 'migration_head'
+    if ($schema -ne $Status.head) {
+        return "it expects schema $schema and the checkout's migration head is $($Status.head)"
+    }
+    if (-not $Status.up_to_date) {
+        return "the database is at $($Status.current), behind the migration head $($Status.head)"
+    }
+    return ''
 }
 
 function Get-Listener([int]$Port) {
@@ -88,18 +127,19 @@ function Get-ParentProcess($Process) {
 function Test-Owned($Process, [string]$Component) {
     if (-not $Process -or -not $Process.CommandLine) { return $false }
     if ($Component -eq 'api') {
-        if (-not (Test-Contains $Process.CommandLine 'runway.api.app:app')) { return $false }
+        $module = 'runway.api.app:app'
+        if (-not (Test-Contains $Process.CommandLine $module)) { return $false }
         if (Test-Contains $Process.CommandLine $python) { return $true }
         # The venv python.exe is a redirector. On python.org installs it starts the
         # base interpreter, whose command line names the base path, not this
-        # checkout. That listener is ours only if its parent is our venv redirector
-        # running the same API module.
+        # checkout. That process is ours only if its parent is our venv redirector
+        # running the same module.
         $parent = Get-ParentProcess $Process
         if (-not $parent -or -not $parent.PSObject.Properties['CommandLine'] -or -not $parent.CommandLine) {
             return $false
         }
         return (Test-Contains $parent.CommandLine $python) -and
-            (Test-Contains $parent.CommandLine 'runway.api.app:app')
+            (Test-Contains $parent.CommandLine $module)
     }
     return $Process.Name -eq 'node.exe' -and (Test-Contains $Process.CommandLine $next)
 }
@@ -123,6 +163,319 @@ function Assert-PortOwner([string]$Component, [int]$Port) {
     }
 }
 
+function Start-HiddenCommand([string]$Command) {
+    # Every child goes through cmd.exe, which writes its logs. Start-Process
+    # -Redirect* would create the child with handle inheritance on, handing it
+    # this launcher's stdout/stderr and any handle a concurrent caller leaked in;
+    # a caller capturing launcher output then blocked until Runway stopped.
+    # Without -Redirect* Start-Process uses ShellExecute, which inherits nothing.
+    # Each child gets its own hidden console, so it can be asked to stop with
+    # Ctrl+Break later.
+    $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
+        -ArgumentList $Command -WorkingDirectory $root -WindowStyle Hidden -PassThru
+    # Retain the handle so rapid exits still have an exit code. A child that has
+    # already exited raises here; its exit is reported by the caller's wait.
+    try { $null = $child.Handle } catch { }
+    return $child
+}
+
+function Get-RuntimeStatus {
+    # One read-only Python query: the database revision against this checkout's
+    # migration head, the checkout revision, and where the worker keeps its lock
+    # and PID record. A failed query stops the launch; it never looks like
+    # "nothing to do".
+    $out = Join-Path $runtime 'status.json'
+    $err = Join-Path $runtime 'status.stderr.log'
+    Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+    $command = '/d /s /c ""{0}" -m runway.operations.launch_status 1>"{1}" 2>"{2}""' -f $python, $out, $err
+    $query = Start-HiddenCommand $command
+    if (-not $query.WaitForExit(120000)) {
+        throw 'The runtime status query did not finish within 2 minutes. Inspect data/runtime/status.stderr.log.'
+    }
+    $query.WaitForExit()
+    if ($query.ExitCode -ne 0) {
+        throw "The runtime status query failed with code $($query.ExitCode). Inspect data/runtime/status.stderr.log."
+    }
+    $status = Get-Content -LiteralPath $out -Raw | ConvertFrom-Json
+    foreach ($name in 'current', 'head', 'up_to_date', 'known_revision', 'revision', 'worker_lock', 'worker_pid') {
+        if (-not $status.PSObject.Properties[$name]) { throw "The runtime status lacks '$name'." }
+    }
+    return $status
+}
+
+function Request-ConsoleStop([int]$ProcessId) {
+    # Ctrl+Break on the process's own hidden console (Windows has no SIGTERM;
+    # Ctrl+C can be disabled by a parent, Ctrl+Break cannot): uvicorn and
+    # `runway worker` handle SIGBREAK and shut down gracefully.
+    # It must run in a separate process because attaching to another console
+    # detaches the caller from its own.
+    & $python -m runway.operations.console_stop $ProcessId 2>&1 | Out-Null
+    return $LASTEXITCODE -eq 0
+}
+
+function Test-ProcessAlive([int]$ProcessId) {
+    return $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
+}
+
+function Stop-ByConsole([int]$ProcessId, [string]$Name, [int[]]$WaitSeconds = @(45, 15)) {
+    # Ask, wait, ask again. uvicorn bounds its graceful shutdown (open event
+    # streams) with --timeout-graceful-shutdown. Nothing is ever force-killed.
+    # Returns $true once it exited.
+    foreach ($wait in $WaitSeconds) {
+        if (-not (Test-ProcessAlive $ProcessId)) { return $true }
+        Write-Diagnostic "Asking $Name (PID $ProcessId) to stop with Ctrl+Break."
+        if (-not (Request-ConsoleStop $ProcessId)) {
+            Write-Diagnostic "Could not deliver Ctrl+Break to $Name (PID $ProcessId)."
+            return $false
+        }
+        $deadline = (Get-Date).AddSeconds($wait)
+        while ((Get-Date) -lt $deadline) {
+            if (-not (Test-ProcessAlive $ProcessId)) {
+                Write-Diagnostic "$Name (PID $ProcessId) stopped."
+                return $true
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    return -not (Test-ProcessAlive $ProcessId)
+}
+
+function Invoke-DatabaseUpgrade {
+    # The API refuses to serve a database behind the migration head and never
+    # migrates at import, so the launcher upgrades it explicitly first.
+    Save-PreviousLog 'db-upgrade'
+    $log = Join-Path $runtime 'db-upgrade.log'
+    Write-Diagnostic "Upgrading the database using $python."
+    $command = '/d /s /c ""{0}" -m runway.cli.db_commands upgrade 1>"{1}" 2>&1"' -f $python, $log
+    $upgrade = Start-HiddenCommand $command
+    # A migration is never killed midway; a slow one is reported and left to finish.
+    if (-not $upgrade.WaitForExit(900000)) {
+        throw 'Database upgrade is still running after 15 minutes. Inspect data/runtime/db-upgrade.log; the API was not started.'
+    }
+    $upgrade.WaitForExit()
+    if ($upgrade.ExitCode -ne 0) {
+        throw "Database upgrade failed with code $($upgrade.ExitCode). Inspect data/runtime/db-upgrade.log; the API was not started."
+    }
+    Write-Diagnostic 'Database is at the migration head.'
+}
+
+function Test-WorkerLockHeld([string]$LockPath) {
+    # `runway worker` holds a byte-range lock on worker.lock for its whole life
+    # and the OS drops it when the process exits, so a held lock is a live
+    # worker however it was started (venv python, runway.exe, by hand). A failed
+    # check throws: it must never look like "no worker", or a second one starts.
+    if (-not (Test-Path -LiteralPath $LockPath -PathType Leaf)) { return $false }
+    $stream = [System.IO.File]::Open($LockPath, 'Open', 'ReadWrite', 'ReadWrite')
+    try {
+        try { $stream.Lock(0, 1) } catch [System.IO.IOException] { return $true }
+        $stream.Unlock(0, 1)
+        return $false
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Get-WorkerRecord([string]$PidPath) {
+    # data/runtime/worker.pid: {"pid", "revision", "started_at"}, written by the
+    # worker while it holds the lock and removed when it exits.
+    try {
+        $record = Get-Content -LiteralPath $PidPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($record -and $record.PSObject.Properties['pid'] -and "$($record.pid)" -match '^\d{1,10}$' -and
+            [long]"$($record.pid)" -le [int]::MaxValue) {
+            return $record
+        }
+    } catch { }
+    return $null
+}
+
+function Start-Worker([string]$LockPath, [string]$PidPath, [double]$GraceSeconds = 5) {
+    # The worker runs scheduled platform sync and queued jobs. It has no port or
+    # health endpoint, and it refuses to run twice for one data directory.
+    if (Test-WorkerLockHeld $LockPath) {
+        $record = Get-WorkerRecord $PidPath
+        $id = if ($record) { $record.pid } else { 'unknown' }
+        Write-Diagnostic "worker already running (PID $id)."
+        return
+    }
+    Save-PreviousLog 'worker'
+    $log = Join-Path $runtime 'worker.log'
+    Write-Diagnostic "Starting worker using $python."
+    $command = '/d /s /c ""{0}" -m runway.cli.worker_commands 1>"{1}" 2>&1"' -f $python, $log
+    $child = Start-HiddenCommand $command
+    $script:started += $child
+    # A worker that is still running after the grace period passed its startup
+    # checks (database at head, single-instance lock).
+    $deadline = (Get-Date).AddSeconds($GraceSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $child.Refresh()
+        if ($child.HasExited) {
+            $child.WaitForExit()
+            throw "worker exited with code $($child.ExitCode). Inspect data/runtime/worker.log."
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    Write-Diagnostic "worker running (PID $($child.Id))."
+}
+
+function Test-RunwayWorkerCommandLine([string]$CommandLine) {
+    # The ways a Runway worker is started: `python -m runway.cli.worker_commands`
+    # (the launcher), `python -m runway.cli.main worker`, and the `runway worker`
+    # console script (runway.exe / runway.cmd).
+    if (-not $CommandLine) { return $false }
+    $end = '(\s|"|$)'
+    return ($CommandLine -match "-m\s+runway\.cli\.worker_commands$end") -or
+        ($CommandLine -match "-m\s+runway\.cli\.main\s+worker$end") -or
+        ($CommandLine -match "(^|[\\/`"])runway(\.exe|\.cmd)?`"?\s+worker$end")
+}
+
+function Test-RunwayWorkerProcess([int]$ProcessId) {
+    # worker.pid can outlive its worker (power loss, taskkill) and Windows reuses
+    # PIDs, so the PID alone never justifies a Ctrl+Break: the process must be
+    # running the Runway worker.
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    if (-not $process) { return $false }
+    return Test-RunwayWorkerCommandLine $process.CommandLine
+}
+
+function Stop-WorkerForRestart($Status) {
+    # The worker is identified by its lock and PID record only. Returns $true
+    # when no worker runs any more.
+    if (-not (Test-WorkerLockHeld $Status.worker_lock)) { return $true }
+    $record = Get-WorkerRecord $Status.worker_pid
+    if (-not $record -or -not (Test-ProcessAlive ([int]$record.pid))) {
+        Write-Diagnostic 'worker.lock is held but worker.pid names no running process; stop that worker by hand.'
+        return $false
+    }
+    if (-not (Test-RunwayWorkerProcess ([int]$record.pid))) {
+        Write-Diagnostic "worker.lock is held but PID $($record.pid) is not a Runway worker; nothing was signalled. Stop the worker by hand."
+        return $false
+    }
+    if (-not (Stop-ByConsole ([int]$record.pid) 'worker')) {
+        Write-Diagnostic "worker (PID $($record.pid)) did not stop after Ctrl+Break; nothing was killed."
+        return $false
+    }
+    # The OS releases the lock with the process.
+    return -not (Test-WorkerLockHeld $Status.worker_lock)
+}
+
+function Stop-StaleApi($Status) {
+    # Deploy: a healthy API that is older code (or serves a database behind
+    # head) is stopped cleanly, worker first, so the upgrade runs with nothing
+    # attached and the old in-process scheduler never runs beside the worker.
+    # Returns $false when it had to be left running (degraded: no upgrade, no
+    # worker); throws when it neither stopped nor stayed healthy.
+    $health = Get-Health 'api'
+    if (-not (Test-Ready 'api')) { return $true }
+    $reason = Get-ApiRestartReason $health $Status
+    if (-not $reason) { return $true }
+    Write-Diagnostic "The running API must restart: $reason."
+    # Prove the API can be stopped before stopping anything else.
+    Assert-PortOwner 'api' 8000
+    if (-not (Stop-WorkerForRestart $Status)) {
+        Write-Diagnostic 'Deploy incomplete: the worker did not stop, so the API was left running on its older code, the database was not upgraded and no worker was started.'
+        return $false
+    }
+    # Stopping the worker can take a minute; prove again that port 8000 is still
+    # this checkout's API before signalling whatever listens there now.
+    Assert-PortOwner 'api' 8000
+    foreach ($listener in (Get-Listener 8000)) {
+        $owner = [int]$listener.OwningProcess
+        if (Stop-ByConsole $owner 'api') { continue }
+        if (Test-Ready 'api') {
+            Write-Diagnostic "Deploy incomplete: the API (PID $owner) did not stop, so it was left running on its older code, the database was not upgraded and no worker was started. Stop it by hand, then run the launcher again."
+            return $false
+        }
+        throw "The API (PID $owner) neither stopped nor stayed healthy after Ctrl+Break; nothing was killed. Inspect data/runtime/api.stderr.log."
+    }
+    return $true
+}
+
+function Test-WorkerStale($Status) {
+    if (-not (Test-WorkerLockHeld $Status.worker_lock)) { return $false }
+    $record = Get-WorkerRecord $Status.worker_pid
+    if (-not $record -or -not $record.PSObject.Properties['revision']) { return $false }
+    $running = "$($record.revision)"
+    return [bool]($running -and $running -ne 'unknown' -and $Status.revision -ne 'unknown' -and
+        $running -ne $Status.revision)
+}
+
+function Resume-WorkerIfSafe($Status) {
+    # After a deferred deploy the worker may have been stopped while the API kept
+    # serving. Start it again only beside an API that runs no in-process
+    # scheduler and expects the schema the database is at.
+    $health = Get-Health 'api'
+    if ((Get-HealthField $health 'sync_scheduler') -eq 'worker' -and $Status.up_to_date -and
+        (Get-HealthField $health 'migration_head') -eq $Status.head) {
+        Start-WorkerBesideApi $Status.worker_lock $Status.worker_pid
+        return
+    }
+    if (-not (Test-WorkerLockHeld $Status.worker_lock)) {
+        Write-Diagnostic 'The worker is not running: scheduled sync and queued jobs wait until the deploy completes.'
+    }
+}
+
+function Start-ApiAndWorker($Status) {
+    if ($Status.PSObject.Properties['known_revision'] -and $Status.known_revision -eq $false) {
+        # The database is at a revision this checkout does not define: newer code
+        # migrated it (a rollback ran without `runway db downgrade`). Upgrading
+        # cannot work and stopping a healthy API would only cause an outage.
+        $message = "The database is at revision $($Status.current), which this checkout does not know (its migration head is $($Status.head)). Nothing was stopped or migrated. Run 'runway db downgrade' with the newer checkout first (docs/OPERATIONS.md, Rollback)."
+        if (Test-Ready 'api') {
+            Write-Diagnostic $message
+            return
+        }
+        throw $message
+    }
+    if (-not (Stop-StaleApi $Status)) {
+        Resume-WorkerIfSafe $Status
+        return
+    }
+    if (-not $Status.up_to_date) {
+        # `runway db upgrade` refuses to migrate under a running worker.
+        if (-not (Stop-WorkerForRestart $Status)) {
+            throw 'The database must be upgraded but the running worker did not stop; nothing was killed. Stop it by hand (PID in data/runtime/worker.pid).'
+        }
+    } elseif (Test-WorkerStale $Status) {
+        Write-Diagnostic "The running worker is older code than revision $($Status.revision); restarting it."
+        if (-not (Stop-WorkerForRestart $Status)) { Write-Diagnostic 'The older worker was left running.' }
+    }
+    Start-Component 'api' 8000
+    # The old in-process scheduler and the worker must never both sync: the
+    # worker starts only beside an API that reports sync_scheduler=worker.
+    if ((Get-HealthField (Get-Health 'api') 'sync_scheduler') -ne 'worker') {
+        Write-Diagnostic 'worker not started: the API on port 8000 still runs the in-process sync scheduler.'
+        return
+    }
+    Start-WorkerBesideApi $Status.worker_lock $Status.worker_pid
+}
+
+function Invoke-ApiStack {
+    # A healthy API is never disturbed because the status query failed (for
+    # example a broken venv after an update): it is left as it is and the
+    # worker is not managed this run. Without a healthy API the failure stops
+    # the launch.
+    $status = $null
+    try {
+        $status = Get-RuntimeStatus
+    } catch {
+        if (-not (Test-Ready 'api')) { throw }
+        Write-Diagnostic "Runtime status unavailable ($($_.Exception.Message)); the healthy API was left as it is and the worker was not managed this run."
+        return
+    }
+    Start-ApiAndWorker $status
+}
+
+function Start-WorkerBesideApi([string]$LockPath, [string]$PidPath) {
+    # The API and web are what the Supervisor health-checks. A worker that
+    # cannot start is logged and left for the next launcher run to retry; it
+    # never fails the launch or stops a healthy API.
+    try {
+        Start-Worker $LockPath $PidPath
+    } catch {
+        Write-Diagnostic "worker did not start: $($_.Exception.Message) The API stays up; the next launcher run retries the worker."
+    }
+}
+
 function Start-Component([string]$Component, [int]$Port) {
     Assert-PortOwner $Component $Port
     if (Test-Ready $Component) {
@@ -139,24 +492,20 @@ function Start-Component([string]$Component, [int]$Port) {
         throw "$Component owns port $Port but is unhealthy. Inspect data/runtime/$Component.stderr.log before stopping it; active work is not terminated automatically."
     }
     $arguments = if ($Component -eq 'api') {
-        '-m uvicorn runway.api.app:app --host 127.0.0.1 --port 8000'
+        # The graceful-shutdown bound keeps an open event stream from holding a
+        # Ctrl+Break stop (deploy restart) forever.
+        '-m uvicorn runway.api.app:app --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 20'
     } else {
         '"{0}" start "{1}" --hostname 127.0.0.1 --port 3000' -f $next, $webRoot
     }
     $executable = if ($Component -eq 'api') { $python } else { $script:node }
+    if ($Component -eq 'api') { Invoke-DatabaseUpgrade }
     Save-PreviousLog "$Component.stdout"
     Save-PreviousLog "$Component.stderr"
     Write-Diagnostic "Starting $Component using $executable on port $Port."
-    # Start-Process -Redirect* would create the server with handle inheritance on,
-    # handing it this launcher's stdout/stderr and any handle a concurrent caller
-    # leaked in. A caller capturing launcher output then blocked until Runway
-    # stopped. Without -Redirect* Start-Process uses ShellExecute, which inherits
-    # nothing; cmd.exe writes the component logs instead.
     $command = '/d /s /c ""{0}" {1} 1>"{2}" 2>"{3}""' -f $executable, $arguments,
         (Join-Path $runtime "$Component.stdout.log"), (Join-Path $runtime "$Component.stderr.log")
-    $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') `
-        -ArgumentList $command -WorkingDirectory $root -WindowStyle Hidden -PassThru
-    $null = $child.Handle # Retain the handle so rapid exits still have an exit code.
+    $child = Start-HiddenCommand $command
     $script:started += $child
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
@@ -209,10 +558,15 @@ try {
     # Check both ports before creating either child; never disturb another application.
     if (-not $WebOnly) { Assert-PortOwner 'api' 8000 }
     if (-not $ApiOnly) { Assert-PortOwner 'web' 3000 }
-    if (-not $WebOnly) { Start-Component 'api' 8000 }
+    if (-not $WebOnly) { Invoke-ApiStack }
     if (-not $ApiOnly) { Start-Component 'web' 3000 }
-    if ((-not $WebOnly -and -not (Test-Ready 'api')) -or
-        (-not $ApiOnly -and -not (Test-Ready 'web'))) { throw 'Stack readiness was lost during startup.' }
+    # One transient probe failure must not roll back a stack that was just ready.
+    $lost = $true
+    foreach ($attempt in 1..3) {
+        if ((($WebOnly) -or (Test-Ready 'api')) -and (($ApiOnly) -or (Test-Ready 'web'))) { $lost = $false; break }
+        Start-Sleep -Seconds 2
+    }
+    if ($lost) { throw 'Stack readiness was lost during startup.' }
     Write-Diagnostic 'Requested Runway services are ready. http://127.0.0.1:3000/review'
 } catch {
     Write-Diagnostic "Launch failed: $($_.Exception.Message)"

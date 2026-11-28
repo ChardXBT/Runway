@@ -1,0 +1,250 @@
+"""The `runway worker` loop: claim a due job, run its handler, sleep until the next one."""
+
+from __future__ import annotations
+
+import logging
+import os
+import socket
+import threading
+import time
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Protocol
+
+from runway.db.workspace import workspace_context
+from runway.jobs.queue import DEFAULT_LEASE_SECONDS, Job, JobQueue, LeaseLost
+from runway.platforms.base import safe_error_summary
+
+logger = logging.getLogger(__name__)
+
+# Never sleep longer than this, so new jobs from the API and a stop request are
+# noticed promptly, yet an idle worker does not poll the database every second.
+MAX_IDLE_SECONDS = 30.0
+# Longest time a stop request waits for the idle sleep to notice it.
+STOP_POLL_SECONDS = 0.5
+
+Handler = Callable[[Job], None]
+
+
+class PermanentJobError(Exception):
+    """A handler failure that retrying the same job cannot fix."""
+
+
+class DeferJob(Exception):  # noqa: N818 - a control signal, not an error
+    """Raised by a handler that did no work: run the job again at `run_at`."""
+
+    def __init__(self, run_at: datetime, reason: str) -> None:
+        super().__init__(reason)
+        self.run_at = run_at
+        self.reason = reason
+
+
+class JobProducer(Protocol):
+    """Something that enqueues jobs on a schedule (e.g. scheduled platform sync)."""
+
+    def produce(self, now: datetime) -> None: ...
+
+    def next_due(self, now: datetime) -> datetime | None: ...
+
+
+def default_worker_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+@dataclass
+class Worker:
+    queue: JobQueue
+    handlers: Mapping[str, Handler]
+    producers: list[JobProducer] = field(default_factory=list)
+    worker_id: str = field(default_factory=default_worker_id)
+    lease_seconds: int = DEFAULT_LEASE_SECONDS
+    max_idle_seconds: float = MAX_IDLE_SECONDS
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    # Private instance (spec 07 section 4): a machine without the instance lease
+    # runs no jobs. `is_active` is a cheap local check; `busy` marks a running
+    # job so `runway instance push/handover` waits for it.
+    is_active: Callable[[], bool] | None = None
+    busy: Callable[[str], AbstractContextManager[object]] | None = None
+    standby_recheck: timedelta = timedelta(seconds=60)
+    _standby_logged: bool = field(default=False, init=False, repr=False)
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
+    def run_forever(self) -> None:
+        logger.info(
+            "runway worker start id=%s kinds=%s",
+            self.worker_id,
+            ",".join(sorted(self.handlers)),
+            extra={"event_type": "worker_start"},
+        )
+        try:
+            failures = 0
+            while not self.stop_event.is_set():
+                try:
+                    self.produce()
+                    ran = self.run_once()
+                    wait = 0.0 if ran else self.idle_seconds()
+                    failures = 0
+                except Exception:  # noqa: BLE001
+                    # A database hiccup (locked, disk) must not kill the worker
+                    # or spin it: every iteration, including the idle-time
+                    # query, is guarded and failures back off up to 30 s.
+                    failures += 1
+                    wait = self.failure_backoff(failures)
+                    logger.exception("worker iteration failed; retrying in %.1f s", wait)
+                if wait > 0:
+                    self.sleep(wait)
+        finally:
+            logger.info(
+                "runway worker stop id=%s", self.worker_id, extra={"event_type": "worker_stop"}
+            )
+
+    def sleep(self, seconds: float) -> None:
+        """Wait up to `seconds`, returning as soon as a stop is requested.
+
+        The wait is cut into short slices because a signal handler (the
+        launcher's Ctrl+Break, SIGTERM) only runs between them on the main
+        thread: one long Event.wait would hold a stop request for up to 30 s.
+        """
+        deadline = time.monotonic() + seconds
+        while not self.stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self.stop_event.wait(min(remaining, STOP_POLL_SECONDS))
+
+    def failure_backoff(self, failures: int) -> float:
+        return float(min(2 ** min(failures - 1, 10), self.max_idle_seconds))
+
+    def produce(self) -> None:
+        now = self.queue.clock()
+        for producer in self.producers:
+            try:
+                producer.produce(now)
+            except Exception:  # noqa: BLE001
+                logger.exception("job producer %s failed", type(producer).__name__)
+
+    def idle_seconds(self) -> float:
+        """Seconds until the earliest due job or producer slot, capped at 30 s."""
+        now = self.queue.clock()
+        due = [self.queue.next_run_at(self.handlers.keys())]
+        due.extend(producer.next_due(now) for producer in self.producers)
+        upcoming = [moment for moment in due if moment is not None]
+        if not upcoming:
+            return self.max_idle_seconds
+        wait = (min(upcoming) - now).total_seconds()
+        return min(max(wait, 0.0), self.max_idle_seconds)
+
+    def _standby(self) -> bool:
+        if self.is_active is None or self.is_active():
+            self._standby_logged = False
+            return False
+        if not self._standby_logged:
+            logger.info("this machine is on standby for the private instance; no jobs run")
+            self._standby_logged = True
+        return True
+
+    def run_once(self) -> bool:
+        """Claim and run one due job. Returns False when nothing was due."""
+        if self._standby():
+            return False
+        job = self.queue.claim(
+            self.worker_id, self.handlers.keys(), lease_seconds=self.lease_seconds
+        )
+        if job is None:
+            return False
+        if self.busy is None:
+            self._run(job)
+            return True
+        with self.busy(job.kind):
+            # Busy first, then check: a push that set its transfer marker in
+            # between either sees this job running or this job sees standby.
+            if self._standby():
+                try:
+                    self.queue.defer(
+                        job.id,
+                        self.worker_id,
+                        self.queue.clock() + self.standby_recheck,
+                        reason="this machine is on standby for the private instance",
+                    )
+                except LeaseLost:
+                    logger.error("job %s was deferred after its lease was recovered", job.id)
+                return False
+            self._run(job)
+        return True
+
+    def _run(self, job: Job) -> None:
+        handler = self.handlers[job.kind]
+        heartbeat = _LeaseHeartbeat(self.queue, job.id, self.worker_id, self.lease_seconds)
+        heartbeat.start()
+        try:
+            # Every `database.session()` inside the handler binds to the job's
+            # workspace (phase P7); system code opts out via system_session().
+            with workspace_context(job.workspace_id):
+                handler(job)
+        except DeferJob as deferred:
+            heartbeat.stop()
+            try:
+                self.queue.defer(job.id, self.worker_id, deferred.run_at, reason=deferred.reason)
+            except LeaseLost:
+                logger.error("job %s was deferred after its lease was recovered", job.id)
+        except PermanentJobError as exc:
+            heartbeat.stop()
+            self._fail(job, exc, retryable=False)
+        except Exception as exc:  # noqa: BLE001
+            heartbeat.stop()
+            logger.exception("job %s (%s) failed", job.id, job.kind)
+            self._fail(job, exc, retryable=True)
+        else:
+            heartbeat.stop()
+            try:
+                self.queue.complete(job.id, self.worker_id)
+            except LeaseLost:
+                logger.error("job %s finished after its lease was recovered", job.id)
+
+    def _fail(self, job: Job, exc: BaseException, *, retryable: bool) -> None:
+        try:
+            state = self.queue.fail(
+                job.id, self.worker_id, safe_error_summary(exc), retryable=retryable
+            )
+        except LeaseLost:
+            logger.error("job %s failed after its lease was recovered", job.id)
+            return
+        logger.warning("job %s (%s) attempt %s -> %s", job.id, job.kind, job.attempts, state)
+
+
+class _LeaseHeartbeat:
+    """Extends a running job's lease so a long handler is not mistaken for a dead one."""
+
+    def __init__(self, queue: JobQueue, job_id: int, worker_id: str, lease_seconds: int) -> None:
+        self.queue = queue
+        self.job_id = job_id
+        self.worker_id = worker_id
+        self.lease_seconds = lease_seconds
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name=f"runway-job-{job_id}-lease", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=10)
+
+    def _run(self) -> None:
+        interval = max(self.lease_seconds / 3, 1.0)
+        while not self._stop.wait(interval):
+            try:
+                self.queue.extend_lease(
+                    self.job_id, self.worker_id, lease_seconds=self.lease_seconds
+                )
+            except LeaseLost:
+                logger.error("job %s lost its lease while running", self.job_id)
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("could not extend the lease of job %s", self.job_id)

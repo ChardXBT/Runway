@@ -8,6 +8,11 @@ from sqlalchemy import func, select
 from runway.db.models import Proposal, PublishAttempt
 from runway.domain.enums import ProposalStatus, PublishAttemptStatus
 from runway.domain.state_machine import ATTEMPT_ACTIVE_STATUSES, attempt_status_of
+from runway.operations.instance_lease import (
+    clear_worker_busy,
+    instance_is_active,
+    mark_worker_busy,
+)
 from runway.publishing.youtube import StalePublishAttempt, YouTubeBrowserPublisher
 
 
@@ -93,6 +98,10 @@ class PublisherQueueCoordinator:
 
     def _start_if_ready(self) -> None:
         _queued, blocked_reason, _proposal_ids = self._persisted_queue_state()
+        # A standby machine (private instance lease held elsewhere) never runs the
+        # worker; queued items wait for the machine that holds the lease. Checked
+        # outside the guard because it may read the lease from the private repository.
+        active = instance_is_active(self.publisher.settings)
         with self._guard:
             if blocked_reason is not None:
                 self._paused_reason = blocked_reason
@@ -102,6 +111,8 @@ class PublisherQueueCoordinator:
             if self._worker is not None and self._worker.is_alive():
                 return
             if self.publisher.next_queued_attempt_id() is None:
+                return
+            if not active:
                 return
             self._worker = threading.Thread(
                 target=self._run,
@@ -116,7 +127,13 @@ class PublisherQueueCoordinator:
                 attempt_id = self.publisher.next_queued_attempt_id()
                 if attempt_id is None:
                     return
+                # The busy marker goes down before the active check: a push or
+                # handover that starts right now sees the marker and waits,
+                # instead of slipping between "is active" and "mark busy".
+                marker = mark_worker_busy(self.publisher.settings, "youtube_publish")
                 try:
+                    if not instance_is_active(self.publisher.settings):
+                        return
                     asyncio.run(self.publisher.process_queued_attempt(attempt_id))
                 except StalePublishAttempt:
                     continue
@@ -124,6 +141,8 @@ class PublisherQueueCoordinator:
                     with self._guard:
                         self._paused_reason = f"{type(exc).__name__}: {exc}"
                     return
+                finally:
+                    clear_worker_busy(marker)
         finally:
             with self._guard:
                 self._worker = None

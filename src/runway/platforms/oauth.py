@@ -36,24 +36,51 @@ class OAuthStateService:
         *,
         redirect_uri: str,
         use_pkce: bool,
+        payload: str | None = None,
+        purpose: str = "connect",
+        account_id: int | None = None,
+        workspace_id: int = 1,
+        token_ciphertext: str | None = None,
     ) -> IssuedState:
+        """A single-use state row for one OAuth flow.
+
+        `purpose` records why the flow was started ("connect", "reconnect" or
+        "enable_publishing"); `account_id` binds it to the connected account it
+        was issued for, so the callback can refuse a token for a different
+        channel (spec 08 section 1: identity check before every write).
+
+        The states table has no payload column, so a non-PKCE state carries
+        its `payload` (e.g. the scope list of an incremental-consent request)
+        in `code_verifier`, which is empty there anyway. `read_state_storage`
+        splits the column back into verifier and payload.
+        """
         verifier = pkce_verifier() if use_pkce else None
+        stored = verifier if verifier is not None else payload
         state = secrets.token_urlsafe(32)
         now = utcnow()
-        with self.database.session() as session:
+        # Bound to the workspace the row is written for, like JobQueue.enqueue:
+        # the write guard would otherwise refuse a state outside the caller's
+        # own workspace.
+        with self.database.session(workspace_id=workspace_id) as session:
             session.add(
                 OAuthState(
                     platform=platform.value,
                     state=state,
-                    code_verifier=verifier,
+                    code_verifier=stored,
                     redirect_uri=redirect_uri,
+                    purpose=purpose,
+                    account_id=account_id,
+                    workspace_id=workspace_id,
+                    token_ciphertext=token_ciphertext,
                     created_at=now,
                     expires_at=now + STATE_TTL,
                 )
             )
         return IssuedState(state=state, code_verifier=verifier)
 
-    def consume(self, platform: Platform, *, state: str) -> OAuthState:
+    def consume(
+        self, platform: Platform, *, state: str, workspace_id: int | None = None
+    ) -> OAuthState:
         """Validate and consume a state value; each state may be used exactly once.
 
         The check-then-set is a single conditional UPDATE, so two concurrent
@@ -61,21 +88,26 @@ class OAuthStateService:
         transaction whose statement matches all conditions reports rowcount 1.
         """
         now = utcnow()
-        with self.database.session() as session:
+        with self.database.session(workspace_id=workspace_id) as session:
+            lookup = [OAuthState.state == state]
+            if workspace_id is not None:
+                lookup.append(OAuthState.workspace_id == workspace_id)
             result = cast(
                 CursorResult[Any],
                 session.execute(
                     update(OAuthState)
                     .where(
-                        OAuthState.state == state,
+                        *lookup,
                         OAuthState.platform == platform.value,
                         OAuthState.consumed_at.is_(None),
                         OAuthState.expires_at > now,
                     )
-                    .values(consumed_at=now)
+                    # The parked-token ciphertext is one-use too: the caller
+                    # must read it from the peeked record before consuming.
+                    .values(consumed_at=now, token_ciphertext=None)
                 ),
             )
-            record = session.scalar(select(OAuthState).where(OAuthState.state == state))
+            record = session.scalar(select(OAuthState).where(*lookup))
             if result.rowcount != 1:
                 if (
                     record is None
@@ -84,6 +116,44 @@ class OAuthStateService:
                 ):
                     raise OAuthStateError("invalid_state")
                 raise OAuthStateError("expired_state")
-            assert record is not None
+            if record is None:
+                # The update matched but the row is invisible to this session's
+                # workspace binding - a foreign workspace's state is refused.
+                raise OAuthStateError("invalid_state")
             session.expunge(record)
             return record
+
+    def peek(
+        self, platform: Platform, *, state: str, workspace_id: int | None = None
+    ) -> OAuthState | None:
+        """Read a live, unconsumed state without consuming it.
+
+        Used by two-step flows (Unified Login's account pick) that list the
+        stored payload first and consume the state only on the final POST.
+        """
+        now = utcnow()
+        conditions = [
+            OAuthState.state == state,
+            OAuthState.platform == platform.value,
+            OAuthState.consumed_at.is_(None),
+            OAuthState.expires_at > now,
+        ]
+        if workspace_id is not None:
+            conditions.append(OAuthState.workspace_id == workspace_id)
+        with self.database.session(workspace_id=workspace_id) as session:
+            record = session.scalar(select(OAuthState).where(*conditions))
+            if record is not None:
+                session.expunge(record)
+            return record
+
+
+def read_state_storage(record: OAuthState) -> tuple[str | None, str | None]:
+    """Split a consumed state's stored text into (code_verifier, payload).
+
+    PKCE verifiers are base64url and never start with `{`; a `{`-prefixed
+    value is the JSON payload a non-PKCE flow stored in that column.
+    """
+    text = record.code_verifier
+    if text is not None and text.lstrip().startswith("{"):
+        return None, text
+    return text, None

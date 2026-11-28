@@ -4,7 +4,9 @@ import json
 import logging
 import threading
 from collections.abc import Callable
+from contextlib import AbstractContextManager, ExitStack
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -23,6 +25,13 @@ from runway.db.models import (
     SyncRun,
     utcnow,
 )
+from runway.domain.enums import CommentStatus
+from runway.domain.state_machine import COMMENT_STATUS_MACHINE, TARGET_DELIVERED_STATES
+from runway.events.log import record_event
+from runway.events.types import SYNC_FINISHED, SYNC_STARTED
+from runway.jobs.queue import Job, JobQueue
+from runway.jobs.worker import PermanentJobError
+from runway.locks import LockTimeout, exclusive_file_lock
 from runway.platforms.base import (
     AuthorizationExpired,
     CapabilityUnsupported,
@@ -39,11 +48,30 @@ from runway.platforms.capabilities import Platform
 from runway.platforms.drafts import external_id_candidates
 from runway.platforms.instagram import InstagramProvider
 from runway.platforms.registry import ProviderRegistry
+from runway.realtime import quota as sync_quota
+from runway.realtime import schedule as sync_schedule
+from runway.realtime import standby
 
 logger = logging.getLogger(__name__)
 
 STALE_RUN_AGE = timedelta(minutes=30)
 COMMENT_PAGE_LIMIT = 5
+# content_metrics_recent covers the 20 most recent items; the older scope
+# rotates through the rest of the catalogue in windows of 50 (spec 04 s.3).
+RECENT_METRICS_COUNT = 20
+OLDER_METRICS_BATCH = 50
+# The scope(s) each full-sync step covers, for freshness bookkeeping only.
+_STEP_TO_SCOPES: dict[str, tuple[str, ...]] = {
+    "identity": ("identity",),
+    "content": ("inventory",),
+    "content_metrics": ("content_metrics_recent",),
+    "account_daily_metrics": ("daily_metrics",),
+    "comments": ("comments",),
+}
+
+
+def sync_lock_path(settings: Settings, account_id: int) -> Path:
+    return settings.resolved_data_dir / "runtime" / "sync-locks" / f"account-{account_id}.lock"
 
 
 class SyncRunInProgress(Exception):
@@ -81,17 +109,40 @@ class SyncService:
                 self._locks[account_id] = lock
             return lock
 
+    def _account_file_lock(self, account_id: int) -> AbstractContextManager[None]:
+        """The cross-process lock held for the whole sync of one account.
+
+        The API (manual sync) and the worker (scheduled sync) are separate
+        processes, so a threading lock alone cannot keep them apart. This is
+        the same OS file lock as token refresh, on a separate file so the
+        refresh inside a sync does not wait on its own sync.
+        """
+        return exclusive_file_lock(sync_lock_path(self.settings, account_id), timeout=0)
+
+    def _sync_held_elsewhere(self, account_id: int) -> bool:
+        try:
+            with self._account_file_lock(account_id):
+                return False
+        except LockTimeout:
+            return True
+
     def mark_stale_runs_failed(self) -> int:
-        """Fail runs left in `running` state for longer than STALE_RUN_AGE."""
+        """Fail runs left in `running` state for longer than STALE_RUN_AGE.
+
+        A run whose account lock is still held belongs to a live sync in
+        another process (for example a long backfill in the worker) and is
+        left alone.
+        """
         cutoff = datetime.now(UTC) - STALE_RUN_AGE
         marked = 0
-        with self.database.session() as session:
+        # Startup sweep across every workspace's runs.
+        with self.database.system_session() as session:
             runs = session.scalars(select(SyncRun).where(SyncRun.status == "running")).all()
             for run in runs:
                 started = run.started_at
                 if started.tzinfo is None:
                     started = started.replace(tzinfo=UTC)
-                if started < cutoff:
+                if started < cutoff and not self._sync_held_elsewhere(run.account_id):
                     run.status = "failed"
                     run.completed_at = utcnow()
                     run.error_summary = "interrupted"
@@ -117,11 +168,20 @@ class SyncService:
 
     # -------------------------------------------------------------------- run
 
-    def _begin_run(self, account_id: int, trigger: str) -> tuple[threading.Lock, int]:
+    def _begin_run(self, account_id: int, trigger: str) -> tuple[ExitStack, int]:
+        """Take both account locks and record the run; the caller closes the stack."""
+        hold = ExitStack()
         lock = self._account_lock(account_id)
         if not lock.acquire(blocking=False):
             raise SyncRunInProgress(f"account {account_id} already has a sync in progress")
+        hold.callback(lock.release)
         try:
+            try:
+                hold.enter_context(self._account_file_lock(account_id))
+            except LockTimeout:
+                raise SyncRunInProgress(
+                    f"account {account_id} is being synced by another Runway process"
+                ) from None
             if self._has_recent_running_run(account_id):
                 raise SyncRunInProgress(f"account {account_id} already has a running sync")
             with self.database.session() as session:
@@ -137,21 +197,31 @@ class SyncService:
                 run = SyncRun(account_id=account_id, trigger=trigger, status="running")
                 session.add(run)
                 session.flush()
-                return lock, run.id
+                return hold, run.id
         except BaseException:
-            lock.release()
+            hold.close()
             raise
 
-    def run(self, account_id: int, trigger: str = "manual") -> SyncRun:
-        lock, run_id = self._begin_run(account_id, trigger)
-        try:
-            self._execute(run_id, account_id)
-        finally:
-            lock.release()
+    def run(
+        self,
+        account_id: int,
+        trigger: str = "manual",
+        scopes: list[str] | None = None,
+    ) -> SyncRun:
+        """Sync one account; `scopes` limits the run to the named steps.
+
+        `scopes=None` is the full sync the "Sync now" button and existing
+        callers use - its step list is unchanged. A scoped run performs only
+        the listed steps and records each scope's outcome on
+        `account_sync_state` (spec 04 section 3).
+        """
+        hold, run_id = self._begin_run(account_id, trigger)
+        with hold:
+            self._execute(run_id, account_id, scopes)
         return self.get_run(run_id)
 
     def start_background(self, account_id: int, trigger: str = "manual") -> SyncRun:
-        lock, run_id = self._begin_run(account_id, trigger)
+        hold, run_id = self._begin_run(account_id, trigger)
 
         def worker() -> None:
             try:
@@ -159,7 +229,7 @@ class SyncService:
             except Exception:  # noqa: BLE001
                 logger.exception("background sync failed for account %s", account_id)
             finally:
-                lock.release()
+                hold.close()
 
         try:
             threading.Thread(
@@ -170,7 +240,7 @@ class SyncService:
         except Exception:
             # The worker never started, so nothing else will release the lock
             # or finish the run; unwind both before surfacing the failure.
-            lock.release()
+            hold.close()
             try:
                 self._finish_run(
                     run_id,
@@ -194,7 +264,7 @@ class SyncService:
             session.expunge(run)
             return run
 
-    def _execute(self, run_id: int, account_id: int) -> None:
+    def _execute(self, run_id: int, account_id: int, scopes: list[str] | None = None) -> None:
         # Every path out of this method must finish the run; an exception that
         # escapes before a step records its own failure (e.g. a transport error
         # in ensure_fresh or a provider construction failure) would otherwise
@@ -223,11 +293,13 @@ class SyncService:
                     quota_units=quota_units,
                     error_summary=detail,
                 )
+                self._record_scopes_failed(account_id, scopes, detail, exc)
                 return
             except ProviderError as exc:
                 # A transient refresh failure (timeout, 5xx, rate limit) fails
                 # this run but leaves the account connected, so the next run
                 # retries instead of demanding a reconnect.
+                detail = safe_error_summary(exc)
                 self._finish_run(
                     run_id,
                     account_id,
@@ -235,24 +307,19 @@ class SyncService:
                     steps=steps,
                     items_fetched=items_fetched,
                     quota_units=quota_units,
-                    error_summary=safe_error_summary(exc),
+                    error_summary=detail,
                 )
+                self._record_scopes_failed(account_id, scopes, detail, exc)
                 return
 
-            steps_to_run: list[tuple[str, Callable[[], dict[str, int]]]] = [
-                ("identity", lambda: self._step_identity(provider, account_id, token)),
-                ("content", lambda: self._step_content(provider, account_id, token)),
-                (
-                    "content_metrics",
-                    lambda: self._step_content_metrics(provider, account_id, token),
-                ),
-                (
-                    "account_daily_metrics",
-                    lambda: self._step_daily_metrics(provider, account_id, token),
-                ),
-                ("comments", lambda: self._step_comments(provider, account_id, token)),
-            ]
+            steps_to_run: list[tuple[str, Callable[[], dict[str, int]]]] = (
+                self._scoped_steps(provider, account_id, token, scopes)
+                if scopes is not None
+                else self._full_steps(provider, account_id, token)
+            )
             for name, step in steps_to_run:
+                step_scopes = self._scopes_for_step(name, scopes)
+                self._emit_scope_events(account_id, run_id, step_scopes, SYNC_STARTED)
                 record: dict[str, Any] = {
                     "step": name,
                     "status": "completed",
@@ -260,6 +327,7 @@ class SyncService:
                     "error": None,
                     "quota_units": 0,
                 }
+                failure: ProviderError | None = None
                 try:
                     result = step()
                     record["items"] = result.get("items", 0)
@@ -271,7 +339,9 @@ class SyncService:
                     record["error"] = safe_error_summary(exc)
                     final_status = "failed"
                     error_summary = record["error"]
+                    failure = exc
                     steps.append(record)
+                    self._record_step_outcome(account_id, run_id, name, record, failure, scopes)
                     self._finish_account_needs_reauth(account_id, record["error"])
                     break
                 except CapabilityUnsupported as exc:
@@ -282,11 +352,13 @@ class SyncService:
                     record["error"] = f"{safe_error_summary(exc)} (retryable)"
                     final_status = "partial"
                     error_summary = record["error"]
+                    failure = exc
                 except ProviderError as exc:
                     record["status"] = "failed"
                     record["error"] = safe_error_summary(exc)
                     final_status = "partial"
                     error_summary = record["error"]
+                    failure = exc
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("sync step %s failed for account %s", name, account_id)
                     record["status"] = "failed"
@@ -294,6 +366,11 @@ class SyncService:
                     final_status = "partial"
                     error_summary = record["error"]
                 steps.append(record)
+                self._record_step_outcome(account_id, run_id, name, record, failure, scopes)
+                if isinstance(provider, InstagramProvider):
+                    # Meta's usage headers at >= 80% defer the account's other
+                    # scopes by an hour (spec 04 section 3).
+                    sync_quota.enforce_instagram_usage(self.database, account_id, provider.usage)
 
             self._finish_run(
                 run_id,
@@ -318,6 +395,144 @@ class SyncService:
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("could not record failure for sync run %s", run_id)
+
+    def _full_steps(
+        self, provider: PlatformProvider, account_id: int, token: TokenSet
+    ) -> list[tuple[str, Callable[[], dict[str, int]]]]:
+        """The unchanged full-sync step list (`scopes=None`)."""
+        return [
+            ("identity", lambda: self._step_identity(provider, account_id, token)),
+            ("content", lambda: self._step_content(provider, account_id, token)),
+            (
+                "content_metrics",
+                lambda: self._step_content_metrics(provider, account_id, token),
+            ),
+            (
+                "account_daily_metrics",
+                lambda: self._step_daily_metrics(provider, account_id, token),
+            ),
+            ("comments", lambda: self._step_comments(provider, account_id, token)),
+        ]
+
+    def _scoped_steps(
+        self,
+        provider: PlatformProvider,
+        account_id: int,
+        token: TokenSet,
+        scopes: list[str],
+    ) -> list[tuple[str, Callable[[], dict[str, int]]]]:
+        """One step per requested scope, named after the scope itself."""
+        by_scope: dict[str, Callable[[], dict[str, int]]] = {
+            "identity": lambda: self._step_identity(provider, account_id, token),
+            "inventory": lambda: self._step_content(provider, account_id, token),
+            "content_metrics_recent": lambda: self._step_content_metrics_recent(
+                provider, account_id, token
+            ),
+            "content_metrics_older": lambda: self._step_content_metrics_older(
+                provider, account_id, token
+            ),
+            "comments": lambda: self._step_comments(provider, account_id, token),
+            "daily_metrics": lambda: self._step_daily_metrics(provider, account_id, token),
+        }
+        return [(scope, by_scope[scope]) for scope in scopes]
+
+    def _scopes_for_step(self, name: str, scopes: list[str] | None) -> list[str]:
+        if scopes is not None:
+            # A scoped run names each step after the scope itself.
+            return [name] if name in sync_schedule.SCOPES else []
+        return list(_STEP_TO_SCOPES.get(name, ()))
+
+    def _record_step_outcome(
+        self,
+        account_id: int,
+        run_id: int,
+        name: str,
+        record: dict[str, Any],
+        failure: ProviderError | None,
+        scopes: list[str] | None,
+    ) -> None:
+        """Persist the step's outcome on `account_sync_state`, one row per scope.
+
+        The `sync.finished` event lands in the same transaction as the state
+        write it describes (spec 04 section 4).
+        """
+        retry_after = failure.retry_after if isinstance(failure, RateLimited) else None
+        step_scopes = self._scopes_for_step(name, scopes)
+        if not step_scopes:
+            return
+        with self.database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            workspace_id = int(account.workspace_id) if account is not None else 1
+            for scope in step_scopes:
+                sync_schedule.record_scope_run(
+                    session,
+                    account_id,
+                    scope,
+                    status=str(record["status"]),
+                    error=record["error"] if record["status"] != "completed" else None,
+                    retry_after=retry_after,
+                )
+                record_event(
+                    session,
+                    workspace_id,
+                    SYNC_FINISHED,
+                    "account",
+                    account_id,
+                    {
+                        "run_id": run_id,
+                        "scope": scope,
+                        "status": str(record["status"]),
+                        "items": int(record["items"]),
+                    },
+                )
+
+    def _emit_scope_events(
+        self,
+        account_id: int,
+        run_id: int,
+        scopes: list[str],
+        event_type: str,
+    ) -> None:
+        """One event per scope about to run (`sync.started`)."""
+        if not scopes:
+            return
+        with self.database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            if account is None:
+                return
+            for scope in scopes:
+                record_event(
+                    session,
+                    int(account.workspace_id),
+                    event_type,
+                    "account",
+                    account_id,
+                    {"run_id": run_id, "scope": scope},
+                )
+
+    def _record_scopes_failed(
+        self,
+        account_id: int,
+        scopes: list[str] | None,
+        detail: str,
+        exc: ProviderError,
+    ) -> None:
+        """A run that never reached its steps still marks its scopes failed."""
+        names = (
+            scopes
+            if scopes is not None
+            else [scope for group in _STEP_TO_SCOPES.values() for scope in group]
+        )
+        retry_after = exc.retry_after if isinstance(exc, RateLimited) else None
+        for scope in names or []:
+            sync_schedule.record_scope_run(
+                self.database,
+                account_id,
+                scope,
+                status="failed",
+                error=detail,
+                retry_after=retry_after,
+            )
 
     def ensure_fresh(self, account_id: int) -> TokenSet:
         with self.database.session() as session:
@@ -537,7 +752,7 @@ class SyncService:
             pending = session.scalars(
                 select(DraftTarget).where(
                     DraftTarget.platform == platform,
-                    DraftTarget.status == "published",
+                    DraftTarget.status.in_([state.value for state in TARGET_DELIVERED_STATES]),
                     DraftTarget.published_content_id.is_(None),
                     DraftTarget.published_url.is_not(None),
                 )
@@ -598,14 +813,53 @@ class SyncService:
     def _step_content_metrics(
         self, provider: PlatformProvider, account_id: int, token: TokenSet
     ) -> dict[str, int]:
+        external_ids = self._content_ids(account_id, limit=50)
+        return self._metrics_for_ids(provider, account_id, token, external_ids)
+
+    def _step_content_metrics_recent(
+        self, provider: PlatformProvider, account_id: int, token: TokenSet
+    ) -> dict[str, int]:
+        external_ids = self._content_ids(account_id, limit=RECENT_METRICS_COUNT)
+        return self._metrics_for_ids(provider, account_id, token, external_ids)
+
+    def _step_content_metrics_older(
+        self, provider: PlatformProvider, account_id: int, token: TokenSet
+    ) -> dict[str, int]:
+        """The catalogue beyond the recent window, in a rotating window of 50."""
+        external_ids = self._content_ids(account_id, limit=None)[RECENT_METRICS_COUNT:]
+        if not external_ids:
+            return {"items": 0, "quota_units": 0}
+        stored = self._load_cursor(account_id, "content_metrics_older") or {}
+        offset = int(stored.get("offset", 0) or 0)
+        if offset >= len(external_ids):
+            offset = 0
+        batch = external_ids[offset : offset + OLDER_METRICS_BATCH]
+        next_offset = offset + len(batch)
+        self._store_cursor(
+            account_id,
+            "content_metrics_older",
+            {"offset": next_offset if next_offset < len(external_ids) else 0},
+        )
+        return self._metrics_for_ids(provider, account_id, token, batch)
+
+    def _content_ids(self, account_id: int, *, limit: int | None) -> list[str]:
         with self.database.session() as session:
-            rows = session.scalars(
-                select(PlatformContent)
+            statement = (
+                select(PlatformContent.external_id)
                 .where(PlatformContent.account_id == account_id)
                 .order_by(PlatformContent.published_at.desc())
-                .limit(50)
-            ).all()
-            external_ids = [row.external_id for row in rows]
+            )
+            if limit is not None:
+                statement = statement.limit(limit)
+            return list(session.scalars(statement).all())
+
+    def _metrics_for_ids(
+        self,
+        provider: PlatformProvider,
+        account_id: int,
+        token: TokenSet,
+        external_ids: list[str],
+    ) -> dict[str, int]:
         if not external_ids:
             return {"items": 0, "quota_units": 0}
         try:
@@ -762,7 +1016,7 @@ class SyncService:
                             reply_count=item.reply_count,
                             published_at=item.published_at,
                             platform_updated_at=item.platform_updated_at,
-                            status="new",
+                            status=COMMENT_STATUS_MACHINE.start(CommentStatus.NEW),
                             has_owner_reply=False,
                             permalink=item.permalink,
                             raw_json=json.dumps(item.raw),
@@ -832,47 +1086,79 @@ class SyncService:
                 row.updated_at = utcnow()
 
 
+SYNC_ACCOUNT_JOB = "sync_account"
+
+
 class PlatformSyncScheduler:
-    """Background thread syncing connected accounts on a fixed interval."""
+    """Producer of scheduled `sync_account` jobs; `runway worker` runs them.
 
-    def __init__(self, service: SyncService, interval_minutes: int) -> None:
-        self.service = service
-        self.interval_seconds = max(interval_minutes, 1) * 60
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+    Time is cut into fixed slots of the configured interval. Each connected
+    account gets one job per slot, keyed `sync_account:<account>:<slot>`, so
+    producing again (or from a restarted worker) never duplicates a sync.
+    The API process no longer syncs on a timer.
+    """
 
-    def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(
-            target=self._loop,
-            name="runway-platform-sync",
-            daemon=True,
-        )
-        self._thread.start()
+    def __init__(self, database: Database, queue: JobQueue, interval_minutes: int) -> None:
+        if interval_minutes < 1:
+            raise ValueError("scheduled sync needs an interval of at least one minute")
+        self.database = database
+        self.queue = queue
+        self.interval = timedelta(minutes=interval_minutes)
 
-    def stop(self, timeout: float = 5.0) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=timeout)
-            self._thread = None
+    def _slot(self, now: datetime) -> int:
+        return int(now.timestamp() // self.interval.total_seconds())
 
-    def _loop(self) -> None:
-        while not self._stop.wait(self.interval_seconds):
-            try:
-                self._tick()
-            except Exception:  # noqa: BLE001
-                logger.exception("platform sync scheduler tick failed")
+    def next_due(self, now: datetime) -> datetime:
+        return datetime.fromtimestamp((self._slot(now) + 1) * self.interval.total_seconds(), tz=UTC)
 
-    def _tick(self) -> None:
-        with self.service.database.session() as session:
-            account_ids = session.scalars(
-                select(ConnectedAccount.id).where(ConnectedAccount.status == "connected")
+    def produce(self, now: datetime) -> None:
+        slot = self._slot(now)
+        # Producer sweep: scans every workspace's connected accounts.
+        with self.database.system_session() as session:
+            accounts = session.execute(
+                select(ConnectedAccount.id, ConnectedAccount.workspace_id).where(
+                    ConnectedAccount.status == "connected"
+                )
             ).all()
-        for account_id in account_ids:
-            try:
-                self.service.run(int(account_id), trigger="scheduled")
-            except SyncRunInProgress:
-                continue
-            except Exception:  # noqa: BLE001
-                logger.exception("scheduled sync failed for account %s", account_id)
+        for account_id, workspace_id in accounts:
+            self.queue.enqueue(
+                SYNC_ACCOUNT_JOB,
+                idempotency_key=f"{SYNC_ACCOUNT_JOB}:{account_id}:{slot}",
+                run_at=now,
+                payload={"account_id": int(account_id), "trigger": "scheduled"},
+                workspace_id=int(workspace_id),
+                # A missed slot is covered by the next one; do not pile up retries.
+                max_attempts=1,
+            )
+
+
+def run_sync_account_job(service: SyncService, job: Job) -> None:
+    """Worker handler for `sync_account`.
+
+    `payload.scope` names the single scope the adaptive scheduler produced;
+    a payload without `scope` is a full sync, the pre-RT2 job shape that
+    already-queued jobs and webhook hints still use.
+    """
+    # Spec 07 section 4: a standby machine runs no sync jobs.
+    standby.ensure_active(service.settings)
+    account_id = job.payload.get("account_id")
+    if not isinstance(account_id, int):
+        raise PermanentJobError("sync_account job has no integer account_id")
+    trigger = str(job.payload.get("trigger") or "scheduled")
+    scope = job.payload.get("scope")
+    scopes: list[str] | None = None
+    if scope is not None:
+        if not isinstance(scope, str) or scope not in sync_schedule.SCOPES:
+            raise PermanentJobError(f"sync_account job has unknown scope {scope!r}")
+        scopes = [scope]
+    try:
+        run = service.run(account_id, trigger=trigger, scopes=scopes)
+    except SyncRunInProgress:
+        logger.info("account %s is already syncing; scheduled sync skipped", account_id)
+        return
+    except (SyncAccountMissing, SyncAccountDisconnected) as exc:
+        logger.info("scheduled sync skipped: %s", exc)
+        return
+    # A failed or partial run is recorded on the run and the account; the next
+    # slot tries again, so the job itself is done.
+    logger.info("scheduled sync of account %s finished %s", account_id, run.status)

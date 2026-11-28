@@ -7,12 +7,13 @@ from fastapi.testclient import TestClient
 
 from runway.api.app import create_app
 from runway.config import Settings
+from runway.db import Database
 
 WEB_ORIGIN = "http://127.0.0.1:3000"
 
 
 @pytest.fixture()
-def client(settings: Settings) -> Iterator[TestClient]:
+def client(settings: Settings, database: Database) -> Iterator[TestClient]:
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as test_client:
         yield test_client
 

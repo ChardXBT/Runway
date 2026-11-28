@@ -17,16 +17,55 @@ from runway.db.models import (
     PlatformContent,
     utcnow,
 )
+from runway.domain.enums import DraftStatus, TargetState
+from runway.domain.state_machine import (
+    DRAFT_STATUS_MACHINE,
+    TARGET_STATE_MACHINE,
+    derive_draft_status,
+)
 from runway.platforms.base import iso_utc
 from runway.platforms.capabilities import (
     Capability,
     Platform,
     capability_matrix,
 )
+from runway.posts.jobs import cancel_pending_jobs
+from runway.posts.states import current_state, set_target_state
+
+
+def legacy_post_type(platform: str) -> str | None:
+    """Targets created by the unversioned routes get the platform's default post type."""
+    from runway.posts.types import DEFAULT_POST_TYPE
+
+    try:
+        return DEFAULT_POST_TYPE[Platform(platform)].value
+    except ValueError:
+        return None
+
+
+def invalidate_releases(session: Session, draft: ContentDraft) -> None:
+    """Return released or queued targets of `draft` to ready; cancel their jobs."""
+    from runway.posts.service import clear_release
+
+    for target in session.scalars(select(DraftTarget).where(DraftTarget.draft_id == draft.id)):
+        if current_state(target) in {TargetState.RELEASED, TargetState.QUEUED}:
+            cancel_pending_jobs(session, target.id)
+            clear_release(target)
+            set_target_state(
+                session,
+                target,
+                TargetState.READY,
+                reason="edited after release; release it again",
+                post=draft,
+            )
 
 
 class DuplicateDraftTarget(ValueError):
     """Two targets of one draft resolve to the same platform account."""
+
+
+class InvalidDraftUpdate(ValueError):
+    """The requested status contradicts the draft's schedule."""
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -131,7 +170,9 @@ class DraftService:
 
     def list_drafts(self, *, status: str | None = None) -> list[dict[str, object]]:
         with self.database.session() as session:
-            statement = select(ContentDraft).where(ContentDraft.status != "archived")
+            statement = select(ContentDraft).where(
+                ContentDraft.status != DraftStatus.ARCHIVED.value
+            )
             if status:
                 statement = select(ContentDraft).where(ContentDraft.status == status)
             drafts = session.scalars(statement.order_by(ContentDraft.id.desc())).all()
@@ -159,7 +200,9 @@ class DraftService:
                 body=body,
                 scheduled_for=_as_utc(scheduled_for),
                 notes=notes,
-                status="scheduled" if scheduled_for else "draft",
+                status=DRAFT_STATUS_MACHINE.start(
+                    DraftStatus.SCHEDULED if scheduled_for else DraftStatus.DRAFT
+                ),
             )
             session.add(draft)
             session.flush()
@@ -192,6 +235,10 @@ class DraftService:
                             if target.get("caption_override")
                             else None
                         ),
+                        status=TARGET_STATE_MACHINE.start(TargetState.DRAFT),
+                        state=TARGET_STATE_MACHINE.start(TargetState.DRAFT),
+                        post_type=legacy_post_type(str(target["platform"])),
+                        planned_at=_as_utc(scheduled_for),
                     )
                 )
             session.flush()
@@ -222,10 +269,31 @@ class DraftService:
                 draft.scheduled_for = _as_utc(scheduled_for)
             if notes is not None:
                 draft.notes = notes
+            if body is not None:
+                # The body is every target's caption: a released target's
+                # approval no longer matches (spec 03 section 2).
+                invalidate_releases(session, draft)
+            scheduled = draft.scheduled_for is not None
             if status is not None:
-                draft.status = status
-            elif draft.scheduled_for is not None and draft.status == "draft":
-                draft.status = "scheduled"
+                requested = DRAFT_STATUS_MACHINE.parse(status)
+                if requested is DraftStatus.SCHEDULED and not scheduled:
+                    raise InvalidDraftUpdate("a scheduled draft needs a scheduled_for time")
+                if requested is DraftStatus.DRAFT and scheduled:
+                    raise InvalidDraftUpdate(
+                        "an unscheduled draft cannot keep a time; send clear_schedule"
+                    )
+                DRAFT_STATUS_MACHINE.apply(draft, requested)
+            else:
+                # Setting or clearing the time moves an unsent draft between
+                # draft and scheduled; it never changes a sent or archived one.
+                DRAFT_STATUS_MACHINE.apply(
+                    draft,
+                    derive_draft_status(
+                        draft.status,
+                        scheduled=scheduled,
+                        target_states=self._target_states(session, draft),
+                    ),
+                )
             session.flush()
             return self._view(session, draft)
 
@@ -234,19 +302,27 @@ class DraftService:
             draft = session.get(ContentDraft, draft_id)
             if draft is None:
                 raise LookupError("draft not found")
-            draft.status = "archived"
+            DRAFT_STATUS_MACHINE.apply(draft, DraftStatus.ARCHIVED)
             session.flush()
-            return {"id": draft.id, "status": "archived"}
+            return {"id": draft.id, "status": draft.status}
+
+    @staticmethod
+    def _target_states(session: Session, draft: ContentDraft) -> list[str]:
+        return list(
+            session.scalars(
+                select(DraftTarget.status).where(DraftTarget.draft_id == draft.id)
+            ).all()
+        )
 
     def _recompute_status(self, session: Session, draft: ContentDraft) -> None:
-        targets = session.scalars(select(DraftTarget).where(DraftTarget.draft_id == draft.id)).all()
-        if not targets:
-            return
-        published = sum(1 for target in targets if target.status == "published")
-        if published == len(targets):
-            draft.status = "published"
-        elif published > 0:
-            draft.status = "partially_published"
+        DRAFT_STATUS_MACHINE.apply(
+            draft,
+            derive_draft_status(
+                draft.status,
+                scheduled=draft.scheduled_for is not None,
+                target_states=self._target_states(session, draft),
+            ),
+        )
 
     def mark_published(
         self, draft_id: int, target_id: int, published_url: str
@@ -272,10 +348,12 @@ class DraftService:
                     PlatformContent.platform == target.platform,
                 )
             )
-            target.status = "published"
+            cancel_pending_jobs(session, target.id)
+            set_target_state(session, target, TargetState.PUBLISHED, post=draft)
             target.published_url = published_url
             target.published_at = utcnow()
             target.published_content_id = match.id if match else None
+            session.flush()
             self._recompute_status(session, draft)
             session.flush()
             return self._view(session, draft)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -33,6 +35,26 @@ AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 API_BASE = "https://open.tiktokapis.com/v2"
 
 
+@dataclass(frozen=True, slots=True)
+class CreatorInfo:
+    """What `POST /v2/post/publish/creator_info/query/` returns about a creator.
+
+    Queried fresh before every post and by the mandatory posting screen: the
+    nickname shown to the person, the privacy options they may pick (never
+    preselected), which interactions the creator has disabled, and the longest
+    video their account may post.
+    """
+
+    creator_nickname: str | None
+    creator_username: str | None
+    creator_avatar_url: str | None
+    privacy_level_options: list[str] = field(default_factory=list)
+    comment_disabled: bool = False
+    duet_disabled: bool = False
+    stitch_disabled: bool = False
+    max_video_post_duration_sec: int | None = None
+
+
 def _int_or_none(value: object) -> int | None:
     if value is None:
         return None
@@ -63,10 +85,11 @@ class TikTokProvider(PlatformProvider):
         state: str,
         redirect_uri: str,
         code_challenge: str | None,
+        scopes: Sequence[str] | None = None,
     ) -> str:
         params = {
             "client_key": self.settings.tiktok_client_key or "",
-            "scope": ",".join(TIKTOK_SCOPES),
+            "scope": ",".join(scopes if scopes is not None else TIKTOK_SCOPES),
             "response_type": "code",
             "redirect_uri": redirect_uri,
             "state": state,
@@ -115,7 +138,18 @@ class TikTokProvider(PlatformProvider):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         data = self._json_or_raise(response)
-        return self._token_from_response(data)
+        refreshed = self._token_from_response(data)
+        # TikTok rotates the refresh token on every refresh and sends the new
+        # one with its own refresh_expires_in. Fields a response omits keep the
+        # values an earlier response gave; nothing falls back to a constant.
+        if refreshed.refresh_token is None:
+            refreshed.refresh_token = token.refresh_token
+        if not isinstance(data.get("scope"), str) or not data["scope"].strip():
+            # A refresh that names no scopes grants exactly what the account
+            # already had — never the connect-time default list.
+            refreshed.scopes = list(token.scopes)
+        refreshed.extra = {**token.extra, **refreshed.extra}
+        return refreshed
 
     def revoke(self, token: TokenSet) -> bool:
         response = provider_request(
@@ -179,6 +213,21 @@ class TikTokProvider(PlatformProvider):
         if not isinstance(data, dict):
             data = {}
         error = data.get("error")
+        if isinstance(error, str) and error and error != "ok":
+            # The OAuth token endpoint reports errors as a top-level string
+            # (RFC 6749 style), unlike the data API's error object.
+            description = data.get("error_description")
+            message = description if isinstance(description, str) and description else error
+            log_id = data.get("log_id")
+            if log_id:
+                message = f"{message} (log_id {log_id})"
+            if error == "invalid_grant" or response.status_code == 401:
+                raise AuthorizationExpired(message, status=response.status_code)
+            raise ProviderError(
+                message,
+                retryable=response.status_code >= 500 or response.status_code == 429,
+                status=response.status_code,
+            )
         if isinstance(error, dict) and error:
             code = str(error.get("code") or "")
             message = str(error.get("message") or "TikTok API error")
@@ -187,16 +236,19 @@ class TikTokProvider(PlatformProvider):
                 message = f"{message} (log_id {log_id})"
             if code and code != "ok":
                 if code in {"access_token_invalid", "invalid_grant"}:
-                    raise AuthorizationExpired(message, status=response.status_code)
-                if code == "rate_limit_exceeded":
-                    raise RateLimited(message, status=response.status_code)
-                if code in {"scope_not_authorized", "scope_permission_missed"}:
-                    raise PermissionMissing(message, status=response.status_code)
-                raise ProviderError(
-                    message,
-                    retryable=response.status_code >= 500,
-                    status=response.status_code,
-                )
+                    exc: ProviderError = AuthorizationExpired(message, status=response.status_code)
+                elif code == "rate_limit_exceeded":
+                    exc = RateLimited(message, status=response.status_code)
+                elif code in {"scope_not_authorized", "scope_permission_missed"}:
+                    exc = PermissionMissing(message, status=response.status_code)
+                else:
+                    exc = ProviderError(
+                        message,
+                        retryable=response.status_code >= 500,
+                        status=response.status_code,
+                    )
+                exc.code = code
+                raise exc
         if response.status_code == 401:
             raise AuthorizationExpired("TikTok authorization expired or was revoked", status=401)
         if response.status_code == 429:
@@ -219,6 +271,132 @@ class TikTokProvider(PlatformProvider):
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
         return self._json_or_raise(response)
+
+    def _api_post(
+        self,
+        token: TokenSet,
+        path: str,
+        body: dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = provider_request(
+            self.client,
+            "TikTok",
+            "POST",
+            f"{API_BASE}/{path.lstrip('/')}",
+            params=params,
+            json=body,
+            headers={
+                "Authorization": f"Bearer {token.access_token}",
+                "Content-Type": "application/json; charset=UTF-8",
+            },
+        )
+        return self._json_or_raise(response)
+
+    # ------------------------------------------------------------ publishing
+
+    def creator_info(self, token: TokenSet) -> CreatorInfo:
+        """The mandatory-screen facts about the creator, fetched fresh each call.
+
+        Required before every publish init: the privacy options the screen may
+        offer, the interactions the creator has disabled, and their maximum
+        video duration.
+        """
+        data = self._api_post(token, "post/publish/creator_info/query/", {})
+        payload = data.get("data")
+        payload = payload if isinstance(payload, dict) else {}
+        options = payload.get("privacy_level_options")
+        return CreatorInfo(
+            creator_nickname=(
+                str(payload["creator_nickname"]) if payload.get("creator_nickname") else None
+            ),
+            creator_username=(
+                str(payload["creator_username"]) if payload.get("creator_username") else None
+            ),
+            creator_avatar_url=(
+                str(payload["creator_avatar_url"]) if payload.get("creator_avatar_url") else None
+            ),
+            privacy_level_options=(
+                [str(option) for option in options] if isinstance(options, list) else []
+            ),
+            comment_disabled=bool(payload.get("comment_disabled", False)),
+            duet_disabled=bool(payload.get("duet_disabled", False)),
+            stitch_disabled=bool(payload.get("stitch_disabled", False)),
+            max_video_post_duration_sec=_int_or_none(payload.get("max_video_post_duration_sec")),
+        )
+
+    def publish_init(
+        self,
+        token: TokenSet,
+        *,
+        inbox: bool,
+        source_info: Mapping[str, Any],
+        post_info: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Start a Content Posting API upload; returns `publish_id` and `upload_url`.
+
+        `inbox` selects `post/publish/inbox/video/init/` (a draft in the creator's
+        inbox); otherwise the Direct Post endpoint `post/publish/video/init/` is
+        used and `post_info` carries the mandatory-screen choices. This is the
+        request that can create the post, so callers mark `request_sent_at`
+        first. The upload URL lives for one hour.
+        """
+        body: dict[str, Any] = {"source_info": dict(source_info)}
+        if post_info is not None:
+            body["post_info"] = dict(post_info)
+        path = "post/publish/inbox/video/init/" if inbox else "post/publish/video/init/"
+        data = self._api_post(token, path, body)
+        payload = data.get("data")
+        payload = payload if isinstance(payload, dict) else {}
+        publish_id = payload.get("publish_id")
+        if not isinstance(publish_id, str) or not publish_id:
+            raise ProviderError("TikTok init returned no publish_id")
+        upload_url = payload.get("upload_url")
+        if not isinstance(upload_url, str) or not upload_url:
+            raise ProviderError("TikTok init returned no upload_url")
+        return {"publish_id": publish_id, "upload_url": upload_url}
+
+    def upload_chunk(
+        self,
+        upload_url: str,
+        *,
+        data: bytes,
+        content_range: str,
+        content_type: str,
+    ) -> int:
+        """PUT one chunk to the session's upload URL; returns the HTTP status.
+
+        The upload URL is signed, so no Authorization header goes on it
+        (research/tiktok.md §5). Expected answers: 206 continue, 201 done,
+        403 URL expired, 416 range mismatch. Anything else raises.
+        """
+        response = provider_request(
+            self.client,
+            "TikTok",
+            "PUT",
+            upload_url,
+            content=data,
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(len(data)),
+                "Content-Range": content_range,
+            },
+        )
+        if response.status_code in (201, 206, 403, 416):
+            return response.status_code
+        if response.status_code == 429:
+            raise RateLimited("TikTok upload rate limit exceeded", status=response.status_code)
+        raise ProviderError(
+            f"TikTok chunk upload failed with HTTP {response.status_code}",
+            retryable=response.status_code >= 500,
+            status=response.status_code,
+        )
+
+    def publish_status(self, token: TokenSet, publish_id: str) -> dict[str, Any]:
+        """`POST /v2/post/publish/status/fetch/` for one publish id."""
+        data = self._api_post(token, "post/publish/status/fetch/", {"publish_id": publish_id})
+        payload = data.get("data")
+        return payload if isinstance(payload, dict) else {}
 
     # --------------------------------------------------------------- identity
 

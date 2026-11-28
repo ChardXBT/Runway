@@ -1,5 +1,9 @@
 # Platform and competitor research (October 2026)
 
+> **Update 2026-11-14:** parts of this document are out of date. See
+> [`expansion/01-AUDIT.md`](expansion/01-AUDIT.md) for corrections and
+> [`expansion/README.md`](expansion/README.md) for the expansion research and specifications.
+
 This document records the research that shaped Runway's creator-platform expansion. It separates
 what the official documentation states from what Runway has verified against a live account, and
 it records the exact sources so the claims can be re-checked when platform policies change.

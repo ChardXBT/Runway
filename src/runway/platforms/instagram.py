@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -33,8 +34,42 @@ API_VERSION = "v25.0"
 AUTH_URL = "https://www.instagram.com/oauth/authorize"
 TOKEN_URL = "https://api.instagram.com/oauth/access_token"
 GRAPH_BASE = f"https://graph.instagram.com/{API_VERSION}"
+# Unified Login reads and publishes against the Facebook Graph host; the
+# account's stored token marks itself with `extra["login"] == "unified"`
+# (spec 08 section 3, "Unified Login adapter").
+FACEBOOK_GRAPH = f"https://graph.facebook.com/{API_VERSION}"
 LONG_LIVED_URL = "https://graph.instagram.com/access_token"
 REFRESH_URL = "https://graph.instagram.com/refresh_access_token"
+
+# Meta reports API pressure as percent values in these response headers; the
+# adaptive scheduler defers the account's sync scopes once one passes 80%
+# (spec 04 section 3).
+_USAGE_HEADERS = ("x-app-usage", "x-business-use-case-usage")
+_USAGE_FIELDS = ("call_count", "total_cputime", "total_time")
+
+
+def _usage_percentages(payload: object) -> list[float]:
+    """Percent values in a Meta usage-header JSON body.
+
+    `X-App-Usage` is flat ({"call_count":N,...}); `X-Business-Use-Case-Usage`
+    nests the same fields under each business object id.
+    """
+    found: list[float] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if (
+                key in _USAGE_FIELDS
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ):
+                found.append(float(value))
+            else:
+                found.extend(_usage_percentages(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.extend(_usage_percentages(item))
+    return found
+
 
 _CONTENT_TYPES = {
     "REELS": "reel",
@@ -44,10 +79,18 @@ _CONTENT_TYPES = {
     "VIDEO": "video",
 }
 
-_CONTENT_METRICS = "comments,likes,reach,saved,shares,total_interactions,views"
-_STORY_METRICS = "reach,replies,shares,total_interactions,views"
+# `total_*` insights (total_interactions and friends) aggregate Instagram,
+# Facebook crossposts and boosted media: never requested and never stored as
+# an Instagram metric (research/recheck-20261123 §3).
+_CONTENT_METRICS = "comments,likes,reach,saved,shares,views"
+_STORY_METRICS = "reach,replies,shares,views"
 _DAILY_METRICS = "reach,follower_count"
-_TOTAL_VALUE_METRICS = "views,profile_views,accounts_engaged,total_interactions"
+_TOTAL_VALUE_METRICS = "views,profile_views,accounts_engaged"
+
+
+def _is_total_metric(name: str) -> bool:
+    """`total_*` metrics count cross-surface engagements, not Instagram ones."""
+    return name.startswith("total_")
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:
@@ -72,6 +115,9 @@ class InstagramProvider(PlatformProvider):
         self.settings = settings
         self.client = client or httpx.Client(timeout=20.0)
         self.warnings: list[str] = []
+        # Latest usage-header percentages, per header name; the sync loop
+        # defers this account's scopes when one reaches 80.
+        self.usage: dict[str, float] = {}
 
     def capabilities(self) -> list[CapabilityEntry]:
         return capability_matrix(Platform.instagram)
@@ -87,12 +133,13 @@ class InstagramProvider(PlatformProvider):
         state: str,
         redirect_uri: str,
         code_challenge: str | None,
+        scopes: list[str] | tuple[str, ...] | None = None,
     ) -> str:
         params = {
             "client_id": self.settings.instagram_app_id or "",
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": ",".join(INSTAGRAM_SCOPES),
+            "scope": ",".join(scopes if scopes is not None else INSTAGRAM_SCOPES),
             "state": state,
         }
         return f"{AUTH_URL}?{httpx.QueryParams(params)}"
@@ -103,6 +150,7 @@ class InstagramProvider(PlatformProvider):
         code: str,
         redirect_uri: str,
         code_verifier: str | None,
+        requested_scopes: list[str] | tuple[str, ...] | None = None,
     ) -> TokenSet:
         response = provider_request(
             self.client,
@@ -118,10 +166,14 @@ class InstagramProvider(PlatformProvider):
             },
         )
         data = self._json_or_raise(response)
-        token = self._short_token_from_response(data)
+        token = self._short_token_from_response(data, requested_scopes)
         return self.exchange_long_lived(token)
 
-    def _short_token_from_response(self, data: dict[str, Any]) -> TokenSet:
+    def _short_token_from_response(
+        self,
+        data: dict[str, Any],
+        requested_scopes: list[str] | tuple[str, ...] | None = None,
+    ) -> TokenSet:
         payload: dict[str, Any] = data
         wrapped = data.get("data")
         if isinstance(wrapped, list) and wrapped:
@@ -136,15 +188,40 @@ class InstagramProvider(PlatformProvider):
         if user_id is not None:
             extra["user_id"] = str(user_id)
         permissions = payload.get("permissions")
-        scopes = (
-            [str(item) for item in permissions]
-            if isinstance(permissions, list)
-            else list(INSTAGRAM_SCOPES)
-        )
+        if isinstance(permissions, list):
+            scopes = [str(item) for item in permissions]
+        elif requested_scopes is not None:
+            # Meta omits `permissions` in some responses; the consent screen
+            # listed exactly what we asked for, which is what was granted.
+            scopes = [str(item) for item in requested_scopes]
+        else:
+            scopes = list(INSTAGRAM_SCOPES)
         return TokenSet(
             access_token=access_token,
             scopes=scopes,
             extra=extra,
+        )
+
+    def _long_lived(self, token: TokenSet, data: dict[str, Any], *, what: str) -> TokenSet:
+        access_token = data.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise ProviderError(f"Instagram {what} returned no token")
+        expires_in = _int_or_none(data.get("expires_in"))
+        issued_at = datetime.now(UTC)
+        extra = dict(token.extra)
+        # Token upkeep reads issued_at/expires_in to decide when a long-lived
+        # token is old enough for ig_refresh_token (never before 24 hours).
+        extra["issued_at"] = issued_at.isoformat()
+        if expires_in is not None:
+            extra["expires_in"] = str(expires_in)
+        return token.model_copy(
+            update={
+                "access_token": access_token,
+                "expires_at": (
+                    issued_at + timedelta(seconds=expires_in) if expires_in is not None else None
+                ),
+                "extra": extra,
+            }
         )
 
     def exchange_long_lived(self, token: TokenSet) -> TokenSet:
@@ -162,20 +239,7 @@ class InstagramProvider(PlatformProvider):
             },
         )
         data = self._json_or_raise(response)
-        access_token = data.get("access_token")
-        if not isinstance(access_token, str) or not access_token:
-            raise ProviderError("Instagram long-lived exchange returned no token")
-        expires_in = _int_or_none(data.get("expires_in"))
-        return token.model_copy(
-            update={
-                "access_token": access_token,
-                "expires_at": (
-                    datetime.now(UTC) + timedelta(seconds=expires_in)
-                    if expires_in is not None
-                    else None
-                ),
-            }
-        )
+        return self._long_lived(token, data, what="long-lived exchange")
 
     def refresh(self, token: TokenSet) -> TokenSet:
         # ig_refresh_token accepts Authorization: Bearer, so the held token stays
@@ -191,25 +255,32 @@ class InstagramProvider(PlatformProvider):
         data = self._json_or_raise(response)
         access_token = data.get("access_token")
         if not isinstance(access_token, str) or not access_token:
-            raise AuthorizationExpired("Instagram refresh returned no token")
-        expires_in = _int_or_none(data.get("expires_in"))
-        return token.model_copy(
-            update={
-                "access_token": access_token,
-                "expires_at": (
-                    datetime.now(UTC) + timedelta(seconds=expires_in)
-                    if expires_in is not None
-                    else None
-                ),
-            }
-        )
+            # A success response without a token is a platform fault, not a
+            # revoked grant; the current token stays usable until it expires.
+            raise ProviderError("Instagram refresh returned no token", retryable=True)
+        return self._long_lived(token, data, what="refresh")
 
     def revoke(self, token: TokenSet) -> bool:
         return False
 
     # -------------------------------------------------------------- HTTP core
 
+    def _track_usage(self, headers: httpx.Headers) -> None:
+        """Keep the newest usage-header percentage seen on any response."""
+        for header in _USAGE_HEADERS:
+            raw = headers.get(header)
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            percentages = _usage_percentages(parsed)
+            if percentages:
+                self.usage[header] = max(percentages)
+
     def _json_or_raise(self, response: httpx.Response) -> dict[str, Any]:
+        self._track_usage(response.headers)
         try:
             data = response.json()
         except ValueError:
@@ -263,21 +334,40 @@ class InstagramProvider(PlatformProvider):
             self.client,
             "Instagram",
             "GET",
-            f"{GRAPH_BASE}/{path.lstrip('/')}",
+            f"{self._graph_base(token)}/{path.lstrip('/')}",
             params=params,
             headers={"Authorization": f"Bearer {token.access_token}"},
         )
         return self._json_or_raise(response)
 
+    @staticmethod
+    def _is_unified(token: TokenSet) -> bool:
+        return token.extra.get("login") == "unified"
+
+    def _graph_base(self, token: TokenSet) -> str:
+        """Unified Login tokens live on graph.facebook.com (spec 08 section 3)."""
+        return FACEBOOK_GRAPH if self._is_unified(token) else GRAPH_BASE
+
+    def _node(self, token: TokenSet) -> str:
+        """The graph node `me` stands in for on Instagram Login.
+
+        A Unified Login `me` is the system user, not the Instagram account —
+        the connected account id stored in `extra["user_id"]` names it there.
+        """
+        if self._is_unified(token) and token.extra.get("user_id"):
+            return str(token.extra["user_id"])
+        return "me"
+
     # --------------------------------------------------------------- identity
 
     def fetch_identity(self, token: TokenSet) -> AccountIdentity:
+        id_field = "id" if self._is_unified(token) else "user_id"
         data = self._graph_get(
             token,
-            "me",
+            self._node(token),
             {
                 "fields": (
-                    "user_id,username,name,account_type,profile_picture_url,"
+                    f"{id_field},username,name,account_type,profile_picture_url,"
                     "followers_count,follows_count,media_count"
                 )
             },
@@ -301,11 +391,30 @@ class InstagramProvider(PlatformProvider):
             raw=data,
         )
 
+    # ---------------------------------------------------------- subscription
+
+    def subscribe_apps(self, token: TokenSet, *, ig_user_id: str) -> None:
+        """Turn this app's comment/mention webhooks on for the account.
+
+        `POST /{ig-user-id}/subscribed_apps` only succeeds while the app is
+        Live with Advanced Access (spec 04 section 2); the caller gates on
+        ``instagram_app_status == "live_advanced"``.
+        """
+        response = provider_request(
+            self.client,
+            "Instagram",
+            "POST",
+            f"{GRAPH_BASE}/{ig_user_id}/subscribed_apps",
+            params={"subscribed_fields": "comments,mentions"},
+            headers={"Authorization": f"Bearer {token.access_token}"},
+        )
+        self._json_or_raise(response)
+
     def fetch_account_totals(self, token: TokenSet) -> dict[str, int | float | None]:
         """Total-value insights for the account snapshot; failures are warnings."""
         data = self._graph_get(
             token,
-            "me/insights",
+            f"{self._node(token)}/insights",
             {
                 "metric": _TOTAL_VALUE_METRICS,
                 "period": "day",
@@ -315,7 +424,11 @@ class InstagramProvider(PlatformProvider):
         totals: dict[str, int | float | None] = {}
         entries = data.get("data")
         for entry in entries if isinstance(entries, list) else []:
-            if not isinstance(entry, dict) or not entry.get("name"):
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("name")
+                or _is_total_metric(str(entry["name"]))
+            ):
                 continue
             total = entry.get("total_value")
             value = total.get("value") if isinstance(total, dict) else None
@@ -342,7 +455,7 @@ class InstagramProvider(PlatformProvider):
         }
         if cursor and cursor.get("after"):
             params["after"] = str(cursor["after"])
-        data = self._graph_get(token, "me/media", params)
+        data = self._graph_get(token, f"{self._node(token)}/media", params)
         items: list[ContentItem] = []
         entries = data.get("data")
         for entry in entries if isinstance(entries, list) else []:
@@ -361,7 +474,16 @@ class InstagramProvider(PlatformProvider):
                     caption=str(entry["caption"]) if entry.get("caption") else None,
                     permalink=(str(entry["permalink"]) if entry.get("permalink") else None),
                     thumbnail_url=(
-                        str(entry.get("thumbnail_url") or entry.get("media_url") or "") or None
+                        # `media_url` is omitted for videos with licensed
+                        # audio; fall back to thumbnail_url, then permalink
+                        # (research/recheck-20261123 §3).
+                        str(
+                            entry.get("thumbnail_url")
+                            or entry.get("media_url")
+                            or entry.get("permalink")
+                            or ""
+                        )
+                        or None
                     ),
                     published_at=_parse_timestamp(
                         str(entry["timestamp"]) if entry.get("timestamp") else None
@@ -407,7 +529,11 @@ class InstagramProvider(PlatformProvider):
         values: dict[str, int | float | None] = {}
         entries = data.get("data")
         for entry in entries if isinstance(entries, list) else []:
-            if not isinstance(entry, dict) or not entry.get("name"):
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("name")
+                or _is_total_metric(str(entry["name"]))
+            ):
                 continue
             metric_values = entry.get("values")
             if isinstance(metric_values, list) and metric_values:
@@ -448,7 +574,7 @@ class InstagramProvider(PlatformProvider):
         )
         data = self._graph_get(
             token,
-            "me/insights",
+            f"{self._node(token)}/insights",
             {
                 "metric": _DAILY_METRICS,
                 "period": "day",
@@ -459,7 +585,11 @@ class InstagramProvider(PlatformProvider):
         results: list[DailyMetric] = []
         entries = data.get("data")
         for entry in entries if isinstance(entries, list) else []:
-            if not isinstance(entry, dict) or not entry.get("name"):
+            if (
+                not isinstance(entry, dict)
+                or not entry.get("name")
+                or _is_total_metric(str(entry["name"]))
+            ):
                 continue
             metric = str(entry["name"])
             values = entry.get("values")
@@ -581,7 +711,7 @@ class InstagramProvider(PlatformProvider):
             self.client,
             "Instagram",
             "POST",
-            f"{GRAPH_BASE}/{comment_external_id}/replies",
+            f"{self._graph_base(token)}/{comment_external_id}/replies",
             data={"message": text},
             headers={"Authorization": f"Bearer {token.access_token}"},
         )

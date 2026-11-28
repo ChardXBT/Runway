@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TextIO
 
 
 class JsonFormatter(logging.Formatter):
@@ -33,8 +33,9 @@ class JsonFormatter(logging.Formatter):
 URL_LOGGING_LIBRARIES = ("httpx", "httpcore")
 
 
-def configure_logging(level: int = logging.INFO) -> None:
-    handler = logging.StreamHandler(sys.stdout)
+def configure_logging(level: int = logging.INFO, *, stream: TextIO | None = None) -> None:
+    """JSON logs to stdout, or to `stream` (`runway mcp` keeps stdout for the protocol)."""
+    handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers.clear()

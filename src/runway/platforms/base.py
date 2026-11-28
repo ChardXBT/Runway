@@ -109,12 +109,16 @@ class ProviderError(Exception):
         self,
         detail: str,
         *,
+        code: str | None = None,
         retryable: bool = False,
         status: int | None = None,
         delivery_unknown: bool = False,
     ) -> None:
         super().__init__(detail)
         self.detail = detail
+        # The platform's machine-readable error code (TikTok's `error.code`,
+        # such as `spam_risk_too_many_posts`), when one was returned.
+        self.code = code
         self.retryable = retryable
         self.status = status
         # True when the request may have reached the platform before the
@@ -132,7 +136,11 @@ class PermissionMissing(ProviderError):
 
 
 class RateLimited(ProviderError):
-    """429 or quota exceeded; the run ends partial and can retry later."""
+    """429 or quota exceeded; the run ends partial and can retry later.
+
+    `retry_after` is the platform's hint in seconds when it sent one; the
+    sync scheduler honours it over its own backoff (spec 04 section 3).
+    """
 
     def __init__(
         self,
@@ -140,8 +148,10 @@ class RateLimited(ProviderError):
         *,
         retryable: bool = True,
         status: int | None = None,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(detail, retryable=retryable, status=status)
+        self.retry_after = retry_after
 
 
 class CapabilityUnsupported(ProviderError):
@@ -330,3 +340,7 @@ class PlatformProvider(ABC):
         comment_external_id: str,
         text: str,
     ) -> ReplyResult: ...
+
+    def subscribe_apps(self, token: TokenSet, *, ig_user_id: str) -> None:
+        """Subscribe the app to the account's push fields (Instagram only)."""
+        raise CapabilityUnsupported("push subscriptions are not supported by this provider")

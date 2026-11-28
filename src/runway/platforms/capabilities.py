@@ -64,6 +64,27 @@ DEFAULT_PLATFORM_SCOPES: dict[Platform, list[str]] = {
     Platform.tiktok: list(TIKTOK_SCOPES),
 }
 
+# Unified Login for Instagram grants the same permissions under different
+# names: the Facebook-Login scope drops `business` (spec 08 section 3). An
+# account connected through either flow satisfies the same requirements.
+UNIFIED_INSTAGRAM_SCOPE_EQUIVALENTS: dict[str, str] = {
+    "instagram_basic": "instagram_business_basic",
+    "instagram_manage_insights": "instagram_business_manage_insights",
+    "instagram_manage_comments": "instagram_business_manage_comments",
+    "instagram_manage_messages": "instagram_business_manage_messages",
+    "instagram_content_publish": "instagram_business_content_publish",
+}
+
+
+def equivalent_scopes(scopes: list[str] | tuple[str, ...] | set[str]) -> set[str]:
+    """The granted scopes plus each Unified Login scope's Business API name."""
+    expanded = set(scopes)
+    for scope in list(expanded):
+        mapped = UNIFIED_INSTAGRAM_SCOPE_EQUIVALENTS.get(scope)
+        if mapped is not None:
+            expanded.add(mapped)
+    return expanded
+
 
 _GOOGLE_SCOPE_DOCS = "https://developers.google.com/youtube/v3/guides/auth/server-side-web-apps"
 _INSTAGRAM_DOCS = "https://developers.facebook.com/docs/instagram-platform"
@@ -289,4 +310,4 @@ def capability_ready(
 ) -> bool:
     if entry.state != "implemented" or account_status != "connected":
         return False
-    return set(entry.requires_scopes) <= set(granted_scopes)
+    return set(entry.requires_scopes) <= equivalent_scopes(granted_scopes)

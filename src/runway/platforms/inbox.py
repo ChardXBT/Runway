@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Literal
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
+from runway.auth.principal import LOCAL_WORKSPACE_ID
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -18,6 +18,10 @@ from runway.db.models import (
     ReplyDraft,
     utcnow,
 )
+from runway.domain.enums import CommentStatus, PlatformActionState
+from runway.domain.state_machine import COMMENT_STATUS_MACHINE, PLATFORM_ACTION_MACHINE
+from runway.hosted.quotas import require_send_allowed
+from runway.operations.instance_lease import worker_busy
 from runway.platforms.base import (
     AuthorizationExpired,
     ProviderError,
@@ -37,9 +41,12 @@ from runway.platforms.registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 
-CommentStatus = Literal["new", "read", "answered", "escalated", "ignored"]
-COMMENT_STATUSES = ("new", "read", "answered", "escalated", "ignored")
-UNANSWERED_STATUSES = ("new", "read", "escalated")
+COMMENT_STATUSES = tuple(status.value for status in CommentStatus)
+UNANSWERED_STATUSES = (
+    CommentStatus.NEW.value,
+    CommentStatus.READ.value,
+    CommentStatus.ESCALATED.value,
+)
 
 
 def unanswered_clause() -> ColumnElement[bool]:
@@ -101,7 +108,9 @@ class InboxService:
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        workspace_id: int | None = None,
     ) -> dict[str, object]:
+        """Top-level comments; `workspace_id` limits them to one workspace (agent tools)."""
         with self.database.session() as session:
             statement = select(CommentRecord).where(CommentRecord.parent_external_id.is_(None))
             count_statement = (
@@ -109,6 +118,9 @@ class InboxService:
                 .select_from(CommentRecord)
                 .where(CommentRecord.parent_external_id.is_(None))
             )
+            if workspace_id is not None:
+                statement = statement.where(CommentRecord.workspace_id == workspace_id)
+                count_statement = count_statement.where(CommentRecord.workspace_id == workspace_id)
             if platform:
                 statement = statement.where(CommentRecord.platform == platform)
                 count_statement = count_statement.where(CommentRecord.platform == platform)
@@ -157,7 +169,7 @@ class InboxService:
                 .select_from(CommentRecord)
                 .where(
                     CommentRecord.parent_external_id.is_(None),
-                    CommentRecord.status == "new",
+                    CommentRecord.status == CommentStatus.NEW.value,
                 )
             )
             return {
@@ -200,10 +212,14 @@ class InboxService:
             "handoff_url": handoff,
         }
 
-    def get_comment(self, comment_id: int) -> dict[str, object] | None:
+    def get_comment(
+        self, comment_id: int, *, workspace_id: int | None = None
+    ) -> dict[str, object] | None:
         with self.database.session() as session:
             comment = session.get(CommentRecord, comment_id)
             if comment is None:
+                return None
+            if workspace_id is not None and comment.workspace_id != workspace_id:
                 return None
             account = session.get(ConnectedAccount, comment.account_id)
             platform = Platform(comment.platform)
@@ -249,13 +265,18 @@ class InboxService:
             comment = session.get(CommentRecord, comment_id)
             if comment is None:
                 raise LookupError("comment not found")
-            comment.status = status
+            COMMENT_STATUS_MACHINE.apply(comment, status)
             session.flush()
             return comment_view(comment)
 
-    def set_draft(self, comment_id: int, text: str) -> dict[str, object]:
+    def set_draft(
+        self, comment_id: int, text: str, *, workspace_id: int | None = None
+    ) -> dict[str, object]:
         with self.database.session() as session:
-            if session.get(CommentRecord, comment_id) is None:
+            comment = session.get(CommentRecord, comment_id)
+            if comment is None or (
+                workspace_id is not None and comment.workspace_id != workspace_id
+            ):
                 raise LookupError("comment not found")
             draft = session.scalar(select(ReplyDraft).where(ReplyDraft.comment_id == comment_id))
             if draft is None:
@@ -273,10 +294,14 @@ class InboxService:
                 session.delete(draft)
             return {"comment_id": comment_id, "text": None}
 
-    def reply(self, comment_id: int, text: str) -> dict[str, object]:
+    def reply(
+        self, comment_id: int, text: str, *, workspace_id: int = LOCAL_WORKSPACE_ID
+    ) -> dict[str, object]:
         if self.registry is None:
             raise InboxReplyForbidden("reply service is unavailable")
         registry = self.registry
+        # Before anything is recorded: a standby machine never sends a platform write.
+        registry.ensure_platform_write_allowed()
         with self.database.session() as session:
             comment = session.get(CommentRecord, comment_id)
             if comment is None:
@@ -298,12 +323,14 @@ class InboxService:
             )
             if not capability["ready"]:
                 raise InboxReplyForbidden(str(capability["detail"]))
+            # The kill switches: nothing is recorded or sent while paused.
+            require_send_allowed(session, self.settings, workspace_id)
             action = PlatformAction(
                 account_id=account.id,
                 action_type="comment_reply",
                 target_type="comment",
                 target_id=comment.id,
-                state="proposed",
+                state=PLATFORM_ACTION_MACHINE.start(PlatformActionState.PROPOSED),
                 request_json=json.dumps(redact_payload({"text": text})),
             )
             session.add(action)
@@ -322,7 +349,7 @@ class InboxService:
             # Nothing reached the platform, so the action is plainly failed.
             with self.database.session() as session:
                 record = _action(session)
-                record.state = "failed"
+                PLATFORM_ACTION_MACHINE.apply(record, PlatformActionState.FAILED)
                 record.error = safe_error_summary(exc)
                 record.completed_at = utcnow()
 
@@ -333,7 +360,7 @@ class InboxService:
         # YouTube access tokens last an hour; a reply long after the last sync
         # must refresh first rather than send an expired token.
         try:
-            token = registry.fresh_token(platform, account_token_ref)
+            token = registry.fresh_token(platform, account_token_ref, for_write=True)
         except AuthorizationExpired as exc:
             forbidden = InboxReplyForbidden(
                 f"account authorization expired; reconnect it ({safe_error_summary(exc)})"
@@ -347,12 +374,13 @@ class InboxService:
 
         with self.database.session() as session:
             record = _action(session)
-            record.state = "attempted"
+            PLATFORM_ACTION_MACHINE.apply(record, PlatformActionState.ATTEMPTED)
             record.attempted_at = utcnow()
         try:
-            result = provider.reply_to_comment(
-                token, comment_external_id=comment_external_id, text=text
-            )
+            with worker_busy(registry.settings, "comment_reply"):
+                result = provider.reply_to_comment(
+                    token, comment_external_id=comment_external_id, text=text
+                )
         except Exception as exc:  # noqa: BLE001
             # A reply is a public, non-idempotent write. When the failure may
             # have followed the request reaching the platform (a read timeout,
@@ -366,7 +394,10 @@ class InboxService:
                 logger.exception("comment reply action %s failed", action_id)
             with self.database.session() as session:
                 record = _action(session)
-                record.state = "uncertain" if uncertain else "failed"
+                PLATFORM_ACTION_MACHINE.apply(
+                    record,
+                    PlatformActionState.UNCERTAIN if uncertain else PlatformActionState.FAILED,
+                )
                 record.error = safe_error_summary(exc)
                 record.completed_at = utcnow()
             if uncertain:
@@ -384,7 +415,10 @@ class InboxService:
             raise
         with self.database.session() as session:
             action = _action(session)
-            action.state = "completed" if result.verified else "uncertain"
+            PLATFORM_ACTION_MACHINE.apply(
+                action,
+                PlatformActionState.COMPLETED if result.verified else PlatformActionState.UNCERTAIN,
+            )
             action.external_result_id = result.external_id
             action.response_json = json.dumps(
                 {"external_id": result.external_id, "verified": result.verified}
@@ -394,7 +428,7 @@ class InboxService:
                 action.verified_at = utcnow()
             comment = session.get(CommentRecord, comment_id)
             if comment is not None:
-                comment.status = "answered"
+                COMMENT_STATUS_MACHINE.apply(comment, CommentStatus.ANSWERED)
                 comment.has_owner_reply = True
             return {
                 "id": action.id,

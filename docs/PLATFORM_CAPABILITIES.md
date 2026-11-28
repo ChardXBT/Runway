@@ -1,5 +1,9 @@
 # Platform capability matrix
 
+> **Update 2026-11-14:** parts of this document are out of date. See
+> [`expansion/01-AUDIT.md`](expansion/01-AUDIT.md) for corrections and
+> [`expansion/README.md`](expansion/README.md) for the expansion research and specifications.
+
 Status vocabulary (also used by `GET /api/platforms` and the Accounts page):
 
 | State | Meaning |
@@ -74,3 +78,53 @@ fixtures and has not been live-verified. See [`VERIFICATION_REPORT.md`](VERIFICA
   the account is ready and the interlock is on.
 - Tests assert that `ready` is never true for a disconnected account, a missing scope, or a
   non-implemented capability.
+
+<!-- BEGIN generated: publishing capability -->
+## Publishing capability per account (generated)
+
+Generated from `runway.platforms.publish_capability` by
+`scripts/generate_platform_capabilities.py`; do not edit by hand. A test fails when
+this section and the code disagree.
+
+Publishing is a function of the account (status, granted scopes), the operator's
+app status (`RUNWAY_YOUTUBE_APP_STATUS`, `RUNWAY_INSTAGRAM_APP_STATUS`,
+`RUNWAY_TIKTOK_APP_STATUS`, `RUNWAY_YOUTUBE_POSTS_API_ACCESS`), the profile and the
+adapters in the build. The `assisted` checklist adapter is always available.
+
+| State | Meaning |
+| --- | --- |
+| `ready` | Adapter implemented, scope granted, app status sufficient |
+| `ready_draft_only` | TikTok inbox: the draft lands in the creator's inbox; they post it |
+| `needs_scope` | The account must grant the publishing scope (or be reconnected) |
+| `needs_media_host` | Instagram in a local install without R2: no public media URL |
+| `needs_app_approval` | Platform review not passed for this kind of account |
+| `assisted_only` | Manual workflow (checklist, then mark as published) |
+
+Direct adapters and the scopes that enable them:
+
+| Post type | Direct adapter | In this build | Scope (any of) |
+| --- | --- | --- | --- |
+| `youtube_video` | `youtube_direct` | yes | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube`, `https://www.googleapis.com/auth/youtube.force-ssl` |
+| `youtube_short` | `youtube_direct` | yes | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube`, `https://www.googleapis.com/auth/youtube.force-ssl` |
+| `youtube_post` | `youtube_post` | yes | `https://www.googleapis.com/auth/youtube.force-ssl`, `https://www.googleapis.com/auth/youtube` |
+| `instagram_reel` | `instagram_direct` | yes | `instagram_business_content_publish` |
+| `instagram_image` | `instagram_direct` | yes | `instagram_business_content_publish` |
+| `instagram_carousel` | `instagram_direct` | yes | `instagram_business_content_publish` |
+| `instagram_story` | `instagram_direct` | yes | `instagram_business_content_publish` |
+| `tiktok_video` | `tiktok_direct` | yes | `video.publish` |
+| `tiktok_draft` | `tiktok_inbox` | yes | `video.upload` |
+
+State once the direct adapter is installed, for a connected account:
+
+| Post type | Owner install, publishing scope granted, no R2 | Owner install, scope granted, R2 configured | Owner install, scope not granted | Hosted, default app status | Hosted, all approvals (verified, live_advanced, audited, posts pilot) |
+| --- | --- | --- | --- | --- | --- |
+| `youtube_video` | `ready` | `ready` | `needs_scope` | `needs_app_approval` | `ready` |
+| `youtube_short` | `ready` | `ready` | `needs_scope` | `needs_app_approval` | `ready` |
+| `youtube_post` | `needs_app_approval` | `needs_app_approval` | `needs_app_approval` | `needs_app_approval` | `ready` |
+| `instagram_reel` | `needs_media_host` | `ready` | `needs_scope` | `needs_app_approval` | `ready` |
+| `instagram_image` | `needs_media_host` | `ready` | `needs_scope` | `needs_app_approval` | `ready` |
+| `instagram_carousel` | `needs_media_host` | `ready` | `needs_scope` | `needs_app_approval` | `ready` |
+| `instagram_story` | `needs_media_host` | `ready` | `needs_scope` | `needs_app_approval` | `ready` |
+| `tiktok_video` | `needs_app_approval` | `needs_app_approval` | `needs_app_approval` | `needs_app_approval` | `ready` |
+| `tiktok_draft` | `ready_draft_only` | `ready_draft_only` | `needs_scope` | `needs_app_approval` | `ready_draft_only` |
+<!-- END generated: publishing capability -->

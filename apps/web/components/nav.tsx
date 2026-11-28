@@ -21,6 +21,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Review", href: "/review", glyph: "generator" },
       { label: "Calendar", href: "/lineup", glyph: "lineup" },
       { label: "Drafts", href: "/drafts", glyph: "drafts" },
+      { label: "Posts", href: "/posts", glyph: "posts" },
     ],
   },
   {
@@ -35,6 +36,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Workspace",
     links: [
       { label: "Accounts", href: "/accounts", glyph: "accounts" },
+      { label: "Approvals", href: "/approvals", glyph: "approvals" },
       { label: "Connector", href: "/connector", glyph: "connector" },
       {
         label: "Archive",
@@ -57,6 +59,8 @@ const HREF_ALIASES: Record<string, string> = {
 type GlyphName =
   | "accounts"
   | "activity"
+  | "approvals"
+  | "posts"
   | "analytics"
   | "catalogue"
   | "connector"
@@ -71,6 +75,22 @@ type GlyphName =
 
 function NavGlyph({ name }: { name: GlyphName }) {
   switch (name) {
+    case "posts":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="14" height="14" rx="2.5" />
+          <path d="M6.5 7h7" />
+          <path d="M6.5 10.5h7" />
+          <path d="M6.5 14h4" />
+        </svg>
+      );
+    case "approvals":
+      return (
+        <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M10 3.5l5.5 2.5v4.5c0 3.4-2.3 5.6-5.5 6.5-3.2-.9-5.5-3.1-5.5-6.5V6z" />
+          <path d="M7.5 10l1.8 1.8 3.2-3.6" />
+        </svg>
+      );
     case "dashboard":
       return (
         <svg className="nav-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

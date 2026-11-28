@@ -1,37 +1,60 @@
 from __future__ import annotations
 
+import json
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import func, select
 
 from runway.api.app import create_app
+from runway.auth.principal import Principal, get_principal
 from runway.config import Settings
+from runway.db import initialize_database
 from runway.db.base import Database
 from runway.db.models import (
     AccountMetricSnapshot,
+    AuditLogEntry,
     CommentRecord,
     ConnectedAccount,
+    OAuthState,
     PlatformContent,
+    Workspace,
 )
+from runway.db.workspace import workspace_context
+from runway.operations import instance_lease
+from runway.platforms.base import TokenSet
 from runway.platforms.capabilities import Platform
+from runway.platforms.oauth import OAuthStateService
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 from runway.platforms.youtube import YouTubeProvider
+
+# A valid but throwaway keyring: hosted apps boot the database token store,
+# which refuses to start without RUNWAY_TOKEN_KEYS.
+_TOKEN_KEYRING = "v1:" + "a" * 43 + "="
+
+
+def migrated(settings: Settings) -> Settings:
+    """The API never migrates; tests upgrade their temporary database first."""
+    initialize_database(settings).engine.dispose()
+    return settings
 
 
 @pytest.fixture()
 def live_settings(tmp_path: Path) -> Settings:
-    return Settings(data_dir=tmp_path / "data", platform_provider="live")
+    return migrated(Settings(data_dir=tmp_path / "data", platform_provider="live"))
 
 
 @pytest.fixture()
 def mock_settings(tmp_path: Path) -> Settings:
-    return Settings(data_dir=tmp_path / "data", platform_provider="mock")
+    return migrated(Settings(data_dir=tmp_path / "data", platform_provider="mock"))
 
 
 def test_live_mode_without_credentials_reports_unconfigured(live_settings: Settings) -> None:
@@ -104,36 +127,207 @@ def test_oauth_connect_and_callback_happy_path(
         return original(self, platform)
 
     monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    database = Database(settings)
+    try:
+        with TestClient(create_app(migrated(settings)), base_url="http://127.0.0.1:8000") as web:
+            connect = web.post("/api/platforms/youtube/connect")
+            assert connect.status_code == 200
+            payload = connect.json()
+            url_query = parse_qs(urlparse(payload["authorization_url"]).query)
+            assert url_query["state"] == [payload["state"]]
+            assert url_query["code_challenge_method"] == ["S256"]
+            assert url_query["code_challenge"]
+
+            bad = web.get(
+                "/api/platforms/youtube/oauth/callback",
+                params={"code": "x", "state": "unknown-state"},
+                follow_redirects=False,
+            )
+            assert bad.status_code == 303
+            assert bad.headers["location"].endswith("/accounts?error=invalid_state")
+
+            good = web.get(
+                "/api/platforms/youtube/oauth/callback",
+                params={"code": "auth-code", "state": payload["state"]},
+                follow_redirects=False,
+            )
+            assert good.status_code == 303
+            assert good.headers["location"].endswith("/accounts?connected=youtube")
+
+            accounts = web.get("/api/platforms/accounts").json()
+            assert len(accounts) == 1
+            assert accounts[0]["platform"] == "youtube"
+            assert accounts[0]["external_account_id"] == "UCtest"
+            assert accounts[0]["status"] == "connected"
+
+            # The OAuth callback has no caller principal; the grant itself is
+            # the actor, on the ordinary connect path as on the bound path.
+            with database.session() as session:
+                audit = session.scalar(
+                    select(AuditLogEntry).where(AuditLogEntry.action == "account.connect")
+                )
+                assert audit is not None
+                assert audit.actor_kind == "oauth"
+                assert audit.actor_id == "youtube"
+                assert audit.target_type == "account"
+                assert audit.target_id == str(accounts[0]["id"])
+                assert json.loads(audit.detail_json) == {"external_account_id": "UCtest"}
+    finally:
+        database.engine.dispose()
+
+
+def _principal(workspace_id: int) -> Principal:
+    return Principal(
+        kind="user",
+        id=f"user-{workspace_id}",
+        workspace_id=workspace_id,
+        role="owner",
+        scopes=frozenset(),
+        display=f"Owner {workspace_id}",
+    )
+
+
+def _hosted_app(settings: Settings):
+    return create_app(settings.model_copy(update={"profile": "hosted"}))
+
+
+def test_hosted_connect_binds_the_state_to_the_principal_workspace(tmp_path: Path) -> None:
+    settings = migrated(
+        Settings(
+            data_dir=tmp_path / "data",
+            platform_provider="live",
+            youtube_client_id="yt-client",
+            youtube_client_secret="yt-secret",
+            token_keys=SecretStr(_TOKEN_KEYRING),
+        ).model_copy(update={"profile": "hosted"})
+    )
+    app = _hosted_app(settings)
+    database = app.state.database
+    with database.system_session() as session:
+        session.add(Workspace(id=2, slug="other", name="Other"))
+    app.dependency_overrides[get_principal] = lambda: _principal(2)
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+
+    connect = client.post("/api/platforms/youtube/connect")
+    assert connect.status_code == 200
+    state = connect.json()["state"]
+    with database.system_session() as session:
+        record = session.scalar(select(OAuthState).where(OAuthState.state == state))
+        assert record is not None
+        assert record.workspace_id == 2
+
+
+def test_hosted_callback_refuses_a_state_from_another_workspace(tmp_path: Path) -> None:
+    settings = migrated(
+        Settings(
+            data_dir=tmp_path / "data",
+            platform_provider="live",
+            youtube_client_id="yt-client",
+            youtube_client_secret="yt-secret",
+            token_keys=SecretStr(_TOKEN_KEYRING),
+        ).model_copy(update={"profile": "hosted"})
+    )
+    app = _hosted_app(settings)
+    database = app.state.database
+    with database.system_session() as session:
+        session.add(Workspace(id=2, slug="other", name="Other"))
+    with workspace_context(2):
+        state = (
+            OAuthStateService(database)
+            .issue(
+                Platform.youtube,
+                redirect_uri="https://api.test/cb",
+                use_pkce=False,
+                workspace_id=2,
+            )
+            .state
+        )
+    app.dependency_overrides[get_principal] = lambda: _principal(1)
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+
+    response = client.get(
+        "/api/platforms/youtube/oauth/callback",
+        params={"code": "auth-code", "state": state},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "error=invalid_state" in response.headers["location"]
+    with database.system_session() as session:
+        # The foreign state was refused, not consumed, and nothing persisted.
+        record = session.scalar(select(OAuthState).where(OAuthState.state == state))
+        assert record is not None
+        assert record.consumed_at is None
+        assert session.scalars(select(ConnectedAccount)).all() == []
+
+
+def test_oauth_callback_gates_standby_before_exchanging_the_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        instance_dir=instance_dir,
+        machine_id="this-machine",
+        token_key=Fernet.generate_key().decode("ascii"),
+        platform_provider="live",
+        youtube_client_id="yt-client",
+        youtube_client_secret="yt-secret",
+    )
+    # This machine holds the lease and confirmed it remotely just now: active.
+    heartbeat = datetime.now(UTC)
+    instance_lease.write_lease(
+        instance_dir,
+        instance_lease.Lease(holder="this-machine", holder_since=heartbeat, heartbeat_at=heartbeat),
+    )
+    instance_lease.record_remote_check(instance_dir, "this-machine", heartbeat)
+    client = httpx.Client(transport=httpx.MockTransport(_youtube_handler), timeout=20.0)
+    provider = YouTubeProvider(settings, client)
+    exchanged: list[str] = []
+    real_exchange = provider.exchange_code
+
+    def exchange_spy(*, code: str, redirect_uri: str, code_verifier: str | None) -> TokenSet:
+        exchanged.append(code)
+        return real_exchange(code=code, redirect_uri=redirect_uri, code_verifier=code_verifier)
+
+    monkeypatch.setattr(provider, "exchange_code", exchange_spy)
+    original = ProviderRegistry.provider
+
+    def patched(self: ProviderRegistry, platform: Platform):
+        if platform is Platform.youtube:
+            return provider
+        return original(self, platform)
+
+    monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    initialize_database(settings).engine.dispose()
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as web:
         connect = web.post("/api/platforms/youtube/connect")
         assert connect.status_code == 200
-        payload = connect.json()
-        url_query = parse_qs(urlparse(payload["authorization_url"]).query)
-        assert url_query["state"] == [payload["state"]]
-        assert url_query["code_challenge_method"] == ["S256"]
-        assert url_query["code_challenge"]
+        state = parse_qs(urlparse(connect.json()["authorization_url"]).query)["state"][0]
 
-        bad = web.get(
-            "/api/platforms/youtube/oauth/callback",
-            params={"code": "x", "state": "unknown-state"},
-            follow_redirects=False,
-        )
-        assert bad.status_code == 303
-        assert bad.headers["location"].endswith("/accounts?error=invalid_state")
+        # A push or handover on this machine makes it standby between the idle
+        # wait and the lease release.
+        with instance_lease.instance_transfer(settings, "push"):
+            standby = web.get(
+                "/api/platforms/youtube/oauth/callback",
+                params={"code": "auth-code", "state": state},
+                follow_redirects=False,
+            )
 
+        assert standby.status_code == 303
+        assert standby.headers["location"].endswith("/accounts?error=standby")
+        # The single-use authorization code was never burned at the provider.
+        assert exchanged == []
+
+        # The state was not consumed: the same callback succeeds once active.
         good = web.get(
             "/api/platforms/youtube/oauth/callback",
-            params={"code": "auth-code", "state": payload["state"]},
+            params={"code": "auth-code", "state": state},
             follow_redirects=False,
         )
         assert good.status_code == 303
         assert good.headers["location"].endswith("/accounts?connected=youtube")
-
-        accounts = web.get("/api/platforms/accounts").json()
-        assert len(accounts) == 1
-        assert accounts[0]["platform"] == "youtube"
-        assert accounts[0]["external_account_id"] == "UCtest"
-        assert accounts[0]["status"] == "connected"
+        assert exchanged == ["auth-code"]
 
 
 def test_mock_mode_auto_creates_three_accounts(mock_settings: Settings) -> None:
@@ -194,7 +388,7 @@ def test_disconnect_deletes_token_and_keeps_content(
         )
         assert response.status_code == 200
 
-        store = TokenStore(mock_settings.resolved_data_dir / "secrets")
+        store = FileTokenStore(mock_settings.resolved_data_dir / "secrets")
         assert store.load(token_ref) is None
         with database.session() as session:
             record = session.get(ConnectedAccount, account["id"])
@@ -294,7 +488,7 @@ def test_settings_endpoint_exposes_no_secret_values(tmp_path: Path) -> None:
         instagram_app_secret="ig-secret-abc",
         tiktok_client_secret="tt-secret-abc",
     )
-    with TestClient(create_app(settings), base_url="http://127.0.0.1:8000") as client:
+    with TestClient(create_app(migrated(settings)), base_url="http://127.0.0.1:8000") as client:
         body = client.get("/api/settings").text
         for secret in ("yt-secret-abc", "ig-secret-abc", "tt-secret-abc"):
             assert secret not in body

@@ -1,0 +1,71 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "profile": "Main",
+      "codec_type": "video",
+      "codec_tag_string": "hvc1",
+      "codec_tag": "0x31637668",
+      "width": 1920,
+      "height": 1080,
+      "coded_width": 1920,
+      "coded_height": 1088,
+      "closed_captions": 0,
+      "film_grain": 0,
+      "has_b_frames": 2,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "16:9",
+      "pix_fmt": "yuv420p",
+      "level": 120,
+      "color_range": "tv",
+      "chroma_location": "left",
+      "field_order": "progressive",
+      "refs": 1,
+      "view_ids_available": "",
+      "view_pos_available": "",
+      "id": "0x1",
+      "r_frame_rate": "30/1",
+      "avg_frame_rate": "30/1",
+      "time_base": "1/15360",
+      "start_pts": 0,
+      "start_time": "0.000000",
+      "duration_ts": 30720,
+      "duration": "2.000000",
+      "bit_rate": "3384300",
+      "nb_frames": "60",
+      "disposition": {
+        "attached_pic": 0
+      },
+      "tags": {
+        "handler_name": "VideoHandler",
+        "vendor_id": "FFMP",
+        "encoder": "Lavc61.19.101 libx265"
+      },
+      "side_data_list": [
+        {
+          "side_data_type": "Display Matrix",
+          "rotation": 90
+        }
+      ]
+    }
+  ],
+  "format": {
+    "filename": "file:upload.bin",
+    "nb_streams": 1,
+    "nb_programs": 0,
+    "nb_stream_groups": 0,
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "start_time": "0.000000",
+    "duration": "2.000000",
+    "size": "850113",
+    "bit_rate": "3400452",
+    "probe_score": 100,
+    "tags": {
+      "major_brand": "qt  ",
+      "minor_version": "512",
+      "compatible_brands": "qt  ",
+      "encoder": "Lavf61.7.100"
+    }
+  }
+}

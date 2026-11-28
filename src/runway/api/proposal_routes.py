@@ -4,10 +4,11 @@ import asyncio
 from datetime import date, datetime
 from typing import Any, Literal, cast
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from runway.audit.service import AuditService
+from runway.auth.principal import get_principal
 from runway.config import Settings
 from runway.db.base import Database
 from runway.discovery.service import DiscoveryService
@@ -127,7 +128,7 @@ class EnsureOptionsRequest(BaseModel):
 
 
 def build_proposal_router(database: Database, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["proposals"])
+    router = APIRouter(prefix="/api", tags=["proposals"], dependencies=[Depends(get_principal)])
     proposals = ProposalService(database, settings)
     editorial = EditorialService(database, settings)
     youtube_publisher = YouTubeBrowserPublisher(database, settings)

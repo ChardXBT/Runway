@@ -5,6 +5,104 @@ Use `runway init` once, `runway doctor` after dependency or configuration change
 development launcher: it starts the API and the Next.js development server, not the production
 build.
 
+## Database migrations and the worker
+
+The API never migrates the database. Importing or starting it against a database that is behind
+(or ahead of) the migration head fails with an error naming `runway db upgrade`, and uvicorn
+exits non-zero. Migrate explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe -m runway.cli.main db current     # read-only: current and head
+.\.venv\Scripts\python.exe -m runway.cli.main db upgrade     # backup, upgrade to head, seed defaults
+.\.venv\Scripts\python.exe -m runway.cli.main db downgrade 0012_creator_platforms   # backup, roll back
+```
+
+When migrations are pending, `db upgrade` first copies the database with SQLite's online backup
+API to `data/backups/runway-<UTC time>-before-upgrade.db` (the newest three of these are kept;
+`--no-backup` skips it). `db downgrade <revision>` always takes a backup first
+(`...-before-downgrade-to-<revision>.db`, never pruned) and refuses targets older than
+`0012_creator_platforms`, the schema of the pre-expansion release, unless `--force` is given.
+Both refuse (exit code 3) while `runway worker` is running (`db upgrade` only when migrations are
+pending; with nothing to migrate it is a harmless no-op).
+
+`runway worker` runs queued jobs from the `publish_jobs` table. Today that is scheduled platform
+sync: with `RUNWAY_PLATFORM_SYNC_INTERVAL_MINUTES` above zero it enqueues one `sync_account` job
+per connected account per interval and runs it with the existing sync code. The API no longer
+runs a sync thread; its `/health` reports `"sync_scheduler": "worker"` (older APIs, which synced
+in-process, lack the field). The worker sleeps until the next due job (at most 30 seconds), stops
+cleanly on Ctrl+C, Ctrl+Break or SIGTERM, and refuses to start a second copy for the same data
+directory (exit code 3).
+
+The worker is identified by two files, never by its command line:
+
+- `data/runtime/worker.lock`: the worker holds an OS byte-range lock on it for its whole life.
+  The OS drops the lock when the process exits, so a held lock means a live worker and a leftover
+  file means nothing.
+- `data/runtime/worker.pid`: `{"pid", "revision", "started_at"}`, written while holding the lock
+  and removed on exit.
+
+## How the launcher deploys
+
+`run-runway.ps1` first asks Python for the database revision, the migration head and the
+checkout's commit (`python -m runway.operations.launch_status`), and reads the running API's
+`/health`. Besides the unchanged `product` and `status` fields, `/health` reports `revision`
+(the commit the API was started from) and `migration_head`. The API is replaced when it is older
+code: it lacks `sync_scheduler`, reports a different revision or head, or the database is behind
+head. In that case the launcher:
+
+1. checks that the process on port 8000 is this checkout's API, then stops the worker (Ctrl+Break
+   on its console, PID from `worker.pid`, only after confirming that PID is running the Runway
+   worker) and then the API, and waits for both to exit. Nothing is force-killed. If either does
+   not stop while the API stays healthy, the older API is left serving, the database is not
+   upgraded, `launcher.log` says "Deploy incomplete", and the worker is started again only if the
+   API runs no in-process scheduler and expects the database's schema. If the API neither stops
+   nor stays healthy, the launch fails and says so;
+2. runs `db upgrade` (with its backup) and starts the API;
+3. starts the worker, but only beside an API whose `/health` reports `sync_scheduler: worker`.
+   The old in-process scheduler and the worker therefore never sync at the same time.
+
+If the database is at a revision this checkout does not define (newer code migrated it and the
+older code was checked out without `runway db downgrade`), the launcher stops nothing and migrates
+nothing: with a healthy API it only logs the problem; without one the launch fails with the
+instruction to run `runway db downgrade` from the newer checkout (see Rollback below).
+
+A worker that cannot start (it exits within 5 seconds, or the lock check fails) never fails the
+launch and never stops the API or web: the launcher logs it to `launcher.log` (output in
+`data/runtime/worker.log`) and the next watchdog run retries. A worker running older code than the
+checkout is restarted the same way.
+
+## Deploy order (by hand)
+
+1. Disable the scheduled task (`Disable-ScheduledTask -TaskName A_Runway_Task`) so the watchdog
+   does not restart anything midway.
+2. Stop the API (port 8000), the web server (port 3000) and `runway worker` (PID in
+   `data/runtime/worker.pid`). Let running publishing or generation finish first.
+3. Check out the new code, then `.\.venv\Scripts\python.exe -m runway.cli.main db upgrade`
+   (it takes the backup first; keep the path it prints).
+4. Start Runway with `run-runway.ps1` and re-enable the task.
+
+Running `run-runway.ps1` after step 3 of a plain `git pull` does steps 2-4 for the API and worker
+itself, as described above.
+
+## Rollback order
+
+Roll the schema back with the NEW checkout, because only it contains the downgrade steps:
+
+1. Disable the scheduled task, then stop the API, the web server and the worker.
+2. With the new checkout still in place:
+   `.\.venv\Scripts\python.exe -m runway.cli.main db downgrade 0012_creator_platforms`
+   (it takes a backup first).
+3. Check out the older code, rebuild the web app if it changed, start `run-runway.ps1`, and
+   re-enable the task.
+
+## External supervisors
+
+Any external supervisor or stop script must stop three things, not two: the API on port 8000,
+the web server on port 3000, and `runway worker`, which has no port. Find the worker through
+`data/runtime/worker.pid` (and confirm it is alive with the `worker.lock` check above), and stop
+it with Ctrl+Break on its console, Ctrl+C or SIGTERM. Starting should still go through
+`run-runway.ps1`, which starts the worker.
+
 ## Windows production startup
 
 Install the Python environment and run `npm ci` followed by `npm run check` before
@@ -19,8 +117,10 @@ Start-ScheduledTask -TaskName A_Runway_Task
 
 A new installation registers a task for the current user that starts Runway 30 seconds after
 logon and then reruns the launcher every 5 minutes (`-WatchdogMinutes 0` disables the
-repetition). Each run is idempotent: healthy services are left alone, a component whose port is
-free (for example after a crash, sleep, or reboot) is started again, and nothing is ever killed.
+repetition). Each run is idempotent: healthy current services are left alone, a component whose
+port is free (for example after a crash, sleep, or reboot) is started again, a healthy API that is
+older code than the checkout is asked to stop and restarted (see "How the launcher deploys"), and
+nothing is ever killed.
 Runs never overlap (`IgnoreNew`), failed runs are retried three times a minute apart, and a run
 is stopped after 10 minutes; the launcher's own waits end well before that.
 
@@ -186,8 +286,11 @@ Back up the database with SQLite's online backup API (see
 powershell -ExecutionPolicy Bypass -File scripts\sync_private_database_release.ps1 -TargetSha <full-commit-sha>
 ```
 
-This command refuses to run before the commit exists on `origin/main` or if the GitHub repository
-is not private. It creates an online SQLite backup plus every media file referenced by the
+The release goes to `-Repository <owner/name>` when given, otherwise to the private instance
+repository named by `RUNWAY_INSTANCE_REPOSITORY` (`instance_repository` in the instance's
+`instance.toml`; see [`PRIVATE_INSTANCE.md`](PRIVATE_INSTANCE.md)), otherwise to the code
+repository. This command refuses to run before the commit exists on `origin/main` or if the
+target GitHub repository is not private. It creates an online SQLite backup plus every media file referenced by the
 database, validates all hashes and table counts, uploads the assets, downloads them again, and
 performs a complete restoration verification. Browser profiles and Google authentication are
 never included.

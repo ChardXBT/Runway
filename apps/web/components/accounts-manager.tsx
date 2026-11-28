@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { API_URL } from "@/lib/api";
 import { ApiError, actionError, readApiJson } from "@/lib/client-api";
+import { AccountFreshness } from "@/components/account-freshness";
 import { AvatarImage } from "@/components/account-avatar";
 import { PlatformBadge, platformLabel } from "@/components/platform-badge";
 import { StatePanel } from "@/components/state-panel";
@@ -101,6 +102,25 @@ function isAuthorizationUrl(value: unknown): value is { authorization_url: strin
 
 function isRunList(value: unknown): value is SyncRunView[] {
   return Array.isArray(value) && value.every(isSyncRunView);
+}
+
+type UnifiedCandidate = { id: string; username: string };
+
+function isUnifiedSelectList(
+  value: unknown,
+): value is { state: string; accounts: UnifiedCandidate[] } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { state?: unknown }).state === "string" &&
+    Array.isArray((value as { accounts?: unknown }).accounts) &&
+    (value as { accounts: unknown[] }).accounts.every(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        typeof (entry as { id?: unknown }).id === "string",
+    )
+  );
 }
 
 function AccountNotice({
@@ -508,7 +528,131 @@ function AccountCard({
       </div>
 
       <SyncHistory accountId={account.id} />
+      <AccountFreshness account={account} />
     </article>
+  );
+}
+
+function UnifiedSelectPanel({
+  state,
+  onChanged,
+}: {
+  state: string;
+  onChanged: () => void;
+}) {
+  const [candidates, setCandidates] = useState<UnifiedCandidate[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/api/platforms/instagram/unified/select?state=${encodeURIComponent(state)}`,
+          { cache: "no-store" },
+        );
+        const payload = await readApiJson(response, {
+          validate: isUnifiedSelectList,
+          failureMessage:
+            "Could not load the Instagram accounts for this sign-in.",
+        });
+        if (!cancelled) setCandidates(payload.accounts);
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            actionError(
+              err,
+              "Could not load the Instagram accounts for this sign-in.",
+            ),
+          );
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [state]);
+
+  const pick = async (candidate: UnifiedCandidate) => {
+    setBusy(candidate.id);
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/platforms/instagram/unified/select`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            state,
+            external_account_id: candidate.id,
+          }),
+        },
+      );
+      if (response.redirected) {
+        // A refused pick redirects to /accounts?error=<code> instead of JSON.
+        const code = new URL(response.url).searchParams.get("error") ?? "";
+        throw new ApiError(
+          ERROR_COPY[code] ?? `Connection failed${code ? ` (${code})` : "."}`,
+        );
+      }
+      await readApiJson(response, {
+        validate: (value): value is { status: string } =>
+          typeof value === "object" &&
+          value !== null &&
+          (value as { status?: unknown }).status === "connected",
+        failureMessage: "Could not finish the account pick.",
+      });
+      setDone(true);
+      onChanged();
+    } catch (err) {
+      setError(actionError(err, "Could not finish the account pick."));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (done) {
+    return (
+      <div className="panel unified-select" data-testid="unified-select">
+        <p role="status">Instagram account connected.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="panel unified-select" data-testid="unified-select">
+      <p>
+        Facebook Login authorized more than one Instagram account. Pick the one
+        Runway should connect.
+      </p>
+      {error ? <p className="status-tone-danger">{error}</p> : null}
+      {candidates === null && !error ? <p>Loading…</p> : null}
+      {candidates !== null && candidates.length === 0 ? (
+        <p className="status-tone-warning">
+          No Instagram accounts are assigned to this login. Assign one in the
+          Meta app, then connect again.
+        </p>
+      ) : null}
+      {candidates ? (
+        <ul className="unified-candidate-list">
+          {candidates.map((candidate) => (
+            <li key={candidate.id}>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => pick(candidate)}
+                disabled={busy !== null}
+                aria-busy={busy === candidate.id}
+              >
+                Connect @{candidate.username || candidate.id}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -597,10 +741,12 @@ export function AccountsManager({
   data,
   connected,
   errorCode,
+  selectInstagram = null,
 }: {
   data: PlatformsResponse;
   connected: string | null;
   errorCode: string | null;
+  selectInstagram?: string | null;
 }) {
   const [dismissedNotice, setDismissedNotice] = useState(false);
   const [connectError, setConnectError] = useState<Record<string, string>>({});
@@ -620,13 +766,16 @@ export function AccountsManager({
     }
   }, []);
 
-  const connect = async (platform: PlatformKind) => {
-    setConnectBusy(platform);
+  const connect = async (
+    platform: PlatformKind,
+    adapter?: "instagram_unified",
+  ) => {
+    setConnectBusy(adapter ?? platform);
     setConnectError((current) => ({ ...current, [platform]: "" }));
     try {
       const payload = await postJson(
         `/api/platforms/${platform}/connect`,
-        {},
+        adapter ? { adapter } : {},
         isAuthorizationUrl,
         "Could not start the connection.",
       );
@@ -669,8 +818,13 @@ export function AccountsManager({
             entry={entry}
             providerMode={liveData.provider_mode}
             connectBusy={connectBusy === entry.platform}
+            unifiedBusy={connectBusy === "instagram_unified"}
             connectError={connectError[entry.platform] ?? null}
             onConnect={() => connect(entry.platform)}
+            onConnectUnified={() => connect(entry.platform, "instagram_unified")}
+            unifiedSelectState={
+              entry.platform === "instagram" ? selectInstagram : null
+            }
             onChanged={() => {
               void refresh();
             }}
@@ -685,15 +839,21 @@ function PlatformSection({
   entry,
   providerMode,
   connectBusy,
+  unifiedBusy,
   connectError,
   onConnect,
+  onConnectUnified,
+  unifiedSelectState,
   onChanged,
 }: {
   entry: PlatformEntry;
   providerMode: "live" | "mock";
   connectBusy: boolean;
+  unifiedBusy: boolean;
   connectError: string | null;
   onConnect: () => void;
+  onConnectUnified: () => void;
+  unifiedSelectState: string | null;
   onChanged: () => void;
 }) {
   const hasConnectedAccount = entry.accounts.some(
@@ -740,6 +900,12 @@ function PlatformSection({
         })}
       </div>
 
+      {entry.platform === "instagram" &&
+      unifiedSelectState &&
+      providerMode === "live" ? (
+        <UnifiedSelectPanel state={unifiedSelectState} onChanged={onChanged} />
+      ) : null}
+
       {entry.accounts.length > 0 ? (
         entry.accounts.map((account) => (
           <AccountCard
@@ -757,11 +923,22 @@ function PlatformSection({
             type="button"
             className="button"
             onClick={onConnect}
-            disabled={connectBusy}
+            disabled={connectBusy || unifiedBusy}
             aria-busy={connectBusy}
           >
             Connect {platformLabel(entry.platform)}
           </button>
+          {entry.platform === "instagram" ? (
+            <button
+              type="button"
+              className="button secondary"
+              onClick={onConnectUnified}
+              disabled={connectBusy || unifiedBusy}
+              aria-busy={unifiedBusy}
+            >
+              Connect with Facebook Login (Unified)
+            </button>
+          ) : null}
         </div>
       ) : !entry.configured ? (
         <StatePanel

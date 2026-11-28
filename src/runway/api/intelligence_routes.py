@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from runway.analysis.service import AnalysisService
+from runway.auth.principal import get_principal
 from runway.captions.preference_models import (
     ENGINEERING_MINIMUM_LABELS,
     PREFERENCE_TARGETS,
@@ -31,7 +32,7 @@ class AnnotationCorrectionRequest(BaseModel):
 
 
 def build_intelligence_router(database: Database, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["intelligence"])
+    router = APIRouter(prefix="/api", tags=["intelligence"], dependencies=[Depends(get_principal)])
 
     @router.post("/analysis/history")
     def analyze_history(resume: bool = True) -> dict[str, int]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -14,14 +15,51 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import text as sql_text
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 from runway.db.base import Base
+from runway.domain.enums import CommentStatus, DraftStatus, PlatformActionState, TargetState
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+# Every row belongs to a workspace (invariant 11). Until isolation is enforced
+# (phase P7) all rows are written to the local workspace, id 1.
+DEFAULT_WORKSPACE_ID = 1
+
+
+class WorkspaceOwned:
+    """Adds `workspace_id` (foreign key to workspaces, default 1) as in 0014."""
+
+    @declared_attr
+    def workspace_id(cls) -> Mapped[int]:
+        table = cls.__tablename__  # type: ignore[attr-defined]
+        return mapped_column(
+            ForeignKey("workspaces.id", name=f"fk_{table}_workspace"),
+            index=True,
+            default=DEFAULT_WORKSPACE_ID,
+            server_default=sql_text("1"),
+        )
+
+
+class WorkspaceScoped(WorkspaceOwned):
+    """Marker mixin: this model's rows belong to `workspace_id`, enforced.
+
+    Combines the `WorkspaceOwned` tenant column with the phase-P7 app-layer
+    contract: every workspace-bound session filters reads to its workspace
+    (`with_loader_criteria`), refuses foreign-workspace writes
+    (`before_flush`) and, on Postgres, mirrors the binding with
+    `SET LOCAL app.workspace_id` so row-level security applies the same rule.
+    Models that carry a `workspace_id` column but are deliberately NOT scoped
+    - the publish-job claim bucket, the pre-resolution webhook inbox, the
+    org-to-workspace identity directory - do not use this mixin; see
+    `runway.db.workspace.UNSCOPED_WORKSPACE_TABLES`.
+    """
 
 
 class TimestampMixin:
@@ -31,7 +69,7 @@ class TimestampMixin:
     )
 
 
-class Channel(Base, TimestampMixin):
+class Channel(Base, WorkspaceScoped, TimestampMixin):
     __tablename__ = "channels"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1462,10 +1500,15 @@ class IntelligenceExperiment(Base):
 # Creator platforms
 
 
-class ConnectedAccount(Base, TimestampMixin):
+class ConnectedAccount(Base, WorkspaceScoped, TimestampMixin):
     __tablename__ = "connected_accounts"
     __table_args__ = (
-        UniqueConstraint("platform", "external_account_id", name="uq_connected_account_external"),
+        UniqueConstraint(
+            "workspace_id",
+            "platform",
+            "external_account_id",
+            name="uq_connected_account_external",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1487,20 +1530,59 @@ class ConnectedAccount(Base, TimestampMixin):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class OAuthState(Base):
+class AccountToken(Base, WorkspaceScoped):
+    """One encrypted platform grant per connected account (spec 05 section 3).
+
+    The database token store keeps at most one row per account, so account
+    deletion or a disconnected-account purge needs no second sweep. The
+    ``token_ref`` on the account row is the lookup handle; the ciphertext is
+    AES-256-GCM under the newest ``RUNWAY_TOKEN_KEYS`` version, with
+    ``<workspace>:<account>:<key_version>`` as additional authenticated data
+    so a transplanted row fails the tag check.
+    """
+
+    __tablename__ = "account_tokens"
+
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("connected_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    key_version: Mapped[str] = mapped_column(String(20))
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refresh_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Migration 0022 declares the same server default for the upgrade path;
+    # fresh databases get their DDL from `create_all`, so both must agree.
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]", server_default=sql_text("'[]'"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class OAuthState(Base, WorkspaceScoped):
     __tablename__ = "oauth_states"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     platform: Mapped[str] = mapped_column(String(20))
     state: Mapped[str] = mapped_column(String(128), unique=True)
     code_verifier: Mapped[str | None] = mapped_column(Text)
+    # A token parked mid-flow (Instagram unified login: the user picks the
+    # account in a second request). Encrypted under the token-store cipher,
+    # never plaintext; consumed and cleared by the select endpoint.
+    token_ciphertext: Mapped[str | None] = mapped_column(Text)
     redirect_uri: Mapped[str] = mapped_column(Text)
+    # Why this flow was started: "connect" (a new or unbound account),
+    # "reconnect" (re-attach an existing account), "enable_publishing"
+    # (incremental consent for extra scopes). A bound flow also records the
+    # account it was issued for; its callback refuses a different identity.
+    purpose: Mapped[str] = mapped_column(String(30), default="connect", server_default="connect")
+    account_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class ContentGroup(Base):
+class ContentGroup(Base, WorkspaceScoped):
     __tablename__ = "content_groups"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1509,7 +1591,7 @@ class ContentGroup(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class PlatformContent(Base):
+class PlatformContent(Base, WorkspaceScoped):
     __tablename__ = "platform_content"
     __table_args__ = (
         UniqueConstraint("account_id", "external_id", name="uq_platform_content_external"),
@@ -1542,7 +1624,7 @@ class PlatformContent(Base):
     raw_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class ContentMetricSnapshot(Base):
+class ContentMetricSnapshot(Base, WorkspaceScoped):
     __tablename__ = "content_metric_snapshots"
     __table_args__ = (
         Index("ix_content_metric_snapshots_content_captured", "content_id", "captured_at"),
@@ -1554,7 +1636,7 @@ class ContentMetricSnapshot(Base):
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class AccountMetricSnapshot(Base):
+class AccountMetricSnapshot(Base, WorkspaceScoped):
     __tablename__ = "account_metric_snapshots"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1568,7 +1650,7 @@ class AccountMetricSnapshot(Base):
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
-class AccountMetricDay(Base):
+class AccountMetricDay(Base, WorkspaceScoped):
     __tablename__ = "account_metric_days"
     __table_args__ = (
         UniqueConstraint("account_id", "day", "metric", name="uq_account_metric_day"),
@@ -1583,7 +1665,7 @@ class AccountMetricDay(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class CommentRecord(Base):
+class CommentRecord(Base, WorkspaceScoped):
     __tablename__ = "comment_records"
     __table_args__ = (
         UniqueConstraint("account_id", "external_id", name="uq_comment_record_external"),
@@ -1605,7 +1687,7 @@ class CommentRecord(Base):
     reply_count: Mapped[int | None] = mapped_column(Integer)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     platform_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    status: Mapped[str] = mapped_column(String(20), index=True, default="new")
+    status: Mapped[str] = mapped_column(String(20), index=True, default=CommentStatus.NEW.value)
     has_owner_reply: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     permalink: Mapped[str | None] = mapped_column(Text)
     raw_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -1613,7 +1695,7 @@ class CommentRecord(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class ReplyDraft(Base):
+class ReplyDraft(Base, WorkspaceScoped):
     __tablename__ = "reply_drafts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1624,7 +1706,7 @@ class ReplyDraft(Base):
     )
 
 
-class PlatformAction(Base):
+class PlatformAction(Base, WorkspaceScoped):
     __tablename__ = "platform_actions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1632,7 +1714,9 @@ class PlatformAction(Base):
     action_type: Mapped[str] = mapped_column(String(40), index=True)
     target_type: Mapped[str] = mapped_column(String(40))
     target_id: Mapped[int | None] = mapped_column(Integer)
-    state: Mapped[str] = mapped_column(String(20), index=True, default="proposed")
+    state: Mapped[str] = mapped_column(
+        String(20), index=True, default=PlatformActionState.PROPOSED.value
+    )
     request_json: Mapped[str] = mapped_column(Text, default="{}")
     response_json: Mapped[str] = mapped_column(Text, default="{}")
     external_result_id: Mapped[str | None] = mapped_column(String(200))
@@ -1643,7 +1727,7 @@ class PlatformAction(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class SyncRun(Base):
+class SyncRun(Base, WorkspaceScoped):
     __tablename__ = "sync_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1658,7 +1742,7 @@ class SyncRun(Base):
     error_summary: Mapped[str | None] = mapped_column(Text)
 
 
-class SyncCursor(Base):
+class SyncCursor(Base, WorkspaceScoped):
     __tablename__ = "sync_cursors"
     __table_args__ = (UniqueConstraint("account_id", "scope", name="uq_sync_cursor_scope"),)
 
@@ -1671,7 +1755,9 @@ class SyncCursor(Base):
     )
 
 
-class ContentDraft(Base, TimestampMixin):
+class ContentDraft(Base, WorkspaceScoped, TimestampMixin):
+    """A post (spec 03 section 1). The table keeps its historical name."""
+
     __tablename__ = "content_drafts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1680,11 +1766,26 @@ class ContentDraft(Base, TimestampMixin):
     media_path: Mapped[str | None] = mapped_column(Text)
     media_kind: Mapped[str | None] = mapped_column(String(20))
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-    status: Mapped[str] = mapped_column(String(30), index=True, default="draft")
+    # Legacy cache for the unversioned /api/drafts views; v1 derives a post's
+    # status from its targets (runway.posts.states.derive_post_status).
+    status: Mapped[str] = mapped_column(String(30), index=True, default=DraftStatus.DRAFT.value)
     notes: Mapped[str | None] = mapped_column(Text)
+    # Added in 0017_publishing_engine.
+    source: Mapped[str] = mapped_column(String(20), default="human", server_default="human")
+    source_ref: Mapped[str | None] = mapped_column(String(200))
+    ai_generated: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=sql_text("1"))
+    created_by: Mapped[str | None] = mapped_column(String(200))
 
 
-class DraftTarget(Base):
+class DraftTarget(Base, WorkspaceScoped):
+    """One post going to one account (spec 03 section 1).
+
+    `state` is the declared target machine's column. `status` is its legacy
+    mirror for the unversioned routes and sync; both are written only by
+    `runway.posts.states.set_target_state`.
+    """
+
     __tablename__ = "draft_targets"
     __table_args__ = (
         UniqueConstraint("draft_id", "platform", "account_id", name="uq_draft_target"),
@@ -1696,8 +1797,576 @@ class DraftTarget(Base):
     account_id: Mapped[int | None] = mapped_column(ForeignKey("connected_accounts.id"), index=True)
     caption_override: Mapped[str | None] = mapped_column(Text)
     settings_json: Mapped[str] = mapped_column(Text, default="{}")
-    status: Mapped[str] = mapped_column(String(30), default="pending")
+    status: Mapped[str] = mapped_column(String(30), default=TargetState.DRAFT.value)
     published_content_id: Mapped[int | None] = mapped_column(ForeignKey("platform_content.id"))
     published_url: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    # Added in 0017_publishing_engine.
+    post_type: Mapped[str | None] = mapped_column(String(40))
+    planned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    release_state: Mapped[str] = mapped_column(String(20), default="none", server_default="none")
+    released_by: Mapped[str | None] = mapped_column(String(200))
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payload_hash: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(
+        String(30),
+        index=True,
+        default=TargetState.DRAFT.value,
+        server_default=TargetState.DRAFT.value,
+    )
+    state_reason: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str | None] = mapped_column(String(200))
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=sql_text("1"))
+    publisher: Mapped[str | None] = mapped_column(String(80))
+
+
+# -----------------------------------------------------------------------------
+# Publishing engine (migration 0017): media assets, post media, the attempt
+# ledger, per-account publisher choice and the publishing pause switch.
+
+
+class MediaAssetV2(Base, WorkspaceScoped):
+    """An uploaded video or image (spec 02 section 3).
+
+    Named v2 because `media_assets` already holds the intelligence images.
+    """
+
+    __tablename__ = "media_assets_v2"
+    __table_args__ = (UniqueConstraint("storage_key", name="uq_media_assets_v2_storage_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Decided by the probe from the bytes; null until the probe ran.
+    kind: Mapped[str | None] = mapped_column(String(20))
+    original_filename: Mapped[str | None] = mapped_column(String(512))
+    content_type: Mapped[str] = mapped_column(String(120))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage: Mapped[str] = mapped_column(String(10))
+    storage_key: Mapped[str] = mapped_column(String(300))
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    rejected_reason: Mapped[str | None] = mapped_column(Text)
+    probe_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+    poster_key: Mapped[str | None] = mapped_column(String(300))
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delete_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MediaUpload(Base, WorkspaceScoped):
+    """The resumable upload of one asset; `plan_json` is `UploadPlan.to_dict()`."""
+
+    __tablename__ = "media_uploads"
+    __table_args__ = (UniqueConstraint("asset_id", name="uq_media_uploads_asset"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("media_assets_v2.id", name="fk_media_uploads_asset")
+    )
+    upload_id: Mapped[str] = mapped_column(String(200))
+    part_size: Mapped[int] = mapped_column(BigInteger)
+    parts_json: Mapped[str] = mapped_column(Text, default="[]", server_default=sql_text("'[]'"))
+    plan_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DraftMedia(Base, WorkspaceScoped):
+    """The ordered media of a post (spec 03 section 1)."""
+
+    __tablename__ = "draft_media"
+    __table_args__ = (
+        UniqueConstraint("draft_id", "position", name="uq_draft_media_position"),
+        UniqueConstraint("draft_id", "asset_id", name="uq_draft_media_asset"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("content_drafts.id", name="fk_draft_media_draft"), index=True
+    )
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("media_assets_v2.id", name="fk_draft_media_asset"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+
+
+class TargetAttempt(Base, WorkspaceScoped):
+    """One step of publishing one target (spec 03 section 1). Append-only.
+
+    A row is inserted (`outcome="pending"`) and committed before any platform
+    call; `request_sent_at` and the outcome are each written once. `job_id` is
+    a plain integer so the ledger outlives purged queue rows.
+    """
+
+    __tablename__ = "target_attempts"
+    __table_args__ = (Index("ix_target_attempts_target_id_id", "target_id", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    target_id: Mapped[int] = mapped_column(
+        ForeignKey("draft_targets.id", name="fk_target_attempts_target")
+    )
+    job_id: Mapped[int | None] = mapped_column(Integer)
+    adapter: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(20), default="send", server_default="send")
+    payload_hash: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    request_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str] = mapped_column(String(30))
+    request_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+    response_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+    external_id: Mapped[str | None] = mapped_column(String(200))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    resumable_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+
+
+class AccountPublisher(Base, WorkspaceScoped):
+    """The owner's publisher choice for one account and post type (spec 03 section 5)."""
+
+    __tablename__ = "account_publishers"
+    __table_args__ = (
+        UniqueConstraint("account_id", "post_type", name="uq_account_publisher_post_type"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("connected_accounts.id", name="fk_account_publishers_account")
+    )
+    post_type: Mapped[str] = mapped_column(String(40))
+    publisher: Mapped[str] = mapped_column(String(80))
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PublishingControl(Base, WorkspaceScoped):
+    """The per-workspace `publishing_paused` switch, checked before every send."""
+
+    __tablename__ = "publishing_controls"
+
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_publishing_controls_workspace"), primary_key=True
+    )
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    reason: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# -----------------------------------------------------------------------------
+# Workspaces, principals and the job queue (migrations 0013-0015)
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+    __table_args__ = (UniqueConstraint("slug", name="uq_workspace_slug"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(200))
+    profile_note: Mapped[str | None] = mapped_column(Text)
+    # Last request from a human principal; drives sync's 14-day inactivity
+    # rule (spec 04 section 3). Written by get_principal, throttled per app.
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class User(Base):
+    """A hosted-profile login; the local profile has no rows here."""
+
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("external_id", name="uq_user_external_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    external_id: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str | None] = mapped_column(String(320))
+    display_name: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WorkspaceMember(Base, WorkspaceScoped):
+    __tablename__ = "workspace_members"
+    __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_workspace_members_workspace")
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", name="fk_workspace_members_user"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ApiKey(Base, WorkspaceScoped):
+    """An agent key; only the prefix and a SHA-256 hash of the secret are stored."""
+
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        UniqueConstraint("prefix", name="uq_api_key_prefix"),
+        UniqueConstraint("key_hash", name="uq_api_key_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_api_keys_workspace"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    prefix: Mapped[str] = mapped_column(String(40))
+    key_hash: Mapped[str] = mapped_column(String(128))
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuditLogEntry(Base, WorkspaceScoped):
+    """Who did what in a workspace. `audit_events` keeps serving the activity feed."""
+
+    __tablename__ = "audit_log"
+    __table_args__ = (Index("ix_audit_log_workspace_created", "workspace_id", "created_at", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_audit_log_workspace")
+    )
+    actor_kind: Mapped[str] = mapped_column(String(20))
+    actor_id: Mapped[str] = mapped_column(String(200))
+    action: Mapped[str] = mapped_column(String(80))
+    target_type: Mapped[str | None] = mapped_column(String(80))
+    target_id: Mapped[str | None] = mapped_column(String(200))
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PublishJob(Base, TimestampMixin):
+    """One durable unit of worker work (spec 03 section 3)."""
+
+    __tablename__ = "publish_jobs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_publish_job_idempotency"),
+        Index("ix_publish_jobs_state_run_at", "state", "run_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_publish_jobs_workspace"),
+        index=True,
+        default=DEFAULT_WORKSPACE_ID,
+        server_default=sql_text("1"),
+    )
+    target_id: Mapped[int | None] = mapped_column(
+        ForeignKey("draft_targets.id", name="fk_publish_jobs_target"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(40))
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    state: Mapped[str] = mapped_column(String(20))
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default=sql_text("0"))
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, server_default=sql_text("3"))
+    locked_by: Mapped[str | None] = mapped_column(String(200))
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(300))
+    payload_json: Mapped[str] = mapped_column(Text, default="{}", server_default=sql_text("'{}'"))
+
+
+# -----------------------------------------------------------------------------
+# Shared v1 contracts (migration 0016)
+
+
+class IdempotencyKey(Base, WorkspaceScoped):
+    """A remembered v1 mutation (spec 06 section 5); kept 24 hours.
+
+    `response_status` is null while the first request is still running, so a
+    concurrent retry with the same key is refused instead of run twice.
+    """
+
+    __tablename__ = "idempotency_keys"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "principal_id", "key", name="uq_idempotency_key"),
+        Index("ix_idempotency_keys_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_idempotency_keys_workspace")
+    )
+    principal_id: Mapped[str] = mapped_column(String(200))
+    key: Mapped[str] = mapped_column(String(200))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    response_body: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EventRecord(Base, WorkspaceScoped):
+    """One change Runway learned about, for the browser stream and agents (spec 04 section 4).
+
+    AUTOINCREMENT keeps ids strictly increasing even after old rows are purged,
+    so a `Last-Event-ID` can never point at a newer, different event.
+    """
+
+    __tablename__ = "events"
+    __table_args__ = (
+        Index("ix_events_workspace_id_id", "workspace_id", "id"),
+        Index("ix_events_created_at", "created_at"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_events_workspace")
+    )
+    type: Mapped[str] = mapped_column(String(80))
+    subject_type: Mapped[str] = mapped_column(String(80))
+    subject_id: Mapped[str | None] = mapped_column(String(200))
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# -----------------------------------------------------------------------------
+# Agent interface (migration 0019, spec 06)
+
+
+class WorkspacePolicy(Base, WorkspaceScoped):
+    """Per-workspace agent policy. A workspace without a row uses the defaults."""
+
+    __tablename__ = "workspace_policies"
+
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_workspace_policies_workspace"), primary_key=True
+    )
+    # `never` (default) or `per_key` (spec 06 section 4).
+    agent_release: Mapped[str] = mapped_column(String(20), default="never")
+    updated_by: Mapped[str | None] = mapped_column(String(200))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ApiKeyReleaseGrant(Base, WorkspaceScoped):
+    """`posts:release` for one key on one platform, with a daily cap (agent_release=per_key)."""
+
+    __tablename__ = "api_key_release_grants"
+    __table_args__ = (UniqueConstraint("key_id", "platform", name="uq_api_key_release_grant"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key_id: Mapped[int] = mapped_column(
+        ForeignKey("api_keys.id", name="fk_api_key_release_grants_key"), index=True
+    )
+    platform: Mapped[str] = mapped_column(String(20))
+    daily_cap: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WebhookEndpoint(Base, WorkspaceScoped, TimestampMixin):
+    """An outbound webhook target for agent events (spec 06 section 8).
+
+    The signing secret is stored Fernet-encrypted with the token-store key and
+    is shown once at creation. `cursor_event_id` is the newest event already
+    turned into deliveries, so a new endpoint never replays old events.
+    """
+
+    __tablename__ = "webhook_endpoints"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    url: Mapped[str] = mapped_column(Text)
+    secret_encrypted: Mapped[str] = mapped_column(Text)
+    # Empty list: every event type the workspace emits.
+    event_types_json: Mapped[str] = mapped_column(Text, default="[]")
+    state: Mapped[str] = mapped_column(String(20), default="active")
+    description: Mapped[str | None] = mapped_column(String(200))
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    # JSON list of the creating principal's scopes: deliveries never cover an
+    # event family the creator could not read (spec 06 section 8). NULL for
+    # rows written before the column existed — those keep their stored filter.
+    creator_scopes: Mapped[str | None] = mapped_column(Text)
+    cursor_event_id: Mapped[int] = mapped_column(Integer, default=0)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    failing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Runway's own summary (status code or error class), never the response body.
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_reason: Mapped[str | None] = mapped_column(String(300))
+
+
+class WebhookDelivery(Base, WorkspaceScoped):
+    """One event for one endpoint; retried with backoff for up to 24 hours.
+
+    `event_id` has no foreign key: events are purged after 7 days and a
+    delivery row must not block that.
+    """
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint("endpoint_id", "event_id", name="uq_webhook_delivery_event"),
+        Index("ix_webhook_deliveries_state_next", "state", "next_attempt_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    endpoint_id: Mapped[int] = mapped_column(
+        ForeignKey("webhook_endpoints.id", name="fk_webhook_deliveries_endpoint"), index=True
+    )
+    event_id: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(80))
+    state: Mapped[str] = mapped_column(String(20), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_status_code: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# Webhook inbox (migration 0018, spec 04 section 2)
+
+
+class PlatformSubscription(Base, WorkspaceScoped, TimestampMixin):
+    """A platform push subscription (YouTube WebSub today).
+
+    `hub_secret` is the per-subscription WebSub secret; it only authenticates
+    hints and is never logged or returned by any API. `callback_token` is a
+    random 32-byte hex token the hub callbacks carry in their path, so the
+    route is unreachable to anyone we did not tell the URL to.
+    """
+
+    __tablename__ = "platform_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "provider", "topic", name="uq_platform_subscription"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="CASCADE",
+            name="fk_platform_subscriptions_account",
+        ),
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(20))
+    topic: Mapped[str] = mapped_column(String(500))
+    hub_secret: Mapped[str | None] = mapped_column(String(128))
+    callback_token: Mapped[str | None] = mapped_column(String(64))
+    lease_seconds: Mapped[int | None] = mapped_column(Integer)
+    subscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default=sql_text("'pending'")
+    )
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class WebhookEvent(Base):
+    """One raw webhook delivery, stored before anything trusts it.
+
+    The body is the unverified hint; `signature_ok` records whether the
+    platform signature matched. `dedupe_key` is NULL for unverified events so
+    a forged copy can never block the real delivery with the same bytes.
+    `workspace_id` stays NULL until `process_webhook` resolves the account.
+    """
+
+    __tablename__ = "webhook_events"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_webhook_events_dedupe_key"),
+        Index("ix_webhook_events_provider_received", "provider", "received_at"),
+        Index("ix_webhook_events_processed_at", "processed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "platform_subscriptions.id",
+            ondelete="SET NULL",
+            name="fk_webhook_events_subscription",
+        )
+    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    signature_ok: Mapped[bool] = mapped_column(Boolean)
+    dedupe_key: Mapped[str | None] = mapped_column(String(120))
+    body: Mapped[bytes] = mapped_column(LargeBinary)
+    content_type: Mapped[str | None] = mapped_column(String(100))
+    source: Mapped[str | None] = mapped_column(String(64))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(String(500))
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="SET NULL",
+            name="fk_webhook_events_account",
+        )
+    )
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id", name="fk_webhook_events_workspace")
+    )
+
+
+# -----------------------------------------------------------------------------
+# Adaptive sync state and provider quota (migration 0018b, spec 04 sections 3-4)
+
+
+class AccountSyncState(Base, WorkspaceScoped):
+    """The per-(account, scope) schedule the adaptive sync loop follows.
+
+    `source` records what last set the refresh in motion (`poll` or `push`),
+    `boosted_until` the temporary fast-cadence window, and
+    `consecutive_failures` the exponent for error backoff.
+    """
+
+    __tablename__ = "account_sync_state"
+    __table_args__ = (
+        UniqueConstraint("account_id", "scope", name="uq_account_sync_state_scope"),
+        Index("ix_account_sync_state_due", "next_run_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "connected_accounts.id",
+            ondelete="CASCADE",
+            name="fk_account_sync_state_account",
+        ),
+        index=True,
+    )
+    scope: Mapped[str] = mapped_column(String(50))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(String(20))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    boosted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str | None] = mapped_column(String(10))
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=sql_text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class QuotaUsage(Base):
+    """Provider quota spend per (provider, bucket, day), project-level.
+
+    Deliberately not WorkspaceScoped: provider quota belongs to the project
+    credentials, not a workspace (spec 04 section 4). `day` is the
+    provider's quota-reset date - Pacific time for YouTube.
+    """
+
+    __tablename__ = "quota_usage"
+    __table_args__ = (UniqueConstraint("provider", "bucket", "day", name="uq_quota_usage_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    bucket: Mapped[str] = mapped_column(String(60))
+    day: Mapped[date] = mapped_column(Date)
+    units_used: Mapped[int] = mapped_column(Integer, default=0, server_default=sql_text("0"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

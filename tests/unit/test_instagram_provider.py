@@ -295,6 +295,27 @@ def test_reply_that_posted_is_not_reported_failed_when_verification_times_out() 
     assert result.verified is False
 
 
+def test_reply_posts_to_facebook_graph_for_a_unified_token() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        if request.method == "POST" and request.url.path == "/v25.0/c1/replies":
+            return httpx.Response(200, json={"id": "r9"})
+        if request.url.path == "/v25.0/r9":
+            return httpx.Response(200, json={"id": "r9", "text": "hey"})
+        return httpx.Response(404, json={})
+
+    provider = _provider(handler)
+    token = TokenSet(
+        access_token="sys-token",
+        extra={"login": "unified", "user_id": "17841400923817"},
+    )
+    result = provider.reply_to_comment(token, comment_external_id="c1", text="hey")
+    assert result.verified is True
+    assert seen and all(host == "graph.facebook.com" for host in seen)
+
+
 def test_code_190_raises_authorization_expired() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"error": {"message": "token expired", "code": 190}})

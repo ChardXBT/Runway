@@ -9,7 +9,11 @@ if [ ! -x .venv/bin/python ]; then
   exit 1
 fi
 
+# The API refuses a database behind the migration head; migrate explicitly first.
+.venv/bin/python -m runway.cli.main db upgrade
 .venv/bin/python -m uvicorn runway.api.app:app --host 127.0.0.1 --port 8000 &
 API_PID=$!
-trap 'kill "$API_PID" 2>/dev/null || true' EXIT INT TERM
+.venv/bin/python -m runway.cli.main worker &
+WORKER_PID=$!
+trap 'kill "$API_PID" "$WORKER_PID" 2>/dev/null || true' EXIT INT TERM
 npm run web:dev

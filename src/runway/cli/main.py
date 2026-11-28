@@ -16,7 +16,7 @@ from pathlib import Path
 
 import typer
 from PIL import Image, ImageDraw
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 
 from runway.analysis.runtime import AgentRuntimeError, CodexAgentRuntime
@@ -24,8 +24,17 @@ from runway.analysis.service import AnalysisService
 from runway.capture.browser import BrowserCaptureService, CapturePaused
 from runway.capture.service import CaptureService
 from runway.catalog.service import CatalogService
+from runway.cli.db_commands import db_app
+from runway.cli.export_commands import export_command
+from runway.cli.hosted_commands import hosted_app
+from runway.cli.instance import instance_app
+from runway.cli.keys_commands import keys_app
+from runway.cli.mcp_commands import mcp_command
+from runway.cli.tokens_commands import tokens_app
+from runway.cli.worker_commands import worker_command
 from runway.config import get_settings
 from runway.db import initialize_database
+from runway.db.bootstrap import read_only_sqlite_engine
 from runway.discovery.service import DiscoveryService
 from runway.evaluation.checksums import canonical_text_sha256
 from runway.evaluation.datasets import DatasetRepository
@@ -82,6 +91,10 @@ arena_app = typer.Typer(help="Operate the blinded three-arm raw-frontier arena."
 neural_app = typer.Typer(help="Evaluate local neural representation challengers offline.")
 composed_app = typer.Typer(help="Prepare learned composed-image retrieval datasets.")
 platforms_app = typer.Typer(help="Inspect and sync connected creator platforms.")
+doctor_app = typer.Typer(
+    invoke_without_command=True,
+    help="Check local dependencies, configuration and platform connections.",
+)
 
 app.add_typer(capture_app, name="capture")
 app.add_typer(catalog_app, name="catalog")
@@ -108,6 +121,15 @@ intelligence_app.add_typer(arena_app, name="arena")
 intelligence_app.add_typer(neural_app, name="neural")
 intelligence_app.add_typer(composed_app, name="composed-retrieval")
 app.add_typer(platforms_app, name="platforms")
+app.add_typer(doctor_app, name="doctor")
+app.add_typer(db_app, name="db")
+app.add_typer(keys_app, name="keys")
+app.add_typer(tokens_app, name="tokens")
+app.command("export")(export_command)
+app.command("worker")(worker_command)
+app.add_typer(hosted_app, name="hosted")
+app.add_typer(instance_app, name="instance")
+app.command("mcp")(mcp_command)
 
 
 @app.callback()
@@ -161,10 +183,7 @@ def _read_only_schema_engine(database_path: Path) -> Engine:
     path = database_path.resolve()
     if not path.is_file():
         raise typer.BadParameter(f"database does not exist: {path}")
-    return create_engine(
-        f"sqlite+pysqlite:///file:{path.as_posix()}?mode=ro&uri=true",
-        future=True,
-    )
+    return read_only_sqlite_engine(path)
 
 
 @database_app.command("schema-status")
@@ -419,7 +438,7 @@ def annotation_refresh_status(
     if run_id is not None:
         result: object = service.status(run_id)
     else:
-        with database.session() as session:
+        with database.system_session() as session:
             channel = get_channel(session, settings.channel_handle)
             ids = list(
                 session.scalars(
@@ -497,7 +516,7 @@ def preference_status() -> None:
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         datasets = session.scalars(
             select(PreferenceDataset)
@@ -656,7 +675,7 @@ def intelligence_feedback_status() -> None:
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         legacy = int(
             session.scalar(
@@ -722,7 +741,7 @@ def intelligence_runs_list(
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         rows = session.scalars(
             select(IntelligenceAgentRun)
@@ -1475,7 +1494,7 @@ def embeddings_status() -> None:
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         count = int(
             session.scalar(
@@ -1517,7 +1536,7 @@ def embeddings_backfill(
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         channel = get_channel(session, settings.channel_handle)
         candidates = session.scalars(
             select(CandidateImage)
@@ -1647,9 +1666,11 @@ def _runway_api_healthy(host: str, port: int) -> bool:
     return response.status == 200 and isinstance(product, str) and product.casefold() == "runway"
 
 
-@app.command()
-def doctor() -> None:
+@doctor_app.callback()
+def doctor(ctx: typer.Context) -> None:
     """Check local dependencies and configuration without exposing secrets."""
+    if ctx.invoked_subcommand is not None:
+        return
     settings = get_settings()
     initialize_database(settings)
     checks: list[tuple[str, bool, str]] = []
@@ -1755,6 +1776,37 @@ def doctor() -> None:
         if not ok and not optional:
             required_failures += 1
     if required_failures:
+        raise typer.Exit(code=1)
+
+
+@doctor_app.command("platforms")
+def doctor_platforms(
+    json_output: bool = typer.Option(False, "--json", help="Print the machine-readable report."),
+    check_edge: bool = typer.Option(
+        False,
+        "--check-edge",
+        help="Also GET {RUNWAY_PUBLIC_EDGE_URL}/hooks/health - the only "
+        "network call, and it goes to the owner's own edge.",
+    ),
+) -> None:
+    """Report whether each platform can be connected; exit 1 while not.
+
+    Per platform: credentials (set? from where? never the value), the exact
+    redirect URI to register, the platform's HTTPS rule, requested versus
+    granted scopes, token state, app-status gates and the per-post-type
+    publishing capability. It ends in a "What is missing" list of one-line
+    actions and exits 1 while that list is not empty.
+    """
+    from runway.platforms.doctor import PlatformsDoctor
+
+    settings = get_settings()
+    database = initialize_database(settings)
+    report = PlatformsDoctor(database, settings).run(check_edge=check_edge)
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(), indent=2))
+    else:
+        typer.echo(report.human_text())
+    if not report.ready:
         raise typer.Exit(code=1)
 
 
@@ -1907,14 +1959,27 @@ def publisher_verify(proposal_id: int = typer.Option(..., min=1)) -> None:
 
 @app.command()
 def serve(
-    host: str | None = typer.Option(None, help="Loopback host only."),
+    host: str | None = typer.Option(None, help="Loopback host only in the local profile."),
     port: int | None = typer.Option(None, help="API port."),
 ) -> None:
-    """Run the local FastAPI service."""
+    """Run the FastAPI service (local: loopback only; hosted: behind a reverse proxy)."""
     import uvicorn
 
     settings = get_settings()
     bind_host = host or settings.host
+    if settings.profile == "hosted":
+        # Behind a TLS-terminating proxy: trust X-Forwarded-* only from it, so
+        # rate limits see the real client address.
+        uvicorn.run(
+            "runway.api.app:app",
+            host=bind_host,
+            port=port or settings.api_port,
+            reload=False,
+            proxy_headers=True,
+            forwarded_allow_ips=settings.forwarded_allow_ips,
+            server_header=False,
+        )
+        return
     if bind_host not in {"127.0.0.1", "localhost", "::1"}:
         raise typer.BadParameter("Runway may only bind to a loopback host")
     uvicorn.run("runway.api.app:app", host=bind_host, port=port or settings.api_port, reload=False)
@@ -2262,7 +2327,7 @@ def platforms_list() -> None:
 
     settings = get_settings()
     database = initialize_database(settings)
-    with database.session() as session:
+    with database.system_session() as session:
         accounts = session.scalars(
             select(ConnectedAccount).order_by(ConnectedAccount.platform)
         ).all()
@@ -2301,7 +2366,7 @@ def platforms_sync(
     settings = get_settings()
     database = initialize_database(settings)
     service = SyncService(database, settings)
-    with database.session() as session:
+    with database.system_session() as session:
         if account is not None:
             record = session.get(ConnectedAccount, account)
             if record is None:

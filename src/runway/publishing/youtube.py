@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from runway.auth.principal import LOCAL_WORKSPACE_ID
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
@@ -42,6 +43,9 @@ from runway.domain.state_machine import (
     require_transition,
     transition_attempt,
 )
+from runway.hosted.quotas import require_send_allowed
+from runway.operations.instance_lease import ensure_active_or_raise
+from runway.posts.lineup_guard import api_path_claimed
 from runway.publishing.base import (
     AssistedPost,
     AssistedPreparation,
@@ -1428,9 +1432,13 @@ class YouTubeBrowserPublisher:
         confirmation_phrase: str,
     ) -> PublishResult:
         self._require_enabled()
+        ensure_active_or_raise(self.settings)
         if not self._confirm_lock.acquire(blocking=False):
             raise ValueError("another YouTube scheduling confirmation is already running")
         try:
+            # Kill switches before the one-time confirmation is consumed, so a
+            # refused send can be confirmed again once publishing resumes.
+            self._require_send_allowed()
             post = self._consume_confirmation(
                 attempt_id,
                 confirmation_token=confirmation_token,
@@ -1496,6 +1504,18 @@ class YouTubeBrowserPublisher:
     ) -> PublishAttempt:
         proposal_id = preflight.post.proposal_id
         self.recover_interrupted_attempts(session)
+        # Never both (spec 08 section 2): same check as `_publishing_preflight`,
+        # re-read inside this transaction in case a `youtube_post` target was
+        # released between the preflight and now.
+        if api_path_claimed(
+            session,
+            proposal_id,
+            channel_external_id=self.settings.publisher_channel_id,
+        ):
+            raise ValueError(
+                "the posts API already claimed this proposal; publishing it "
+                "through the browser would double-post"
+            )
         unsettled = session.scalars(
             select(PublishAttempt)
             .where(
@@ -1700,6 +1720,7 @@ class YouTubeBrowserPublisher:
     async def process_queued_attempt(self, attempt_id: int) -> PublishResult:
         """Schedule one explicitly queued Lineup item; callers serialize the queue."""
         self._require_enabled()
+        ensure_active_or_raise(self.settings)
         await asyncio.to_thread(self._confirm_lock.acquire)
         try:
             with self.database.session() as session:
@@ -1710,6 +1731,9 @@ class YouTubeBrowserPublisher:
                     raise StalePublishAttempt(
                         f"publish attempt {attempt_id} was superseded before submission"
                     )
+            # A paused send leaves the attempt queued; the queue pauses with
+            # the reason and a human resumes it after the switch is lifted.
+            self._require_send_allowed()
             try:
                 session_status = await self._validated_adapter_session(source="queue_preflight")
             except Exception as exc:
@@ -2230,6 +2254,18 @@ class YouTubeBrowserPublisher:
                 raise LookupError(f"proposal {proposal_id} not found")
             if proposal.status not in statuses:
                 raise ValueError("external scheduling requires an internally scheduled proposal")
+            # Never both (spec 08 section 2): a proposal a released
+            # `youtube_post` target claimed cannot also go out through the
+            # browser; channel identity fails closed.
+            if api_path_claimed(
+                session,
+                proposal.id,
+                channel_external_id=self.settings.publisher_channel_id,
+            ):
+                raise ValueError(
+                    "the posts API already claimed this proposal; publishing it "
+                    "through the browser would double-post"
+                )
             candidate = session.get(CandidateImage, proposal.candidate_image_id)
             media = session.get(MediaAsset, candidate.media_asset_id) if candidate else None
             if media is None:
@@ -2418,6 +2454,16 @@ class YouTubeBrowserPublisher:
                 if not hmac.compare_digest(attempt.payload_hash, current_payload_hash):
                     transition_attempt(attempt, PublishAttemptStatus.INVALIDATED, now=now)
                     terminal_error = "proposal changed after preparation; prepare a new attempt"
+                elif api_path_claimed(
+                    session,
+                    proposal.id,
+                    channel_external_id=self.settings.publisher_channel_id,
+                ):
+                    transition_attempt(attempt, PublishAttemptStatus.INVALIDATED, now=now)
+                    terminal_error = (
+                        "the posts API already claimed this proposal; publishing it "
+                        "through the browser would double-post"
+                    )
                 else:
                     require_transition(proposal.status, ProposalStatus.PUBLISHING)
                     old_status = proposal.status
@@ -2482,6 +2528,15 @@ class YouTubeBrowserPublisher:
                 attempt.payload_hash, current_payload_hash
             ):
                 terminal_error = "proposal changed after it entered the scheduling queue"
+            if terminal_error is None and api_path_claimed(
+                session,
+                proposal.id,
+                channel_external_id=self.settings.publisher_channel_id,
+            ):
+                terminal_error = (
+                    "the posts API already claimed this proposal; publishing it "
+                    "through the browser would double-post"
+                )
             if terminal_error is not None:
                 transition_attempt(
                     attempt,
@@ -2694,6 +2749,11 @@ class YouTubeBrowserPublisher:
             attempt.proposal_id,
             details,
         )
+
+    def _require_send_allowed(self) -> None:
+        """Global pause and workspace kill switch (the browser publisher is local-only)."""
+        with self.database.session() as session:
+            require_send_allowed(session, self.settings, LOCAL_WORKSPACE_ID)
 
     def _require_enabled(self) -> None:
         if not self.settings.authorized_browser_ready:

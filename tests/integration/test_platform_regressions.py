@@ -13,12 +13,13 @@ from sqlalchemy import delete
 
 from runway.api.app import create_app
 from runway.config import Settings
+from runway.db import initialize_database
 from runway.db.base import Database
 from runway.db.models import AccountMetricDay, ConnectedAccount
 from runway.platforms.capabilities import Platform
 from runway.platforms.overview import metric_window_start
 from runway.platforms.registry import ProviderRegistry
-from runway.platforms.tokens import TokenStore
+from runway.platforms.tokens import FileTokenStore
 from runway.platforms.youtube import YouTubeProvider
 
 API = "http://127.0.0.1:8000"
@@ -84,6 +85,7 @@ def test_reconnect_after_disconnect_stores_a_usable_token(
         return provider if platform is Platform.youtube else original(self, platform)
 
     monkeypatch.setattr(ProviderRegistry, "provider", patched)
+    initialize_database(settings).engine.dispose()
     app = create_app(settings)
     with TestClient(app, base_url=API) as web:
         _connect_via_oauth(web)
@@ -105,13 +107,14 @@ def test_reconnect_after_disconnect_stores_a_usable_token(
             assert account.token_ref is not None
             assert account.token_ref != "None"
             token_ref = account.token_ref
-    token = TokenStore(settings.resolved_data_dir / "secrets").load(token_ref)
+    token = FileTokenStore(settings.resolved_data_dir / "secrets").load(token_ref)
     assert token is not None and token.access_token == "yt-access"
 
 
 @pytest.fixture()
 def mock_client(tmp_path: Path):
     settings = Settings(data_dir=tmp_path / "data", platform_provider="mock")
+    initialize_database(settings).engine.dispose()
     app = create_app(settings)
     with TestClient(app, base_url=API) as client:
         yield app, client

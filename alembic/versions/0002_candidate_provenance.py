@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision = "0002_candidate_provenance"
 down_revision = "0001_initial"
@@ -16,9 +16,22 @@ branch_labels = None
 depends_on = None
 
 
+def _offline() -> bool:
+    """`alembic upgrade --sql`: nothing can be inspected, so emit every statement."""
+    return context.is_offline_mode()
+
+
 def _column_names() -> set[str]:
+    if _offline():
+        return set()
     inspector = sa.inspect(op.get_bind())
     return {column["name"] for column in inspector.get_columns("candidate_images")}
+
+
+def _index_names() -> set[str]:
+    if _offline():
+        return set()
+    return {index["name"] for index in sa.inspect(op.get_bind()).get_indexes("candidate_images")}
 
 
 def upgrade() -> None:
@@ -35,7 +48,7 @@ def upgrade() -> None:
     for column in columns:
         if column.name not in existing:
             op.add_column("candidate_images", column)
-    indexes = {index["name"] for index in sa.inspect(op.get_bind()).get_indexes("candidate_images")}
+    indexes = _index_names()
     if "ix_candidate_images_direct_image_url" not in indexes:
         op.create_index(
             "ix_candidate_images_direct_image_url",
@@ -47,9 +60,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    indexes = {index["name"] for index in sa.inspect(op.get_bind()).get_indexes("candidate_images")}
+    indexes = _index_names()
     for index in ("ix_candidate_images_direct_image_url", "ix_candidate_images_source_domain"):
-        if index in indexes:
+        if _offline() or index in indexes:
             op.drop_index(index, table_name="candidate_images")
     existing = _column_names()
     for name in (
@@ -61,5 +74,5 @@ def downgrade() -> None:
         "direct_image_url",
         "source_page_url",
     ):
-        if name in existing:
+        if _offline() or name in existing:
             op.drop_column("candidate_images", name)

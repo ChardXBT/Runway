@@ -1,5 +1,7 @@
+import { ApiKeysManager } from "@/components/api-keys-manager";
 import { PlatformConnection } from "@/components/platform-connection";
 import { SettingsForm } from "@/components/settings-form";
+import { WebhooksManager } from "@/components/webhooks-manager";
 import { apiGetRequired } from "@/lib/api";
 import {
   isPublisherConnectionStatus,
@@ -48,6 +50,8 @@ export default async function SettingsPage() {
         initialConnection={publisherConnection}
       />
       <SettingsForm initial={settings} />
+      <ApiKeysManager />
+      <WebhooksManager />
     </>
   );
 }

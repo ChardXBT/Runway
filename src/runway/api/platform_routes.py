@@ -3,60 +3,58 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from collections.abc import Callable
+from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Response
-from fastapi.responses import RedirectResponse
+from cryptography.fernet import InvalidToken
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from runway.api.v1.router import bind_workspace_context
+from runway.auth.principal import Principal, get_principal
+from runway.auth.problems import Problem
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import (
-    AccountMetricDay,
-    AccountMetricSnapshot,
+    AuditLogEntry,
     ConnectedAccount,
-    PlatformContent,
+    OAuthState,
     SyncRun,
     utcnow,
 )
+from runway.hosted.quotas import require_connected_account_slot
+from runway.jobs.queue import JobQueue
+from runway.operations.instance_lease import StandbyError
+from runway.platforms.account_views import account_analytics_view
+from runway.platforms.account_views import account_view as _account_view
 from runway.platforms.base import (
     ProviderError,
     TokenSet,
+    deserialize_token,
     iso_utc,
+    serialize_token,
 )
 from runway.platforms.capabilities import (
-    YOUTUBE_ENGAGE_SCOPE,
-    Capability,
     Platform,
-    capability_matrix,
-    capability_ready,
 )
 from runway.platforms.content import ContentService
 from runway.platforms.drafts import DraftService, DuplicateDraftTarget
 from runway.platforms.inbox import InboxReplyForbidden, InboxService
 from runway.platforms.instagram import InstagramProvider
-from runway.platforms.oauth import OAuthStateError, OAuthStateService
-from runway.platforms.overview import OverviewService, account_freshness, metric_window_start
+from runway.platforms.instagram_unified import InstagramUnifiedProvider
+from runway.platforms.oauth import OAuthStateError, OAuthStateService, read_state_storage
+from runway.platforms.overview import OverviewService
 from runway.platforms.registry import ProviderRegistry, parse_platform
 from runway.platforms.sync import SyncAccountDisconnected, SyncRunInProgress, SyncService
 from runway.platforms.tokens import pkce_challenge
+from runway.realtime import subscriptions
+from runway.realtime.lifecycle import disconnect_account
 
 logger = logging.getLogger(__name__)
-
-_METRIC_LABELS = {
-    "views": "Views",
-    "estimatedMinutesWatched": "Watch time (min)",
-    "averageViewDuration": "Avg. view duration (s)",
-    "subscribersGained": "Subscribers gained",
-    "subscribersLost": "Subscribers lost",
-    "likes": "Likes",
-    "comments": "Comments",
-    "shares": "Shares",
-    "reach": "Reach",
-    "follower_count": "Followers",
-}
 
 
 INSTAGRAM_KNOWN_SCOPES = (
@@ -66,6 +64,17 @@ INSTAGRAM_KNOWN_SCOPES = (
     "instagram_business_manage_messages",
     "instagram_business_content_publish",
 )
+
+
+class ConnectRequest(BaseModel):
+    """Optional connect body; `adapter` picks a non-default connection flow."""
+
+    adapter: Literal["instagram_unified"] | None = None
+
+
+class UnifiedSelectRequest(BaseModel):
+    state: str = Field(min_length=8, max_length=200)
+    external_account_id: str = Field(min_length=1, max_length=200)
 
 
 class ImportTokenRequest(BaseModel):
@@ -142,100 +151,6 @@ REQUIRED_ENV: dict[Platform, list[str]] = {
 }
 
 
-def _blocked_by_setting(
-    entry: object,
-    platform: Platform,
-    granted_scopes: list[str],
-    settings: Settings,
-) -> bool:
-    capability = getattr(entry, "capability", None)
-    if capability != Capability.comments_reply:
-        return False
-    if not settings.inbox_replies_enabled:
-        return True
-    return (
-        platform is Platform.youtube
-        and not settings.youtube_engage_scopes
-        and YOUTUBE_ENGAGE_SCOPE not in granted_scopes
-    )
-
-
-def _account_view(
-    database: Database,
-    settings: Settings,
-    account: ConnectedAccount,
-) -> dict[str, object]:
-    granted_scopes = json.loads(account.granted_scopes_json or "[]")
-    try:
-        metadata = json.loads(account.metadata_json or "{}")
-    except json.JSONDecodeError:
-        metadata = {}
-    scopes_source = metadata.get("scopes_source")
-    entries = capability_matrix(
-        Platform(account.platform),
-        engage_scopes=settings.youtube_engage_scopes,
-        replies_enabled=settings.inbox_replies_enabled,
-    )
-    with database.session() as session:
-        snapshot = session.scalar(
-            select(AccountMetricSnapshot)
-            .where(AccountMetricSnapshot.account_id == account.id)
-            .order_by(AccountMetricSnapshot.captured_at.desc())
-            .limit(1)
-        )
-        latest_snapshot = (
-            {
-                "followers": snapshot.followers,
-                "following": snapshot.following,
-                "content_count": snapshot.content_count,
-                "total_views": snapshot.total_views,
-                "total_likes": snapshot.total_likes,
-                "captured_at": iso_utc(snapshot.captured_at),
-            }
-            if snapshot is not None
-            else None
-        )
-    return {
-        "id": account.id,
-        "platform": account.platform,
-        "external_account_id": account.external_account_id,
-        "handle": account.handle,
-        "display_name": account.display_name,
-        "avatar_url": account.avatar_url,
-        "profile_url": account.profile_url,
-        "account_type": account.account_type,
-        "status": account.status,
-        "granted_scopes": granted_scopes,
-        "scopes_source": scopes_source,
-        "connected_at": iso_utc(account.connected_at),
-        "last_verified_at": (iso_utc(account.last_verified_at)),
-        "last_sync_at": iso_utc(account.last_sync_at),
-        "last_sync_status": account.last_sync_status,
-        "last_error": account.last_error,
-        "freshness": account_freshness(account.last_sync_at),
-        "capabilities": [
-            {
-                "capability": entry.capability.value,
-                "state": entry.state,
-                "ready": capability_ready(
-                    entry,
-                    account_status=account.status,
-                    granted_scopes=granted_scopes,
-                ),
-                "missing_scopes": [
-                    scope for scope in entry.requires_scopes if scope not in granted_scopes
-                ],
-                "blocked_by_setting": _blocked_by_setting(
-                    entry, Platform(account.platform), granted_scopes, settings
-                ),
-                "detail": entry.detail,
-            }
-            for entry in entries
-        ],
-        "latest_snapshot": latest_snapshot,
-    }
-
-
 def _run_view(run: SyncRun) -> dict[str, object]:
     try:
         steps = json.loads(run.steps_json or "[]")
@@ -278,65 +193,683 @@ def _enrich_token(
     return token.model_copy(update={"extra": extra})
 
 
-def build_platform_router(database: Database, settings: Settings) -> APIRouter:
-    router = APIRouter(prefix="/api", tags=["platforms"])
-    registry = ProviderRegistry(database, settings)
-    oauth_states = OAuthStateService(database)
+def _state_meta(record: OAuthState) -> dict[str, object]:
+    """The JSON payload a non-PKCE state stored (adapter choice, scopes)."""
+    _verifier, payload = read_state_storage(record)
+    if payload is None:
+        return {}
+    try:
+        meta = json.loads(payload)
+    except json.JSONDecodeError:
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _state_requested_scopes(record: OAuthState) -> list[str] | None:
+    """The scope list an incremental-consent state stored, when it has one."""
+    scopes = _state_meta(record).get("scopes")
+    if not isinstance(scopes, list):
+        return None
+    return [str(scope) for scope in scopes]
+
+
+def _require_active_instance(registry: ProviderRegistry) -> None:
+    # A standby machine (private instance lease held elsewhere) must not mint,
+    # store or revoke tokens: TikTok rotation would break the active machine.
+    try:
+        registry.token_store.ensure_writable()
+    except StandbyError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+def _persist_connection(
+    database: Database,
+    settings: Settings,
+    registry: ProviderRegistry,
+    queue: JobQueue,
+    platform: Platform,
+    token: TokenSet,
+    scopes: list[str],
+    scopes_source: str = "granted",
+    *,
+    workspace_id: int,
+) -> ConnectedAccount:
+    registry.token_store.ensure_writable()
+    provider = registry.provider(platform)
+    identity = provider.fetch_identity(token)
+    token = _enrich_token(platform, token, identity.raw, identity.external_account_id)
+    now = utcnow()
+    with database.session(workspace_id=workspace_id) as session:
+        account = session.scalar(
+            select(ConnectedAccount).where(
+                ConnectedAccount.platform == platform.value,
+                ConnectedAccount.external_account_id == identity.external_account_id,
+                # Two workspaces may connect the same platform identity;
+                # each keeps its own row (spec 01 section 4).
+                ConnectedAccount.workspace_id == workspace_id,
+            )
+        )
+        if account is None or account.status == "disconnected":
+            # A new or disconnected account takes a connection slot.
+            require_connected_account_slot(session, settings, workspace_id)
+        if account is None:
+            account = ConnectedAccount(
+                platform=platform.value,
+                external_account_id=identity.external_account_id,
+                token_ref=registry.token_store.new_token_ref(),
+                workspace_id=workspace_id,
+            )
+            session.add(account)
+        if account.token_ref is None:
+            # Disconnect clears token_ref; a reconnect needs a fresh one.
+            account.token_ref = registry.token_store.new_token_ref()
+        account.handle = identity.handle
+        account.display_name = identity.display_name
+        account.avatar_url = identity.avatar_url
+        account.profile_url = identity.profile_url
+        account.account_type = identity.account_type
+        account.status = "connected"
+        account.granted_scopes_json = json.dumps(scopes)
+        account.connected_at = now
+        account.last_verified_at = now
+        account.last_error = None
+        metadata: dict[str, object] = {
+            "raw": identity.raw,
+            "scopes_source": scopes_source,
+            # The connection adapter decides the account's direct
+            # publisher (instagram_direct vs instagram_unified).
+            "connection": (
+                "instagram_unified" if token.extra.get("login") == "unified" else platform.value
+            ),
+        }
+        # Unified Login also knows the app-scoped Meta user id; Meta's
+        # compliance callbacks name it, so it lives on the row.
+        meta_user_id = token.extra.get("meta_user_id")
+        if isinstance(meta_user_id, str) and meta_user_id:
+            metadata["meta_user_id"] = meta_user_id
+        account.metadata_json = json.dumps(metadata)
+        session.flush()
+        # The OAuth callback has no caller principal; the grant itself is
+        # the actor (spec 05 section 5), same as on the bound path.
+        session.add(
+            AuditLogEntry(
+                workspace_id=account.workspace_id,
+                actor_kind="oauth",
+                actor_id=account.platform,
+                action="account.connect",
+                target_type="account",
+                target_id=str(account.id),
+                detail_json=json.dumps(
+                    {"external_account_id": identity.external_account_id},
+                    sort_keys=True,
+                ),
+            )
+        )
+        # Push subscriptions join the connect transaction (spec 04
+        # section 2): a YouTube WebSub row plus its subscribe job, only
+        # when a public callback base exists.
+        subscriptions.on_account_connected(session, queue, settings, account)
+        token_ref = str(account.token_ref)
+        account_id = account.id
+    registry.token_store.store(token_ref, token)
+    with database.session(workspace_id=workspace_id) as session:
+        persisted = session.get(ConnectedAccount, account_id)
+        assert persisted is not None
+        session.expunge(persisted)
+        return persisted
+
+
+def _persist_bound_connection(
+    database: Database,
+    registry: ProviderRegistry,
+    record_platform: Platform,
+    record_account_id: int,
+    token: TokenSet,
+    *,
+    workspace_id: int,
+) -> str | None:
+    """Attach the token to the exact account a bound state was issued for.
+
+    Returns the redirect's error short-code on refusal. The identity check
+    (spec 08 section 1): the platform identity the token belongs to must
+    equal the account it was issued for. The comparison is generic -
+    each provider's `fetch_identity` reports its canonical identity
+    (YouTube channel id, TikTok open_id, Instagram user id) as
+    `external_account_id` - so a consent-screen account switch never
+    attaches someone else's grant, on any platform.
+    """
+    with database.session(workspace_id=workspace_id) as session:
+        account = session.get(ConnectedAccount, record_account_id)
+        if (
+            account is None
+            or account.workspace_id != workspace_id
+            or account.platform != record_platform.value
+        ):
+            return "unknown_account"
+        account_id = account.id
+        expected_external_id = account.external_account_id
+    provider = registry.provider(record_platform)
+    identity = provider.fetch_identity(token)
+    if identity.external_account_id != expected_external_id:
+        return "wrong_channel"
+    token = _enrich_token(record_platform, token, identity.raw, identity.external_account_id)
+    now = utcnow()
+    with database.session(workspace_id=workspace_id) as session:
+        account = session.get(ConnectedAccount, account_id)
+        assert account is not None
+        if not account.token_ref:
+            account.token_ref = registry.token_store.new_token_ref()
+        account.handle = identity.handle
+        account.display_name = identity.display_name
+        account.avatar_url = identity.avatar_url
+        account.profile_url = identity.profile_url
+        account.account_type = identity.account_type
+        account.status = "connected"
+        # The response's `scope` is the authoritative current grant set.
+        account.granted_scopes_json = json.dumps(list(token.scopes))
+        account.last_verified_at = now
+        account.last_error = None
+        account.metadata_json = json.dumps({"raw": identity.raw, "scopes_source": "granted"})
+        session.flush()
+        # The OAuth callback has no caller principal; the grant itself is
+        # the actor (spec 05 section 5).
+        session.add(
+            AuditLogEntry(
+                workspace_id=account.workspace_id,
+                actor_kind="oauth",
+                actor_id=account.platform,
+                action="account.connect",
+                target_type="account",
+                target_id=str(account.id),
+                detail_json=json.dumps(
+                    {"external_account_id": identity.external_account_id},
+                    sort_keys=True,
+                ),
+            )
+        )
+        token_ref = str(account.token_ref)
+    registry.token_store.store(token_ref, token)
+    return None
+
+
+def _issue_connect(
+    settings: Settings,
+    registry: ProviderRegistry,
+    oauth_states: OAuthStateService,
+    platform: Platform,
+    *,
+    purpose: str = "connect",
+    account_id: int | None = None,
+    workspace_id: int,
+) -> dict[str, object]:
+    if settings.platform_provider == "mock":
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth connect is unavailable in mock provider mode",
+        )
+    _require_active_instance(registry)
+    provider = registry.provider(platform)
+    if not provider.configured():
+        raise HTTPException(
+            status_code=409,
+            detail=f"{platform.value} OAuth is not configured",
+        )
+    use_pkce = platform is Platform.youtube
+    issued = oauth_states.issue(
+        platform,
+        redirect_uri=registry.redirect_uri(platform),
+        use_pkce=use_pkce,
+        purpose=purpose,
+        account_id=account_id,
+        workspace_id=workspace_id,
+    )
+    authorization_url = provider.authorization_url(
+        state=issued.state,
+        redirect_uri=registry.redirect_uri(platform),
+        code_challenge=(pkce_challenge(issued.code_verifier) if issued.code_verifier else None),
+    )
+    return {"authorization_url": authorization_url, "state": issued.state}
+
+
+def _unified(
+    settings: Settings, unified_provider: InstagramUnifiedProvider | None
+) -> InstagramUnifiedProvider:
+    return unified_provider or InstagramUnifiedProvider(settings)
+
+
+def _issue_unified_connect(
+    settings: Settings,
+    registry: ProviderRegistry,
+    oauth_states: OAuthStateService,
+    unified_provider: InstagramUnifiedProvider | None,
+    *,
+    workspace_id: int,
+) -> dict[str, object]:
+    if settings.platform_provider == "mock":
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth connect is unavailable in mock provider mode",
+        )
+    provider = _unified(settings, unified_provider)
+    if not provider.configured():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "instagram_unified OAuth is not configured "
+                "(RUNWAY_META_APP_ID, RUNWAY_META_APP_SECRET, "
+                "RUNWAY_INSTAGRAM_UNIFIED_CONFIG_ID)"
+            ),
+        )
+    redirect_uri = registry.redirect_uri(Platform.instagram)
+    issued = oauth_states.issue(
+        Platform.instagram,
+        redirect_uri=redirect_uri,
+        use_pkce=False,
+        payload=json.dumps({"adapter": "instagram_unified"}),
+        workspace_id=workspace_id,
+    )
+    return {
+        "authorization_url": provider.authorization_url(
+            state=issued.state,
+            redirect_uri=redirect_uri,
+            code_challenge=None,
+        ),
+        "state": issued.state,
+    }
+
+
+def _require_slot(database: Database, settings: Settings, principal: Principal) -> None:
+    with database.session(workspace_id=principal.workspace_id) as session:
+        require_connected_account_slot(session, settings, principal.workspace_id)
+
+
+def _select_record(
+    oauth_states: OAuthStateService, state: str, workspace_id: int
+) -> OAuthState | None:
+    record = oauth_states.peek(Platform.instagram, state=state, workspace_id=workspace_id)
+    if record is None:
+        return None
+    meta = _state_meta(record)
+    if meta.get("adapter") != "instagram_unified" or not meta.get("select"):
+        return None
+    return record
+
+
+def _select_meta(
+    oauth_states: OAuthStateService, state: str, workspace_id: int
+) -> dict[str, object] | None:
+    record = _select_record(oauth_states, state, workspace_id)
+    return _state_meta(record) if record is not None else None
+
+
+def _register_oauth_routes(
+    router: APIRouter,
+    database: Database,
+    settings: Settings,
+    registry: ProviderRegistry,
+    queue: JobQueue,
+    oauth_states: OAuthStateService,
+    unified_provider: InstagramUnifiedProvider | None,
+    *,
+    include_select_routes: bool,
+) -> None:
+    """The OAuth connect and callback routes (spec 08).
+
+    The local platform router also registers the Unified Login select
+    endpoints; hosted mounts only the connect and callback routes.
+    """
+
+    @router.post("/platforms/{platform}/connect")
+    def connect(
+        platform: str,
+        payload: ConnectRequest | None = None,
+        principal: Principal = Depends(get_principal),
+    ) -> dict[str, object]:
+        try:
+            parsed = parse_platform(platform)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _require_slot(database, settings, principal)
+        adapter = payload.adapter if payload is not None else None
+        if adapter == "instagram_unified":
+            if parsed is not Platform.instagram:
+                raise HTTPException(
+                    status_code=400,
+                    detail="instagram_unified is an Instagram connection adapter",
+                )
+            return _issue_unified_connect(
+                settings,
+                registry,
+                oauth_states,
+                unified_provider,
+                workspace_id=principal.workspace_id,
+            )
+        return _issue_connect(
+            settings,
+            registry,
+            oauth_states,
+            parsed,
+            workspace_id=principal.workspace_id,
+        )
+
+    def _unified_callback(
+        code: str,
+        record: OAuthState,
+        principal: Principal,
+        fail: Callable[[str], RedirectResponse],
+    ) -> Response:
+        """Unified Login callback (spec 08 section 3): exchange the code, list
+        assigned accounts, persist the only one or defer to the owner pick."""
+        web_base = settings.resolved_web_base_url
+        provider = _unified(settings, unified_provider)
+        try:
+            token = provider.exchange_code(
+                code=code, redirect_uri=record.redirect_uri, code_verifier=None
+            )
+            token = provider.attach_business_id(token)
+            candidates = provider.assigned_accounts(token)
+        except ProviderError as exc:
+            logger.warning("unified oauth callback failed: %s", exc.detail)
+            return fail("exchange_failed")
+        except Exception:  # noqa: BLE001
+            logger.exception("unified oauth callback failed")
+            return fail("exchange_failed")
+        if not candidates:
+            return fail("no_instagram_accounts")
+        if len(candidates) == 1:
+            token.extra["user_id"] = candidates[0]["id"]
+            try:
+                _persist_connection(
+                    database,
+                    settings,
+                    registry,
+                    queue,
+                    Platform.instagram,
+                    token,
+                    token.scopes,
+                    workspace_id=record.workspace_id,
+                )
+            except Problem as exc:
+                return fail(exc.code)
+            except ProviderError:
+                return fail("exchange_failed")
+            return RedirectResponse(
+                url=f"{web_base}/accounts?connected=instagram",
+                status_code=303,
+            )
+        # Several accounts are assigned: park the token on the state row,
+        # encrypted under the token-store cipher, and let the owner pick
+        # through the select endpoints. `account_tokens` cannot hold it: it
+        # is keyed by account, and none exists until the pick persists.
+        parked = (
+            registry.token_store.cipher()
+            .encrypt(json.dumps(serialize_token(token)).encode("utf-8"))
+            .decode("ascii")
+        )
+        issued = oauth_states.issue(
+            Platform.instagram,
+            redirect_uri=record.redirect_uri,
+            use_pkce=False,
+            token_ciphertext=parked,
+            payload=json.dumps(
+                {
+                    "adapter": "instagram_unified",
+                    "select": True,
+                    "accounts": candidates,
+                }
+            ),
+            workspace_id=principal.workspace_id,
+        )
+        return RedirectResponse(
+            url=f"{web_base}/accounts?select_instagram={issued.state}",
+            status_code=303,
+        )
+
+    if include_select_routes:
+
+        @router.get("/platforms/instagram/unified/select")
+        def unified_select_list(
+            state: str = Query(min_length=1), principal: Principal = Depends(get_principal)
+        ) -> dict[str, object]:
+            meta = _select_meta(oauth_states, state, principal.workspace_id)
+            if meta is None:
+                raise HTTPException(status_code=404, detail="no pending Instagram account pick")
+            return {"state": state, "accounts": meta.get("accounts") or []}
+
+        @router.post("/platforms/instagram/unified/select")
+        def unified_select(
+            payload: UnifiedSelectRequest,
+            principal: Principal = Depends(get_principal),
+        ) -> Response:
+            web_base = settings.resolved_web_base_url
+
+            def fail(short_code: str) -> RedirectResponse:
+                return RedirectResponse(
+                    url=f"{web_base}/accounts?error={short_code}",
+                    status_code=303,
+                )
+
+            # Peek first: a pick the state never offered is rejected without
+            # consuming it, so the owner can still choose a valid account. The
+            # parked ciphertext rides the peeked record; consuming clears it.
+            record = _select_record(oauth_states, payload.state, principal.workspace_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="no pending Instagram account pick")
+            meta = _state_meta(record)
+            candidates = meta.get("accounts")
+            accounts = (
+                [a for a in candidates if isinstance(a, dict)]
+                if isinstance(candidates, list)
+                else []
+            )
+            chosen = next((a for a in accounts if a.get("id") == payload.external_account_id), None)
+            if chosen is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="that Instagram account is not among the assigned ones",
+                )
+            parked = record.token_ciphertext
+            try:
+                oauth_states.consume(
+                    Platform.instagram, state=payload.state, workspace_id=principal.workspace_id
+                )
+            except OAuthStateError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            token: TokenSet | None = None
+            if parked:
+                try:
+                    plaintext = registry.token_store.cipher().decrypt(parked.encode("ascii"))
+                    token = deserialize_token(json.loads(plaintext.decode("utf-8")))
+                except (InvalidToken, ValueError, TypeError):
+                    token = None
+            if token is None:
+                raise HTTPException(status_code=410, detail="the held token is gone; connect again")
+            token.extra["user_id"] = chosen["id"]
+            try:
+                account = _persist_connection(
+                    database,
+                    settings,
+                    registry,
+                    queue,
+                    Platform.instagram,
+                    token,
+                    token.scopes,
+                    workspace_id=record.workspace_id,
+                )
+            except Problem as exc:
+                return fail(exc.code)
+            except ProviderError:
+                return fail("exchange_failed")
+            return JSONResponse(
+                jsonable_encoder(
+                    {"status": "connected", "account": _account_view(database, settings, account)}
+                )
+            )
+
+    @router.get("/platforms/{platform}/oauth/callback")
+    def oauth_callback(
+        platform: str,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+        principal: Principal = Depends(get_principal),
+    ) -> Response:
+        web_base = settings.resolved_web_base_url
+
+        def fail(short_code: str) -> RedirectResponse:
+            return RedirectResponse(
+                url=f"{web_base}/accounts?error={short_code}",
+                status_code=303,
+            )
+
+        try:
+            parsed = parse_platform(platform)
+        except ValueError:
+            return fail("unknown_platform")
+        if error:
+            return fail("denied" if error == "access_denied" else "provider_error")
+        if not code or not state:
+            return fail("missing_code")
+        try:
+            registry.token_store.ensure_writable()
+        except StandbyError:
+            # Standby check before the code exchange and before consuming the
+            # state: a standby machine must not burn the single-use
+            # authorization code on a token it could never store.
+            return fail("standby")
+        try:
+            record = oauth_states.consume(parsed, state=state, workspace_id=principal.workspace_id)
+        except OAuthStateError as exc:
+            return fail(str(exc))
+        if record.workspace_id != principal.workspace_id:
+            # consume() already runs under the caller's workspace binding, so
+            # a foreign state is refused above; this check is the explicit
+            # contract that a state never crosses workspaces.
+            return fail("invalid_state")
+        if (
+            parsed is Platform.instagram
+            and _state_meta(record).get("adapter") == "instagram_unified"
+        ):
+            return _unified_callback(code, record, principal, fail)
+        provider = registry.provider(parsed)
+        verifier, _payload = read_state_storage(record)
+        requested_scopes = _state_requested_scopes(record)
+        try:
+            if requested_scopes and isinstance(provider, InstagramProvider):
+                # Incremental consent: the state named the scopes the consent
+                # screen showed; Meta may omit `permissions` in its response.
+                token = provider.exchange_code(
+                    code=code,
+                    redirect_uri=record.redirect_uri,
+                    code_verifier=verifier,
+                    requested_scopes=requested_scopes,
+                )
+            else:
+                token = provider.exchange_code(
+                    code=code,
+                    redirect_uri=record.redirect_uri,
+                    code_verifier=verifier,
+                )
+            if record.account_id is not None:
+                # A bound flow (reconnect, enable_publishing) must attach to
+                # the exact account it was issued for, identity included.
+                refusal = _persist_bound_connection(
+                    database,
+                    registry,
+                    parsed,
+                    record.account_id,
+                    token,
+                    workspace_id=record.workspace_id,
+                )
+                if refusal is not None:
+                    return fail(refusal)
+            else:
+                _persist_connection(
+                    database,
+                    settings,
+                    registry,
+                    queue,
+                    parsed,
+                    token,
+                    token.scopes,
+                    workspace_id=record.workspace_id,
+                )
+        except Problem as exc:
+            # The workspace reached its connected-accounts quota meanwhile.
+            return fail(exc.code)
+        except ProviderError as exc:
+            logger.warning("oauth callback failed for %s: %s", platform, exc.detail)
+            return fail("exchange_failed")
+        except Exception:  # noqa: BLE001
+            logger.exception("oauth callback failed for %s", platform)
+            return fail("exchange_failed")
+        outcome = "publishing_enabled" if record.purpose == "enable_publishing" else "connected"
+        return RedirectResponse(
+            url=f"{web_base}/accounts?{outcome}={parsed.value}",
+            status_code=303,
+        )
+
+
+def build_oauth_router(
+    database: Database,
+    settings: Settings,
+    *,
+    registry: ProviderRegistry | None = None,
+    oauth_states: OAuthStateService | None = None,
+    unified_provider: InstagramUnifiedProvider | None = None,
+) -> APIRouter:
+    """Only the OAuth connect + callback routes - all that hosted mounts.
+
+    The rest of the platform router stays local-only until its queries are
+    workspace-scoped and scope-checked (spec 01 sections 4-5). OAuth state
+    rows carry the principal's workspace and the callback persists into it,
+    so a state never crosses workspaces.
+    """
+    router = APIRouter(
+        prefix="/api",
+        tags=["platforms"],
+        dependencies=[Depends(get_principal), Depends(bind_workspace_context)],
+    )
+    if registry is None:
+        registry = ProviderRegistry(database, settings)
+    if oauth_states is None:
+        oauth_states = OAuthStateService(database)
+    _register_oauth_routes(
+        router,
+        database,
+        settings,
+        registry,
+        JobQueue(database),
+        oauth_states,
+        unified_provider,
+        include_select_routes=False,
+    )
+    return router
+
+
+def build_platform_router(
+    database: Database,
+    settings: Settings,
+    *,
+    registry: ProviderRegistry | None = None,
+    oauth_states: OAuthStateService | None = None,
+    unified_provider: InstagramUnifiedProvider | None = None,
+) -> APIRouter:
+    router = APIRouter(
+        prefix="/api",
+        tags=["platforms"],
+        dependencies=[Depends(get_principal), Depends(bind_workspace_context)],
+    )
+    if registry is None:
+        registry = ProviderRegistry(database, settings)
+    queue = JobQueue(database)
+    if oauth_states is None:
+        oauth_states = OAuthStateService(database)
     sync_service = SyncService(database, settings, registry)
     content_service = ContentService(database)
     inbox_service = InboxService(database, settings, registry)
     draft_service = DraftService(database, settings)
     overview_service = OverviewService(database, settings)
-
-    def _persist_connection(
-        platform: Platform,
-        token: TokenSet,
-        scopes: list[str],
-        scopes_source: str = "granted",
-    ) -> ConnectedAccount:
-        provider = registry.provider(platform)
-        identity = provider.fetch_identity(token)
-        token = _enrich_token(platform, token, identity.raw, identity.external_account_id)
-        now = utcnow()
-        with database.session() as session:
-            account = session.scalar(
-                select(ConnectedAccount).where(
-                    ConnectedAccount.platform == platform.value,
-                    ConnectedAccount.external_account_id == identity.external_account_id,
-                )
-            )
-            if account is None:
-                account = ConnectedAccount(
-                    platform=platform.value,
-                    external_account_id=identity.external_account_id,
-                    token_ref=registry.token_store.new_token_ref(),
-                )
-                session.add(account)
-            if account.token_ref is None:
-                # Disconnect clears token_ref; a reconnect needs a fresh one.
-                account.token_ref = registry.token_store.new_token_ref()
-            account.handle = identity.handle
-            account.display_name = identity.display_name
-            account.avatar_url = identity.avatar_url
-            account.profile_url = identity.profile_url
-            account.account_type = identity.account_type
-            account.status = "connected"
-            account.granted_scopes_json = json.dumps(scopes)
-            account.connected_at = now
-            account.last_verified_at = now
-            account.last_error = None
-            account.metadata_json = json.dumps(
-                {"raw": identity.raw, "scopes_source": scopes_source}
-            )
-            session.flush()
-            token_ref = str(account.token_ref)
-            account_id = account.id
-        registry.token_store.store(token_ref, token)
-        with database.session() as session:
-            persisted = session.get(ConnectedAccount, account_id)
-            assert persisted is not None
-            session.expunge(persisted)
-            return persisted
 
     # ------------------------------------------------------------- read APIs
 
@@ -374,92 +907,29 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
 
     # ---------------------------------------------------------------- OAuth
 
-    def _issue_connect(platform: Platform) -> dict[str, object]:
-        if settings.platform_provider == "mock":
-            raise HTTPException(
-                status_code=400,
-                detail="OAuth connect is unavailable in mock provider mode",
-            )
-        provider = registry.provider(platform)
-        if not provider.configured():
-            raise HTTPException(
-                status_code=409,
-                detail=f"{platform.value} OAuth is not configured",
-            )
-        use_pkce = platform is Platform.youtube
-        issued = oauth_states.issue(
-            platform,
-            redirect_uri=registry.redirect_uri(platform),
-            use_pkce=use_pkce,
-        )
-        authorization_url = provider.authorization_url(
-            state=issued.state,
-            redirect_uri=registry.redirect_uri(platform),
-            code_challenge=(pkce_challenge(issued.code_verifier) if issued.code_verifier else None),
-        )
-        return {"authorization_url": authorization_url, "state": issued.state}
-
-    @router.post("/platforms/{platform}/connect")
-    def connect(platform: str) -> dict[str, object]:
-        try:
-            parsed = parse_platform(platform)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return _issue_connect(parsed)
-
-    @router.get("/platforms/{platform}/oauth/callback")
-    def oauth_callback(
-        platform: str,
-        code: str | None = None,
-        state: str | None = None,
-        error: str | None = None,
-    ) -> Response:
-        web_base = settings.resolved_web_base_url
-
-        def fail(short_code: str) -> RedirectResponse:
-            return RedirectResponse(
-                url=f"{web_base}/accounts?error={short_code}",
-                status_code=303,
-            )
-
-        try:
-            parsed = parse_platform(platform)
-        except ValueError:
-            return fail("unknown_platform")
-        if error:
-            return fail("denied" if error == "access_denied" else "provider_error")
-        if not code or not state:
-            return fail("missing_code")
-        try:
-            record = oauth_states.consume(parsed, state=state)
-        except OAuthStateError as exc:
-            return fail(str(exc))
-        provider = registry.provider(parsed)
-        try:
-            token = provider.exchange_code(
-                code=code,
-                redirect_uri=record.redirect_uri,
-                code_verifier=record.code_verifier,
-            )
-            _persist_connection(parsed, token, token.scopes)
-        except ProviderError as exc:
-            logger.warning("oauth callback failed for %s: %s", platform, exc.detail)
-            return fail("exchange_failed")
-        except Exception:  # noqa: BLE001
-            logger.exception("oauth callback failed for %s", platform)
-            return fail("exchange_failed")
-        return RedirectResponse(
-            url=f"{web_base}/accounts?connected={parsed.value}",
-            status_code=303,
-        )
+    # Connect + callback + the Unified Login select endpoints; hosted mounts
+    # only the connect and callback routes via build_oauth_router.
+    _register_oauth_routes(
+        router,
+        database,
+        settings,
+        registry,
+        queue,
+        oauth_states,
+        unified_provider,
+        include_select_routes=True,
+    )
 
     @router.post("/platforms/instagram/import-token")
-    def import_instagram_token(payload: ImportTokenRequest) -> dict[str, object]:
+    def import_instagram_token(
+        payload: ImportTokenRequest, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
         if settings.platform_provider == "mock":
             raise HTTPException(
                 status_code=400,
                 detail="token import is unavailable in mock provider mode",
             )
+        _require_active_instance(registry)
         provider = registry.provider(Platform.instagram)
         token = TokenSet(access_token=payload.access_token)
         try:
@@ -471,51 +941,67 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
                 token = provider.exchange_long_lived(token)
         scopes = list(dict.fromkeys(str(scope) for scope in payload.granted_scopes))
         account = _persist_connection(
-            Platform.instagram, token, scopes, scopes_source="user_declared"
+            database,
+            settings,
+            registry,
+            queue,
+            Platform.instagram,
+            token,
+            scopes,
+            scopes_source="user_declared",
+            workspace_id=principal.workspace_id,
         )
         return {"account_id": account.id, "platform": "instagram"}
 
     # ----------------------------------------------------------- account ops
 
-    def _account_or_404(account_id: int) -> ConnectedAccount:
+    def _account_or_404(account_id: int, workspace_id: int) -> ConnectedAccount:
         with database.session() as session:
             account = session.get(ConnectedAccount, account_id)
-            if account is None:
+            # Another workspace's account is not a wrong answer: it is "not
+            # found", the same as an id that never existed (invariant 11).
+            if account is None or account.workspace_id != workspace_id:
                 raise HTTPException(status_code=404, detail="account not found")
             session.expunge(account)
             return account
 
     @router.post("/platforms/accounts/{account_id}/disconnect")
-    def disconnect(account_id: int, payload: ConfirmedRequest) -> dict[str, object]:
-        account = _account_or_404(account_id)
-        if account.token_ref:
-            token = registry.token_store.load(account.token_ref)
-            if token is not None:
-                try:
-                    registry.provider(Platform(account.platform)).revoke(token)
-                except ProviderError as exc:
-                    logger.warning(
-                        "token revoke failed for account %s: %s",
-                        account_id,
-                        exc.detail,
-                    )
-            registry.token_store.delete(account.token_ref)
+    def disconnect(
+        account_id: int,
+        payload: ConfirmedRequest,
+        principal: Principal = Depends(get_principal),
+    ) -> dict[str, object]:
+        _account_or_404(account_id, principal.workspace_id)
+        _require_active_instance(registry)
         with database.session() as session:
             record = session.get(ConnectedAccount, account_id)
             if record is not None:
-                record.status = "disconnected"
-                record.token_ref = None
-                record.last_error = None
+                # Revoke, drop the stored token, cancel pending sends and run
+                # the subscription teardown in one transaction (spec 04
+                # section 2, spec 05 section 4).
+                disconnect_account(session, registry, queue, record)
         return {"account_id": account_id, "status": "disconnected"}
 
     @router.post("/platforms/accounts/{account_id}/reconnect")
-    def reconnect(account_id: int) -> dict[str, object]:
-        account = _account_or_404(account_id)
-        return _issue_connect(Platform(account.platform))
+    def reconnect(
+        account_id: int, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
+        account = _account_or_404(account_id, principal.workspace_id)
+        if account.status == "disconnected":
+            _require_slot(database, settings, principal)
+        return _issue_connect(
+            settings,
+            registry,
+            oauth_states,
+            Platform(account.platform),
+            purpose="reconnect",
+            account_id=account_id,
+            workspace_id=principal.workspace_id,
+        )
 
     @router.post("/platforms/accounts/{account_id}/sync")
-    def sync_account(account_id: int) -> Response:
-        _account_or_404(account_id)
+    def sync_account(account_id: int, principal: Principal = Depends(get_principal)) -> Response:
+        _account_or_404(account_id, principal.workspace_id)
         try:
             run = sync_service.start_background(account_id, trigger="manual")
         except (SyncRunInProgress, SyncAccountDisconnected) as exc:
@@ -536,9 +1022,11 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
 
     @router.get("/platforms/accounts/{account_id}/sync-runs")
     def account_sync_runs(
-        account_id: int, limit: int = Query(default=20, ge=1, le=100)
+        account_id: int,
+        limit: int = Query(default=20, ge=1, le=100),
+        principal: Principal = Depends(get_principal),
     ) -> list[dict[str, object]]:
-        _account_or_404(account_id)
+        _account_or_404(account_id, principal.workspace_id)
         with database.session() as session:
             runs = session.scalars(
                 select(SyncRun)
@@ -603,193 +1091,11 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
     def account_analytics(
         account_id: int,
         range: Literal["7", "28", "90"] = "28",  # noqa: A002
+        principal: Principal = Depends(get_principal),
     ) -> dict[str, object]:
-        days = int(range)
-        account = _account_or_404(account_id)
-        with database.session() as session:
-            start_day = metric_window_start(days)
-            metric_rows = session.scalars(
-                select(AccountMetricDay)
-                .where(
-                    AccountMetricDay.account_id == account_id,
-                    AccountMetricDay.day >= start_day,
-                )
-                .order_by(AccountMetricDay.day.asc())
-            ).all()
-            prior_start = start_day - timedelta(days=days)
-            prior_rows = session.scalars(
-                select(AccountMetricDay).where(
-                    AccountMetricDay.account_id == account_id,
-                    AccountMetricDay.day >= prior_start,
-                    AccountMetricDay.day < start_day,
-                )
-            ).all()
-            snapshot = session.scalar(
-                select(AccountMetricSnapshot)
-                .where(AccountMetricSnapshot.account_id == account_id)
-                .order_by(AccountMetricSnapshot.captured_at.desc())
-                .limit(1)
-            )
-            top = session.scalars(
-                select(PlatformContent)
-                .where(PlatformContent.account_id == account_id)
-                .order_by(PlatformContent.view_count.desc())
-                .limit(10)
-            ).all()
-        mean_metrics = {"averageViewDuration"}
-        last_metrics = {"follower_count"}
-
-        def metric_label(metric: str) -> str:
-            return _METRIC_LABELS.get(metric, metric.replace("_", " ").title())
-
-        def aggregate(metric: str, values: list[tuple[object, float]]) -> float | None:
-            if not values:
-                return None
-            raw = [value for _key, value in values]
-            if metric in mean_metrics:
-                return sum(raw) / len(raw)
-            if metric in last_metrics:
-                return raw[-1]
-            return sum(raw)
-
-        series_by_metric: dict[str, list[dict[str, object]]] = {}
-        values_by_metric: dict[str, list[tuple[object, float]]] = {}
-        sources: set[str] = set()
-        for row in metric_rows:
-            sources.add(row.source)
-            values_by_metric.setdefault(row.metric, []).append((row.day, row.value))
-            series_by_metric.setdefault(row.metric, []).append(
-                {"day": row.day.isoformat(), "value": row.value}
-            )
-        prior_values: dict[str, list[tuple[object, float]]] = {}
-        for row in prior_rows:
-            prior_values.setdefault(row.metric, []).append((row.day, row.value))
-        kpis: list[dict[str, object]] = []
-        for metric, points in series_by_metric.items():
-            value = aggregate(metric, values_by_metric.get(metric, []))
-            prior = aggregate(metric, prior_values.get(metric, []))
-            kpis.append(
-                {
-                    "key": metric,
-                    "label": metric_label(metric),
-                    "value": value,
-                    "delta": (value - prior) if value is not None and prior is not None else None,
-                    "source": next(iter(sources), None),
-                    "as_of": points[-1]["day"] if points else None,
-                }
-            )
-        snapshot_start = datetime.combine(start_day, datetime.min.time(), tzinfo=UTC)
-        with database.session() as session:
-            snapshots = session.scalars(
-                select(AccountMetricSnapshot)
-                .where(AccountMetricSnapshot.account_id == account_id)
-                .order_by(AccountMetricSnapshot.captured_at.asc())
-            ).all()
-        snapshot_series: list[dict[str, object]] = []
-        snapshot_fields = (
-            ("followers", "Followers"),
-            ("total_views", "Total views"),
-            ("total_likes", "Total likes"),
-            ("content_count", "Content items"),
+        return account_analytics_view(
+            database, _account_or_404(account_id, principal.workspace_id), int(range)
         )
-        for field, label in snapshot_fields:
-            before: list[tuple[datetime, int]] = []
-            within: list[tuple[datetime, int]] = []
-            for snap in snapshots:
-                captured = snap.captured_at
-                if captured.tzinfo is None:
-                    captured = captured.replace(tzinfo=UTC)
-                value = getattr(snap, field)
-                if not isinstance(value, int):
-                    continue
-                if captured < snapshot_start:
-                    before.append((captured, value))
-                else:
-                    within.append((captured, value))
-            selected = before[-1:] + within
-            if selected:
-                snapshot_series.append(
-                    {
-                        "metric": field,
-                        "label": label,
-                        "source": "runway_sync_snapshots",
-                        "points": [
-                            {"captured_at": iso_utc(captured), "value": value}
-                            for captured, value in selected
-                        ],
-                    }
-                )
-        notes: list[str] = []
-        if account.platform == "youtube":
-            notes.append(
-                "Recent days may be incomplete; YouTube finalizes Analytics data "
-                "with a delay of about two days."
-            )
-        elif account.platform == "instagram":
-            notes.append(
-                "Instagram insights are available only for the connected "
-                "professional account and may lag the app."
-            )
-        elif account.platform == "tiktok":
-            notes.append(
-                "TikTok's Display API has no daily analytics; trends are built "
-                "from Runway's own sync snapshots."
-            )
-        data_sources = []
-        if "youtube_analytics_api" in sources:
-            data_sources.append(
-                {
-                    "label": "YouTube Analytics API",
-                    "url": "https://developers.google.com/youtube/analytics",
-                }
-            )
-        if "instagram_insights_api" in sources:
-            data_sources.append(
-                {
-                    "label": "Instagram Insights API",
-                    "url": "https://developers.facebook.com/docs/instagram-platform",
-                }
-            )
-        return {
-            "account": {
-                "id": account.id,
-                "platform": account.platform,
-                "handle": account.handle,
-            },
-            "range": days,
-            "kpis": kpis,
-            "series": [
-                {"metric": metric, "label": metric_label(metric), "points": pts}
-                for metric, pts in series_by_metric.items()
-            ],
-            "snapshot_series": snapshot_series,
-            "top_content": [
-                {
-                    "id": item.id,
-                    "platform": item.platform,
-                    "content_type": item.content_type,
-                    "title": item.title,
-                    "caption": item.caption,
-                    "thumbnail_url": item.thumbnail_url,
-                    "view_count": item.view_count,
-                    "like_count": item.like_count,
-                    "comment_count": item.comment_count,
-                    "published_at": (iso_utc(item.published_at)),
-                    "permalink": item.permalink,
-                }
-                for item in top
-            ],
-            "notes": notes,
-            "data_sources": data_sources,
-            "latest_snapshot": (
-                {
-                    "followers": snapshot.followers,
-                    "captured_at": iso_utc(snapshot.captured_at),
-                }
-                if snapshot
-                else None
-            ),
-        }
 
     @router.get("/inbox")
     def inbox_list(
@@ -839,13 +1145,19 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
         return inbox_service.delete_draft(comment_id)
 
     @router.post("/inbox/{comment_id}/reply")
-    def inbox_reply(comment_id: int, payload: ReplyRequest) -> dict[str, object]:
+    def inbox_reply(
+        comment_id: int, payload: ReplyRequest, principal: Principal = Depends(get_principal)
+    ) -> dict[str, object]:
         try:
-            return inbox_service.reply(comment_id, payload.text)
+            return inbox_service.reply(
+                comment_id, payload.text, workspace_id=principal.workspace_id
+            )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except InboxReplyForbidden as exc:
             raise HTTPException(status_code=403, detail=exc.detail) from exc
+        except StandbyError as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
         except ProviderError as exc:
             raise HTTPException(status_code=502, detail=exc.detail) from exc
 
@@ -880,6 +1192,10 @@ def build_platform_router(database: Database, settings: Settings) -> APIRouter:
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            # The draft state machine refused the status (e.g. a published
+            # draft back to draft, or scheduled without a time).
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.delete("/drafts/{draft_id}")
     def drafts_archive(draft_id: int) -> dict[str, object]:
