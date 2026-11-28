@@ -219,6 +219,33 @@ def test_reconnect_replaces_token_without_duplicating_the_account(oauth_env) -> 
         assert store.load(first_ref) is None
 
 
+def test_duplicate_connect_updates_existing_account_instead_of_creating_a_second_row(
+    oauth_env,
+) -> None:
+    with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
+        first = _complete_connect(web)
+        assert first.status_code == 303
+        first_account = _single_account(oauth_env.database)
+        first_ref = str(first_account.token_ref)
+        oauth_env.provider_state["access_token"] = "access-two"
+        oauth_env.provider_state["refresh_token"] = "refresh-two"
+
+        second = _complete_connect(web)
+
+        assert second.status_code == 303
+        assert second.headers["location"].endswith("/accounts?connected=youtube")
+        with oauth_env.database.session() as session:
+            accounts = session.scalars(select(ConnectedAccount)).all()
+        assert len(accounts) == 1
+        assert accounts[0].id == first_account.id
+        assert accounts[0].token_ref != first_ref
+        store = TokenStore(oauth_env.settings.resolved_data_dir / "secrets")
+        replacement = store.load(str(accounts[0].token_ref))
+        assert replacement is not None
+        assert replacement.access_token == "access-two"
+        assert store.load(first_ref) is None
+
+
 def test_interruption_before_replacement_write_keeps_reconnected_account_on_old_token(
     oauth_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
