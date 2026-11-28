@@ -41,6 +41,49 @@ class AgentRunConflictError(AgentHarnessError):
 RunResultT = TypeVar("RunResultT")
 
 
+def _json_values_equal(left: Any, right: Any) -> bool:
+    """Compare parsed JSON values without Python's bool/int equality collision."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return bool(left == right)
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        if left.keys() != right.keys():
+            return False
+        return all(_json_values_equal(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _json_values_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    return bool(left == right)
+
+
+def _require_json_compatible(value: Any, *, path: str) -> None:
+    """Reject values whose JSON serialization would lose their logical identity."""
+    if value is None or isinstance(value, (str, bool)):
+        return
+    if type(value) is int:
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path} must contain only finite JSON numbers")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _require_json_compatible(item, path=f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{path} must contain only string object keys")
+            _require_json_compatible(item, path=f"{path}.{key}")
+        return
+    raise ValueError(f"{path} must contain only JSON-serializable values")
+
+
 class AgentInputEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -310,9 +353,9 @@ class IntelligenceAgentHarness:
         try:
             left_value: object = json.loads(left)
             right_value: object = json.loads(right)
-            return left_value == right_value
+            return _json_values_equal(left_value, right_value)
         except ValueError:
-            return left == right
+            return False
 
     def _ensure_same_logical_request(
         self,
@@ -815,6 +858,10 @@ class IntelligenceAgentHarness:
     ) -> tuple[int, AgentOutputEnvelope]:
         spec = self.registry.resolve(capability)
         validated_input = spec.input_type.model_validate(input_value)
+        _require_json_compatible(
+            validated_input.model_dump(mode="python"),
+            path="agent input",
+        )
         effective_budget = budget or AgentBudget()
         key = self._normalized_run_key(run_key, "agent")
         configuration = {
@@ -891,6 +938,10 @@ class IntelligenceAgentHarness:
                         timeout=timeout,
                     )
                     output = spec.output_type.model_validate(result.output)
+                    _require_json_compatible(
+                        output.model_dump(mode="python"),
+                        path=f"{capability} output",
+                    )
                     usage = self._normalized_usage(result.usage)
                     total_tokens += usage.total_tokens
                     if total_tokens > effective_budget.max_total_tokens:
@@ -971,6 +1022,10 @@ class IntelligenceAgentHarness:
             self.registry.resolve(step.capability)
             if step.capability not in handlers:
                 raise LookupError(f"pipeline handler for {step.capability!r} is missing")
+            _require_json_compatible(
+                step.input_value.model_dump(mode="python"),
+                path=f"pipeline input for {step.capability!r}",
+            )
         key = self._normalized_run_key(run_key, "editorial-pipeline")
         configuration = {
             "version": "adaptive-editorial-pipeline-v1",
@@ -1028,6 +1083,10 @@ class IntelligenceAgentHarness:
                 step_input = spec.input_type.model_validate(
                     pipeline_step.input_value.model_copy(update={"payload": payload})
                 )
+                _require_json_compatible(
+                    step_input.model_dump(mode="python"),
+                    path=f"pipeline input for {pipeline_step.capability!r}",
+                )
                 step_input_json = step_input.model_dump_json()
                 errors: list[str] = []
                 completed = False
@@ -1074,6 +1133,10 @@ class IntelligenceAgentHarness:
                             timeout=timeout,
                         )
                         output = spec.output_type.model_validate(result.output)
+                        _require_json_compatible(
+                            output.model_dump(mode="python"),
+                            path=f"{pipeline_step.capability} output",
+                        )
                         usage = self._normalized_usage(result.usage)
                         total_tokens += usage.total_tokens
                         if total_tokens > effective_budget.max_total_tokens:
@@ -1210,6 +1273,15 @@ class IntelligenceAgentHarness:
         for capability in capabilities:
             spec = self.registry.resolve(capability)
             validated_outputs[capability] = spec.output_type.model_validate(outputs[capability])
+            _require_json_compatible(
+                validated_outputs[capability].model_dump(mode="python"),
+                path=f"observed {capability} output",
+            )
+        for pipeline_step in plan.steps:
+            _require_json_compatible(
+                pipeline_step.input_value.model_dump(mode="python"),
+                path=f"observed {pipeline_step.capability} input",
+            )
 
         normalized_usage = self._normalized_usage(usage or {})
         budget = AgentBudget(
@@ -1246,7 +1318,7 @@ class IntelligenceAgentHarness:
                         existing.channel_id != channel_id
                         or existing.configuration_hash != config_hash
                         or existing.status != terminal_status
-                        or json.loads(existing.output_json) != output_payload
+                        or not _json_values_equal(json.loads(existing.output_json), output_payload)
                     ):
                         raise AgentHarnessError(
                             f"observed pipeline {run_key!r} conflicts with its persisted trace"
@@ -1324,7 +1396,7 @@ class IntelligenceAgentHarness:
                         existing.channel_id != channel_id
                         or existing.configuration_hash != config_hash
                         or existing.status != terminal_status
-                        or json.loads(existing.output_json) != output_payload
+                        or not _json_values_equal(json.loads(existing.output_json), output_payload)
                     ):
                         raise AgentHarnessError(
                             f"observed pipeline {run_key!r} conflicts with its persisted trace"

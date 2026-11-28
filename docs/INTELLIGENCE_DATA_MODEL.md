@@ -180,7 +180,11 @@ count remain monotonic across the row's history. A pipeline retry re-enters its
 deterministic sequence from the first step; prior step rows remain as history
 rather than being overwritten. An active duplicate fails closed with a
 controlled claim conflict, and concurrent creation races are reconciled through
-the unique key rather than surfacing raw integrity errors.
+the unique key rather than surfacing raw integrity errors. Input and output
+envelopes must contain only JSON-serializable values with string object keys and
+finite numbers; non-JSON values fail closed instead of being coerced into a
+colliding persisted identity. Logical-input comparison is type strict, so JSON
+`true`/`false` never compare equal to `1`/`0`.
 
 ### `intelligence_agent_steps`
 

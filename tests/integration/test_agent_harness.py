@@ -1104,3 +1104,109 @@ async def test_edge_payloads_replay_by_exact_logical_input_and_distinct_keys_can
     assert first_distinct_id != second_distinct_id
     assert first_distinct_output.payload["key"] == "a"
     assert second_distinct_output.payload["key"] == "b"
+
+
+@pytest.mark.asyncio
+async def test_logical_input_identity_distinguishes_boolean_from_integer(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database)
+    calls = 0
+
+    async def handler(value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        nonlocal calls
+        calls += 1
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"echo": value.payload["flag"]}),
+            usage={"total_tokens": 0},
+        )
+
+    kwargs = {
+        "channel_id": channel_id,
+        "capability": "candidate_analysis",
+        "provider": "mock",
+        "model": "fixture",
+        "prompt_version": "fixture-v1",
+        "handler": handler,
+        "run_key": "fixture-boolean-integer-identity",
+    }
+    first_id, first_output = await harness.execute(
+        **kwargs,
+        input_value=AgentInputEnvelope(payload={"flag": True}),
+    )
+    assert first_output.payload == {"echo": True}
+
+    with pytest.raises(AgentHarnessError, match="different logical request"):
+        await harness.execute(
+            **kwargs,
+            input_value=AgentInputEnvelope(payload={"flag": 1}),
+        )
+    assert calls == 1
+    assert harness.inspect(first_id)["output"] == {"payload": {"echo": True}}
+
+
+@pytest.mark.asyncio
+async def test_nonfinite_json_values_fail_closed_instead_of_collapsing_to_null(
+    database: Database,
+    settings: Settings,
+) -> None:
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+    harness = IntelligenceAgentHarness(database)
+
+    async def handler(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"ok": True}),
+            usage={"total_tokens": 0},
+        )
+
+    kwargs = {
+        "channel_id": channel_id,
+        "capability": "candidate_analysis",
+        "provider": "mock",
+        "model": "fixture",
+        "prompt_version": "fixture-v1",
+    }
+    with pytest.raises(ValueError, match="finite JSON numbers"):
+        await harness.execute(
+            **kwargs,
+            handler=handler,
+            input_value=AgentInputEnvelope(payload={"value": float("nan")}),
+            run_key="fixture-nonfinite-input",
+        )
+    with database.session() as session:
+        assert (
+            session.scalar(
+                select(func.count(IntelligenceAgentRun.id)).where(
+                    IntelligenceAgentRun.run_key == "fixture-nonfinite-input"
+                )
+            )
+            == 0
+        )
+
+    async def nonfinite_output(_value: AgentInputEnvelope, _attempt: int) -> AgentStepResult:
+        return AgentStepResult(
+            output=AgentOutputEnvelope(payload={"value": float("inf")}),
+            usage={"total_tokens": 0},
+        )
+
+    with pytest.raises(AgentHarnessError, match="failed after"):
+        await harness.execute(
+            **kwargs,
+            input_value=AgentInputEnvelope(payload={"value": None}),
+            handler=nonfinite_output,
+            run_key="fixture-nonfinite-output",
+        )
+    with database.session() as session:
+        failed_id = session.scalar(
+            select(IntelligenceAgentRun.id).where(
+                IntelligenceAgentRun.run_key == "fixture-nonfinite-output"
+            )
+        )
+    assert failed_id is not None
+    detail = harness.inspect(failed_id)
+    assert detail["status"] == "failed"
+    assert "finite JSON numbers" in str(detail["error_summary"])
