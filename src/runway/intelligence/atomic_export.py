@@ -15,7 +15,12 @@ def write_text_atomically(destination: Path, content: str, *, temporary_prefix: 
     )
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        try:
+            handle = os.fdopen(descriptor, "w", encoding="utf-8")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with handle:
             handle.write(content)
         os.replace(temporary, destination)
     except BaseException:
