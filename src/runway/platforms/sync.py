@@ -209,11 +209,16 @@ class SyncService:
 
             provider = self.registry.provider(Platform(self._account_platform(account_id)))
 
+            token_ref_used: str | None = None
             try:
-                token = self.ensure_fresh(account_id)
+                token, token_ref_used = self._ensure_fresh_with_ref(account_id)
             except AuthorizationExpired as exc:
                 detail = safe_error_summary(exc)
-                self._finish_account_needs_reauth(account_id, detail)
+                self._finish_account_needs_reauth(
+                    account_id,
+                    detail,
+                    token_ref=getattr(exc, "token_ref", None),
+                )
                 self._finish_run(
                     run_id,
                     account_id,
@@ -272,7 +277,11 @@ class SyncService:
                     final_status = "failed"
                     error_summary = record["error"]
                     steps.append(record)
-                    self._finish_account_needs_reauth(account_id, record["error"])
+                    self._finish_account_needs_reauth(
+                        account_id,
+                        record["error"],
+                        token_ref=token_ref_used,
+                    )
                     break
                 except CapabilityUnsupported as exc:
                     record["status"] = "skipped"
@@ -320,15 +329,15 @@ class SyncService:
                 logger.exception("could not record failure for sync run %s", run_id)
 
     def ensure_fresh(self, account_id: int) -> TokenSet:
+        return self._ensure_fresh_with_ref(account_id)[0]
+
+    def _ensure_fresh_with_ref(self, account_id: int) -> tuple[TokenSet, str]:
         with self.database.session() as session:
             account = session.get(ConnectedAccount, account_id)
             if account is None:
                 raise SyncAccountMissing(f"account {account_id} does not exist")
-            token_ref = account.token_ref
             platform = account.platform
-        if not token_ref:
-            raise AuthorizationExpired("account has no stored token", status=401)
-        return self.registry.fresh_account_token(Platform(platform), account_id)
+        return self.registry.fresh_account_token_with_ref(Platform(platform), account_id)
 
     def _account_platform(self, account_id: int) -> str:
         with self.database.session() as session:
@@ -337,12 +346,21 @@ class SyncService:
                 raise SyncAccountMissing(f"account {account_id} does not exist")
             return str(account.platform)
 
-    def _finish_account_needs_reauth(self, account_id: int, detail: str) -> None:
+    def _finish_account_needs_reauth(
+        self,
+        account_id: int,
+        detail: str,
+        *,
+        token_ref: str | None,
+    ) -> None:
         with self.database.session() as session:
             account = session.get(ConnectedAccount, account_id)
-            if account is not None and account.status != "disconnected":
-                account.status = "needs_reauth"
-                account.last_error = detail
+            if account is None or account.status == "disconnected":
+                return
+            if account.token_ref != token_ref:
+                return
+            account.status = "needs_reauth"
+            account.last_error = detail
 
     def _finish_run(
         self,

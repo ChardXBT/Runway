@@ -11,7 +11,7 @@ from sqlalchemy import select
 from runway.config import Settings
 from runway.db.base import Database
 from runway.db.models import ConnectedAccount
-from runway.platforms.base import AuthorizationExpired, PlatformProvider, TokenSet
+from runway.platforms.base import AuthorizationExpired, PlatformProvider, ProviderError, TokenSet
 from runway.platforms.capabilities import (
     DEFAULT_PLATFORM_SCOPES,
     Platform,
@@ -42,6 +42,30 @@ def token_refresh_window(platform: Platform) -> timedelta:
 
 class UnknownPlatformError(ValueError):
     pass
+
+
+class AccountTokenAuthorizationExpired(AuthorizationExpired):
+    """Authorization failure tied to one token-store reference generation."""
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        token_ref: str | None,
+        retryable: bool = False,
+        status: int | None = None,
+    ) -> None:
+        super().__init__(detail, retryable=retryable, status=status)
+        self.token_ref = token_ref
+
+
+def _auth_error_for_ref(exc: AuthorizationExpired, token_ref: str) -> AuthorizationExpired:
+    return AccountTokenAuthorizationExpired(
+        exc.detail,
+        retryable=exc.retryable,
+        status=exc.status,
+        token_ref=token_ref,
+    )
 
 
 TOKEN_RECOVERY_DETAIL = "stored OAuth token is missing or unreadable; reconnect the account"
@@ -103,9 +127,17 @@ class ProviderRegistry:
             try:
                 token = self.token_store.load(token_ref)
             except TokenStoreError as exc:
-                raise AuthorizationExpired(TOKEN_RECOVERY_DETAIL, status=401) from exc
+                raise AccountTokenAuthorizationExpired(
+                    TOKEN_RECOVERY_DETAIL,
+                    status=401,
+                    token_ref=token_ref,
+                ) from exc
             if token is None:
-                raise AuthorizationExpired("account token is missing", status=401)
+                raise AccountTokenAuthorizationExpired(
+                    "account token is missing",
+                    status=401,
+                    token_ref=token_ref,
+                )
             if token.expires_at is None:
                 return token
             expires_at = token.expires_at
@@ -113,8 +145,17 @@ class ProviderRegistry:
                 expires_at = expires_at.replace(tzinfo=UTC)
             if expires_at - datetime.now(UTC) > token_refresh_window(platform):
                 return token
-            refreshed = self.provider(platform).refresh(token)
-            self.token_store.store(token_ref, refreshed)
+            try:
+                refreshed = self.provider(platform).refresh(token)
+                self.token_store.store(token_ref, refreshed)
+            except AuthorizationExpired as exc:
+                raise _auth_error_for_ref(exc, token_ref) from exc
+            except TokenStoreError as exc:
+                raise AccountTokenAuthorizationExpired(
+                    TOKEN_RECOVERY_DETAIL,
+                    status=401,
+                    token_ref=token_ref,
+                ) from exc
             return refreshed
 
     def _account_token_ref(self, account_id: int) -> str | None:
@@ -122,8 +163,10 @@ class ProviderRegistry:
             account = session.get(ConnectedAccount, account_id)
             return str(account.token_ref) if account is not None and account.token_ref else None
 
-    def fresh_account_token(self, platform: Platform, account_id: int) -> TokenSet:
-        """Load a fresh token even if a reconnect swaps the account's token ref.
+    def fresh_account_token_with_ref(
+        self, platform: Platform, account_id: int
+    ) -> tuple[TokenSet, str]:
+        """Load a fresh token and the reference generation it came from.
 
         Sync and inbox work capture account state before network work. A
         reconnect may commit a fresh token ref and remove the old one in that
@@ -134,16 +177,25 @@ class ProviderRegistry:
         """
         token_ref = self._account_token_ref(account_id)
         if token_ref is None:
-            raise AuthorizationExpired("account has no stored token", status=401)
+            raise AccountTokenAuthorizationExpired(
+                "account has no stored token",
+                status=401,
+                token_ref=None,
+            )
         for _ in range(2):
             try:
-                return self.fresh_token(platform, token_ref)
-            except AuthorizationExpired:
+                return self.fresh_token(platform, token_ref), token_ref
+            except AuthorizationExpired as exc:
                 current_ref = self._account_token_ref(account_id)
                 if current_ref is None or current_ref == token_ref:
-                    raise
+                    if getattr(exc, "token_ref", None) == token_ref:
+                        raise
+                    raise _auth_error_for_ref(exc, token_ref) from exc
                 token_ref = current_ref
-        raise AssertionError("unreachable")
+        raise ProviderError("account token changed while loading; retry", retryable=True)
+
+    def fresh_account_token(self, platform: Platform, account_id: int) -> TokenSet:
+        return self.fresh_account_token_with_ref(platform, account_id)[0]
 
     def reconcile_connected_accounts(self) -> TokenReconciliationResult:
         """Reconcile account rows with the encrypted token blob.

@@ -212,6 +212,26 @@ def test_malformed_token_entry_is_reconciled_without_exposing_token_material(oau
     assert "reconnect" in account["last_error"]
 
 
+def test_empty_token_entry_is_reconciled_without_exposing_token_material(oauth_env) -> None:
+    token_ref = "empty-token-ref"
+    _insert_connected_account(oauth_env.database, token_ref)
+    store = TokenStore(oauth_env.settings.resolved_data_dir / "secrets")
+    store.store(token_ref, TokenSet(access_token="fixture-access-token"))
+    fernet = Fernet(store._load_key())
+    payload = store._read_store(fernet)
+    payload[token_ref] = {"access_token": ""}
+    store._write_store(fernet, payload)
+
+    with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
+        response = web.get("/api/platforms/accounts")
+
+    assert response.status_code == 200
+    assert "fixture-access-token" not in response.text
+    account = response.json()[0]
+    assert account["status"] == "needs_reauth"
+    assert "reconnect" in account["last_error"]
+
+
 def test_reconnect_replaces_token_without_duplicating_the_account(oauth_env) -> None:
     with TestClient(oauth_env.app, base_url="http://127.0.0.1:8000") as web:
         first = _complete_connect(web)
@@ -430,6 +450,39 @@ def test_concurrent_reconnect_token_swap_does_not_look_like_revoked_access(
     assert stale_refs_seen == [old_ref]
 
 
+def test_reconnect_completed_before_stale_sync_failure_is_not_overwritten(
+    oauth_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = oauth_env.database
+    stale_ref = "stale-token-ref"
+    replacement_ref = "replacement-token-ref"
+    account_id = _insert_connected_account(database, stale_ref)
+    registry = ProviderRegistry(database, oauth_env.settings)
+    sync = SyncService(database, oauth_env.settings, registry)
+    original_finish = sync._finish_account_needs_reauth
+
+    def reconnect_then_finish(account_id: int, detail: str, **kwargs) -> None:
+        registry.token_store.store(replacement_ref, TokenSet(access_token="replacement-access"))
+        with database.session() as session:
+            account = session.get(ConnectedAccount, account_id)
+            assert account is not None
+            account.status = "connected"
+            account.token_ref = replacement_ref
+            account.last_error = None
+        original_finish(account_id, detail, **kwargs)
+
+    monkeypatch.setattr(sync, "_finish_account_needs_reauth", reconnect_then_finish)
+
+    run = sync.run(account_id)
+
+    assert run.status == "failed"
+    with database.session() as session:
+        account = session.get(ConnectedAccount, account_id)
+        assert account is not None
+        assert account.status == "connected"
+        assert account.token_ref == replacement_ref
+
+
 def test_disconnect_wins_over_a_concurrent_sync_reauth_failure(oauth_env) -> None:
     database = oauth_env.database
     account_id = _insert_connected_account(database, "disconnect-token-ref")
@@ -440,7 +493,7 @@ def test_disconnect_wins_over_a_concurrent_sync_reauth_failure(oauth_env) -> Non
         account.token_ref = None
 
     sync = SyncService(database, oauth_env.settings)
-    sync._finish_account_needs_reauth(account_id, "stale sync failure")
+    sync._finish_account_needs_reauth(account_id, "stale sync failure", token_ref=None)
 
     with database.session() as session:
         account = session.get(ConnectedAccount, account_id)

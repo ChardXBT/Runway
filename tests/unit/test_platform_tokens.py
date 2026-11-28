@@ -72,6 +72,16 @@ def test_blob_written_with_other_key_raises(tmp_path: Path) -> None:
         store.load("ref")
 
 
+def test_empty_access_token_is_rejected_without_writing(tmp_path: Path) -> None:
+    store = TokenStore(tmp_path / "secrets")
+    ref = store.new_token_ref()
+
+    with pytest.raises(TokenStoreError, match="empty"):
+        store.store(ref, TokenSet(access_token="   "))
+
+    assert store.load(ref) is None
+
+
 def test_delete_removes_entry(tmp_path: Path) -> None:
     store = TokenStore(tmp_path / "secrets")
     ref = store.new_token_ref()

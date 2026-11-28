@@ -154,6 +154,8 @@ class TokenStore:
             raise
 
     def store(self, token_ref: str, token: TokenSet) -> None:
+        if not token.access_token.strip():
+            raise TokenStoreError("access token material is empty")
         with self.locked():
             fernet = Fernet(self._load_key())
             payload = self._read_store(fernet)
@@ -170,9 +172,12 @@ class TokenStore:
             if not isinstance(entry, dict):
                 raise TokenStoreError(f"token entry {token_ref!r} is malformed")
             try:
-                return deserialize_token(entry)
+                token = deserialize_token(entry)
             except (TypeError, ValueError, ValidationError) as exc:
                 raise TokenStoreError(f"token entry {token_ref!r} is malformed") from exc
+            if not token.access_token.strip():
+                raise TokenStoreError(f"token entry {token_ref!r} is malformed")
+            return token
 
     def delete(self, token_ref: str) -> None:
         with self.locked():
