@@ -247,6 +247,88 @@ def test_blind_export_interruption_cannot_leave_partial_final_export(
     assert temporary_leftovers == []
 
 
+@pytest.mark.parametrize("has_existing_export", [False, True])
+def test_blind_export_write_interruption_cleans_temporary_file(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    has_existing_export: bool,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    planned = service.plan(
+        _study_cases(database, count=1),
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+    output = tmp_path / "blind.json"
+    if has_existing_export:
+        output.write_text("complete prior export\n", encoding="utf-8")
+
+    class InterruptedWriter:
+        def __init__(self, descriptor: int) -> None:
+            self.descriptor = descriptor
+            self.closed = False
+
+        def __enter__(self) -> InterruptedWriter:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.close()
+
+        def write(self, content: str) -> int:
+            raise OSError("simulated write interruption")
+
+        def close(self) -> None:
+            if not self.closed:
+                os.close(self.descriptor)
+                self.closed = True
+
+    writers: list[InterruptedWriter] = []
+
+    def interrupted_fdopen(descriptor: int, *args: object, **kwargs: object) -> InterruptedWriter:
+        writer = InterruptedWriter(descriptor)
+        writers.append(writer)
+        return writer
+
+    monkeypatch.setattr(os, "fdopen", interrupted_fdopen)
+    with pytest.raises(OSError, match="simulated write interruption"):
+        service.export(int(planned["study_id"]), output, minimum_cases=1)
+
+    if has_existing_export:
+        assert output.read_text(encoding="utf-8") == "complete prior export\n"
+    else:
+        assert not output.exists()
+    assert writers[0].closed
+    temporary_leftovers = [path for path in tmp_path.iterdir() if path != output and path.is_file()]
+    assert temporary_leftovers == []
+
+
+def test_blind_export_long_output_filename_does_not_inflate_temporary_name(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    service = BlindStudyService(database, settings)
+    planned = service.plan(
+        _study_cases(database, count=1),
+        baseline_identity="secret-model-a",
+        challenger_identity="secret-model-b",
+        seed=42,
+    )
+    output = tmp_path / ("a" * 250 + ".json")
+    assert len(output.name.encode("utf-8")) == 255
+
+    service.export(int(planned["study_id"]), output, minimum_cases=1)
+
+    assert json.loads(output.read_text(encoding="utf-8"))["case_count"] == 1
+    temporary_leftovers = [path for path in tmp_path.iterdir() if path != output and path.is_file()]
+    assert temporary_leftovers == []
+
+
 def test_blind_export_overwrite_remains_deterministic(
     database: Database,
     settings: Settings,
