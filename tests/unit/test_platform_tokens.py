@@ -229,6 +229,28 @@ def test_repeated_store_recovery_attempts_do_not_repeat_quarantine(tmp_path: Pat
     assert store.load(second_ref) is not None
 
 
+def test_repeated_disasters_create_distinct_quarantines(tmp_path: Path) -> None:
+    secrets_dir = tmp_path / "secrets"
+    store = TokenStore(secrets_dir)
+    store.store(store.new_token_ref(), _token())
+
+    first_tampered = _tamper_store_blob(store)
+    first_ref = store.new_token_ref()
+    store.store(first_ref, TokenSet(access_token="replacement-one"))
+    second_tampered = _tamper_store_blob(store)
+    second_ref = store.new_token_ref()
+    store.store(second_ref, TokenSet(access_token="replacement-two"))
+
+    quarantined = _quarantine_dirs(secrets_dir)
+    assert len(quarantined) == 2
+    preserved = {(path / "platform-tokens.json").read_bytes() for path in quarantined}
+    assert preserved == {first_tampered, second_tampered}
+    assert all((path / "token.key").is_file() for path in quarantined)
+    loaded = store.load(second_ref)
+    assert loaded is not None
+    assert loaded.access_token == "replacement-two"
+
+
 def test_concurrent_store_access_recovers_once_and_preserves_all_replacements(
     tmp_path: Path,
 ) -> None:
@@ -260,6 +282,32 @@ def test_concurrent_store_access_recovers_once_and_preserves_all_replacements(
         loaded = store.load(ref)
         assert loaded is not None
         assert loaded.access_token == f"replacement-{index}"
+
+
+def test_partial_quarantine_move_failure_rolls_back_active_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secrets_dir = tmp_path / "secrets"
+    store = TokenStore(secrets_dir)
+    store.store(store.new_token_ref(), _token())
+    original_key = store.key_path.read_bytes()
+    tampered_blob = _tamper_store_blob(store)
+    original_replace = os.replace
+
+    def fail_key_move(source, destination):
+        if Path(source) == store.key_path and Path(destination).name == "token.key":
+            raise OSError("simulated key move failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_key_move)
+
+    with pytest.raises(OSError, match="simulated key move failure"):
+        store.quarantine_unreadable()
+
+    assert store.store_path.read_bytes() == tampered_blob
+    assert store.key_path.read_bytes() == original_key
+    assert _quarantine_dirs(secrets_dir) == []
 
 
 def test_explicit_quarantine_leaves_a_healthy_store_untouched(tmp_path: Path) -> None:

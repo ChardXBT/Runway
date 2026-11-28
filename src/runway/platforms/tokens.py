@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -178,16 +178,32 @@ class TokenStore:
 
         store_preserved = False
         key_preserved = False
-        if self.store_path.exists():
-            os.replace(self.store_path, quarantine_dir / self.store_path.name)
-            store_preserved = True
-            if sys.platform != "win32":
-                os.chmod(quarantine_dir / self.store_path.name, 0o600)
-        if self.key_path.exists():
-            os.replace(self.key_path, quarantine_dir / self.key_path.name)
-            key_preserved = True
-            if sys.platform != "win32":
-                os.chmod(quarantine_dir / self.key_path.name, 0o600)
+        moved: list[tuple[Path, Path]] = []
+        try:
+            if self.store_path.exists():
+                destination = quarantine_dir / self.store_path.name
+                os.replace(self.store_path, destination)
+                moved.append((self.store_path, destination))
+                store_preserved = True
+                if sys.platform != "win32":
+                    os.chmod(destination, 0o600)
+            if self.key_path.exists():
+                destination = quarantine_dir / self.key_path.name
+                os.replace(self.key_path, destination)
+                moved.append((self.key_path, destination))
+                key_preserved = True
+                if sys.platform != "win32":
+                    os.chmod(destination, 0o600)
+        except BaseException:
+            # A partial move must not strand the active store in a worse state.
+            # Roll back what can be rolled back; anything that cannot be moved
+            # back remains preserved in quarantine rather than being deleted.
+            for source, destination in reversed(moved):
+                with suppress(OSError):
+                    os.replace(destination, source)
+            with suppress(OSError):
+                quarantine_dir.rmdir()
+            raise
 
         manifest = {
             "version": 1,
