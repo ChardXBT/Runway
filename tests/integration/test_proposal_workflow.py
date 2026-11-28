@@ -145,6 +145,56 @@ def test_proposal_service_recovers_only_abandoned_generation_runs(
 
 
 @pytest.mark.asyncio
+async def test_generation_normal_entrypoint_closes_crashed_lease_and_completes_owned_run(
+    database: Database,
+    settings: Settings,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    await AnalysisService(database, settings).analyze_history()
+    await StyleProfileService(database, settings).build()
+    await DiscoveryService(database, settings).discover(provider_name="fixture", dry_run=True)
+    now = datetime.now(UTC)
+    crashed_owner = new_owner_token()
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+        crashed = GenerationRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            start_date=date(2026, 1, 5),
+            days=1,
+            status="running",
+            started_at=now,
+            owner_token=crashed_owner,
+            heartbeat_at=now - timedelta(minutes=10),
+            lease_expires_at=now - timedelta(seconds=1),
+            lease_version=1,
+        )
+        session.add(crashed)
+        session.flush()
+        crashed_id = crashed.id
+
+    result = await ProposalService(database, settings).generate_batch(
+        days=1,
+        start_date=date(2026, 3, 6),
+    )
+
+    assert result["status"] == "completed"
+    assert len(result["proposal_ids"]) == 1
+    assert int(result["generation_run_id"]) != crashed_id
+    with database.session() as session:
+        crashed_run = session.get(GenerationRun, crashed_id)
+        current_run = session.get(GenerationRun, int(result["generation_run_id"]))
+        assert crashed_run is not None
+        assert crashed_run.status == "failed"
+        assert "without a valid lease" in str(crashed_run.error_summary)
+        assert current_run is not None
+        assert current_run.status == "completed"
+        assert current_run.owner_token
+        assert current_run.heartbeat_at is not None
+        assert current_run.lease_expires_at is not None
+
+
+@pytest.mark.asyncio
 async def test_continuous_workflow_actions_and_restart_persistence(
     database: Database, settings: Settings
 ) -> None:

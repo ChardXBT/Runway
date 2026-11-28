@@ -432,6 +432,55 @@ def test_discovery_recovery_uses_lease_heartbeat_and_blocks_out_of_order_complet
         assert "without a valid lease" in str(timed_out.error_summary)
 
 
+@pytest.mark.asyncio
+async def test_discovery_normal_entrypoint_closes_crashed_lease_and_completes_owned_run(
+    database: Database,
+    settings: Settings,
+) -> None:
+    CaptureService(database, settings).run_fixture()
+    await AnalysisService(database, settings).analyze_history()
+    await StyleProfileService(database, settings).build()
+    now = datetime.now(UTC)
+    crashed_owner = new_owner_token()
+    with database.session() as session:
+        channel_id = get_channel(session, settings.channel_handle).id
+        crashed = SearchRun(
+            channel_id=channel_id,
+            style_profile_id=None,
+            query_plan_json="{}",
+            provider="archives",
+            status="running",
+            started_at=now,
+            owner_token=crashed_owner,
+            heartbeat_at=now - timedelta(minutes=10),
+            lease_expires_at=now - timedelta(seconds=1),
+            lease_version=1,
+        )
+        session.add(crashed)
+        session.flush()
+        crashed_id = crashed.id
+
+    result = await DiscoveryService(database, settings).discover(
+        days=1,
+        provider_name="fixture",
+        dry_run=True,
+    )
+
+    assert result["status"] in {"completed", "completed_with_errors"}
+    assert int(result["run_id"]) != crashed_id
+    with database.session() as session:
+        crashed_run = session.get(SearchRun, crashed_id)
+        current_run = session.get(SearchRun, int(result["run_id"]))
+        assert crashed_run is not None
+        assert crashed_run.status == "failed"
+        assert "without a valid lease" in str(crashed_run.error_summary)
+        assert current_run is not None
+        assert current_run.status == "completed"
+        assert current_run.owner_token
+        assert current_run.heartbeat_at is not None
+        assert current_run.lease_expires_at is not None
+
+
 def test_recent_search_queries_are_newest_first_deduplicated_and_bounded(
     database: Database,
     settings: Settings,

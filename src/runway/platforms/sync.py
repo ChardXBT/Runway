@@ -170,6 +170,12 @@ class SyncService:
                 try:
                     session.flush()
                 except IntegrityError as exc:
+                    detail = str(exc.orig)
+                    if (
+                        "ux_sync_runs_account_running" not in detail
+                        and "UNIQUE constraint failed: sync_runs.account_id" not in detail
+                    ):
+                        raise
                     raise SyncRunInProgress(
                         f"account {account_id} already has a running sync"
                     ) from exc

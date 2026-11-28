@@ -271,6 +271,8 @@ class DiscoveryService:
                         result,
                         archive_fingerprints,
                     )
+                except LeaseLost:
+                    raise
                 except Exception as exc:
                     errors.append(f"rank {result.result_rank}: {type(exc).__name__}: {exc}")
                     with self.database.session() as session:

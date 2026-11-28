@@ -324,6 +324,36 @@ def test_sync_admission_respects_active_lease_for_long_live_cross_process_run(sy
         assert active_run.completed_at is None
 
 
+def test_sync_admission_converts_unique_index_race_without_masking_other_errors(
+    sync_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings, database, registry, service = sync_env
+    account = _account(database, "youtube")
+    now = datetime.now(UTC)
+    owner = new_owner_token()
+    lease = lease_claim_fields(owner, lease_duration=timedelta(minutes=5), now=now)
+    with database.session() as session:
+        session.add(
+            SyncRun(
+                account_id=account.id,
+                trigger="manual",
+                status="running",
+                started_at=now - timedelta(hours=2),
+                owner_token=owner,
+                heartbeat_at=lease["heartbeat_at"],
+                lease_expires_at=lease["lease_expires_at"],
+                lease_version=lease["lease_version"],
+            )
+        )
+
+    # Simulate the stale-read window between admission's active-row scan and
+    # its insert: the database partial unique index is the final cross-process
+    # serialization point and must surface as the domain conflict.
+    monkeypatch.setattr(service, "_has_recent_running_run", lambda _account_id: False)
+    with pytest.raises(SyncRunInProgress):
+        service.run(account.id, trigger="manual")
+
+
 def test_sync_terminal_write_after_stale_recovery_cannot_overwrite_evidence(sync_env) -> None:
     _settings, database, _registry, service = sync_env
     account = _account(database, "youtube")
