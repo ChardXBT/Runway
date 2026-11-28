@@ -587,7 +587,7 @@ def _seed_running_run(
     *,
     channel_id: int,
     run_key: str,
-    lease_expires_at: datetime,
+    lease_expires_at: datetime | None,
 ) -> int:
     input_value = AgentInputEnvelope(payload={"candidate_id": 1})
     budget = AgentBudget()
@@ -706,6 +706,24 @@ async def test_lease_expiry_clock_boundary_is_explicit(
         run_key="fixture-lease-expired-at-now",
     )
     assert recovered_id == expired_id
+
+    legacy_id = _seed_running_run(
+        database,
+        channel_id=channel_id,
+        run_key="fixture-lease-legacy-absent",
+        lease_expires_at=None,
+    )
+    legacy_recovered_id, _legacy_output = await harness.execute(
+        channel_id=channel_id,
+        capability="candidate_analysis",
+        provider="mock",
+        model="fixture",
+        prompt_version="fixture-v1",
+        input_value=input_value,
+        handler=success,
+        run_key="fixture-lease-legacy-absent",
+    )
+    assert legacy_recovered_id == legacy_id
 
     active_id = _seed_running_run(
         database,
