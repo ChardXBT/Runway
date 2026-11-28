@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 
 from runway.config import Settings
 from runway.db.base import Database
@@ -354,13 +354,15 @@ class SyncService:
         token_ref: str | None,
     ) -> None:
         with self.database.session() as session:
-            account = session.get(ConnectedAccount, account_id)
-            if account is None or account.status == "disconnected":
-                return
-            if account.token_ref != token_ref:
-                return
-            account.status = "needs_reauth"
-            account.last_error = detail
+            session.execute(
+                update(ConnectedAccount)
+                .where(
+                    ConnectedAccount.id == account_id,
+                    ConnectedAccount.status != "disconnected",
+                    ConnectedAccount.token_ref == token_ref,
+                )
+                .values(status="needs_reauth", last_error=detail)
+            )
 
     def _finish_run(
         self,
