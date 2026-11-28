@@ -40,6 +40,7 @@ from runway.db.models import (
     utcnow,
 )
 from runway.db.repositories import get_channel
+from runway.intelligence.atomic_export import write_text_atomically
 from runway.intelligence.embeddings import configuration_hash
 
 StudySplit = Literal["development", "tuning", "final_holdout"]
@@ -1120,10 +1121,10 @@ class ActiveLearningService:
     def export(self, batch_id: int, output: Path) -> Path:
         payload = self.status(batch_id)
         payload["exported_at"] = datetime.now(UTC).isoformat()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
+        write_text_atomically(
+            output,
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
+            temporary_prefix="active-learning-",
         )
         return output
 

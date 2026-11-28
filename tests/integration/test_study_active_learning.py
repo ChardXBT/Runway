@@ -458,3 +458,112 @@ def test_active_learning_prioritizes_uncertainty_and_preserves_diversity(
     assert selections[0]["entity_id"] in {1, 2}
     clusters = [row["rationale"]["diversity_cluster"] for row in selections]
     assert len(set(clusters)) == 3
+
+
+def _active_learning_service_and_batch(
+    database: Database,
+    settings: Settings,
+) -> tuple[ActiveLearningService, int]:
+    service = ActiveLearningService(database, settings)
+    selected = service.select(
+        [
+            ActiveLearningCase(
+                entity_type="fixture",
+                entity_id=1,
+                group_key="group-atomic-export",
+                split="development",
+                target="caption",
+                uncertainty_score=0.9,
+                disagreement_score=0.4,
+                information_gain_score=0.5,
+                diversity_cluster="atomic-export-cluster",
+                reasons=["fixture"],
+                metadata={"scene": "unicode-ü", "nested": {"zero": 0, "empty": []}},
+            )
+        ],
+        target="caption",
+        limit=1,
+        seed=7,
+    )
+    return service, int(selected["batch_id"])
+
+
+def test_active_learning_export_uses_temporary_sibling_then_atomic_rename(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, batch_id = _active_learning_service_and_batch(database, settings)
+    output = tmp_path / "active-learning.json"
+    replacements: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def recording_replace(source: object, destination: object) -> None:
+        replacements.append((Path(source), Path(destination)))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+    service.export(batch_id, output)
+
+    assert len(replacements) == 1
+    temporary, destination = replacements[0]
+    assert destination == output
+    assert temporary.parent == output.parent
+    assert temporary != output
+    assert temporary.name.endswith(".tmp")
+    assert not temporary.exists()
+    exported = json.loads(output.read_text(encoding="utf-8"))
+    assert exported["batch_id"] == batch_id
+    assert exported["selections"][0]["rationale"]["metadata"]["scene"] == "unicode-ü"
+
+
+@pytest.mark.parametrize("has_existing_export", [False, True])
+def test_active_learning_export_interruption_cannot_leave_partial_final_export(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    has_existing_export: bool,
+) -> None:
+    service, batch_id = _active_learning_service_and_batch(database, settings)
+    output = tmp_path / "active-learning.json"
+    if has_existing_export:
+        output.write_text("complete prior export\n", encoding="utf-8")
+
+    def interrupted_replace(source: object, destination: object) -> None:
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr(os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="simulated interruption"):
+        service.export(batch_id, output)
+
+    if has_existing_export:
+        assert output.read_text(encoding="utf-8") == "complete prior export\n"
+    else:
+        assert not output.exists()
+    temporary_leftovers = [path for path in tmp_path.iterdir() if path != output and path.is_file()]
+    assert temporary_leftovers == []
+
+
+def test_active_learning_export_overwrite_preserves_nested_unicode_content(
+    database: Database,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    service, batch_id = _active_learning_service_and_batch(database, settings)
+    output = tmp_path / "nested" / "active-learning.json"
+    output.parent.mkdir()
+    output.write_text("stale partial export\n", encoding="utf-8")
+
+    service.export(batch_id, output)
+
+    raw = output.read_text(encoding="utf-8")
+    assert raw != "stale partial export\n"
+    exported = json.loads(raw)
+    assert exported["batch_id"] == batch_id
+    assert exported["selections"][0]["rationale"]["metadata"] == {
+        "scene": "unicode-ü",
+        "nested": {"zero": 0, "empty": []},
+    }
+    assert "unicode-ü" in raw

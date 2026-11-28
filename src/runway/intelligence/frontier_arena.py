@@ -27,6 +27,7 @@ from runway.db.models import (
     utcnow,
 )
 from runway.db.repositories import get_channel
+from runway.intelligence.atomic_export import write_text_atomically
 from runway.intelligence.embeddings import configuration_hash
 
 ArenaArm = Literal["raw_frontier", "runway_frontier", "runway_weaker"]
@@ -340,8 +341,11 @@ class FrontierArenaService:
         for forbidden in ("raw_frontier", "runway_frontier", "runway_weaker", "hidden_label"):
             if forbidden in encoded:
                 raise RuntimeError("arena export would reveal hidden model provenance")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(encoded, encoding="utf-8")
+        write_text_atomically(
+            destination,
+            encoded,
+            temporary_prefix="frontier-arena-",
+        )
         with self.database.session() as session:
             persisted = self._study(session, study_id)
             persisted.status = "in_review"
